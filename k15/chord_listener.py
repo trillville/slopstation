@@ -10,11 +10,11 @@ CHORD    = 0x01 | 0x80            # Steam + right-trigger click
 HOLD_S   = 2.0
 COUCH    = cglib.BASE / "couch.py"
 
-# Haptic "chord heard" ack - rising chirp on both trackpads, bench-tuned via
-# haptic_test.py. Re-bench after controller firmware updates.
-ACK_TONES = ((440, 60), (660, 90))   # (freq_hz, duration_ms)
-ACK_GAP_S = 0.07
-ACK_GAIN  = 0                        # s8 dB-ish; 0 = natural level (bench-tuned 2026-08-10; 120 = clamped max)
+# Haptic "chord heard" ack - two quick rising tones on both trackpads, played
+# through cglib.play_pattern (the same engine haptic_test's audition/quiz use,
+# so the bench feel IS the production feel). Re-bench after firmware updates.
+ACK_PATTERN = ((440, 60, 10, 0, 0), (660, 90, 0, 0, 0))   # (freq, dur_ms, gap_ms, lfo_f, lfo_d)
+ACK_GAIN    = 0                      # s8 dB-ish; 0 = natural level (bench-tuned 2026-08-10; 120 = clamped max)
 
 cglib.rotate_log()
 log = cglib.make_log("listener")
@@ -23,15 +23,9 @@ log = cglib.make_log("listener")
 def ack_chirp(dev):
     """Best-effort by rule: a haptic failure must never delay or block the
     launch. Writes go to the already-latched input interface (same target the
-    SDL driver and SteamControllerBridge use); trailing stops are harmless if
-    the tones already self-terminated and required if firmware sustains them."""
+    SDL driver and SteamControllerBridge use)."""
     try:
-        for freq, dur in ACK_TONES:
-            for side in (0, 1):
-                dev.write(cglib.tone_report(side, freq, dur, ACK_GAIN))
-            time.sleep(ACK_GAP_S)
-        for side in (0, 1):
-            dev.write(cglib.stop_report(side))
+        cglib.play_pattern(dev, ACK_PATTERN, ACK_GAIN)
         log("ack chirp sent")
     except Exception as e:
         log(f"ack chirp failed ({e}) - launching anyway")

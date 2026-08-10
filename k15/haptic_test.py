@@ -103,28 +103,13 @@ PATTERNS = {
 QUIZ_SET = {"l": "launch", "b": "busy-long", "f": "fail-insist"}
 
 
-def play_pattern(dev, steps, gain, quiet=False):
-    for freq, dur, gap, lfo_f, lfo_d in steps:
-        for side in (0, 1):
-            data = cglib.tone_report(side, freq, dur, gain, lfo_f, lfo_d)
-            if quiet:
-                dev.write(data)              # no logging - the quiz must not leak answers
-            else:
-                w(dev, data, f"tone {freq}Hz/{dur}ms side{side}")
-        time.sleep((dur + gap) / 1000)
-    for side in (0, 1):
-        if quiet:
-            dev.write(cglib.stop_report(side))
-        else:
-            w(dev, cglib.stop_report(side), f"stop side{side}")
-
-
 def audition(dev, gain):
-    """Labeled pass: learn each candidate. Run with gain 0 = production feel."""
+    """Labeled pass: learn each candidate. Run with gain 0 = production feel.
+    Playback goes through cglib.play_pattern - identical to production."""
     for name, steps in PATTERNS.items():
         print(f"\n>>> {name}")
         time.sleep(1.0)
-        play_pattern(dev, steps, gain)
+        cglib.play_pattern(dev, steps, gain)
         time.sleep(1.5)
 
 
@@ -140,7 +125,7 @@ def quiz(dev, gain, rounds=10):
     for i in range(1, rounds + 1):
         key = random.choice(list(QUIZ_SET))
         time.sleep(1.0 + random.random() * 2.5)   # unpredictable onset
-        play_pattern(dev, PATTERNS[QUIZ_SET[key]], gain, quiet=True)
+        cglib.play_pattern(dev, PATTERNS[QUIZ_SET[key]], gain)
         guess = (input(f"{i}/{rounds} which? [l/b/f] ").strip().lower() or "?")[0]
         if guess == key:
             score += 1

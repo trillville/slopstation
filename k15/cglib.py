@@ -54,6 +54,20 @@ def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
                        left_speed, left_gain, right_speed, right_gain)
 
 
+def play_pattern(dev, steps, gain=0):
+    """THE haptic playback engine - production ack, bench audition, and the
+    blind quiz all use this one function, so what you audition is exactly
+    what ships. steps = ((freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth), ...).
+    Each tone plays out fully before the next starts; trailing stops are sent
+    after the last (harmless if tones self-terminated, required if sustained)."""
+    for freq, dur, gap, lfo_f, lfo_d in steps:
+        for side in (0, 1):
+            dev.write(tone_report(side, freq, dur, gain, lfo_f, lfo_d))
+        time.sleep((dur + gap) / 1000)
+    for side in (0, 1):
+        dev.write(stop_report(side))
+
+
 def load_config():
     return json.loads((BASE / "config.json").read_text())
 
