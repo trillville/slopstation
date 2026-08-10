@@ -87,20 +87,17 @@ def chirp(dev, gain):
 
 
 # --- Vocabulary audition / blind quiz ----------------------------------------
-# A pattern = steps of (freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth).
-# Distinguishability lives in EVENT COUNT and rhythm first (1 vs 2 vs 3),
-# length second, register third - pitch *direction* alone is a weak tactile
-# cue. Edit values freely; QUIZ_SET picks the trio under blind test.
+# The production trio lives in cglib (count is the message: 1 launch / 2 busy
+# / 3 fail) and is played by the same engine the listener uses. Extra entries
+# here are experiments/retired candidates; edit freely and re-quiz.
 PATTERNS = {
-    "launch":      ((440, 60, 10, 0, 0), (660, 90, 0, 0, 0)),           # current ack: 2 quick, rising
-    "busy-long":   ((220, 300, 0, 0, 0),),                              # 1 long low hum
-    "busy-double": ((220, 60, 90, 0, 0), (220, 60, 0, 0, 0)),           # 2 low thuds
-    "fail-triple": ((250, 100, 100, 0, 0), (220, 100, 100, 0, 0), (200, 140, 0, 0, 0)),
-    "fail-insist": ((250, 100, 100, 0, 0), (220, 100, 100, 0, 0), (200, 140, 800, 0, 0),
-                    (250, 100, 100, 0, 0), (220, 100, 100, 0, 0), (200, 140, 0, 0, 0)),
-    "fail-rough":  ((180, 500, 0, 12, 200),),                           # LFO texture experiment
+    "launch": cglib.PATTERN_LAUNCH,
+    "busy":   cglib.PATTERN_BUSY,
+    "fail":   cglib.PATTERN_FAIL,
+    "old-ack":    ((440, 60, 10, 0, 0), (660, 90, 0, 0, 0)),   # retired rising chirp
+    "fail-rough": ((180, 500, 0, 12, 200),),                   # LFO texture experiment
 }
-QUIZ_SET = {"l": "launch", "b": "busy-long", "f": "fail-insist"}
+QUIZ_SET = {"l": "launch", "b": "busy", "f": "fail"}
 
 
 def audition(dev, gain):

@@ -5,12 +5,10 @@ the TV exactly as the viewer had it."""
 import socket, subprocess, sys, time
 
 import cglib
-from cglib import BASE
+from cglib import BASE, LOCK, LOCK_STALE_S
 
 CFG  = cglib.load_config()
-LOCK = BASE / "state" / "session.lock"
 
-LOCK_STALE_S   = 300   # a live session touches the lock every few seconds; much older = dead owner
 PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
@@ -72,10 +70,7 @@ def wait_port(timeout=PORT_WAIT_S):
 
 
 def start():
-    try:
-        age = time.time() - LOCK.stat().st_mtime
-    except OSError:
-        age = None                      # no lock (or it vanished mid-check)
+    age = cglib.lock_age()
     if age is not None and age < LOCK_STALE_S:
         log("session already active/starting - ignoring"); return 1
     if age is not None:
@@ -108,10 +103,16 @@ def start():
                 log(f"status poll failed ({e}) - retrying")
             time.sleep(1)
         if not ready: raise RuntimeError("host never reported READY")
+        cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
         exlink(CFG["tvGamingCmd"])
         log("=== GAMING ==="); watch()
     except Exception as e:
         log(f"launch failed: {e} - TV input untouched")
+        try:
+            # The listener polls this and signals the failure haptically (3 thuds).
+            cglib.LAST_ERROR.write_text(str(e))
+        except OSError:
+            pass
         LOCK.unlink(missing_ok=True); return 1
     return 0
 

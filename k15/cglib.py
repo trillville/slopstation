@@ -68,6 +68,29 @@ def play_pattern(dev, steps, gain=0):
         dev.write(stop_report(side))
 
 
+# --- Session state (shared by couch.py and the chord listener) ----------------
+LOCK = BASE / "state" / "session.lock"
+LOCK_STALE_S = 300          # a live session touches the lock every few seconds
+LAST_ERROR = BASE / "state" / "last_error"   # written by couch.py on launch failure
+
+
+def lock_age():
+    """Seconds since the session lock was last touched, or None if no lock."""
+    try:
+        return time.time() - LOCK.stat().st_mtime
+    except OSError:
+        return None
+
+
+# --- Haptic vocabulary: one base note, count is the message -------------------
+#   1 thud = launch dispatched   2 = busy (launch already active)   3 = launch failed
+_THUD     = (220, 60, 90, 0, 0)
+_THUD_END = (220, 60, 0, 0, 0)
+PATTERN_LAUNCH = (_THUD_END,)
+PATTERN_BUSY   = (_THUD, _THUD_END)
+PATTERN_FAIL   = (_THUD, _THUD, _THUD_END)
+
+
 def load_config():
     return json.loads((BASE / "config.json").read_text())
 
