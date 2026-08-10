@@ -1,0 +1,71 @@
+# Tier-1 grammar (hassil). Deterministic command vocabulary - every final
+# transcript is screened against this BEFORE any LLM. {input} and {game} slot
+# lists are supplied at runtime (config inputs map / library titles), so this
+# file never needs editing when games install.
+#
+# House rules encoded here:
+#   - EndSession phrasings are deliberately narrow (risky command, no fuzz).
+#   - ExitSession = "conversation over", not a system action.
+language: en
+intents:
+  StartSession:
+    data:
+      - sentences:
+          - "start [a|the] [gaming] session"
+          - "game time"
+          - "let's play"
+  EndSession:
+    data:
+      - sentences:
+          - "end [the] [gaming] session"
+          - "stop [the] [gaming] session"
+          - "we're done [gaming|playing]"
+  VolumeUp:
+    data:
+      - sentences:
+          - "[turn [the]] volume up"
+          - "turn it up"
+          - "louder"
+  VolumeDown:
+    data:
+      - sentences:
+          - "[turn [the]] volume down"
+          - "turn it down"
+          - "quieter"
+          - "softer"
+  VolumeSet:
+    data:
+      - sentences:
+          - "[set [the]] volume [to] {level}"
+  MuteToggle:
+    data:
+      - sentences:
+          - "mute [the] [tv|sound|audio]"
+          - "unmute [the] [tv|sound|audio]"
+  SwitchInput:
+    data:
+      - sentences:
+          - "switch [over] to [the] {input}"
+          - "go [back] to [the] {input}"
+          - "show [the] {input}"
+  PlayGame:
+    data:
+      - sentences:
+          - "(play|launch|start|put on) [the game] {game}"
+  ExitSession:
+    data:
+      - sentences:
+          - "thanks"
+          - "thank you"
+          - "that's all"
+          - "that is all"
+          - "never mind"
+          - "nevermind"
+          - "cancel"
+          - "go back to sleep"
+lists:
+  level:
+    range:
+      type: number
+      from: 0
+      to: 100

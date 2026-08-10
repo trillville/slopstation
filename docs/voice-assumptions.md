@@ -17,6 +17,12 @@ HW = needs the hardware pass · KEY = needs a real key.
 | 5 | dispatch | "volume up" = `volumeStep` (5) single-step frames, 50 ms apart, abort on first failed ack | Matches remote-button feel; absolute set exists for jumps | HW: volume drill — tune step count by feel | |
 | 6 | earcons | Frequencies/durations chosen by taste (wake 1175 Hz tick, ok 660, busy 2×520, fail 3×330, close soft 440); counts are the contract, tones are placeholder-tunable | Can't audition blind | HW: first listen — retune freely, tests only pin counts | |
 
+| 7 | architecture | **Per-session pipeline**: wake detection runs outside Pipecat (raw PyAudio + openWakeWord loop); each wake builds and runs a fresh `PipelineWorker` (mic → Flux → GrammarGate → speaker), torn down at session end | Pinned-source recon: Flux connects on `StartFrame` with no app-facing connect/disconnect, and its watchdog injects **billed** silence into stalled turns — per-session workers give fresh sockets and $0 idle by construction | BT (session loop unit) + HW: wake→command feel, back-to-back sessions | |
+| 8 | wake | oWW models live in the venv's package dir (`download_models` default target), auto-fetched on first run per machine; `voice/models/` is unused | `Model()` resolves feature models from package resources; a custom dir would strand them | BT (test_wake downloads + detects) | |
+| 9 | session | HOLDING/LINGER = `PipelineWorker.idle_timeout_secs` = `holdWindowS`, with speech/transcript/bot frames resetting the clock; exit phrases push `EndWorkerFrame` immediately | One timeout mechanism instead of gate-managed timers; Pipecat owns the clock | HW: window feel — tune `holdWindowS` | |
+| 10 | wake→speech gap | User's first words after the wake tick may race Flux's ~200–400 ms connect; the tick invites a natural pause and no mitigation is built | Buffering pre-connect audio adds complexity for an unproven problem | HW: if first words clip, add a pre-roll buffer | |
+| 11 | stt | `mip_opt_out=True` always (privacy over the ~2× metered rate) | Design-doc stance | Deepgram console shows the flag | |
+
 (rows appended as the build proceeds)
 
 ## Open questions
