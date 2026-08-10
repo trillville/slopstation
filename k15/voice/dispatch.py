@@ -101,6 +101,16 @@ class Dispatch:
         self.log(f"end session refused: {out}")
         return _fail(f"ssh exit: {out}", say="The PC refused the exit.")
 
+    def now_playing(self):
+        """RunningAppID via the `playing` verb; Result.detail carries it."""
+        if self.dry_run:
+            return self._would("ssh playing")
+        try:
+            out = ssh("playing").strip()
+        except Exception as e:
+            return _fail(f"ssh playing: {e}", say="I couldn't reach the PC.")
+        return _ok(out if out.isdigit() else "0")
+
     def play_game(self, appid):
         """Session live -> direct host launch (Dispatch verb answers
         truthfully: OK/ALREADY/BUSY/NOTREADY). No session -> full couch

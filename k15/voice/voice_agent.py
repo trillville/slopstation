@@ -147,6 +147,23 @@ class WakeListener:
 
 # --- the per-session pipeline -------------------------------------------------
 
+CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
+
+
+def _make_tts(voice, secrets):
+    if voice.get("ttsLocal"):
+        try:
+            from pipecat.services.kokoro.tts import KokoroTTSService
+            log("TTS: Kokoro (local; first run downloads the model)")
+            return KokoroTTSService()
+        except Exception as e:
+            log(f"Kokoro unavailable ({e}) - falling back to Aura-2")
+    from pipecat.services.deepgram.tts import DeepgramTTSService
+    return DeepgramTTSService(
+        api_key=secrets["deepgramApiKey"], sample_rate=16000,
+        settings=DeepgramTTSService.Settings(voice=voice["ttsVoice"]))
+
+
 async def run_session(cfg, secrets, args, input_idx, output_idx):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
@@ -183,17 +200,47 @@ async def run_session(cfg, secrets, args, input_idx, output_idx):
     )
 
     import titles as titles_mod
+    dispatcher = Dispatch(cfg, log, dry_run=args.dry_run)
+    assistant_live = real_key(secrets.get("anthropicApiKey"))
     gate = GrammarGate(
         GrammarMatcher(voice, titles),
-        Dispatch(cfg, log, dry_run=args.dry_run),
+        dispatcher,
         log,
         resolve_game=(titles_mod.build_resolver(voice["fuzzyTitleThreshold"])
                       if titles else None),
-        assistant_enabled=False,                # C3 flips this
+        assistant_enabled=assistant_live,
     )
 
+    stages = [transport.input(), stt, gate]
+    context = None
+    if assistant_live:
+        from assistant import (function_schemas, system_instruction,
+                               tool_impls)
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMContextAggregatorPair)
+        from pipecat.services.anthropic.llm import AnthropicLLMService
+
+        carry = (list(CARRY["messages"])
+                 if time.time() - CARRY["t"] < voice["followupCarryS"] else [])
+        context = LLMContext(
+            messages=carry,
+            tools=function_schemas(tool_impls(dispatcher, log)))
+        user_agg, asst_agg = LLMContextAggregatorPair(context)
+        llm = AnthropicLLMService(
+            api_key=secrets["anthropicApiKey"],
+            settings=AnthropicLLMService.Settings(
+                model=voice["assistantModel"],
+                system_instruction=system_instruction(),
+                enable_prompt_caching=True,
+                max_tokens=400))
+        stages += [user_agg, llm, _make_tts(voice, secrets),
+                   transport.output(), asst_agg]
+    else:
+        stages += [transport.output()]
+
     worker = PipelineWorker(
-        Pipeline([transport.input(), stt, gate, transport.output()]),
+        Pipeline(stages),
         params=PipelineParams(audio_in_sample_rate=16000,
                               audio_out_sample_rate=16000),
         enable_rtvi=False,
@@ -205,6 +252,9 @@ async def run_session(cfg, secrets, args, input_idx, output_idx):
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
     await runner.run()
+    if context is not None:                     # cross-session follow-ups
+        CARRY["messages"] = list(context.messages)[-8:]
+        CARRY["t"] = time.time()
 
 
 # --- main ---------------------------------------------------------------------
@@ -216,12 +266,24 @@ def main():
     ap.add_argument("--wake-trials", action="store_true")
     ap.add_argument("--false-accept-soak", action="store_true")
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--text", action="store_true",
+                    help="assistant REPL: typed transcripts, no audio; "
+                         "always dry-run (actions log, never execute)")
     args = ap.parse_args()
 
     if args.devices:
         from spike import list_devices
         list_devices()
         return 0
+
+    if args.text:
+        cfg = cglib.load_config()
+        secrets = load_secrets()
+        if not real_key(secrets.get("anthropicApiKey")):
+            print("anthropicApiKey is a placeholder - the REPL needs a real key")
+            return 1
+        from assistant import repl
+        return repl(cfg, secrets, log, dry_run=True)
 
     import pyaudio
     cfg = cglib.load_config()
