@@ -1,7 +1,7 @@
 import time
 import hid
 
-VID, PID = 0x28DE, 0x1304
+from cglib import VID, PID
 
 def pick_interface():
     for d in hid.enumerate(VID, PID):

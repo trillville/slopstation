@@ -1,34 +1,40 @@
-import json, pathlib, socket, subprocess, sys, time
-import serial
+"""K15 orchestrator: Ex-Link TV power -> WoL -> ssh enter -> poll READY ->
+switch TV input -> watch loop. The one rule: nothing switches the TV to the
+gaming input before the host writes READY, so every pre-READY failure leaves
+the TV exactly as the viewer had it."""
+import socket, subprocess, sys, time
 
-BASE = pathlib.Path(__file__).parent
-CFG  = json.loads((BASE / "config.json").read_text())
+import cglib
+from cglib import BASE
+
+CFG  = cglib.load_config()
 LOCK = BASE / "state" / "session.lock"
-LOCK_STALE_S = 300   # a live session touches the lock every few seconds; much older = dead owner
-LOGF = BASE / "couch.log"
 
-EXLINK = {"power_on": "082200000002d4", "power_off": "082200000001d5",
-          "hdmi1": "08220a000500c7", "hdmi2": "08220a000501c6",
-          "hdmi3": "08220a000502c5", "hdmi4": "08220a000503c4"}
+LOCK_STALE_S   = 300   # a live session touches the lock every few seconds; much older = dead owner
+PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
+ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
+READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
+WATCH_POLL_S   = 5
+WATCH_FAILS    = 3     # consecutive ssh failures = session dead. Deliberately low:
+                       # a true sleep gets the TV restored within ~a minute; the
+                       # false-positive cost is a desk-side relaunch (the Puck
+                       # stays claimed, so the chord can't hear).
 
-def log(msg):
-    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line, flush=True)
-    try:
-        with LOGF.open("a", encoding="utf-8") as f: f.write(line + "\n")
-    except OSError: pass
+log = cglib.make_log("launch")
+
 
 def touch_lock():
     try: LOCK.write_text(str(time.time()))
     except OSError: pass
 
+
 def exlink(name):
     try:
-        with serial.Serial(CFG["tvComPort"], 9600, timeout=1) as s:
-            s.write(bytes.fromhex(EXLINK[name]))
-            log(f"exlink {name} -> {s.read(3).hex() or 'no-ack'}")
+        ack = cglib.exlink_send(name, CFG["tvComPort"])
+        log(f"exlink {name} -> {ack or 'no-ack'}")
     except Exception as e:
         log(f"exlink {name} FAILED: {e}")   # non-fatal: PC readiness is independent
+
 
 def wol():
     mac = bytes.fromhex(CFG["gamingPcMac"].replace(":", "").replace("-", ""))
@@ -38,12 +44,14 @@ def wol():
         s.sendto(pkt, ("255.255.255.255", 9))
     log("WOL sent")
 
+
 def ssh(cmd, timeout=15):
     r = subprocess.run(["ssh", CFG["sshHost"], cmd],
                        capture_output=True, text=True, timeout=timeout)
     return (r.stdout + r.stderr).strip()
 
-def wait_port(timeout=90):
+
+def wait_port(timeout=PORT_WAIT_S):
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -52,6 +60,7 @@ def wait_port(timeout=90):
         except OSError:
             time.sleep(1)
     return False
+
 
 def start():
     try:
@@ -69,7 +78,7 @@ def start():
         wol()
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh port up")
-        for _ in range(60):
+        for _ in range(ENTER_ATTEMPTS):
             touch_lock()
             try:
                 if ssh("enter") == "OK":
@@ -78,7 +87,7 @@ def start():
                 log(f"enter attempt failed ({e}) - retrying")
             time.sleep(1)
         else: raise RuntimeError("could not trigger Enter task")
-        end = time.time() + 120
+        end = time.time() + READY_WAIT_S
         ready = False
         while time.time() < end:
             touch_lock()
@@ -97,10 +106,11 @@ def start():
         LOCK.unlink(missing_ok=True); return 1
     return 0
 
+
 def watch():
     fails = 0
     while True:
-        time.sleep(5)
+        time.sleep(WATCH_POLL_S)
         touch_lock()
         try:
             st = ssh("status"); fails = 0
@@ -108,11 +118,21 @@ def watch():
                 log("host reports session ended"); break
         except Exception:
             fails += 1
-            if fails >= 3:
+            if fails >= WATCH_FAILS:
                 log("gaming PC gone (slept/crashed) - treating as ended"); break
     exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
     LOCK.unlink(missing_ok=True)
     log("=== IDLE ===")
 
+
+def usage():
+    print("usage: couch.py [start|reconcile]")
+    return 2
+
+
 if __name__ == "__main__":
-    sys.exit(start() if (len(sys.argv) < 2 or sys.argv[1] == "start") else 0)
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
+    if cmd == "start":
+        sys.exit(start())
+    else:
+        sys.exit(usage())
