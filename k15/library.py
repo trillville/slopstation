@@ -9,7 +9,12 @@ Output: state/library.json  {"refreshed": iso-utc, "installed": [rows]}
 written atomically (tmp + os.replace). Consumers: Flux keyterms, the grammar's
 {game} slot, fuzzy launch resolution, and (C3) the assistant's catalog.
 
+The voice agent calls sync() on a background thread at startup and after each
+session - installed refreshes when the PC is awake, owned/metadata whenever a
+Steam key is present. The CLI verbs below are for manual/dev use.
+
 CLI:
+    python library.py sync                        (all three, as the agent does)
     python library.py refresh [--local-steam] [--owned] [--meta [N]]
     python library.py show
     python library.py catalog
@@ -19,6 +24,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -215,6 +221,51 @@ def refresh_owned():
     return 0
 
 
+# --- the sync orchestrator (all three layers, staleness- and key-gated) -------
+# Cadence note: layer 1 (installed) needs the PC awake and fail-softs if it's
+# asleep; layers 2-3 (owned/metadata) come from the Steam cloud and refresh
+# with no PC at all - so the catalog stays current even while the rig sleeps.
+OWNED_MAX_AGE_S = 6 * 3600      # playtime/recency drift slowly; one call/6h
+_sync_lock = threading.Lock()
+
+
+def _iso_age(index, key):
+    """Seconds since index[key] (iso timestamp), or None if absent/unparseable."""
+    try:
+        return time.time() - time.mktime(time.strptime(index[key],
+                                                        "%Y-%m-%dT%H:%M:%S"))
+    except (KeyError, ValueError):
+        return None
+
+
+def sync(meta_limit=200):
+    """Full catalog refresh for the background thread: installed every call
+    (cheap, and install state changes), owned when stale >6h, metadata top-up
+    for any new appid. Steam layers are skipped without keys, never crash.
+    Non-reentrant: a second caller while one runs is a no-op, so rapid
+    session-boundary calls can't stack concurrent metadata crawls."""
+    if not _sync_lock.acquire(blocking=False):
+        return
+    try:
+        refresh()                                   # layer 1 (fail-softs asleep)
+        s = cglib.load_secrets()
+        if not (cglib.real_key(s.get("steamApiKey"))
+                and str(s.get("steamId64", "")).isdigit()):
+            return                                  # no Steam key: layer 1 only
+        age = _iso_age(load(), "ownedRefreshed")
+        if age is None or age > OWNED_MAX_AGE_S:
+            refresh_owned()                         # layer 2
+        index = load()
+        appids = {r["appid"] for r in index.get("installed", [])}
+        appids.update(int(a) for a in index.get("owned", {}))
+        if any(str(a) not in load_meta() for a in appids):
+            refresh_meta(list(appids), meta_limit)  # layer 3 (top-up only)
+    except Exception as e:
+        log(f"sync error ({e}) - partial index kept")
+    finally:
+        _sync_lock.release()
+
+
 def catalog_lines():
     """Compact rows for the assistant's context - one line per game,
     installed first. appid|name|tags|genres|hours|lastPlayed|installed|ctrl"""
@@ -253,14 +304,17 @@ def catalog():
 
 
 def usage():
-    print("usage: library.py refresh [--local-steam] [--owned] [--meta [N]] "
-          "| show | catalog")
+    print("usage: library.py sync | refresh [--local-steam] [--owned] "
+          "[--meta [N]] | show | catalog")
     return 2
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    if args[:1] == ["refresh"]:
+    if args[:1] == ["sync"]:
+        sync()
+        sys.exit(0)
+    elif args[:1] == ["refresh"]:
         rc = refresh(local="--local-steam" in args)
         if "--owned" in args:
             rc = refresh_owned() or rc

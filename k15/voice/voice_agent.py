@@ -53,9 +53,10 @@ def load_titles(count):
 
 
 def refresh_library_bg():
-    """Best-effort index refresh off the wake loop - a slow/asleep PC (30 s ssh
-    timeout) must never delay a wake. library.refresh already fail-softs."""
-    threading.Thread(target=library.refresh, daemon=True).start()
+    """Full catalog sync off the wake loop - a slow/asleep PC (30 s ssh timeout)
+    or a metadata crawl must never delay a wake. library.sync fail-softs, is
+    key-gated per layer, and no-ops if one is already running."""
+    threading.Thread(target=library.sync, daemon=True).start()
 
 
 # --- audio plumbing outside the pipeline --------------------------------------
