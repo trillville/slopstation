@@ -118,6 +118,7 @@ def start():
 
 def watch():
     fails = 0
+    died_by_fails = False
     while True:
         time.sleep(WATCH_POLL_S)
         touch_lock()
@@ -128,7 +129,20 @@ def watch():
         except Exception:
             fails += 1
             if fails >= WATCH_FAILS:
-                log("gaming PC gone (slept/crashed) - treating as ended"); break
+                log("gaming PC gone (slept/crashed) - treating as ended")
+                died_by_fails = True
+                break
+    if died_by_fails:
+        # A fails-death can leave a live PC holding the Puck in TV topology -
+        # and a held Puck means a deaf chord, so recovery would need the desk.
+        # Best-effort exit dispatch: if the PC is actually alive behind a
+        # transient blip, its teardown restores the desk and sends the Puck
+        # home; if it's truly asleep, this raises and nothing changes.
+        try:
+            if ssh("exit") == "OK":
+                log("watch died on ssh failures - dispatched exit to release the desk/Puck")
+        except Exception:
+            pass
     exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
     LOCK.unlink(missing_ok=True)
     log("=== IDLE ===")
