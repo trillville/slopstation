@@ -14,7 +14,7 @@ COUCH    = cglib.BASE / "couch.py"
 # haptic_test.py. Re-bench after controller firmware updates.
 ACK_TONES = ((440, 60), (660, 90))   # (freq_hz, duration_ms)
 ACK_GAP_S = 0.07
-ACK_GAIN  = 120                      # s8; bridge-proven loud value (firmware clamps) - tune down if harsh
+ACK_GAIN  = 0                        # s8 dB-ish; 0 = natural level (bench-tuned 2026-08-10; 120 = clamped max)
 
 log = cglib.make_log("listener")
 
