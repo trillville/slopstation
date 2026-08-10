@@ -87,11 +87,13 @@ escape hatch not needed.
 couch.log; Task Manager kill → auto-restart ≤10 s; close window → stays dead.
 
 ### Step 2 — `voice: wake gate + bench modes`
-- `wake_gate.py` (FrameProcessor): buffers 20 ms input frames to oWW's 80 ms
-  hop, runs `hey_jarvis` (ONNX; auto-download to `voice/models/` on first run),
-  config `wakeThreshold`. Gate CLOSED = input audio swallowed (nothing flows
-  downstream — no cloud, by construction). On detection: wake-tick earcon, gate
-  OPEN, timers armed (`lingerS`, `holdWindowS` consumed in step 3).
+*(as-built differs — see voice-assumptions.md #7-#9: the wake loop runs OUTSIDE
+Pipecat, so there is no in-pipeline wake FrameProcessor; the model auto-downloads
+into the openwakeword package dir, not `voice/models/`; session-end is one
+`idle_timeout` mechanism, not gate-managed `lingerS`/`holdWindowS` timers.)*
+- `WakeListener` (raw PyAudio + oWW ONNX, in `voice_agent.py`): scores 80 ms
+  hops, config `wakeThreshold`. DORMANT owns the mic and releases it before a
+  session pipeline opens. On detection: wake-tick earcon, run one session.
 - Bench modes on `voice_agent.py`: `--wake-trials` (log each detection +
   confidence + running tally) and `--false-accept-soak` (spurious-wake count +
   rate/hr). These are C0's instruments.
@@ -101,21 +103,18 @@ couch.log; Task Manager kill → auto-restart ≤10 s; close window → stays de
 acoustic gate) — expect ≥9 detections; 1-hour TV soak → false-accept count
 (number recorded, no gate — that's C0's job on the real array).
 
-### Step 3 — `voice: flux session + grammar gate` *(the one remaining technical unknown lives here)*
-- **Session lifecycle first**: verify against pinned source how
-  `DeepgramFluxSTTService` behaves when audio stops ~30 s (socket death per
-  SDK issue #649). Candidate A: wake gate simply starts/stops the audio flow
-  and the service reconnects on demand (if its `_connect` is lazy/re-entrant).
-  Candidate B: wake gate drives explicit service `start()`/`stop()` via events.
-  Whichever the source supports cleanly wins; decision recorded in as-built.
-  Billing invariant either way: **socket open ≈ session open only**.
+### Step 3 — `voice: flux session + grammar gate`
+*(as-built: the Flux socket-lifecycle unknown resolved to per-session workers —
+each wake builds one `PipelineWorker`, so the socket opens on `StartFrame` and
+closes at session end; billing invariant holds. Intent names shipped as
+`StartSession`/`EndSession`/`VolumeUp`/… not the `session_start`/`vol_up` sketch;
+session-end is the worker idle timeout guarded by `GrammarGate.is_busy`, not a
+gate LINGER timer.)*
 - `grammar_gate.py` (FrameProcessor): hassil match over `grammar.yaml` —
-  `session_start`, `session_end` (**exact match only**), `vol_up`, `vol_down`,
-  `vol_set{level}`, `mute`, `input_switch{name}`, exit phrases ("thanks",
-  "that's all", "never mind"). Match → swallow frame, ack earcon, dispatch
-  (this commit: log-only stubs `[voice] would: ...`). No match → pass through
-  (dead-ends until C3; fail earcon + log in the interim). LINGER (~5 s
-  post-command) and HOLDING windows enforced via the wake gate's timers.
+  StartSession, EndSession (**narrow phrasings, no fuzz**), VolumeUp/Down,
+  VolumeSet, MuteToggle, SwitchInput, PlayGame (wildcard + fuzzy resolver),
+  ExitSession. Match → swallow frame, dispatch off-loop (`asyncio.to_thread`),
+  ack earcon. No match → assistant lane (C3) or fail earcon.
 - `test_grammar.py`: offline utterance→intent table, runnable with no audio.
 - Deps: `+pipecat-ai[deepgram]`, `+hassil` (pinned at commit).
 

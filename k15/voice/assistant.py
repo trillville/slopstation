@@ -61,19 +61,22 @@ def tool_impls(dispatch, log):
         r = dispatch.play_game(appid)
         return {"ok": r.ok, "detail": r.detail}
 
+    plain = {"end_session": dispatch.end_session,
+             "start_session": dispatch.start_session,
+             "volume_up": dispatch.volume_up,
+             "volume_down": dispatch.volume_down,
+             "mute": dispatch.mute_toggle}
+
     def control(args):
         action = args.get("action")
         if action == "set_volume":
-            r = dispatch.volume_set(int(args.get("level", 0)))
+            if "level" not in args:
+                return {"ok": False, "error": "set_volume needs level 0-100"}
+            r = dispatch.volume_set(int(args["level"]))
         elif action == "switch_input":
             r = dispatch.switch_input(str(args.get("input", "")))
-        elif action in ("end_session", "start_session", "volume_up",
-                        "volume_down", "mute"):
-            r = {"end_session": dispatch.end_session,
-                 "start_session": dispatch.start_session,
-                 "volume_up": dispatch.volume_up,
-                 "volume_down": dispatch.volume_down,
-                 "mute": dispatch.mute_toggle}[action]()
+        elif action in plain:
+            r = plain[action]()
         else:
             return {"ok": False, "error": f"unknown action {action}"}
         return {"ok": r.ok, "detail": r.detail}
@@ -118,12 +121,17 @@ TOOL_DEFS = [
 
 
 def function_schemas(impls):
-    """Pipecat FunctionSchema list with auto-registering async handlers."""
+    """Pipecat FunctionSchema list with auto-registering async handlers.
+    Tool impls call blocking dispatch (ssh/serial) - run them off the event
+    loop so audio and the Flux socket keep flowing during a tool call."""
+    import asyncio
+
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     def wrap(fn):
         async def handler(params):
-            await params.result_callback(fn(dict(params.arguments)))
+            out = await asyncio.to_thread(fn, dict(params.arguments))
+            await params.result_callback(out)
         return handler
 
     return [FunctionSchema(name=n, description=d, properties=p, required=r,

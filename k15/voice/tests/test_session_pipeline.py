@@ -40,7 +40,7 @@ async def run():
         lines.append(msg)
 
     cfg = cglib.load_config()
-    gate = GrammarGate(GrammarMatcher(cfg["voice"], None),
+    gate = GrammarGate(GrammarMatcher(cfg["voice"]),
                        Dispatch(cfg, log, dry_run=True), log)
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,

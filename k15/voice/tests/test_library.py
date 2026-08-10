@@ -50,7 +50,11 @@ def main():
         assert appid == r["appid"], f"round-trip failed: {r['name']} -> {name}"
     # ...and garbage resolves to nothing.
     assert resolve("purple monkey dishwasher") == (None, None)
-    print(f"  resolver: {len(rows)}/{len(rows)} spoken-form round-trips")
+    # Bare pronouns/stopwords must NOT capture a title (token-subset scores
+    # 100); "play it" has to fall through to the assistant lane.
+    for stop in ("it", "the", "a", "on"):
+        assert resolve(stop) == (None, None), f"'{stop}' wrongly resolved"
+    print(f"  resolver: {len(rows)}/{len(rows)} round-trips, stopwords refused")
 
     # The realism cases that motivated titles.py (guarded on ownership).
     by_id = {r["appid"]: r["name"] for r in rows}

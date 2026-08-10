@@ -7,11 +7,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from grammar_gate import GrammarMatcher
 
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",
                         "ps5": "hdmi2", "the pc": "hdmi4"}}
-TITLES = ["armored core six", "elden ring", "forza horizon five"]
 
 # (utterance, expected intent or None, expected slots subset)
 TABLE = [
@@ -64,7 +64,7 @@ TABLE = [
 
 
 def main():
-    m = GrammarMatcher(VOICE_CFG, TITLES)
+    m = GrammarMatcher(VOICE_CFG)
     failures = []
     for text, want_intent, want_slots in TABLE:
         got = m.match(text)

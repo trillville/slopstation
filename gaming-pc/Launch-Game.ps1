@@ -10,8 +10,12 @@ try {
     if (-not (Test-Path $marker)) {
         Log 'no launch-app marker - nothing to do'
     } else {
-        $id = (Get-Content $marker -TotalCount 1).Trim()
+        # Stringify before trimming: Get-Content on an empty file returns $null
+        # in PS 5.1, and .Trim() on it would crash BEFORE the delete, stranding
+        # the marker. Read, delete, then validate the (possibly empty) string.
+        $raw = Get-Content $marker -TotalCount 1
         Remove-Item $marker -Force
+        $id = "$raw".Trim()
         if ($id -notmatch '^\d{1,10}$') { throw "invalid appid in marker: '$id'" }
         $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam').SteamPath -replace '/', '\'
         $exe = Join-Path $steam 'steam.exe'

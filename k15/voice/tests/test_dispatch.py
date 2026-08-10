@@ -84,16 +84,7 @@ def main():
     sent.clear()
     assert h.d.mute_toggle().ok and sent == [cglib.EXLINK_FRAMES["mute_toggle"]]
 
-    # --- serial retry: first open fails, second succeeds ---------------------
-    calls = {"n": 0}
-    def flaky(frame, port):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise OSError("could not open port")
-        return "030cf1"
-    cglib.exlink_send_hex = flaky
-    h = Harness()
-    assert h.d.mute_toggle().ok and calls["n"] == 2
+    # --- serial send raises -> fail earcon (COM retry now lives in cglib) ----
     def always_down(frame, port): raise OSError("dead")
     cglib.exlink_send_hex = always_down
     r = h.d.mute_toggle()

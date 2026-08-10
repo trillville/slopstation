@@ -193,7 +193,9 @@ def usage():
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
     if cmd == "start":
-        appid = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
+        if len(sys.argv) > 2 and not sys.argv[2].isdigit():
+            sys.exit(usage())               # a non-digit appid is a caller bug
+        appid = sys.argv[2] if len(sys.argv) > 2 else None
         sys.exit(start(appid))
     elif cmd == "reconcile":
         sys.exit(reconcile())

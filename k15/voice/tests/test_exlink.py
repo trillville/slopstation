@@ -5,6 +5,7 @@ builder's checksum math drifts, this fails. Run:
     .venv\\Scripts\\python tests\\test_exlink.py
 """
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -40,6 +41,42 @@ def main():
 
     # The bench query probe frame is also builder-consistent.
     assert cglib.EXLINK_VOLUME_QUERY == cglib.exlink_frame(0xF0, 0x01, 0x00, 0x00)
+
+    # COM-port contention retry (moved here so couch.py's sends get it too):
+    # one SerialException retries after a settle; a second one propagates.
+    import types
+    calls = {"n": 0}
+
+    class FakePort:
+        def __init__(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise fake_serial.SerialException("busy")
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def write(self, b): pass
+        def read(self, n): return bytes.fromhex("030cf1")
+
+    fake_serial = types.ModuleType("serial")
+    fake_serial.SerialException = type("SerialException", (Exception,), {})
+    fake_serial.Serial = FakePort
+    sys.modules["serial"] = fake_serial
+    _real_sleep = time.sleep
+    time.sleep = lambda s: None
+    try:
+        assert cglib.exlink_send_hex("082202000000d4", "COMX") == "030cf1"
+        assert calls["n"] == 2, "should have retried once"
+        calls["n"] = 0
+        FakePort.__init__ = lambda self, *a, **k: (_ for _ in ()).throw(
+            fake_serial.SerialException("always"))
+        try:
+            cglib.exlink_send_hex("082202000000d4", "COMX")
+            assert False, "second failure must propagate"
+        except fake_serial.SerialException:
+            pass
+    finally:
+        time.sleep = _real_sleep
+        del sys.modules["serial"]
 
     # Every frame is 7 bytes and its own checksum verifies.
     for name, hexs in {**cglib.EXLINK_FRAMES,

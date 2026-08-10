@@ -25,7 +25,8 @@ import asyncio, platform, sys, time, traceback
 
 RATE = 16000
 TONE_HZ, TONE_S = 440, 0.25
-RMS_THRESHOLD = int(sys.argv[1]) if len(sys.argv) > 1 else 900
+RMS_THRESHOLD = 900  # optional argv[1] override, parsed under __main__ only -
+#                      module-level parsing would crash `voice_agent --devices`
 TRIGGER_COOLDOWN_S = 1.5
 STATS_EVERY_S = 5.0
 HOLDER = {}          # probe survives here so Ctrl+C still gets a summary
@@ -155,6 +156,8 @@ def summary(probe, err):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        RMS_THRESHOLD = int(sys.argv[1])
     err = None
     try:
         banner()

@@ -118,6 +118,29 @@ def load_config():
     return json.loads((BASE / "config.json").read_text())
 
 
+# --- secrets (voice lanes; chord path never needs these) ----------------------
+SECRETS = BASE / "secrets.json"
+
+
+def load_secrets():
+    """Fail-soft: missing or malformed file = no keys = lanes disabled with a
+    message downstream, never a crash (utf-8-sig eats Notepad's BOM)."""
+    try:
+        return json.loads(SECRETS.read_text(encoding="utf-8-sig"))
+    except OSError:
+        return {}
+    except ValueError:
+        print(f"[cglib] {SECRETS.name} is malformed - all keyed lanes disabled")
+        return {}
+
+
+def real_key(value):
+    """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent."""
+    return (isinstance(value, str) and "..." not in value
+            and not value.upper().startswith("PLACEHOLDER")
+            and len(value.strip()) >= 15)
+
+
 def rotate_log(max_bytes=5_000_000):
     """Two-generation rotation: couch.log -> couch.log.1 once it exceeds the
     cap. Called at K15 boot (reconcile) and listener startup. Writers open-
@@ -152,11 +175,19 @@ def make_log(tag):
 def exlink_send_hex(frame_hex, port):
     """Send one raw Ex-Link frame (hex string); returns the ack as hex ('' if
     none). serial is imported lazily so machines without pyserial can import
-    cglib. Success ack is 03 0c f1."""
+    cglib. Success ack is 03 0c f1. One retry after 1 s: couch.py and the
+    voice agent now share this port from separate processes in
+    open-write-close bursts, so a transient open collision gets patience."""
     import serial
-    with serial.Serial(port, 9600, timeout=1) as s:
-        s.write(bytes.fromhex(frame_hex))
-        return s.read(3).hex()
+    try:
+        with serial.Serial(port, 9600, timeout=1) as s:
+            s.write(bytes.fromhex(frame_hex))
+            return s.read(3).hex()
+    except serial.SerialException:
+        time.sleep(1)
+        with serial.Serial(port, 9600, timeout=1) as s:
+            s.write(bytes.fromhex(frame_hex))
+            return s.read(3).hex()
 
 
 def exlink_send(name, port):

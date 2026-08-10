@@ -20,8 +20,8 @@ separate process on system python and must survive anything that happens here.
 """
 import argparse
 import asyncio
-import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -31,41 +31,31 @@ sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
 import earcons                                  # noqa: E402
+import library                                  # noqa: E402
 from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarGate, GrammarMatcher   # noqa: E402
 
-SECRETS = HERE.parent / "secrets.json"
-LIBRARY = HERE.parent / "state" / "library.json"
-
 log = cglib.make_log("voice")
 
-
-# --- config / secrets ---------------------------------------------------------
-
-def load_secrets():
-    try:
-        return json.loads(SECRETS.read_text(encoding="utf-8"))
-    except OSError:
-        return {}
-
-
-def real_key(value):
-    """Placeholder discipline (assumption #1): template junk disables a lane
-    with a message, never a crash."""
-    return (isinstance(value, str) and "..." not in value
-            and not value.upper().startswith("PLACEHOLDER")
-            and len(value.strip()) >= 15)
+# config.json's voice section is the one home for tuning values; a deployed
+# config missing any of these should fail loudly at startup, not per-wake.
+REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
+                  "eotThreshold", "eagerEotThreshold", "keytermCount",
+                  "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
+                  "assistantModel", "inputs")
 
 
 def load_titles(count):
-    """Installed titles by recency from the library index (C2 writes it).
-    Feeds Flux keyterms, the grammar's {game} slot, and fuzzy resolution."""
-    try:
-        rows = json.loads(LIBRARY.read_text(encoding="utf-8"))["installed"]
-    except (OSError, KeyError, ValueError):
-        return None
-    rows = sorted(rows, key=lambda r: r.get("lastPlayed", 0), reverse=True)
+    """Installed titles by recency: Flux keyterms + fuzzy-resolution corpus."""
+    rows = library.load().get("installed", [])
+    rows.sort(key=lambda r: r.get("lastPlayed", 0), reverse=True)
     return [r["name"] for r in rows if r.get("name")][:count]
+
+
+def refresh_library_bg():
+    """Best-effort index refresh off the wake loop - a slow/asleep PC (30 s ssh
+    timeout) must never delay a wake. library.refresh already fail-softs."""
+    threading.Thread(target=library.refresh, daemon=True).start()
 
 
 # --- audio plumbing outside the pipeline --------------------------------------
@@ -87,7 +77,8 @@ def resolve_device(pa, fragment, want_input):
 
 def play_pcm(pa, pcm, device_index=None):
     """Blocking playback for the wake tick (the pipeline isn't up yet)."""
-    s = pa.open(format=8, channels=1, rate=earcons.SAMPLE_RATE,  # 8 = paInt16
+    import pyaudio
+    s = pa.open(format=pyaudio.paInt16, channels=1, rate=earcons.SAMPLE_RATE,
                 output=True, output_device_index=device_index)
     try:
         s.write(pcm)
@@ -128,8 +119,9 @@ class WakeListener:
     def wait_for_wake(self, threshold, on_score=None):
         """Blocks until the wake word fires; returns the score. The stream is
         closed before returning so the session pipeline can own the device."""
-        stream = self.pa.open(format=8, channels=1, rate=16000, input=True,
-                              frames_per_buffer=self.CHUNK,
+        import pyaudio
+        stream = self.pa.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                              input=True, frames_per_buffer=self.CHUNK,
                               input_device_index=self.device_index)
         try:
             while True:
@@ -150,6 +142,31 @@ class WakeListener:
 CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
 
 
+def _trim_carry(messages):
+    """Carry only whole tool exchanges. A fixed slice can start on an orphaned
+    role:'tool' message (or an assistant message bearing tool_calls with no
+    following result); the Anthropic API 400s on a tool_result without its
+    tool_use, so drop from the front until the first message is a plain user
+    turn, and drop a trailing assistant-with-tool-calls that has no result."""
+    def is_plain_user(m):
+        return (isinstance(m, dict) and m.get("role") == "user"
+                and "tool_call_id" not in m and "tool_use_id" not in m)
+
+    def has_tool_calls(m):
+        return isinstance(m, dict) and (m.get("tool_calls")
+                                        or m.get("role") == "assistant"
+                                        and isinstance(m.get("content"), list)
+                                        and any(isinstance(b, dict)
+                                                and b.get("type") == "tool_use"
+                                                for b in m["content"]))
+    msgs = list(messages)
+    while msgs and not is_plain_user(msgs[0]):
+        msgs.pop(0)
+    if msgs and has_tool_calls(msgs[-1]):
+        msgs.pop()
+    return msgs
+
+
 def _make_tts(voice, secrets):
     if voice.get("ttsLocal"):
         try:
@@ -164,7 +181,7 @@ def _make_tts(voice, secrets):
         settings=DeepgramTTSService.Settings(voice=voice["ttsVoice"]))
 
 
-async def run_session(cfg, secrets, args, input_idx, output_idx):
+async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
                                        TranscriptionFrame,
@@ -177,7 +194,7 @@ async def run_session(cfg, secrets, args, input_idx, output_idx):
     from pipecat.workers.runner import WorkerRunner
 
     voice = cfg["voice"]
-    titles = load_titles(voice["keytermCount"])
+    keyterms = load_titles(voice["keytermCount"])
 
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
@@ -195,19 +212,16 @@ async def run_session(cfg, secrets, args, input_idx, output_idx):
             eager_eot_threshold=(voice["eagerEotThreshold"]
                                  if voice.get("eagerEnabled", True) else None),
             numerals=True,
-            **({"keyterm": titles} if titles else {}),
+            **({"keyterm": keyterms} if keyterms else {}),
         ),
     )
 
-    import titles as titles_mod
     dispatcher = Dispatch(cfg, log, dry_run=args.dry_run)
-    assistant_live = real_key(secrets.get("anthropicApiKey"))
+    assistant_live = cglib.real_key(secrets.get("anthropicApiKey"))
     gate = GrammarGate(
-        GrammarMatcher(voice, titles),
-        dispatcher,
-        log,
-        resolve_game=(titles_mod.build_resolver(voice["fuzzyTitleThreshold"])
-                      if titles else None),
+        matcher, dispatcher, log,
+        resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])
+                      if keyterms else None),
         assistant_enabled=assistant_live,
     )
 
@@ -247,13 +261,30 @@ async def run_session(cfg, secrets, args, input_idx, output_idx):
         idle_timeout_secs=voice["holdWindowS"],
         idle_timeout_frames=(TranscriptionFrame, InterimTranscriptionFrame,
                              UserStartedSpeakingFrame, BotSpeakingFrame),
-        cancel_on_idle_timeout=True,
+        cancel_on_idle_timeout=False,           # we decide - see the handler
     )
+
+    @worker.event_handler("on_idle_timeout")
+    async def _on_idle(worker):
+        # Flux emits no frame mid-turn and dispatch pushes nothing while it
+        # blocks, so the idle clock can expire mid-utterance or mid-ssh. End
+        # only when the user isn't speaking and no dispatch is in flight;
+        # otherwise defer and let the next idle window re-check.
+        if gate.is_busy():
+            log("idle timeout deferred - user/dispatch still active")
+            return
+        log("idle - ending session")
+        await worker.cancel(reason="idle")
+
     runner = WorkerRunner(handle_sigint=False)
-    await runner.add_workers(worker)
-    await runner.run()
+    try:
+        await runner.add_workers(worker)
+        await runner.run()
+    finally:
+        transport._pyaudio.terminate()          # pipecat 1.7 owns but never
+        #                                         terminates its PyAudio handle
     if context is not None:                     # cross-session follow-ups
-        CARRY["messages"] = list(context.messages)[-8:]
+        CARRY["messages"] = _trim_carry(list(context.messages)[-8:])
         CARRY["t"] = time.time()
 
 
@@ -276,29 +307,37 @@ def main():
         list_devices()
         return 0
 
+    cfg = cglib.load_config()
+    voice = cfg["voice"]
+    missing = [k for k in REQUIRED_VOICE if k not in voice]
+    if missing:
+        log(f"config.json voice section missing keys: {missing} - fix and restart")
+        return 1
+    secrets = cglib.load_secrets()
+
     if args.text:
-        cfg = cglib.load_config()
-        secrets = load_secrets()
-        if not real_key(secrets.get("anthropicApiKey")):
+        if not cglib.real_key(secrets.get("anthropicApiKey")):
             print("anthropicApiKey is a placeholder - the REPL needs a real key")
             return 1
         from assistant import repl
         return repl(cfg, secrets, log, dry_run=True)
 
     import pyaudio
-    cfg = cglib.load_config()
-    voice = cfg["voice"]
-    secrets = load_secrets()
     cglib.rotate_log()
 
     pa = pyaudio.PyAudio()
     input_idx = resolve_device(pa, voice["inputDeviceName"], want_input=True)
     output_idx = resolve_device(pa, voice["outputDeviceName"], want_input=False)
 
-    stt_live = real_key(secrets.get("deepgramApiKey"))
+    stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
         log("deepgramApiKey is a placeholder - wake word runs, but sessions "
             "are DISABLED until a real key lands in secrets.json")
+
+    # Build the grammar once (a YAML typo fails here, not per-wake), and warm
+    # the library index in the background so the first "play <title>" resolves.
+    matcher = GrammarMatcher(voice)
+    refresh_library_bg()
 
     listener = WakeListener(pa, voice, input_idx)
     log(f"voice agent up - wake model {listener.model_name}, "
@@ -314,7 +353,6 @@ def main():
             log(f"wake #{n} (score {score:.2f})")
             play_pcm(pa, earcons.pcm("wake"), output_idx)
             time.sleep(1.0)                     # refractory: one hit per attempt
-        return 0
 
     if args.false_accept_soak:
         log("false-accept soak: leave the room noisy; every wake is a false accept.")
@@ -325,7 +363,6 @@ def main():
             hrs = (time.time() - t0) / 3600
             log(f"FALSE ACCEPT #{n} after {hrs:.2f}h ({n / max(hrs, 0.01):.1f}/hr)")
             time.sleep(1.0)
-        return 0
 
     while True:
         score = listener.wait_for_wake(voice["wakeThreshold"])
@@ -336,9 +373,11 @@ def main():
         play_pcm(pa, earcons.pcm("wake"), output_idx)
         log("session open")
         try:
-            asyncio.run(run_session(cfg, secrets, args, input_idx, output_idx))
+            asyncio.run(run_session(cfg, secrets, matcher, args,
+                                    input_idx, output_idx))
         except Exception as e:
             log(f"session crashed: {e!r} - back to dormant")
+        refresh_library_bg()                    # pick up installs between sessions
         log("session closed - dormant")
         if args.once:
             return 0

@@ -13,9 +13,13 @@ import cglib
 def main(argv):
     port = cglib.load_config()["tvComPort"]
     if len(argv) == 2 and argv[0] == "vol_set" and argv[1].isdigit():
-        frame = cglib.vol_set_frame(int(argv[1]))
+        level = int(argv[1])
+        if level > 100:
+            print("vol_set takes 0-100")
+            return 2
+        frame = cglib.vol_set_frame(level)
         ack = cglib.exlink_send_hex(frame, port)
-        print(f"vol_set {argv[1]}: sent {frame}, response={ack or '(none)'}")
+        print(f"vol_set {level}: sent {frame}, response={ack or '(none)'}")
         return 0
     if len(argv) == 1 and argv[0] == "probe_volume":
         ack = cglib.exlink_send_hex(cglib.EXLINK_VOLUME_QUERY, port)

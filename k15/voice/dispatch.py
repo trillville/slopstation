@@ -12,11 +12,9 @@ import subprocess
 import sys
 import time
 from collections import namedtuple
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cglib
-from couch import ssh          # doctor.py precedent: one ssh implementation
+from couch import ssh          # one ssh implementation - couch.py owns it
 
 COUCH = cglib.BASE / "couch.py"
 
@@ -49,23 +47,17 @@ class Dispatch:
         return _ok(f"dry-run: {what}")
 
     def _exlink(self, what, frame_hex):
-        """TV serial send with one retry - couch.py shares the COM port in
-        open-write-close bursts, so a transient open failure gets one second
-        of patience before it becomes a fail earcon."""
+        """TV serial send; COM-port contention retry lives in cglib so
+        couch.py's power/input sends get the same protection."""
         if self.dry_run:
             return self._would(f"exlink {what} ({frame_hex})")
-        for attempt in (1, 2):
-            try:
-                ack = cglib.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
-                self.log(f"exlink {what} -> {ack or 'no-ack'}")
-                return _ok(f"exlink {what}")
-            except Exception as e:
-                if attempt == 1:
-                    time.sleep(1)
-                else:
-                    self.log(f"exlink {what} FAILED: {e}")
-                    return _fail(f"exlink {what}: {e}",
-                                 say="The TV command failed.")
+        try:
+            ack = cglib.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
+            self.log(f"exlink {what} -> {ack or 'no-ack'}")
+            return _ok(f"exlink {what}")
+        except Exception as e:
+            self.log(f"exlink {what} FAILED: {e}")
+            return _fail(f"exlink {what}: {e}", say="The TV command failed.")
 
     # -- session ---------------------------------------------------------------
 
@@ -141,32 +133,27 @@ class Dispatch:
 
     # -- TV --------------------------------------------------------------------
 
-    def volume_up(self):
-        step = int(self.voice.get("volumeStep", 5))
+    def _vol_steps(self, name):
+        step = int(self.voice["volumeStep"])
         if self.dry_run:
-            return self._would(f"vol_up x{step}")
+            return self._would(f"{name} x{step}")
         for _ in range(step):
-            r = self._exlink("vol_up", cglib.EXLINK_FRAMES["vol_up"])
+            r = self._exlink(name, cglib.EXLINK_FRAMES[name])
             if not r.ok:
                 return r
             time.sleep(0.05)
-        return _ok(f"vol_up x{step}")
+        return _ok(f"{name} x{step}")
+
+    def volume_up(self):
+        return self._vol_steps("vol_up")
 
     def volume_down(self):
-        step = int(self.voice.get("volumeStep", 5))
-        if self.dry_run:
-            return self._would(f"vol_down x{step}")
-        for _ in range(step):
-            r = self._exlink("vol_down", cglib.EXLINK_FRAMES["vol_down"])
-            if not r.ok:
-                return r
-            time.sleep(0.05)
-        return _ok(f"vol_down x{step}")
+        return self._vol_steps("vol_down")
 
     def volume_set(self, level):
         """Absolute set, clamped to volumeMax - a misheard number must never
         blast the room. Also the mute-desync escape hatch."""
-        vmax = int(self.voice.get("volumeMax", 40))
+        vmax = int(self.voice["volumeMax"])
         clamped = max(0, min(vmax, int(level)))
         if clamped != int(level):
             self.log(f"vol_set {level} clamped to {clamped} (volumeMax {vmax})")
@@ -198,4 +185,8 @@ class Dispatch:
             except Exception as e:
                 self.log(f"input {cmd} refused - status check failed ({e})")
                 return _fail(f"status check: {e}", say="I couldn't reach the PC.")
-        return self._exlink(f"input {cmd}", cglib.EXLINK_FRAMES[cmd])
+        frame_hex = cglib.EXLINK_FRAMES.get(cmd)
+        if frame_hex is None:
+            return _fail(f"config maps '{spoken_name}' to unknown command '{cmd}'",
+                         say="That input isn't configured correctly.")
+        return self._exlink(f"input {cmd}", frame_hex)

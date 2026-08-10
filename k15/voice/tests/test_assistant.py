@@ -44,6 +44,8 @@ def main():
     assert impls["control"]({"action": "volume_up"})["ok"]
     assert impls["control"]({"action": "set_volume", "level": 30})["ok"]
     assert not impls["control"]({"action": "self_destruct"})["ok"]
+    r = impls["control"]({"action": "set_volume"})     # no level -> refused
+    assert not r["ok"] and "level" in r["error"]
     r = impls["get_now_playing"]({})
     assert r["ok"]                                # dry-run path
     r = impls["get_game_details"]({"appid": real_appid})

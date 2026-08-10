@@ -3,9 +3,9 @@
 # Deliberately dependency-free - no dot-sourcing in the sshd context.
 # The ready path mirrors $CG.ReadyMarker in CouchGaming.common.ps1.
 #
-# Voice (C2) adds: games (installed-library JSON), playing (RunningAppID),
-# launch <appid> (READY-gated, BUSY/ALREADY-truthful, file-as-argument to the
-# \CouchGaming\LaunchGame task - schtasks can't take arguments).
+# Verbs: enter/exit/status (session), games (installed-library JSON), playing
+# (RunningAppID), launch <appid> (READY-gated, BUSY/ALREADY-truthful; the appid
+# travels via marker file because schtasks /Run cannot pass arguments).
 $ready = 'C:\ProgramData\CouchGaming\ready'
 switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   '^enter$'  { schtasks /Run /TN '\CouchGaming\Enter' | Out-Null

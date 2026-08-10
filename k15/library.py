@@ -203,10 +203,8 @@ def refresh_meta(appids, limit=200):
 
 
 def refresh_owned():
-    sys.path.insert(0, str(cglib.BASE / "voice"))
-    from voice_agent import load_secrets, real_key
-    s = load_secrets()
-    if not (real_key(s.get("steamApiKey")) and str(s.get("steamId64", "")).isdigit()):
+    s = cglib.load_secrets()
+    if not (cglib.real_key(s.get("steamApiKey")) and str(s.get("steamId64", "")).isdigit()):
         log("owned-layer skipped: steamApiKey/steamId64 not set in secrets.json")
         return 1
     index = load()

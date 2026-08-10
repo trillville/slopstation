@@ -13,15 +13,9 @@ Variant expansion per title: full form + subtitle-stripped form (text before
 ":" or " - ") + trailing-number-stripped form. Variants claimed by more than
 one title are dropped as ambiguous (fuzzy resolution still sees full names).
 """
-import json
 import re
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import cglib
-
-LIBRARY = cglib.BASE / "state" / "library.json"
+import library
 
 _ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6",
           "vii": "7", "viii": "8", "ix": "9", "xi": "11", "xii": "12"}
@@ -83,19 +77,12 @@ def slot_tuples(titles):
     return list(variant_map(titles).items())
 
 
-def load_installed():
-    try:
-        return json.loads(LIBRARY.read_text(encoding="utf-8"))["installed"]
-    except (OSError, KeyError, ValueError):
-        return []
-
-
 def build_resolver(threshold, margin=5):
     """spoken -> (appid, canonical title) or (None, None). Fuzzy over the
     culled variant space; a near-tie between DIFFERENT games (token_set_ratio
     scores subsets at 100, so 'warhammer' ties every 40K title) resolves to
     nothing rather than a coin flip - saying no beats launching wrong."""
-    rows = load_installed()
+    rows = library.load().get("installed", [])
     if not rows:
         return None
     by_name = {r["name"]: r["appid"] for r in rows if r.get("name")}
@@ -109,6 +96,11 @@ def build_resolver(threshold, margin=5):
         if q in vmap:                           # exact variant: no fuzz, no
             canon = vmap[q]                     # ambiguity ('hades 2' must
             return by_name[canon], canon        # never lose to 'hades')
+        # A bare pronoun/stopword ("it", "the") is a token-subset of some
+        # title and would score 100 on token_set_ratio - refuse short
+        # single-token queries so "play it" falls through to the assistant.
+        if len(q.split()) == 1 and len(q) <= 3:
+            return None, None
         hits = process.extract(q, keys, scorer=fuzz.token_set_ratio, limit=3)
         if not hits or hits[0][1] < threshold:
             return None, None
