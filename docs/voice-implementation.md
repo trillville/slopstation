@@ -11,7 +11,7 @@ artifacts from C1, so planning them early would just be guessing in markdown.
 
 | Phase | State | Gate result |
 |---|---|---|
-| **C1 — spike + command lane** | **current — planned below** | — |
+| **C1 — spike + command lane** | **current — planned below** | step 0 spike: **PASS** (gaming PC, 2026-08-10; see as-built) |
 | C0 — acoustic gate | protocol below; **blocked on array delivery**, consumes C1 steps 0–2 (the bench kit) | — |
 | C2 — game launch | unplanned (needs C1's grammar + pins); scope in design doc | — |
 | C3 — conversation lane | unplanned (needs C1 spike verdict + C2 index); scope in design doc | — |
@@ -57,12 +57,18 @@ C:\Users\minipc\Desktop\voice\.venv\Scripts\pip install -r C:\Users\minipc\Deskt
 C:\Users\minipc\Desktop\voice\.venv\Scripts\python C:\Users\minipc\Desktop\voice\spike.py
 ```
 
-**Pass:** device list prints, speech → `[vad] speaking` lines + audible tone,
-10 minutes without device errors. **Fail path A:** PyAudio/WASAPI device
-errors → Claude writes the thin `sounddevice` transport (~200 lines, design
-doc's escape hatch), re-run. **Fail path B (catastrophic):** frame pipeline
-itself misbehaves on Windows → stop; hand-roll decision per design doc. The
-verdict and final pins get recorded in the as-built when this collapses.
+**As-built (2026-08-10): PASS — run on the gaming PC** (both machines are
+Windows 11; K15 confirmation piggybacks on the next deploy rather than a
+special trip). Python 3.11.4, `pipecat-ai==1.7.0`, `pyaudio==0.2.14`
+(cp313 win_amd64 wheel also confirmed on PyPI for the K15's 3.13). Results:
+capture steady at **49.6 frames/s** (exactly the expected 50 × 20 ms chunks),
+4 speech events → 4 tones played **while capture continued** (duplex — the
+barge-in prerequisite — works), zero device errors. Short 11 s run by design;
+the 10-minute soak moves to C0 prep on the actual array, where it's evidence
+about the shipping device. **Findings for the build:** (1) `PipelineRunner` is
+deprecated since 1.3.0 (removed in 2.0) → `voice_agent.py` uses
+`WorkerRunner` + `add_workers()` from day one — the pin-and-read-current-docs
+rule earning its keep; (2) sounddevice escape hatch not needed.
 
 ### Build order (one commit each, `py_compile` + drill per commit)
 
