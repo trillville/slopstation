@@ -1,282 +1,330 @@
-# Voice Control — implementation plan
+# Voice Control — full implementation plan (living document)
 
-Architecture: [voice-control-design.md](voice-control-design.md). This is the
-full build plan — every phase at commit granularity. Because Pipecat releases
-weekly and the spike already caught one API deprecation, each phase opens with
-the **phase-open ritual** instead of trusting this document blindly:
+Architecture: [voice-control-design.md](voice-control-design.md). This file is
+the build: every phase at commit granularity. It stays living — each commit's
+drill results append to that phase's **as-built**; deviations get recorded, not
+hidden. One stated caveat: Pipecat moves weekly, so C3's exact service
+constructor signatures are re-verified against the **pinned** version's docs at
+build time — the spike already caught `PipelineRunner` deprecated in favor of
+`WorkerRunner`, which is now the standing example of why.
 
-1. Confirm the pinned deps still install clean on both machines.
-2. Re-read the *pinned version's* docs for every Pipecat service this phase
-   touches; copy signatures from there, never from tutorials.
-3. If anything drifted, amend this plan first, then build.
+## Ledger
 
-Division of labor, as ever: Claude ships code + exact drills; Tillman runs them
-on real hardware and pastes results. Every commit ends in a paste-back. Completed
-work collapses to **as-built** records (kept forever); plans for done work are
-deleted.
-
-## Status ledger
-
-| Phase | State | Gate result |
+| Phase | State | Gate |
 |---|---|---|
-| **C1 — command lane** | **current** — commit 1 partially done (spike ✅) | step-0 spike: **PASS** (gaming PC, 2026-08-10; as-built below) |
-| C0 — acoustic gate | protocol ready; **blocked on array delivery**; consumes C1 commits 1–2 | — |
-| C2 — game launch | planned below; opens when C1's gate closes | — |
-| C3 — conversation lane | planned below; opens when C2's gate closes | — |
+| **C1 — command lane** | **current**; step 0 spike **PASS** (gaming PC, 2026-08-10) | every command class by voice, ≤0.5 s, chord untouched, K15-confirmed |
+| C0 — acoustic gate | blocked on array delivery; consumes C1 step 2 bench modes | ≥18/20 wakes per condition, ≤1 false accept per movie |
+| C2 — game launch | planned below; starts when C1 closes | "play \<installed title\>" works in any system state |
+| C3 — conversation lane | planned below; starts when C2 closes | design-doc example flows pass live at target latency |
 
-## Cross-cutting decisions (all phases)
-
-- **Runner API**: `WorkerRunner` + `add_workers()` from day one — `PipelineRunner`
-  is deprecated since 1.3.0, removed in 2.0 (spike finding).
-- **One dispatch module**: `voice/dispatch.py` owns every side effect (spawn
-  `couch.py start [appid]`, `ssh gamepc exit|launch|games|playing`, cglib
-  Ex-Link calls, earcons). GrammarGate (C1) and the LLM tool handlers (C3) call
-  the same functions — two lanes, one set of hands.
-- **Failure-domain rule**: `k15/voice/` is a folder unit with its own `.venv`;
-  the chord listener stays on system-PATH python, untouched, forever.
-- **Logging**: everything tags `[voice]` into `couch.log` via `cglib.make_log`.
-- **Dependency policy**: `requirements.txt` grows per commit, always `==` pins;
-  upgrades are deliberate events regression-tested with the current phase's
-  drill suite.
-- **Secrets timeline**: `deepgramApiKey` needed at C1 commit 3 · `steamApiKey` +
-  `steamId64` at C3 commit 1 · `anthropicApiKey` at C3 commit 2.
-- **Deploy model**: K15 = copy `k15/voice/` + any touched sibling files to the
-  Desktop, listener console closed, venv is machine-local (never copied). PC
-  (C2 only) = copy touched files to `C:\CouchGaming\`, no session active.
-  **First K15 deploy reruns `spike.py` there** — that's the deferred
-  K15-confirmation, then the machine is trusted.
-
-### `config.json` additions (final schema, introduced incrementally)
-
-```json
-"voice": {
-  "inputDeviceName": "",            // substring match on device name; "" = default
-  "outputDeviceName": "",
-  "wakeModel": "hey_jarvis",        // custom "hey console" swaps in later
-  "wakeThreshold": 0.5,
-  "eotThreshold": 0.7,              // Flux end-of-turn confidence
-  "eagerEotThreshold": 0.5,         // speculative start; 0 disables
-  "lingerS": 5,                     // post-command chained-command window
-  "holdWindowS": 8,                 // post-answer follow-up window
-  "followupCarryS": 60,             // cross-session context carry
-  "bargeInMinWords": 2,
-  "fuzzyTitleThreshold": 87,        // rapidfuzz token_set_ratio floor
-  "keytermCount": 40,               // Flux keyterm budget (500-token cap upstream)
-  "volumeStep": 5,
-  "volumeMax": 40,                  // voice can never blast the room
-  "ttsVoice": "aura-2-thalia-en",   // C3 audition decides
-  "assistantModel": "claude-haiku-4-5"
-}
-```
+**Conventions (all phases):** Claude ships code + numbered drills; Tillman runs
+them on hardware and pastes results — no commit is "done" until its drill
+passes. Every touched `.py` gets `py_compile`, every `.ps1` gets
+`Parser::ParseFile`, before commit. Deploy = copy listed files to the machine
+(never clone); the voice venv is created on-machine, never copied. Dependency
+pins are frozen in `requirements.txt` at each commit and recorded in the
+as-built. Rollback for every K15 voice commit: close the Start-Voice window —
+the system is byte-for-byte pre-voice; PC-side rollback is per-file
+`git checkout` + re-copy (C2 lists its extra step).
 
 ---
 
 ## C1 — command lane (current)
 
-**Exit gate:** every command class works by voice end-to-end — session
-start/end, volume/mute, input switching — at ≤0.5 s end-of-speech → earcon;
-chord listener provably unaffected; supervisor restart survives; K15 spike
-rerun passed; pins recorded.
+**Exit criteria:** start/end session, volume/mute, input switching by voice at
+≤0.5 s end-of-speech → earcon; supervisor survives kill; chord listener
+provably unaffected; drills re-run green on the K15 (step 6).
 
-### Commit 1 — `voice: spike kit` ✅ shipped (`1e04f4a`, `5468cf6`)
+### Step 0 — spike ✅ as-built (2026-08-10)
 
-**As-built (2026-08-10): PASS — run on the gaming PC** (K15 confirmation rides
-the first K15 deploy). Python 3.11.4, `pipecat-ai==1.7.0`, `pyaudio==0.2.14`
-(cp313 win_amd64 wheel confirmed for the K15's 3.13). Capture steady at 49.6
-frames/s (= the expected 50 × 20 ms chunks); 4 speech events → 4 tones played
-while capture continued (duplex, the barge-in prerequisite, works); zero device
-errors. 11 s run by design — the 10-minute soak moves to C0 prep on the real
-array. Findings: `PipelineRunner` deprecated → build on `WorkerRunner`;
-sounddevice escape hatch not needed.
+**PASS on the gaming PC** (K15 confirmation folded into step 6's deploy).
+Python 3.11.4, `pipecat-ai==1.7.0`, `pyaudio==0.2.14` (cp313 win_amd64 wheel
+confirmed for the K15's 3.13). Capture steady at 49.6 frames/s (= expected
+50 × 20 ms), 4/4 speech→tone with capture continuing (duplex proven), zero
+errors. Soak deferred to C0 prep on the real array. Findings: build on
+`WorkerRunner.add_workers()` (`PipelineRunner` dies in 2.0); sounddevice
+escape hatch not needed.
 
-### Commit 2 — `voice: skeleton + wake gate + bench modes`
-`voice_agent.py` (WorkerRunner skeleton, config/secrets loading, `[voice]`
-logging), `earcons.py` (synthesized at startup; count vocabulary mirrors the
-haptic thuds: 1 ok / 2 busy / 3 fail + wake tick), `wake_gate.py`
-(OpenWakeWordGate FrameProcessor: oWW ONNX `hey jarvis`, model auto-fetch to
-`voice/models/`, gate closed = zero frames downstream, zero cloud). Bench
-modes: `--wake-trials` (per-detection log with confidence — C0's instrument)
-and `--false-accept-soak` (spurious-wake counter). *Deps added:*
-`openwakeword` + pinned onnxruntime. *Drills:* 10 wakes at ~10 ft in a quiet
-room (code check, not the acoustic gate); 1-hour TV soak; CPU% at idle
-(expect ~nil).
+### Step 1 — `voice: scaffold + supervisor`
+- `voice_agent.py` skeleton: parent-path bootstrap (`sys.path` insert → import
+  `cglib`), load `../config.json` + `../secrets.json`, `cglib.make_log("voice")`
+  (one `couch.log`, `[voice]` tag), device resolution by config name-fragment →
+  `input_device_index`/`output_device_index`, `WorkerRunner` shell, `--devices`
+  flag (prints the spike's device table and exits).
+- `earcons.py`: synthesized tones, count vocabulary mirroring the thuds —
+  1 = accepted, 2 = busy, 3 = failed, plus wake-tick and session-close ticks.
+- `Start-Voice.bat`: venv bootstrap (create + `pip install -r` if missing),
+  supervisor restart loop with 10 s backoff (same shape as Start-Listener),
+  `rem` close-window-to-stop; array `xvf_host REBOOT 1` slot present but gated
+  on the exe existing (no-ops until the array is real).
+- README: voice rows in the K15 table.
 
-### Commit 3 — `voice: flux session + grammar gate` *(needs `deepgramApiKey`)*
-Flux socket lifecycle (open on wake, close at DORMANT — no idle socket exists
-on Flux v2), `grammar_gate.py` + `grammar.yaml` (hassil templates: start/end
-session — end is exact-match-only; volume up/down/set/mute; input switching;
-exit phrases), earcon acks, LINGER window, lock-arbiter busy check (mirrors
-the chord's 2-thud rule). Dispatch calls stubbed to log-only. *Deps:*
-`deepgram-sdk` (or Pipecat's deepgram extra — ritual decides), `hassil`,
-`rapidfuzz`. *Drills:* offline transcript table via `voice/test_grammar.py`
-(runs anywhere, no audio); live: each template phrased 3 ways → correct earcon
-+ `[voice]` log line; end-of-speech → earcon stopwatch (target ≤0.5 s);
-deliberate garble → no match, no action.
+**Drill 1:** bat cold-starts on the gaming PC; `[voice]` startup line lands in
+couch.log; Task Manager kill → auto-restart ≤10 s; close window → stays dead.
 
-### Commit 4 — `k15: exlink volume/mute frames`
-cglib: checksum builder + frozen frames (vol_up `082201000100d4`, vol_down
-`082201000200d3`, mute_toggle `082202000000d4`, parametric vol_set with
-`volumeMax` clamp). exlink.py CLI inherits the names automatically. *Drills
-(TV on, from the K15):* each frame once → `030cf1` ack + visible TV response;
-the one-shot volume-query probe (500 ms read) — answer decides real mute state
-vs software-tracked; mute desync recovery via absolute vol_set.
+### Step 2 — `voice: wake gate + bench modes`
+- `wake_gate.py` (FrameProcessor): buffers 20 ms input frames to oWW's 80 ms
+  hop, runs `hey_jarvis` (ONNX; auto-download to `voice/models/` on first run),
+  config `wakeThreshold`. Gate CLOSED = input audio swallowed (nothing flows
+  downstream — no cloud, by construction). On detection: wake-tick earcon, gate
+  OPEN, timers armed (`lingerS`, `holdWindowS` consumed in step 3).
+- Bench modes on `voice_agent.py`: `--wake-trials` (log each detection +
+  confidence + running tally) and `--false-accept-soak` (spurious-wake count +
+  rate/hr). These are C0's instruments.
+- Deps: `+openwakeword==0.6.0` (onnxruntime already core via pipecat, `~=1.24.3`).
 
-### Commit 5 — `voice: dispatch wiring`
-`dispatch.py` created; GrammarGate stubs go live: `couch.py start` spawn
-(listener's pattern), `ssh gamepc exit`, cglib exlink calls. *Drills:* voice
-session start from cold — TV untouched until READY (the one rule, observed);
-voice "end session" mid-game (the exit asymmetry, closed); volume/mute/input
-in every system state incl. mid-session; chained commands inside LINGER; busy
-buzz on double-start.
+**Drill 2:** 10 deliberate wakes, quiet room, any mic (code check, not the
+acoustic gate) — expect ≥9 detections; 1-hour TV soak → false-accept count
+(number recorded, no gate — that's C0's job on the real array).
 
-### Commit 6 — `voice: supervisor + doctor + docs`
-`Start-Voice.bat` (venv activate, `xvf_host REBOOT 1` gated on presence —
-no-ops until the array exists, restart-with-backoff loop, close-window-to-stop),
-doctor.py voice rows (venv + pins, mic device, wake model, Deepgram auth,
-grammar parses, index age placeholder), README rows, as-built here. *Drills:*
-kill voice python → restart ≤10 s; kill mid-session → chord/listener untouched;
-doctor healthy pass + induced FAIL (rename secrets.json); **first full K15
-deploy incl. spike rerun on the K15**.
+### Step 3 — `voice: flux session + grammar gate` *(the one remaining technical unknown lives here)*
+- **Session lifecycle first**: verify against pinned source how
+  `DeepgramFluxSTTService` behaves when audio stops ~30 s (socket death per
+  SDK issue #649). Candidate A: wake gate simply starts/stops the audio flow
+  and the service reconnects on demand (if its `_connect` is lazy/re-entrant).
+  Candidate B: wake gate drives explicit service `start()`/`stop()` via events.
+  Whichever the source supports cleanly wins; decision recorded in as-built.
+  Billing invariant either way: **socket open ≈ session open only**.
+- `grammar_gate.py` (FrameProcessor): hassil match over `grammar.yaml` —
+  `session_start`, `session_end` (**exact match only**), `vol_up`, `vol_down`,
+  `vol_set{level}`, `mute`, `input_switch{name}`, exit phrases ("thanks",
+  "that's all", "never mind"). Match → swallow frame, ack earcon, dispatch
+  (this commit: log-only stubs `[voice] would: ...`). No match → pass through
+  (dead-ends until C3; fail earcon + log in the interim). LINGER (~5 s
+  post-command) and HOLDING windows enforced via the wake gate's timers.
+- `test_grammar.py`: offline utterance→intent table, runnable with no audio.
+- Deps: `+pipecat-ai[deepgram]`, `+hassil` (pinned at commit).
+
+**Drill 3:** offline grammar table green; live: each command 3 phrasings →
+correct `[voice] would:` lines; "volume up" twice inside LINGER without
+re-waking; Deepgram console usage ≈ session seconds (billing sanity);
+30 s silence → session closes with tick.
+
+### Step 4 — `k15: exlink volume/mute frames`
+- `cglib.py`: checksum builder + frozen frames — `vol_up 082201000100d4`,
+  `vol_down 082201000200d3`, `mute_toggle 082202000000d4`, parametric
+  `vol_set(0-100)`. Computed, never hand-typed (a one-byte slip in this family
+  is power_off). `exlink.py` CLI picks the names up automatically.
+
+**Drill 4 (TV on, from K15):** each frame once → `030cf1` ack + visible TV
+response; the 500 ms volume-query probe (`0822f0010000e5`) — reply ⇒ real mute
+state forever, silence ⇒ software-tracked mute + absolute-set resync (result
+recorded in as-built either way). Never send key-codes 0x3B/0x3C.
+
+### Step 5 — `voice: dispatch wiring`
+- Stubs → real, all through one dispatch module shared later with C3's tools:
+  `session_start` → `cglib.lock_age()` fresh ⇒ busy earcon, else spawn
+  `couch.py start` (new console, exactly the listener's pattern);
+  `session_end` → `ssh gamepc exit` (15 s timeout; OK ⇒ ack, raise ⇒ fail
+  earcon); volume/mute/input → `cglib.exlink_send` (config COM port,
+  `volumeMax` clamp on `vol_set`, one retry on transient serial-open failure —
+  couch.py and voice share COM3 in open-write-close bursts).
+
+**Drill 5 (the C1 payoff):** cold voice "start a session" → full chain, TV
+untouched until READY (the one rule, witnessed); "end session" **mid-game** —
+the exit asymmetry closed; busy path (chord launch then voice start ⇒ 2-tone);
+volume/mute/input in idle + mid-session; chord still works with voice running.
+
+### Step 6 — `voice: doctor + K15 confirmation + as-built`
+- `doctor.py` voice rows: venv exists + pins match requirements, input device
+  resolves by name, wake model file present, Deepgram key auths (1 s probe),
+  `grammar.yaml` parses, config voice keys present. Same PASS/WARN/FAIL format.
+- Start-Voice finalized; README/docs;
+- **First K15 deploy**: copy `k15/voice/` + updated `cglib.py`, `config.json`,
+  `doctor.py`, `exlink.py` → Desktop; venv bootstrap; **re-run spike.py on the
+  K15** (its 3.13 + drivers — the deferred confirmation), then drills 1/3/5
+  condensed. C1 gate closes on this paste-back; pins frozen in as-built.
 
 ---
 
-## C0 — acoustic acceptance gate (when the array arrives)
-
-Unchanged protocol; consumes commit 2's bench modes.
+## C0 — acoustic gate (execute on array arrival; needs C1 ≥ step 2)
 
 1. **Prep:** USB3/xHCI port; Zadig WinUSB on the control interface;
-   `xvf_host VERSION` smoke; UA firmware confirmed (2-ch 16 kHz); **10-minute
-   spike soak on the array** (the deferred one); speaker-out audibility over
-   TV audio from the couch.
-2. **Aim (placement 1: atop console):** `AEC_FIXEDBEAMSONOFF 1` → both
-   azimuths/elevations at couch seats (measured, slight up-tilt) →
-   `AEC_FIXEDBEAMSGATING 1` → validate via `AEC_SPENERGY_VALUES` + LED DoA →
-   only after live proof: `SAVE_CONFIGURATION 1` **once** (Safe-Mode recovery
-   chord — hold mute at boot — known *before* saving).
+   `xvf_host VERSION`; confirm UA/USB 2-ch 16 kHz firmware; speaker-out
+   audibility at couch distance; **the deferred 10-minute spike soak, on the
+   array**; enable the REBOOT line in Start-Voice.bat.
+2. **Aim (candidate 1: atop console):** `AEC_FIXEDBEAMSONOFF 1` → both
+   azimuths/elevations at couch-left/right (slight up-tilt) →
+   `AEC_FIXEDBEAMSGATING 1` → validate speaking from each seat via
+   `AEC_SPENERGY_VALUES` + LED DoA → only after live config proves out:
+   `SAVE_CONFIGURATION 1` **once** (Safe-Mode recovery = hold mute at boot;
+   learn it before saving — the brick bug is real).
 3. **Trials:** `--wake-trials` 20× per condition {movie volume, loud movie} ×
    {couch-left, couch-right}; `--false-accept-soak` through one ~2 h movie.
-4. **Gate:** ≥18/20 every condition, ≤1 false accept/movie → record placement +
-   azimuths, done. Miss → placement 2 (in-cabinet, foam pad) → repeat → beam-energy
-   double-gate in wake_gate → repeat → stop and reassess (design-doc top risk).
-5. Results table lands here as-built regardless — C3's barge-in tuning wants it.
+4. **Gate:** ≥18/20 every condition AND ≤1 false accept/movie ⇒ pass; record
+   placement + azimuths + the full table here. Miss ⇒ candidate 2 (in-cabinet,
+   foam, against grate) ⇒ still miss ⇒ enable beam-energy double-gate in
+   wake_gate ⇒ still miss ⇒ stop, reassess mount geometry (design-doc top risk).
 
 ---
 
-## C2 — game launch
+## C2 — game launch (starts when C1 closes)
 
-**Exit gate:** "play <title>" works from cold (full chain into the game) and
-mid-session; wrong-state cases refuse politely (BUSY/NOTREADY); fuzzy matching
-survives the torture list; installed-index refresh works without a thought.
+**Exit criteria:** "play \<installed title\>" from the couch works cold (full
+launch into the game), mid-session (direct launch), and refuses truthfully
+(busy earcon) when another game is running. No new secrets needed — the
+installed list rides SSH; Steam Web API waits for C3.
 
-### Commit 1 — `gaming-pc: launch/games/playing verbs + LaunchGame task`
-Dispatch.ps1 grows to six verbs, posture unchanged (allowlist, built-ins only,
-default DENIED): `games` (SteamPath from registry → `libraryfolders.vdf` →
-every `appmanifest_*.acf` → regex appid/name/SizeOnDisk/LastPlayed/StateFlags →
-`ConvertTo-Json -Compress`, ~25 lines, read-only); `playing` (RunningAppID,
-0 = none); `launch <appid>` (regex `^launch \d{1,10}$` → ready marker else
-`NOTREADY` → RunningAppID: same appid `ALREADY`, different `BUSY:<id>` → write
-appid to `C:\ProgramData\CouchGaming\launch-app` → `schtasks /Run
-\CouchGaming\LaunchGame` → `OK`/`FAILED:<code>`). New `Launch-Game.ps1`
-(transcript, read + delete marker, re-validate numeric, SteamPath registry →
-`steam.exe -applaunch <appid>`); task registered with the Enter/Exit idiom
-(5-min limit, no elevation). Doctor.ps1: LaunchGame task row + stale-marker
-check. *Drills (from K15 ssh):* `games` → valid JSON, count matches reality;
-`playing` idle → 0; desk-side `launch` with no session → `NOTREADY`; in-session
-`launch <installed>` → game boots into Big Picture; `launch <other>` while
-running → `BUSY:<id>`, nothing launches; same appid → `ALREADY`.
+### Step 1 — `pc: games/launch/playing verbs + LaunchGame task`
+- `Dispatch.ps1` 3→6 verbs, posture unchanged (allowlist, built-ins only):
+  - `games`: parse `libraryfolders.vdf` paths → regex each `appmanifest_*.acf`
+    for appid/name/SizeOnDisk/LastPlayed/StateFlags → compact JSON to stdout.
+  - `launch <appid>`: `^\d{1,10}$` or DENIED → ready marker absent ⇒
+    `NOTREADY` → `RunningAppID` ≠ 0 and ≠ target ⇒ `BUSY:<id>` → write appid
+    to `C:\ProgramData\CouchGaming\launch-app` → `schtasks /Run \CouchGaming\LaunchGame`
+    → `OK`/`FAILED:<code>`. (Pre-checks in Dispatch so failures return
+    synchronously; file-as-argument because the task needs the interactive
+    session.)
+  - `playing`: emit `HKCU\...\Steam\RunningAppID` (0 = none).
+- `Launch-Game.ps1` + registration (same idiom as Enter/Exit incl. the
+  load-bearing 5-min execution limit, non-elevated): read+delete marker,
+  re-validate numeric, SteamPath from registry, `& steam.exe -applaunch <id>`.
+- `Doctor.ps1`: LaunchGame task registered; stale `launch-app` marker warning.
+- Registration commands recorded in this file (the guide stays frozen).
 
-### Commit 2 — `voice: library.py layer 1 + keyterm feed`
-`library.py`: `refresh` (ssh `games` → parse → atomic merge into
-`state/library.json`), `show`, keyterm derivation (top `keytermCount` installed
-titles by LastPlayed → consumed at Flux session open). voice_agent refresh
-schedule: at startup if port 22 answers; after each "end session" dispatch
-(PC provably awake); every 6 h opportunistically; manual CLI always. Never a
-blind nightly. *Drills:* refresh with PC awake → JSON sane; refresh with PC
-asleep → clean skip, no error spam; keyterm list eyeball (recent titles
-present, ≤40).
+**Drills:** from K15 — `ssh gamepc games` JSON count matches steamapps;
+`playing` = 0 idle; `launch` outside session ⇒ `NOTREADY`; in session: real
+appid ⇒ game boots into Big Picture; second launch while running ⇒ `BUSY:<id>`;
+`bogus` still `DENIED`. Rollback: checkout Dispatch/Doctor, re-copy,
+`schtasks /Delete /TN \CouchGaming\LaunchGame`.
 
-### Commit 3 — `voice: play {game} + couch.py appid`
-grammar.yaml gains `(play|launch|start|put on) {game}`; GrammarGate fuzzy-binds
-{game} over installed titles (`fuzzyTitleThreshold`, below → no-match earcon —
-until C3 gives it to the assistant). `couch.py start [appid]`: after the input
-switch, best-effort `ssh launch <appid>` (a failed game launch never fails the
-session — Big Picture up is a working outcome). dispatch.py routes: lock
-fresh + READY → direct ssh launch (BUSY → busy earcon); no session → spawn
-`couch.py start <appid>` (1-tone earcon). *Drills:* "play <title>" from cold —
-one chord-free chain into the game; mid-session switchless launch; "play Y"
-during X → refusal earcon + log; fuzzy torture ("armored core", "AC6",
-"forza" for Forza Horizon 5, a title that shouldn't match anything); STT
-accuracy spot-check on the 5 hardest installed titles (keyterms earning keep).
+### Step 2 — `k15: library layer 1 + keyterms`
+- `library.py`: `refresh` (ssh `games` → parse → atomic `state/library.json`),
+  `show`; keyterm list = top-`keytermCount` installed by LastPlayed.
+- Hooks in voice_agent: refresh at startup if PC reachable, after each
+  `session_end` dispatch, and manual CLI. Never scheduled against a sleeping PC.
 
-**C2 deploy:** PC: Dispatch.ps1, Launch-Game.ps1, Doctor.ps1 + one elevated
-task registration (guide-style ELI5 provided). K15: voice/ + couch.py.
-**Rollback:** verbs are additive; task deregisters with one schtasks command;
-couch.py appid param is inert when absent.
+**Drills:** refresh with PC awake → count matches; PC asleep → one clean
+`[voice] library refresh skipped` line; keyterms file inspected.
 
----
+### Step 3 — `voice: play {game}`
+- `grammar.yaml` gains `play|launch|start|put on {game}`; `{game}` resolved
+  against library titles — hassil list slot + rapidfuzz `token_set_ratio ≥ 87`
+  (below ⇒ fail earcon in C2; becomes the C3 fallthrough later). Deps:
+  `+rapidfuzz`.
+- Dispatch: lock fresh + READY ⇒ `ssh launch <appid>` (`BUSY:` ⇒ busy earcon);
+  no session ⇒ `couch.py start <appid>`.
+- `couch.py`: optional argv appid — after the input switch, best-effort
+  `ssh launch <appid>` (a failed game launch never fails the session; Big
+  Picture is already a working outcome). Chord path passes nothing —
+  byte-for-byte today's behavior.
+- Flux keyterms wired from the library.
 
-## C3 — conversation lane
-
-**Exit gate:** the design doc's drills — multi-turn mech-games → "play it"
-launches a validated appid; barge-in mid-answer; "volume up" mid-conversation
-provably skips the LLM; TV-noise movie soak with ≤1 false turn; offline drill
-(no internet = voice down by design, chord unaffected; Aura-only outage =
-Kokoro speaks). Latency: ≤1.5 s end-of-speech → first audio (measure both
-eager on/off).
-
-### Commit 1 — `voice: library layers 2+3 + catalog` *(needs Steam key + steamid64)*
-`library.py` grows: `refresh --owned` (GetOwnedGames: playtime_forever/2wks,
-rtime_last_played — canonical recency), `refresh --meta` (appdetails genres/
-categories 28|18/desc/metacritic + SteamSpy tags-with-votes; ≤1 req/2 s;
-`state/metadata-cache.json` cached forever, top-up new appids only), `catalog`
-(emits the compact prompt rows: `appid|title|top5 tags|hours|last_played|
-installed|controller`). Owned refresh daily; meta top-up after installed
-refreshes. *Drills:* cold crawl of the full library (rate-limit respected —
-watch for 429s); tag spot-check 5 games vs the store; `catalog` token count
-(expect ~6–18K; ceiling check vs cache minimum 4,096 — it clears).
-
-### Commit 2 — `voice: assistant brain` *(needs `anthropicApiKey`)*
-`assistant.py`: AnthropicLLMService (`assistantModel`, `Settings` pattern —
-not the deprecated kwargs), system prompt (voice-answer style rules: lead with
-the count, name ≤3, never recite >4 titles, ≤2 sentences unless asked),
-catalog block + `cache_control` breakpoint, strict tools `launch_game` /
-`get_game_details` / `get_now_playing` / `control` — handlers call dispatch.py
-(same hands as GrammarGate), `launch_game` re-validated against the index.
-GrammarGate no-match now flows to the context aggregator; in-session
-multi-turn native; `followupCarryS` cross-session stash. **`--text` REPL
-mode**: type transcripts, see replies + tool calls — prompt/tool iteration
-without audio. *Drills (REPL first):* 20-query canned set (Q&A, recommend,
-launch-by-description, "the second one" follow-up, garbage in); tool-call
-validation (invented appid must be impossible); then the same set live-voice.
-
-### Commit 3 — `voice: speech out + conversation UX`
-Voice audition script (one sentence in every `aura-2-*-en` voice → user picks
-→ `ttsVoice`); Aura-2 WebSocket service with sentence-chunked streaming;
-HOLDING window; barge-in enabled (`bargeInMinWords`, sustained-speech ~250 ms,
-energy floor) — tuned against real TV audio; KokoroTTSService auto-fallback on
-Aura failure; exit phrases close with a soft earcon. *Drills:* the C3 gate
-list above, plus: latency stopwatch ×10 queries (eager on/off compared);
-barge-in 10× mid-answer (flush <150 ms by ear); movie-soak false-turn count;
-pull WAN mid-session → commands dead with fail earcon, chord alive (overlay
-rule observed); Aura-blocked-only test → Kokoro speaks.
-
-### Commit 4 — `voice: A/B, polish, docs`
-Model A/B (Haiku vs current fast-tier alternatives incl. whatever Luna/mini
-looks like then): same 20-query set, measured end-of-speech → first-word +
-blind answer-quality judgment — data decides `assistantModel`. README final
-rows; design-doc deltas if reality disagreed; as-builts collapse here.
-
-**C3 deploy:** K15 only (voice/ + library state bootstraps on-machine).
-**Rollback:** conversation lane is the GrammarGate fallthrough — config flag
-turns it off and C2 behavior returns; Aura/Kokoro/model are config strings.
+**Drills:** cold "play armored core six" → thud-free full chain into the game;
+mid-session direct launch ≤3 s; "play Y" during X ⇒ busy earcon + `BUSY:` log;
+fuzzy torture ("armored core", "the new armored core", partials); a
+non-installed title ⇒ fail earcon (C3 will turn this into speech).
 
 ---
 
-## What could still change this plan
+## C3 — conversation lane (starts when C2 closes)
 
-| Trigger | Effect |
+**Exit criteria:** the design doc's example flows live — multi-turn mech-games
+Q&A → "play it" launches with a validated appid; barge-in mid-answer; "volume
+up" mid-conversation with zero LLM involvement in the log; measured
+end-of-speech → first-audio ≤1.5 s; a week's spend within budget.
+**New secrets:** `anthropicApiKey`, `steamApiKey` + `steamId64` (template
+already marks these C3+).
+
+### Step 1 — `k15: library layers 2+3 + catalog`
+- Layer 2: `GetOwnedGames` (include_appinfo, played free) → hours/2-week/
+  `rtime_last_played` (canonical recency). Layer 3: appdetails (genres,
+  categories 28/18 → controller, short_description, metacritic, release) +
+  SteamSpy tags w/ votes; ≤1 req/2 s and 1 req/s respectively; cache-forever
+  `state/metadata-cache.json`, top-up new appids only.
+- Final row schema: `appid, title, installed, hours, lastPlayed, tags(top-10 by
+  votes), genres, controller, shortDesc, metacritic, releaseYear`.
+- `library.py catalog`: emits the compact prompt rows + prints token estimate.
+
+**Drills:** 3 games spot-checked against the Steam profile; crawl-throttle
+timestamps in log; catalog token count vs the 6–18K design envelope.
+
+### Step 2 — `voice: conversation lane (brain + tools)`
+- `AnthropicLLMService` behind GrammarGate's no-match path —
+  **constructor per pinned docs** (`settings=AnthropicLLMService.Settings(...)`,
+  `model="claude-haiku-4-5"`, `enable_prompt_caching=True`; the deprecated
+  `model=`/`params=` kwargs are the known trap). Context aggregator pair for
+  multi-turn; 60 s cross-session carry; HOLDING window via wake gate.
+- System prompt: role + couch rules (spoken lists are summarized — count first,
+  top few, compress the tail), catalog block with `cache_control` breakpoint.
+- Strict tools calling the **same dispatch module as Tier-1**:
+  `launch_game(appid)`, `get_game_details(appid)`, `get_now_playing()`,
+  `control(action)`. Client-side validation: appid must exist in the index or
+  the tool call is refused. Deps: `+pipecat-ai[anthropic]`.
+
+**Drills:** mech-games Q&A live; "which is shortest?" follow-up (no wake word);
+"play it" → launch with validated appid; "volume up" mid-conversation → log
+shows GrammarGate swallow, zero LLM call; adversarial: ask it to launch a
+made-up appid → tool refused, spoken decline.
+
+### Step 3 — `voice: aura-2 + barge-in + eager EOT`
+- Aura-2 WebSocket TTS, sentence-aggregated streaming; **voice audition first**
+  (shortlist of `aura-2-*-en` through the actual speaker, pick by ear).
+- Barge-in on: interruptions enabled with min-words ≥ 2 / ~250 ms sustained +
+  energy floor (config); verify context truncation (next turn coherent).
+- Eager EOT on (`eagerEotThreshold` ~0.5): speculative Haiku start, cancel on
+  `TurnResumed` (visible in logs); config kill-switch.
+- Kokoro fallback: `KokoroTTSService` behind a config switch (manual first;
+  auto-fallback-on-TTS-error only if pinned Pipecat offers a clean seam).
+
+**Drills:** TTFA stopwatch ×10 (target ≤1.5 s median, eager ≤1.2 s); barge-in
+mid-answer ×5 (playback stops <150 ms by ear, context sane); movie-noise soak
+(false barge-in count with guards on); WAN unplugged → Kokoro path or graceful
+fail earcon (never a hang).
+
+### Step 4 — `voice: polish + as-built`
+- `last_error` watcher speaks launch failures ("The launch failed: host never
+  reported ready") — read-only mtime tracking, the chord listener stays the
+  marker's sole consumer.
+- "what am I playing" wired through `get_now_playing` + title lookup.
+- doctor: anthropic auth probe, catalog age/size, TTS reachability.
+- As-built: measured latency table, one-week cost readout (Deepgram + Anthropic
+  consoles) vs the ~$6–9 budget, the optional model A/B result if run, final
+  pins. README final pass. **Project C v2 scope complete.**
+
+---
+
+## Appendices
+
+### A. `config.json` voice section (full schema; commits consume incrementally)
+```json
+"voice": {
+  "inputDeviceName": "",  "outputDeviceName": "",
+  "wakeModel": "hey_jarvis",  "wakeThreshold": 0.5,
+  "lingerS": 5,  "holdWindowS": 8,
+  "eotThreshold": 0.7,  "eagerEotThreshold": 0.5,  "eagerEnabled": true,
+  "bargeInMinWords": 2,  "bargeInMinMs": 250,
+  "volumeStep": 5,  "volumeMax": 40,
+  "keytermCount": 40,
+  "ttsVoice": "aura-2-thalia-en",  "ttsLocal": false,
+  "assistantModel": "claude-haiku-4-5"
+}
+```
+
+### B. Secrets timeline
+| Key | Needed at | Source |
+|---|---|---|
+| `deepgramApiKey` | C1 step 3 | console.deepgram.com ($200 credit) |
+| `anthropicApiKey` | C3 step 2 | platform.claude.com |
+| `steamApiKey` + `steamId64` | C3 step 1 | steamcommunity.com/dev/apikey |
+
+### C. Dependency growth (each pinned at its commit, frozen in as-builts)
+| Commit | Adds |
 |---|---|
-| C0 gate fails at both placements + double-gate | Project pauses at C1 scope (voice works desk-quality: near-field mic) — the design doc's top risk, decided by data |
-| Phase-open ritual finds Pipecat drift | Plan amended first (this file), signatures from pinned docs, then build |
-| C3 latency misses ≤1.5 s measured | gpt-realtime-2.1 drop-in for the conversation lane (design doc §Rejected has the exact pattern) |
-| Flux misbehaves (turn quality, socket flake) | Nova-3 + smart-turn v3 swap — one service line each, both already scoped |
+| C1 s0 ✅ | `pipecat-ai[local]==1.7.0` (pyaudio 0.2.14) |
+| C1 s2 | `openwakeword==0.6.0` |
+| C1 s3 | `pipecat-ai[deepgram]`, `hassil` |
+| C2 s3 | `rapidfuzz` |
+| C3 s2 | `pipecat-ai[anthropic]` |
+| C3 s3 | `kokoro-onnx` (fallback path) |
+
+### D. Risk → owner map (details in design doc §Risks)
+| Risk | Owned by |
+|---|---|
+| Pipecat-on-Windows | C1 s0 ✅ retired (K15 re-confirm at C1 s6) |
+| Flux session lifecycle / idle billing | C1 s3 (the flagged unknown) |
+| Ex-Link byte slips / query support | C1 s4 drill |
+| TV/couch azimuth geometry | C0 (project's top risk) |
+| ws-TTS post-barge-in overrun | C3 s3 (sentence chunking bounds it) |
+| Tool-call appid hallucination | C3 s2 (strict + index validation) |
+| Pipecat upgrade regressions | pins + drill suite as regression tests; upgrades deliberate, never casual |
