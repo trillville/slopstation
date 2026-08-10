@@ -1,6 +1,10 @@
-# C1 step-0 spike pins - validated against PyPI 2026-08-10.
-# [local] pulls pyaudio ~=0.2.14 (cp313 win_amd64 wheel confirmed to exist).
-# Deliberately minimal: no [silero]/[deepgram] yet - the spike isolates
-# transport health, so a failure here can only mean PortAudio/WASAPI.
-# Later C1 commits grow this file; pins recorded in docs/voice-implementation.md.
-pipecat-ai[local]==1.7.0
+# Voice venv pins - frozen 2026-08-10 against PyPI (see docs/voice-implementation.md).
+# The chord listener stays on system python; this venv is voice's alone.
+pipecat-ai[local,silero,deepgram,anthropic]==1.7.0
+openwakeword==0.6.0
+hassil==3.11.0
+rapidfuzz==3.14.5
+pyserial==3.5
+# Transitively pinned by the above (recorded for the as-built):
+#   pyaudio 0.2.14 (cp313 win_amd64 wheel exists), onnxruntime 1.24.4,
+#   deepgram-sdk 7.6.0, anthropic 0.121.0, numpy 2.4.6
