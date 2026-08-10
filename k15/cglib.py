@@ -3,11 +3,12 @@
 Everything lives beside this file (the K15 desktop): config.json, couch.log,
 state/session.lock, and the scripts that import this.
 """
-import json, pathlib, time
+import json, pathlib, struct, time
 
 BASE = pathlib.Path(__file__).resolve().parent
 
 # Valve Steam Controller Puck (as forwarded by VirtualHere).
+# 0x1304 = USB_PRODUCT_VALVE_STEAM_PROTEUS_DONGLE in SDL's usb_ids.h.
 VID, PID = 0x28DE, 0x1304
 
 # Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum,
@@ -20,6 +21,36 @@ EXLINK_FRAMES = {
     "hdmi3": "08220a000502c5",
     "hdmi4": "08220a000503c4",
 }
+
+
+# --- Triton haptic output reports ---------------------------------------------
+# Layouts verified against SDL's steam/controller_structs.h ("snapshot from
+# Nov 2024 -- things may change" - re-verify after controller firmware updates)
+# and SteamControllerBridge's working implementation. These are plain HID
+# output reports (dev.write), sent to the same interface that streams 0x42
+# state reports. All u16 little-endian, no padding.
+HAPTIC_RUMBLE = 0x80   # 10B: type u8, intensity u16, left speed u16 + gain s8, right speed u16 + gain s8
+HAPTIC_PULSE  = 0x81   # 8B: side u8, on_us u16, off_us u16, repeat u16; zero-filled = stop tone
+HAPTIC_TONE   = 0x83   # 10B: side u8, gain_db s8, freq u16, duration_ms u16, lfo_freq u16, lfo_depth u8
+
+
+def tone_report(side, freq_hz, duration_ms, gain=0):
+    return struct.pack('<BBbHHHB', HAPTIC_TONE, side, gain, freq_hz, duration_ms, 0, 0)
+
+
+def pulse_report(side, on_us, off_us, repeat):
+    return struct.pack('<BBHHH', HAPTIC_PULSE, side, on_us, off_us, repeat)
+
+
+def stop_report(side):
+    """Zero-filled 0x81 = stop any playing tone on that side (bridge-proven)."""
+    return pulse_report(side, 0, 0, 0)
+
+
+def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
+    """One-shot 0x80 rumble; hardware safety-timeout stops it in ~50 ms."""
+    return struct.pack('<BBHHbHb', HAPTIC_RUMBLE, 0, intensity,
+                       left_speed, left_gain, right_speed, right_gain)
 
 
 def load_config():

@@ -40,7 +40,8 @@ paths from their own location, so the folders are relocatable as units.)
 |---|---|
 | `cglib.py` | Shared module: Ex-Link frame table, Puck VID/PID, config loading, tagged logging to `couch.log`. |
 | `couch.py` | Orchestrator: Ex-Link TV power → WoL → `ssh enter` → poll READY → switch input → watch loop. `reconcile` subcommand re-adopts or clears a session lock that survived a K15 restart. |
-| `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s; fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
+| `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s; acks a validated chord with a haptic chirp, then fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
+| `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
 | `exlink.py` | Manual Ex-Link TV control (`python exlink.py power_on\|power_off\|hdmi1..4`); COM port from config. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping). |
