@@ -23,6 +23,13 @@ HW = needs the hardware pass · KEY = needs a real key.
 | 10 | wake→speech gap | User's first words after the wake tick may race Flux's ~200–400 ms connect; the tick invites a natural pause and no mitigation is built | Buffering pre-connect audio adds complexity for an unproven problem | HW: if first words clip, add a pre-roll buffer | |
 | 11 | stt | `mip_opt_out=True` always (privacy over the ~2× metered rate) | Design-doc stance | Deepgram console shows the flag | |
 
+| 12 | titles | `{game}` is a hassil **wildcard**; all title matching lives in the fuzzy resolver (exact-variant short-circuit → fuzzy with ambiguity refusal: near-ties across different games return "no match" — saying no beats launching wrong). Names are ASCII-sanitized at both sources | Real-library tests: no colon in "ARMORED CORE VI FIRES OF RUBICON" broke list matching; token_set scores subsets at 100 (Warhammer 40K tie); PS5.1 mojibake'd ™ | BT (38/38 round-trips, 10/10 spoken phrasings) + HW: fuzzy torture drill | |
+| 13 | launch | "play Y" while X runs ⇒ truthful refusal (`BUSY:<id>`), same appid ⇒ `ALREADY`, mid-launch ⇒ "still starting"; owned-but-not-installed ⇒ spoken decline (install flow is C4) | Design-doc no-force-switch policy | HW: launch drills | |
+| 14 | REPL | `--text` REPL is **always dry-run** (actions log, never execute) | Bench instrument; typing "end session" at a keyboard mid-game shouldn't kill the game | Your first REPL session | |
+| 15 | tts | Aura-2 default voice `aura-2-thalia-en` (unauditioned); Kokoro behind `ttsLocal: true` requires `pip install "pipecat-ai[kokoro]"` and its ctor **blocks on a ~300 MB first-run download** | Audition needs ears; Kokoro kept optional to keep deploys light | HW: voice audition, then set `ttsVoice` | |
+| 16 | catalog | Pre-metadata catalog rows are sparse (`\|\|\|0h\|never`) until `library.py refresh --owned --meta` runs with keys; appid 228980 (redistributables) excluded | Layers 2–3 need Steam key + a crawl session | KEY + one `--meta` run (~80 s for 38 games) | |
+| 17 | assistant | Cross-session carry = last 8 context messages in process memory (lost on agent restart); in-session history native | Simplest thing that makes "play the second one" work | HW: follow-up drill | |
+
 (rows appended as the build proceeds)
 
 ## Open questions

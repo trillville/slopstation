@@ -18,10 +18,24 @@ of why this exists). At the start of every phase, before building:
 
 | Phase | State | Gate |
 |---|---|---|
-| **C1 — command lane** | **current**; step 0 spike **PASS** (gaming PC, 2026-08-10) | every command class by voice, ≤0.5 s, chord untouched, K15-confirmed |
-| C0 — acoustic gate | blocked on array delivery; consumes C1 step 2 bench modes | ≥18/20 wakes per condition, ≤1 false accept per movie |
-| C2 — game launch | planned below; starts when C1 closes | "play \<installed title\>" works in any system state |
-| C3 — conversation lane | planned below; starts when C2 closes | design-doc example flows pass live at target latency |
+| **C1 — command lane** | **blind-built on branch `voice`** (spike PASS; wake 0.998 on synthetic speech; grammar 41-utterance table; real-transport session test) | hardware pass: every command class by voice, ≤0.5 s, chord untouched, K15-confirmed |
+| C0 — acoustic gate | blocked on array delivery; bench modes built | ≥18/20 wakes per condition, ≤1 false accept per movie |
+| C2 — game launch | **blind-built** (PS↔python row-identical on the real library; 38/38 resolver round-trips; 10/10 spoken titles; live BUSY/DENIED probes) | hardware pass: cold/mid-session/refusal launch drills |
+| C3 — conversation lane | **blind-built, core** (real-catalog prompt; tool-boundary refusal; live keyless metadata; constructions on pinned APIs) | keys + hardware pass: example flows at target latency |
+
+**Blind-build note (2026-08-10):** the entire feature was built without live
+audio hardware or keys per the user's request — every commit carries its blind
+evidence; judgment calls live in [voice-assumptions.md](voice-assumptions.md)
+with a verdict column for the hardware pass. Deferred to post-hardware:
+doctor.py voice rows, README rows, C1's live-STT/latency/barge-in verification.
+
+**LaunchGame task registration (run once, on the PC, before C2 drills):**
+
+```powershell
+$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\CouchGaming\Launch-Game.ps1'
+$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'LaunchGame' -Action $a -Settings $s
+```
 
 **Conventions (all phases):** Claude ships code + numbered drills; Tillman runs
 them on hardware and pastes results — no commit is "done" until its drill
