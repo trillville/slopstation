@@ -6,8 +6,8 @@ From boxes to a one-chord Steam console: RTX 4090 → direct HDMI → Samsung S9
 
 **Design decisions locked in** (from v2 + review): every Windows logon unconditionally restores OFFICE mode (no boot-gating flag); SSH is signaling only — all display/Steam work runs via interactive Scheduled Tasks; TV powers on early (EDID needs to be live) but switches input **last**; the Puck/VirtualHere handoff is validated before any automation is written, because it's the one remaining architectural unknown.
 
-Version 4.3 (as-built) · August 9, 2026 · This document matches the deployed system file-for-file: every script is the final field-tested version and every command listed was actually required.
-*(v4.3: session lock gains a heartbeat — a K15 crash or closed console mid-session goes stale and is recycled after 5 minutes instead of silently blocking every future launch. v4.2: Wake-Safety resume task cleans up sessions abandoned without End TV Session and distinguishes keyboard from network wakes; Enter recycles stale Puck claims before claiming; DisplayMagician instances killed after every verified apply (frozen-window prevention); Ctrl+Alt+E desk hotkey for Exit. v4.1 hardened after the first failure drill; v4.0 consolidated the original build.)*
+Version 4.4 (as-built) · August 9, 2026 · This document matches the deployed system file-for-file: every script is the final field-tested version and every command listed was actually required.
+*(v4.4: Exit no longer blanks the desk monitor at teardown — the display's own power-plan timeout handles it. v4.3: session lock gains a heartbeat — a K15 crash or closed console mid-session goes stale and is recycled after 5 minutes instead of silently blocking every future launch. v4.2: Wake-Safety resume task cleans up sessions abandoned without End TV Session and distinguishes keyboard from network wakes; Enter recycles stale Puck claims before claiming; DisplayMagician instances killed after every verified apply (frozen-window prevention); Ctrl+Alt+E desk hotkey for Exit. v4.1 hardened after the first failure drill; v4.0 consolidated the original build.)*
 
 ---
 
@@ -293,7 +293,7 @@ $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 Set-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'WakeSafety' -Settings $s
 ```
 
-Semantics: keyboard wake into a stale session → full Exit cleanup (desk restored, Puck released fresh — which also cures the stale-claim controller); normal desk wake → no-op; chord/WoL wake → stands down so Enter owns it. The network-wake match keys on `powercfg /lastwake` text — verify your NIC's wake string matches the regex after the first WoL wake (the transcript prints it raw) and widen the pattern if needed. Known cosmetic: a stale-session cleanup ends with Exit's monitor blank ~5 s after the desk restores — the next keystroke re-lights it. (The K15 needs no changes for abandoned sessions: its watch loop already declares the session dead ~20 s after the PC sleeps, powers the TV off, and re-arms the chord.)
+Semantics: keyboard wake into a stale session → full Exit cleanup (desk restored, Puck released fresh — which also cures the stale-claim controller); normal desk wake → no-op; chord/WoL wake → stands down so Enter owns it. The network-wake match keys on `powercfg /lastwake` text — verify your NIC's wake string matches the regex after the first WoL wake (the transcript prints it raw) and widen the pattern if needed. (The K15 needs no changes for abandoned sessions: its watch loop already declares the session dead ~20 s after the PC sleeps, powers the TV off, and re-arms the chord.)
 
 ### 6.4 One sign-in setting
 
@@ -367,7 +367,7 @@ Test from the K15: `ssh gamepc enter` should print `OK` (the task will no-op-fai
 
 ### 8.3 Host session scripts
 
-These are the deployed, field-tested versions: condition-polled waits with elapsed-time stamps, display state read via a fresh-process `GetSystemMetrics` probe (WMI display classes and in-process metrics both report stale values inside windowless scheduled tasks), VirtualHere results redirected to a file with `-r` (console-less `-t` calls otherwise throw GUI popups), claims/releases verified by Windows device enumeration with retries (the IPC report can read `FAILED: API Timeout` on an operation that succeeded - enumeration is the arbiter), an immediate client nudge plus a hub-reconnect gate for the wake-from-sleep path (the client's TCP link dies during S3 sleep; claiming before reconnect returns `ERROR: Invalid address`), the Puck claim parallelized with profile settling (profile verification happens after the USB phase), Big Picture forced to the foreground on enter and closed (while still on the TV) as exit's first act, and the desk monitor blanked at teardown's end so the PC idles dark until its power-plan sleep timer. Measured: warm enters ~6-8 s, wake-from-sleep enters ~8-13 s to READY, dominated by S3 resume + VirtualHere reconnect.
+These are the deployed, field-tested versions: condition-polled waits with elapsed-time stamps, display state read via a fresh-process `GetSystemMetrics` probe (WMI display classes and in-process metrics both report stale values inside windowless scheduled tasks), VirtualHere results redirected to a file with `-r` (console-less `-t` calls otherwise throw GUI popups), claims/releases verified by Windows device enumeration with retries (the IPC report can read `FAILED: API Timeout` on an operation that succeeded - enumeration is the arbiter), an immediate client nudge plus a hub-reconnect gate for the wake-from-sleep path (the client's TCP link dies during S3 sleep; claiming before reconnect returns `ERROR: Invalid address`), the Puck claim parallelized with profile settling (profile verification happens after the USB phase), Big Picture forced to the foreground on enter and closed (while still on the TV) as exit's first act. Measured: warm enters ~6-8 s, wake-from-sleep enters ~8-13 s to READY, dominated by S3 resume + VirtualHere reconnect.
 
 `C:\CouchGaming\Enter-TV.ps1`:
 
@@ -531,17 +531,6 @@ if ($sp) { [void][P2.W]::ShowWindow($sp.MainWindowHandle, 6); Log 'Steam minimiz
 Remove-Item 'C:\ProgramData\CouchGaming\ready' -ErrorAction SilentlyContinue
 Log 'done'
 Stop-Transcript
-# Blank the desk monitor (PC stays awake and sleeps on its own power-plan timer;
-# any key wakes the display straight into OFFICE). Requires a sleep timer to be
-# set in Settings > System > Power. MUST be PostMessage (async): a SendMessage
-# broadcast waits on every window and one hung window wedges the task instance,
-# after which Task Scheduler silently ignores all further runs of Exit.
-# To hard-sleep immediately instead, replace the PostMessage lines with:
-#   Add-Type -AssemblyName System.Windows.Forms
-#   [void][System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)
-Start-Sleep 5
-Add-Type -Namespace P -Name M -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int m, IntPtr w, IntPtr l);'
-[void][P.M]::PostMessage([IntPtr]0xFFFF, 0x0112, [IntPtr]0xF170, [IntPtr]2)
 ```
 
 Reading the transcripts (`C:\CouchGaming\logs\`): a healthy enter ends `READY`, a healthy exit ends `Puck released`. A line like `vh attempt 1: FAILED: API Timeout 3 sec` immediately after a successful `Puck enumerated` gate is documented cosmetic noise - the first IPC call after a display switch often times out on the report even when the operation succeeded; the enumeration checks are the source of truth.
@@ -752,7 +741,7 @@ The watch loop polls every 5 s, so the TV returns to Apple TV within seconds of 
    - Kill Steam mid-launch → Enter's catch block restores OFFICE.
    - Hard-reset the PC mid-game → next logon lands in OFFICE; K15 watch loop restores the TV.
    - Mash the launcher three times fast → one session, two "already active" logs.
-4. Only after all drills pass, un-comment the auto-sleep line in `Exit-TV.ps1` if you want the PC to doze after sessions.
+4. Only after all drills pass, append a hard-sleep (`Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)`) to the end of `Exit-TV.ps1` if you want the PC to doze immediately after sessions.
 
 Live with the visible launcher for **a week** before Stage 11.
 

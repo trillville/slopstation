@@ -48,6 +48,3 @@ if ($sp) { [void][P2.W]::ShowWindow($sp.MainWindowHandle, 6); Log 'Steam minimiz
 Remove-Item 'C:\ProgramData\CouchGaming\ready' -ErrorAction SilentlyContinue
 Log 'done'
 Stop-Transcript
-Start-Sleep 5
-Add-Type -Namespace P -Name M -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int m, IntPtr w, IntPtr l);'
-[void][P.M]::PostMessage([IntPtr]0xFFFF, 0x0112, [IntPtr]0xF170, [IntPtr]2)
