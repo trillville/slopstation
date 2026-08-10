@@ -14,6 +14,17 @@ config.ini
 logs/
 state/
 couch.log
+couch.log.*
+
+# Voice (Project C): API credentials - commit secrets.template.json, never this
+secrets.json
+
+# Voice: per-machine python env and caches (listener stays on system python)
+.venv/
+__pycache__/
+
+# Voice: wake-word model binaries - fetched on first run, not vendored
+k15/voice/models/
 
 # OS / editor cruft
 Thumbs.db
