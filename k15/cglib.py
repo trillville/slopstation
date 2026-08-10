@@ -13,6 +13,10 @@ VID, PID = 0x28DE, 0x1304
 
 # Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum,
 # checksum = (0x100 - sum(first 6)) & 0xFF. Serial is 9600 baud, 8N1.
+# Volume/mute family from Samsung's official RS-232 worksheet (voice design
+# doc has the citation). DANGER: a one-byte slip in this family is power_off -
+# entries are frozen literals, cross-checked against exlink_frame() by
+# voice/tests/test_exlink.py, and never hand-typed anywhere else.
 EXLINK_FRAMES = {
     "power_on":  "082200000002d4",
     "power_off": "082200000001d5",
@@ -20,7 +24,26 @@ EXLINK_FRAMES = {
     "hdmi2": "08220a000501c6",
     "hdmi3": "08220a000502c5",
     "hdmi4": "08220a000503c4",
+    "vol_up":      "082201000100d4",
+    "vol_down":    "082201000200d3",
+    "mute_toggle": "082202000000d4",   # discrete mute on/off does not exist
 }
+
+# Bench probe only (C1 drill): status queries are contested on modern sets.
+# One 500 ms read decides real-mute-state vs software-tracked forever.
+EXLINK_VOLUME_QUERY = "0822f0010000e5"
+
+
+def exlink_frame(c1, c2, c3, value):
+    """Build one 7-byte Ex-Link frame (hex string) with computed checksum."""
+    body = bytes([0x08, 0x22, c1, c2, c3, value])
+    return (body + bytes([(0x100 - sum(body)) & 0xFF])).hex()
+
+
+def vol_set_frame(level):
+    """Volume Direct 0-100 (official worksheet). Clamps to the protocol range;
+    the room-protecting volumeMax clamp lives in voice dispatch, not here."""
+    return exlink_frame(0x01, 0x00, 0x00, max(0, min(100, int(level))))
 
 
 # --- Triton haptic output reports ---------------------------------------------
@@ -126,10 +149,16 @@ def make_log(tag):
     return log
 
 
-def exlink_send(name, port):
-    """Send one Ex-Link frame; returns the ack as hex ('' if none).
-    serial is imported lazily so machines without pyserial can import cglib."""
+def exlink_send_hex(frame_hex, port):
+    """Send one raw Ex-Link frame (hex string); returns the ack as hex ('' if
+    none). serial is imported lazily so machines without pyserial can import
+    cglib. Success ack is 03 0c f1."""
     import serial
     with serial.Serial(port, 9600, timeout=1) as s:
-        s.write(bytes.fromhex(EXLINK_FRAMES[name]))
+        s.write(bytes.fromhex(frame_hex))
         return s.read(3).hex()
+
+
+def exlink_send(name, port):
+    """Send a named frame from EXLINK_FRAMES."""
+    return exlink_send_hex(EXLINK_FRAMES[name], port)

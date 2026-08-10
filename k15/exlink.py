@@ -1,6 +1,8 @@
 """Manual Ex-Link TV control (debug/bench tool):
 
-    python exlink.py power_on|power_off|hdmi1|hdmi2|hdmi3|hdmi4
+    python exlink.py power_on|power_off|hdmi1..4|vol_up|vol_down|mute_toggle
+    python exlink.py vol_set <0-100>
+    python exlink.py probe_volume     (C1 drill: does this set answer queries?)
 
 Frames and the COM port come from cglib/config.json - one home for both."""
 import sys
@@ -9,14 +11,24 @@ import cglib
 
 
 def main(argv):
-    if len(argv) != 1 or argv[0] not in cglib.EXLINK_FRAMES:
-        print("usage: exlink.py " + "|".join(cglib.EXLINK_FRAMES))
-        return 2
-    name = argv[0]
     port = cglib.load_config()["tvComPort"]
-    ack = cglib.exlink_send(name, port)
-    print(f"{name}: sent, response={ack or '(none)'}")
-    return 0
+    if len(argv) == 2 and argv[0] == "vol_set" and argv[1].isdigit():
+        frame = cglib.vol_set_frame(int(argv[1]))
+        ack = cglib.exlink_send_hex(frame, port)
+        print(f"vol_set {argv[1]}: sent {frame}, response={ack or '(none)'}")
+        return 0
+    if len(argv) == 1 and argv[0] == "probe_volume":
+        ack = cglib.exlink_send_hex(cglib.EXLINK_VOLUME_QUERY, port)
+        verdict = ack or "(none - set is write-only; software mute state it is)"
+        print(f"volume query: response={verdict}")
+        return 0
+    if len(argv) == 1 and argv[0] in cglib.EXLINK_FRAMES:
+        ack = cglib.exlink_send(argv[0], port)
+        print(f"{argv[0]}: sent, response={ack or '(none)'}")
+        return 0
+    print("usage: exlink.py " + "|".join(cglib.EXLINK_FRAMES)
+          + " | vol_set <0-100> | probe_volume")
+    return 2
 
 
 if __name__ == "__main__":
