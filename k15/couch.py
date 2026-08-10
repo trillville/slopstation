@@ -125,6 +125,33 @@ def watch():
     log("=== IDLE ===")
 
 
+def reconcile():
+    """Run once at K15 startup (Start-Listener.bat), before the listener.
+
+    If a session lock survived a restart, the watch loop died with us. Either
+    the session is still live - resume watching it so its end still restores
+    the TV - or it's dead, in which case just clear the lock so the chord
+    isn't deaf. The TV is NOT touched on the dead path: its current state is
+    unknowable after arbitrary downtime, and only a live session's end may
+    drive it."""
+    if not LOCK.exists():
+        return 0
+    log("reconcile: session lock survived a restart - checking the host")
+    for _ in range(3):                  # boot-time network may need a moment
+        try:
+            if ssh("status") != "NOTREADY":
+                log("reconcile: session still live - resuming watch")
+                touch_lock()
+                watch()
+                return 0
+            break                       # definitive NOTREADY - session is dead
+        except Exception:
+            time.sleep(2)
+    log("reconcile: stale lock from a dead session - clearing, TV untouched")
+    LOCK.unlink(missing_ok=True)
+    return 0
+
+
 def usage():
     print("usage: couch.py [start|reconcile]")
     return 2
@@ -134,5 +161,7 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
     if cmd == "start":
         sys.exit(start())
+    elif cmd == "reconcile":
+        sys.exit(reconcile())
     else:
         sys.exit(usage())
