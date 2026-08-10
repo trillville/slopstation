@@ -130,6 +130,9 @@ def main():
     dp.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
     r = h.d.play_game(1)
     assert not r.ok and r.earcon == "busy"
+    dp.ssh = lambda cmd, **kw: "NOTINSTALLED"         # PC-side install guard
+    r = h.d.play_game(1)
+    assert not r.ok and r.earcon == "fail" and "installed" in r.say
     dp.ssh = ssh_down
     assert Harness().d.play_game(1).earcon == "fail"
     with_temp_lock(None)                              # cold: full couch launch

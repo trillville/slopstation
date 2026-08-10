@@ -129,6 +129,10 @@ class Dispatch:
             # Lock fresh but host pre-READY: a launch is in flight.
             return _busy("session launch in flight",
                          say="The session is still starting.")
+        if out == "NOTINSTALLED":
+            return _fail(f"{appid} not installed",
+                         say="That game isn't installed - "
+                             "you'd install it with the controller.")
         return _fail(f"ssh launch: {out}", say="The launch failed.")
 
     # -- TV --------------------------------------------------------------------

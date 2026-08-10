@@ -63,6 +63,24 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
         if ("$run" -eq $id) { 'ALREADY' } else { "BUSY:$run" }
         break
       }
+      # Install state lives only here (the PC's ACFs). Refuse an uninstalled
+      # appid - the authoritative guard, since a stale K15 index or a future
+      # caller could otherwise make steam -applaunch pop the install dialog on
+      # the TV (needs the controller - deliberately not a voice action).
+      $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
+      $roots = @()
+      if ($steam) { $steam = $steam -replace '/', '\'; $roots += $steam }
+      $lf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+      if (Test-Path $lf) {
+        foreach ($line in (Get-Content $lf)) {
+          if ($line -match '^\s*"path"\s+"(.+)"\s*$') { $roots += ($Matches[1] -replace '\\\\', '\') }
+        }
+      }
+      $installed = $false
+      foreach ($root in ($roots | Select-Object -Unique)) {
+        if (Test-Path (Join-Path $root "steamapps\appmanifest_$id.acf")) { $installed = $true; break }
+      }
+      if (-not $installed) { 'NOTINSTALLED'; break }
       Set-Content 'C:\ProgramData\CouchGaming\launch-app' $id
       schtasks /Run /TN '\CouchGaming\LaunchGame' | Out-Null
       if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
