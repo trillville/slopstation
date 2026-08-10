@@ -23,4 +23,5 @@ if (-not (Test-TvIsPrimary)) {
 }
 Stop-DisplayMagician
 Clear-ReadyMarker
+Clear-OldLogs
 Stop-Transcript

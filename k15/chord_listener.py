@@ -16,6 +16,7 @@ ACK_TONES = ((440, 60), (660, 90))   # (freq_hz, duration_ms)
 ACK_GAP_S = 0.07
 ACK_GAIN  = 0                        # s8 dB-ish; 0 = natural level (bench-tuned 2026-08-10; 120 = clamped max)
 
+cglib.rotate_log()
 log = cglib.make_log("listener")
 
 

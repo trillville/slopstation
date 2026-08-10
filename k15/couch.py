@@ -143,6 +143,7 @@ def reconcile():
     isn't deaf. The TV is NOT touched on the dead path: its current state is
     unknowable after arbitrary downtime, and only a live session's end may
     drive it."""
+    cglib.rotate_log()
     if not LOCK.exists():
         return 0
     log("reconcile: session lock survived a restart - checking the host")

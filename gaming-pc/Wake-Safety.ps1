@@ -23,4 +23,5 @@ if ($wake -match $NetworkWakePattern) {
 } else {
     Log 'clean wake - nothing to do'
 }
+Clear-OldLogs
 Stop-Transcript

@@ -137,6 +137,15 @@ function Test-CgTaskRunning([string]$Name) {
 
 function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | Out-Null }
 
+# Transcript retention: one file per enter/exit/wake/logon adds up forever.
+# Called from Office-Safety (every logon) and Wake-Safety (every desk wake -
+# the real cadence, since sleep-centric use makes logons rare).
+function Clear-OldLogs([int]$Days = 30) {
+    Get-ChildItem $CG.LogDir -Filter *.log -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$Days) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
 # The ready marker is the cross-machine session API: Enter writes it last, the
 # K15 switches the TV input only after seeing it, Exit/safeties remove it.
 function Set-ReadyMarker {

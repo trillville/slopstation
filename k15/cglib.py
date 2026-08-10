@@ -3,7 +3,7 @@
 Everything lives beside this file (the K15 desktop): config.json, couch.log,
 state/session.lock, and the scripts that import this.
 """
-import json, pathlib, struct, time
+import json, os, pathlib, struct, time
 
 BASE = pathlib.Path(__file__).resolve().parent
 
@@ -55,6 +55,19 @@ def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
 
 def load_config():
     return json.loads((BASE / "config.json").read_text())
+
+
+def rotate_log(max_bytes=5_000_000):
+    """Two-generation rotation: couch.log -> couch.log.1 once it exceeds the
+    cap. Called at K15 boot (reconcile) and listener startup. Writers open-
+    append-close per line, so the rename race window is negligible; a lost
+    round just rotates on the next call."""
+    logf = BASE / "couch.log"
+    try:
+        if logf.stat().st_size > max_bytes:
+            os.replace(logf, BASE / "couch.log.1")
+    except OSError:
+        pass
 
 
 def make_log(tag):
