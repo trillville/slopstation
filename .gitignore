@@ -1,6 +1,20 @@
 # Claude Code local settings (personal, not shared)
 .claude/settings.local.json
 
+# Third-party binaries (VirtualHere - download, don't redistribute)
+*.exe
+
+# VirtualHere app config - contains EasyFind ID/PIN (remote-access credentials)
+config.ini
+
+# Machine-generated DisplayMagician shortcuts - recreate per guide Stage 6
+*.lnk
+
+# Runtime state and logs
+logs/
+state/
+couch.log
+
 # OS / editor cruft
 Thumbs.db
 .DS_Store

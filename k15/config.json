@@ -1,0 +1,9 @@
+{
+  "gamingPcMac": "74-56-3C-45-92-DD",
+  "gamingPcIp":  "192.168.68.67",
+  "sshHost":     "gamepc",
+  "tvComPort":   "COM3",
+  "tvGamingCmd": "hdmi4",
+  "tvIdleCmd":   "hdmi1",
+  "tvOffWhenDone": true
+}
