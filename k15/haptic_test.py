@@ -51,22 +51,27 @@ def w(dev, data, label):
 
 def open_input_interface(timeout_s=2.0):
     """Latch-by-content, same as the listener and SteamControllerBridge: the
-    interface that emits 0x42 state reports is also the haptic write target."""
+    interface that emits 0x42 state reports is also the haptic write target.
+    The Puck exposes ~13 interfaces and some error on read - cull those quietly,
+    exactly as the listener does."""
     for info in hid.enumerate(VID, PID):
         d = hid.device()
         try:
             d.open_path(info["path"])
+            d.set_nonblocking(True)
+            t0 = time.time()
+            while time.time() - t0 < timeout_s:
+                r = d.read(64)
+                if r and r[0] == STATE_REPORT:
+                    log(f"latched 0x42 interface: {info['path']}")
+                    return d
+                time.sleep(0.002)
         except (OSError, ValueError):
-            continue
-        d.set_nonblocking(True)
-        t0 = time.time()
-        while time.time() - t0 < timeout_s:
-            r = d.read(64)
-            if r and r[0] == STATE_REPORT:
-                log(f"latched 0x42 interface: {info['path']}")
-                return d
-            time.sleep(0.002)
-        d.close()
+            pass                       # unreadable interface - skip it
+        try:
+            d.close()
+        except Exception:
+            pass
     raise RuntimeError("no live 0x42 interface - controller awake? listener stopped?")
 
 
