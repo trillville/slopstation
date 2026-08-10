@@ -1,4 +1,6 @@
-# Couch Gaming Build Guide — Complete Step-by-Step (v3.0)
+# Couch Gaming Build Guide — Complete Step-by-Step
+
+> **Historical record (frozen at v4.4).** This guide documents the v4 system as built. The scripts in [`gaming-pc/`](../gaming-pc/) and [`k15/`](../k15/) are canonical and have since been refactored (v5) with identical behavior — code listings below no longer match the repo line-for-line. The narrative, rationale, registration commands, and failure drills remain accurate.
 
 From boxes to a one-chord Steam console: RTX 4090 → direct HDMI → Samsung S90C, orchestrated by a GMKtec K15, native 2026 Steam Controller via Puck passthrough, Ex-Link TV control (port confirmed present).
 
@@ -6,7 +8,7 @@ From boxes to a one-chord Steam console: RTX 4090 → direct HDMI → Samsung S9
 
 **Design decisions locked in** (from v2 + review): every Windows logon unconditionally restores OFFICE mode (no boot-gating flag); SSH is signaling only — all display/Steam work runs via interactive Scheduled Tasks; TV powers on early (EDID needs to be live) but switches input **last**; the Puck/VirtualHere handoff is validated before any automation is written, because it's the one remaining architectural unknown.
 
-Version 4.4 (as-built) · August 9, 2026 · This document matches the deployed system file-for-file: every script is the final field-tested version and every command listed was actually required.
+Version 4.4 (as-built) · August 9, 2026 · At the time of freezing, this document matched the deployed v4 system file-for-file: every script was the final field-tested version and every command listed was actually required.
 *(v4.4: Exit no longer blanks the desk monitor at teardown — the display's own power-plan timeout handles it. v4.3: session lock gains a heartbeat — a K15 crash or closed console mid-session goes stale and is recycled after 5 minutes instead of silently blocking every future launch. v4.2: Wake-Safety resume task cleans up sessions abandoned without End TV Session and distinguishes keyboard from network wakes; Enter recycles stale Puck claims before claiming; DisplayMagician instances killed after every verified apply (frozen-window prevention); Ctrl+Alt+E desk hotkey for Exit. v4.1 hardened after the first failure drill; v4.0 consolidated the original build.)*
 
 ---
