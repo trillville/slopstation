@@ -1,0 +1,6 @@
+# C1 step-0 spike pins - validated against PyPI 2026-08-10.
+# [local] pulls pyaudio ~=0.2.14 (cp313 win_amd64 wheel confirmed to exist).
+# Deliberately minimal: no [silero]/[deepgram] yet - the spike isolates
+# transport health, so a failure here can only mean PortAudio/WASAPI.
+# Later C1 commits grow this file; pins recorded in docs/voice-implementation.md.
+pipecat-ai[local]==1.7.0
