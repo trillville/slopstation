@@ -105,7 +105,7 @@ def check_haptics():
         from haptic_test import open_input_interface, chirp
         dev = open_input_interface()
     except Exception as e:
-        report(WARN, "haptics", f"no live 0x42 interface ({e})",
+        report(WARN, "haptics", str(e),
                "controller asleep? tap a button and rerun; or a session is active")
         return
     try:
