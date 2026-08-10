@@ -1,14 +1,16 @@
-import subprocess, time
+import subprocess, sys, time
 import hid
 
-VID, PID = 0x28DE, 0x1304
+import cglib
+from cglib import VID, PID
+
 RID_INPUT = 0x42                  # input report type, from calibrate.py ("report type: 42")
 BTN_BYTE = 4
 CHORD    = 0x01 | 0x80            # Steam + right-trigger click
 HOLD_S   = 2.0
-COUCH    = r"C:\Users\minipc\Desktop\couch.py"
+COUCH    = cglib.BASE / "couch.py"
 
-def log(m): print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
+log = cglib.make_log("listener")
 
 class Puck:
     def __init__(self): self.handles, self.active = [], None
@@ -70,7 +72,7 @@ while True:
             if time.time() - held >= HOLD_S:
                 log("chord! launching session")
                 puck.close()
-                subprocess.Popen(["python", COUCH, "start"],
+                subprocess.Popen([sys.executable, str(COUCH), "start"],
                                  creationflags=subprocess.CREATE_NEW_CONSOLE)
                 time.sleep(20); held, armed = None, False
         else:
