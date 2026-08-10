@@ -19,6 +19,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import earcons
+import titles as titles_mod
 
 GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
 
@@ -32,17 +33,19 @@ class GrammarMatcher:
     Runtime slot lists: inputs from config, game titles from the library."""
 
     def __init__(self, voice_cfg, titles=None):
+        # titles arg kept for signature stability; {game} is a wildcard now -
+        # the fuzzy resolver owns title matching (see grammar.yaml comment).
         self.intents = load_intents()
         self.slot_lists = {
             "input": TextSlotList.from_tuples(
                 (spoken, spoken) for spoken in voice_cfg["inputs"]),
-            "game": TextSlotList.from_tuples(
-                (t, t) for t in (titles or ["__no_games_indexed__"])),
         }
 
     def match(self, text):
-        """Returns (intent_name, slots dict) or None."""
-        r = recognize(text.strip().lower(), self.intents,
+        """Returns (intent_name, slots dict) or None. Input goes through
+        spoken_form so 'armored core six' meets the slot variant
+        'armored core 6' on equal terms."""
+        r = recognize(titles_mod.spoken_form(text), self.intents,
                       slot_lists=self.slot_lists)
         if r is None:
             return None
@@ -67,12 +70,14 @@ class GrammarGate(FrameProcessor):
             num_channels=1))
 
     async def _run_intent(self, intent, slots):
+        """Returns True if the utterance was consumed here (the usual case);
+        False = hand it to the assistant lane after all (unresolvable title)."""
         d = self.dispatch
         if intent == "ExitSession":
             self.log("exit phrase - ending voice session")
             await self._earcon("close")
             await self.push_frame(EndWorkerFrame(reason="exit phrase"))
-            return
+            return True
         if intent == "StartSession":
             r = d.start_session()
         elif intent == "EndSession":
@@ -89,18 +94,26 @@ class GrammarGate(FrameProcessor):
             r = d.switch_input(str(slots["input"]))
         elif intent == "PlayGame":
             r = self._play_game(str(slots["game"]))
+            if r is None:                       # unresolvable title -> Tier 2
+                return False
         else:
             self.log(f"grammar matched unknown intent {intent} - ignoring")
-            return
+            return True
         self.log(f"{intent} -> {r.detail}")
         await self._earcon(r.earcon)
+        return True
 
     def _play_game(self, spoken):
-        if self.resolve_game is None:
-            return self.dispatch.start_session()   # no library yet: plain start
-        appid, title = self.resolve_game(spoken)
+        """Resolve via titles.py; a miss goes to the assistant (it can reason
+        about 'that mech game') or, without one, an honest fail earcon."""
+        appid, title = (self.resolve_game(spoken) if self.resolve_game
+                        else (None, None))
         if appid is None:
-            self.log(f"play '{spoken}' - no confident title match")
+            if self.assistant_enabled:
+                self.log(f"play '{spoken}' - no confident match, asking the assistant")
+                return None
+            self.log(f"play '{spoken}' - no confident title match"
+                     + ("" if self.resolve_game else " (no library index yet)"))
             from dispatch import Result
             return Result(False, "fail", f"I couldn't find {spoken}.",
                           f"no match for '{spoken}'")
@@ -115,8 +128,8 @@ class GrammarGate(FrameProcessor):
                 m = self.matcher.match(text)
                 if m is not None:
                     self.log(f'heard "{text}" -> {m[0]}')
-                    await self._run_intent(*m)
-                    return                          # swallowed: Tier 1 handled it
+                    if await self._run_intent(*m):
+                        return                      # swallowed: Tier 1 handled it
                 if not self.assistant_enabled:
                     self.log(f'heard "{text}" - no command match '
                              f"(assistant lane not enabled)")

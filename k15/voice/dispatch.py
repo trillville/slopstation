@@ -101,6 +101,34 @@ class Dispatch:
         self.log(f"end session refused: {out}")
         return _fail(f"ssh exit: {out}", say="The PC refused the exit.")
 
+    def play_game(self, appid):
+        """Session live -> direct host launch (Dispatch verb answers
+        truthfully: OK/ALREADY/BUSY/NOTREADY). No session -> full couch
+        launch with the game queued for after READY."""
+        age = cglib.lock_age()
+        if age is None or age >= cglib.LOCK_STALE_S:
+            return self.start_session(appid)
+        if self.dry_run:
+            return self._would(f"ssh launch {appid}")
+        try:
+            out = ssh(f"launch {appid}")
+        except Exception as e:
+            self.log(f"launch {appid} failed: {e}")
+            return _fail(f"ssh launch: {e}", say="I couldn't reach the PC.")
+        self.log(f"launch {appid} -> {out}")
+        if out == "OK":
+            return _ok(f"launch {appid}", say="Launching.")
+        if out == "ALREADY":
+            return _ok(f"{appid} already running", say="It's already running.")
+        if out.startswith("BUSY:"):
+            return _busy(f"another game is running ({out})",
+                         say="Another game is running - quit it first.")
+        if out == "NOTREADY":
+            # Lock fresh but host pre-READY: a launch is in flight.
+            return _busy("session launch in flight",
+                         say="The session is still starting.")
+        return _fail(f"ssh launch: {out}", say="The launch failed.")
+
     # -- TV --------------------------------------------------------------------
 
     def volume_up(self):

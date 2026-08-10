@@ -39,10 +39,13 @@ TABLE = [
     ("go back to the playstation", "SwitchInput", {"input": "playstation"}),
     ("switch to ps5", "SwitchInput", {"input": "ps5"}),
     ("show the apple tv", "SwitchInput", {"input": "apple tv"}),
-    ("play armored core six", "PlayGame", {"game": "armored core six"}),
+    # {game} is a wildcard: the slot carries the (normalized) spoken text;
+    # title->appid resolution is titles.py's job, tested in test_library.
+    ("play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("launch elden ring", "PlayGame", {"game": "elden ring"}),
-    ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon five"}),
+    ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),
     ("start elden ring", "PlayGame", {"game": "elden ring"}),
+    ("play some music", "PlayGame", {"game": "some music"}),
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
@@ -53,7 +56,6 @@ TABLE = [
     ("start", None, {}),
     ("play", None, {}),
     ("switch to the garage", None, {}),          # unknown input name
-    ("play some music", None, {}),               # unknown game title
     # Risky-command narrowness: casual variants must NOT end a session.
     ("end it", None, {}),
     ("stop", None, {}),

@@ -69,7 +69,7 @@ def wait_port(timeout=PORT_WAIT_S):
     return False
 
 
-def start():
+def start(appid=None):
     age = cglib.lock_age()
     if age is not None and age < LOCK_STALE_S:
         log("session already active/starting - ignoring"); return 1
@@ -105,6 +105,14 @@ def start():
         if not ready: raise RuntimeError("host never reported READY")
         cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
         exlink(CFG["tvGamingCmd"])
+        if appid:
+            # Voice "play <title>" from cold: queue the game once the session
+            # is READY. Best-effort - a failed game launch never fails the
+            # session; Big Picture being up is already a working outcome.
+            try:
+                log(f"game launch {appid} -> {ssh(f'launch {appid}')}")
+            except Exception as e:
+                log(f"game launch {appid} failed ({e}) - session continues")
         log("=== GAMING ==="); watch()
     except Exception as e:
         log(f"launch failed: {e} - TV input untouched")
@@ -178,14 +186,15 @@ def reconcile():
 
 
 def usage():
-    print("usage: couch.py [start|reconcile]")
+    print("usage: couch.py [start [appid]|reconcile]")
     return 2
 
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
     if cmd == "start":
-        sys.exit(start())
+        appid = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
+        sys.exit(start(appid))
     elif cmd == "reconcile":
         sys.exit(reconcile())
     else:

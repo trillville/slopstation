@@ -126,9 +126,29 @@ def main():
     r = Harness().d.end_session()
     assert not r.ok and r.earcon == "fail"
 
+    # --- play_game: session-live ssh outcomes + cold-start delegation --------
+    with_temp_lock(10)                                # fresh lock = session up
+    h = Harness()
+    dp.ssh = lambda cmd, **kw: "OK"
+    assert h.d.play_game(1888160).ok
+    dp.ssh = lambda cmd, **kw: "ALREADY"
+    assert h.d.play_game(1).ok
+    dp.ssh = lambda cmd, **kw: "BUSY:42"
+    r = h.d.play_game(1)
+    assert not r.ok and r.earcon == "busy"
+    dp.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
+    r = h.d.play_game(1)
+    assert not r.ok and r.earcon == "busy"
+    dp.ssh = ssh_down
+    assert Harness().d.play_game(1).earcon == "fail"
+    with_temp_lock(None)                              # cold: full couch launch
+    spawned.clear()
+    r = Harness().d.play_game(777)
+    assert r.ok and spawned[0][-2:] == ["start", "777"], spawned
+
     time.sleep = real_sleep
     print("OK - dispatch: lock arbiter, dry-run, spawn args, volume step/clamp, "
-          "mute, retry, input map, READY gate, ssh outcomes")
+          "mute, retry, input map, READY gate, ssh outcomes, play_game paths")
 
 
 if __name__ == "__main__":

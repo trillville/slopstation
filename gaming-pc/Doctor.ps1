@@ -19,13 +19,13 @@ function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = 
 }
 
 # 1. Deployed files
-$files = @('CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
+$files = @('CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
 $missing = $files | Where-Object { -not (Test-Path (Join-Path $CG.Root $_)) }
 if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 're-copy from repo gaming-pc/ (lnk files: recreate per guide Stage 6)' }
 else { Report PASS 'files' "$($files.Count)/$($files.Count) present" }
 
 # 2. Scheduled tasks
-foreach ($t in 'Enter','Exit','ForceOfficeAtLogon','WakeSafety') {
+foreach ($t in 'Enter','Exit','ForceOfficeAtLogon','WakeSafety','LaunchGame') {
     schtasks /Query /TN "\CouchGaming\$t" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Report PASS "task $t" 'registered' }
     else { Report FAIL "task $t" 'not registered' 'guide Stage 6/8 has the registration commands' }
@@ -70,6 +70,10 @@ if ($h -gt 0) {
 # 6. Session state + logs
 if (Test-ReadyMarker) { Report WARN 'ready marker' 'present - a session is (or looks) active' 'stale after a crash? Exit task or Office-Safety clears it' }
 else { Report PASS 'ready marker' 'absent (idle)' }
+
+if (Test-Path 'C:\ProgramData\CouchGaming\launch-app') {
+    Report WARN 'launch marker' 'launch-app marker present - a voice launch never got consumed' 'safe to delete; LaunchGame task may have failed - check its transcript'
+} else { Report PASS 'launch marker' 'absent' }
 
 try {
     $probeFile = Join-Path $CG.LogDir ".doctor-write-test"

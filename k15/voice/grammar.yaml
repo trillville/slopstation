@@ -48,10 +48,6 @@ intents:
           - "switch [over] to [the] {input}"
           - "go [back] to [the] {input}"
           - "show [the] {input}"
-  PlayGame:
-    data:
-      - sentences:
-          - "(play|launch|start|put on) [the game] {game}"
   ExitSession:
     data:
       - sentences:
@@ -63,9 +59,18 @@ intents:
           - "nevermind"
           - "cancel"
           - "go back to sleep"
+  # LAST on purpose: {game} is a wildcard, so "start a session" must hit
+  # StartSession above before "start {game}" can eat it. Title resolution is
+  # the fuzzy resolver's job (titles.py), not this grammar's.
+  PlayGame:
+    data:
+      - sentences:
+          - "(play|launch|start|put on) [the game] {game}"
 lists:
   level:
     range:
       type: number
       from: 0
       to: 100
+  game:
+    wildcard: true

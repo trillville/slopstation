@@ -147,26 +147,6 @@ class WakeListener:
 
 # --- the per-session pipeline -------------------------------------------------
 
-def build_resolver(titles, threshold):
-    """Fuzzy spoken-title -> (appid, title); None below the confidence floor."""
-    if not titles:
-        return None
-    try:
-        rows = json.loads(LIBRARY.read_text(encoding="utf-8"))["installed"]
-    except (OSError, KeyError, ValueError):
-        return None
-    by_name = {r["name"]: r["appid"] for r in rows if r.get("name")}
-    from rapidfuzz import fuzz, process
-
-    def resolve(spoken):
-        best = process.extractOne(spoken, list(by_name), scorer=fuzz.token_set_ratio)
-        if best is None or best[1] < threshold:
-            return None, None
-        return by_name[best[0]], best[0]
-
-    return resolve
-
-
 async def run_session(cfg, secrets, args, input_idx, output_idx):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
@@ -202,11 +182,13 @@ async def run_session(cfg, secrets, args, input_idx, output_idx):
         ),
     )
 
+    import titles as titles_mod
     gate = GrammarGate(
         GrammarMatcher(voice, titles),
         Dispatch(cfg, log, dry_run=args.dry_run),
         log,
-        resolve_game=build_resolver(titles, voice["fuzzyTitleThreshold"]),
+        resolve_game=(titles_mod.build_resolver(voice["fuzzyTitleThreshold"])
+                      if titles else None),
         assistant_enabled=False,                # C3 flips this
     )
 
