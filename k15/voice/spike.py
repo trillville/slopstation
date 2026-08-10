@@ -49,8 +49,15 @@ def list_devices():
     print(f"[devices] host APIs: "
           + ", ".join(pa.get_host_api_info_by_index(i)["name"]
                       for i in range(pa.get_host_api_count())))
-    d_in = pa.get_default_input_device_info()
-    d_out = pa.get_default_output_device_info()
+    def default_index(getter, what):
+        try:
+            return getter()["index"]
+        except OSError:
+            print(f"[devices] WARNING: no default {what} device - "
+                  f"{'capture/duplex cannot run without a mic' if what == 'input' else 'tones will be inaudible'}")
+            return None
+    idx_in = default_index(pa.get_default_input_device_info, "input")
+    idx_out = default_index(pa.get_default_output_device_info, "output")
     for i in range(pa.get_device_count()):
         d = pa.get_device_info_by_index(i)
         tags = []
@@ -59,8 +66,8 @@ def list_devices():
         if d["maxOutputChannels"]:
             tags.append(f"out:{d['maxOutputChannels']}")
         mark = ""
-        if i == d_in["index"]:  mark += " <= default input"
-        if i == d_out["index"]: mark += " <= default output"
+        if i == idx_in:  mark += " <= default input"
+        if i == idx_out: mark += " <= default output"
         print(f"[devices] {i:3d} {d['name']} ({', '.join(tags)}){mark}")
     pa.terminate()
 
