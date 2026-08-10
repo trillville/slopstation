@@ -14,6 +14,9 @@ if (Test-CgTaskRunning 'Enter') {
     Log 'Enter task is running - stopping it (teardown wins)'
     Stop-CgTask 'Enter'
     Start-Sleep 1
+    # A killed Enter gets no catch block - clear any DisplayMagician instance it
+    # left mid-apply before this script launches its own.
+    Stop-DisplayMagician
 }
 
 # Leave Big Picture FIRST, while still on the TV - Steam's window never gets
