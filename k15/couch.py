@@ -15,10 +15,11 @@ PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
 WATCH_POLL_S   = 5
-WATCH_FAILS    = 3     # consecutive ssh failures = session dead. Deliberately low:
-                       # a true sleep gets the TV restored within ~a minute; the
-                       # false-positive cost is a desk-side relaunch (the Puck
-                       # stays claimed, so the chord can't hear).
+WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
+                       # dead. Deliberately low: a true sleep restores the TV in
+                       # ~20-30s; the false-positive cost of a transient outage
+                       # is a desk-side relaunch (the Puck stays claimed, so the
+                       # chord can't hear).
 
 log = cglib.make_log("launch")
 
@@ -46,9 +47,17 @@ def wol():
 
 
 def ssh(cmd, timeout=15):
+    """Run one Dispatch verb on the host; returns its stdout.
+
+    check=True is load-bearing: an unreachable host RAISES instead of returning
+    ssh's error text. Without it, connection errors read as session state -
+    start()'s READY poll would treat 'ssh: connect ... timed out' as READY and
+    switch the TV to a dead input, and watch() could never detect sleep (its
+    fails counter only moves on exceptions). stdout-only keeps stderr noise out
+    of state comparisons; Dispatch reports its own failures as FAILED:<code>."""
     r = subprocess.run(["ssh", CFG["sshHost"], cmd],
-                       capture_output=True, text=True, timeout=timeout)
-    return (r.stdout + r.stderr).strip()
+                       capture_output=True, text=True, timeout=timeout, check=True)
+    return r.stdout.strip()
 
 
 def wait_port(timeout=PORT_WAIT_S):
