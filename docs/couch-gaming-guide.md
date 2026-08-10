@@ -6,8 +6,8 @@ From boxes to a one-chord Steam console: RTX 4090 → direct HDMI → Samsung S9
 
 **Design decisions locked in** (from v2 + review): every Windows logon unconditionally restores OFFICE mode (no boot-gating flag); SSH is signaling only — all display/Steam work runs via interactive Scheduled Tasks; TV powers on early (EDID needs to be live) but switches input **last**; the Puck/VirtualHere handoff is validated before any automation is written, because it's the one remaining architectural unknown.
 
-Version 4.2 (as-built) · August 9, 2026 · This document matches the deployed system file-for-file: every script is the final field-tested version and every command listed was actually required.
-*(v4.2: Wake-Safety resume task cleans up sessions abandoned without End TV Session and distinguishes keyboard from network wakes; Enter recycles stale Puck claims before claiming; DisplayMagician instances killed after every verified apply (frozen-window prevention); Ctrl+Alt+E desk hotkey for Exit. v4.1 hardened after the first failure drill; v4.0 consolidated the original build.)*
+Version 4.3 (as-built) · August 9, 2026 · This document matches the deployed system file-for-file: every script is the final field-tested version and every command listed was actually required.
+*(v4.3: session lock gains a heartbeat — a K15 crash or closed console mid-session goes stale and is recycled after 5 minutes instead of silently blocking every future launch. v4.2: Wake-Safety resume task cleans up sessions abandoned without End TV Session and distinguishes keyboard from network wakes; Enter recycles stale Puck claims before claiming; DisplayMagician instances killed after every verified apply (frozen-window prevention); Ctrl+Alt+E desk hotkey for Exit. v4.1 hardened after the first failure drill; v4.0 consolidated the original build.)*
 
 ---
 
@@ -590,7 +590,7 @@ Test locally at the PC: run the Enter task from Task Scheduler with the TV on �
 
 (`tvOffWhenDone: true` = TV powers off after sessions; set `false` to return to the Apple TV on `tvIdleCmd: hdmi1` instead.)
 
-`couch.py` (lives next to `config.json` — on this build, the K15 desktop). Every line it prints is also appended to `couch.log` beside it, so chord-launched runs (whose console closes with them) always leave a trail; each `ssh` poll tolerates transient failures and retries rather than aborting the launch:
+`couch.py` (lives next to `config.json` — on this build, the K15 desktop). Every line it prints is also appended to `couch.log` beside it, so chord-launched runs (whose console closes with them) always leave a trail; each `ssh` poll tolerates transient failures and retries rather than aborting the launch; and the session lock carries a heartbeat (touched on every poll) so a lock whose owner died is recycled after 5 minutes rather than blocking launches forever:
 
 ```python
 import json, pathlib, socket, subprocess, sys, time
@@ -599,6 +599,7 @@ import serial
 BASE = pathlib.Path(__file__).parent
 CFG  = json.loads((BASE / "config.json").read_text())
 LOCK = BASE / "state" / "session.lock"
+LOCK_STALE_S = 300   # a live session touches the lock every few seconds; much older = dead owner
 LOGF = BASE / "couch.log"
 
 EXLINK = {"power_on": "082200000002d4", "power_off": "082200000001d5",
@@ -610,6 +611,10 @@ def log(msg):
     print(line, flush=True)
     try:
         with LOGF.open("a", encoding="utf-8") as f: f.write(line + "\n")
+    except OSError: pass
+
+def touch_lock():
+    try: LOCK.write_text(str(time.time()))
     except OSError: pass
 
 def exlink(name):
@@ -644,9 +649,15 @@ def wait_port(timeout=90):
     return False
 
 def start():
-    if LOCK.exists():
+    try:
+        age = time.time() - LOCK.stat().st_mtime
+    except OSError:
+        age = None                      # no lock (or it vanished mid-check)
+    if age is not None and age < LOCK_STALE_S:
         log("session already active/starting - ignoring"); return 1
-    LOCK.parent.mkdir(exist_ok=True); LOCK.write_text(str(time.time()))
+    if age is not None:
+        log(f"stale session lock ({age:.0f}s old, owner dead) - recycling")
+    LOCK.parent.mkdir(exist_ok=True); touch_lock()
     try:
         log("=== LAUNCH ===")
         exlink("power_on")
@@ -654,6 +665,7 @@ def start():
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh port up")
         for _ in range(60):
+            touch_lock()
             try:
                 if ssh("enter") == "OK":
                     log("enter dispatched"); break
@@ -664,6 +676,7 @@ def start():
         end = time.time() + 120
         ready = False
         while time.time() < end:
+            touch_lock()
             try:
                 st = ssh("status")
                 if st != "NOTREADY":
@@ -683,6 +696,7 @@ def watch():
     fails = 0
     while True:
         time.sleep(5)
+        touch_lock()
         try:
             st = ssh("status"); fails = 0
             if st == "NOTREADY":
