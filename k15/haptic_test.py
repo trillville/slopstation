@@ -15,6 +15,8 @@ Subcommands, in bench order (first one that buzzes wins):
   pulse      0x81 as a real pulse train (side 0 then side 1)
   rumble     one-shot 0x80 back-motor rumble (hardware self-stops in ~50 ms)
   probe      list all Puck HID interfaces and which one streams 0x42
+  audition   labeled tour of the haptic-vocabulary candidates (run with gain 0)
+  quiz       blind l/b/f discrimination test of QUIZ_SET (run with gain 0)
 
 Optional trailing integer = gain for tone commands (s8; default 120, the
 bridge-proven loud value - firmware clamps; negative attenuates).
@@ -84,6 +86,75 @@ def chirp(dev, gain):
         w(dev, cglib.stop_report(side), f"stop side{side}")
 
 
+# --- Vocabulary audition / blind quiz ----------------------------------------
+# A pattern = steps of (freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth).
+# Distinguishability lives in EVENT COUNT and rhythm first (1 vs 2 vs 3),
+# length second, register third - pitch *direction* alone is a weak tactile
+# cue. Edit values freely; QUIZ_SET picks the trio under blind test.
+PATTERNS = {
+    "launch":      ((440, 60, 10, 0, 0), (660, 90, 0, 0, 0)),           # current ack: 2 quick, rising
+    "busy-long":   ((220, 300, 0, 0, 0),),                              # 1 long low hum
+    "busy-double": ((220, 60, 90, 0, 0), (220, 60, 0, 0, 0)),           # 2 low thuds
+    "fail-triple": ((250, 100, 100, 0, 0), (220, 100, 100, 0, 0), (200, 140, 0, 0, 0)),
+    "fail-insist": ((250, 100, 100, 0, 0), (220, 100, 100, 0, 0), (200, 140, 800, 0, 0),
+                    (250, 100, 100, 0, 0), (220, 100, 100, 0, 0), (200, 140, 0, 0, 0)),
+    "fail-rough":  ((180, 500, 0, 12, 200),),                           # LFO texture experiment
+}
+QUIZ_SET = {"l": "launch", "b": "busy-long", "f": "fail-insist"}
+
+
+def play_pattern(dev, steps, gain, quiet=False):
+    for freq, dur, gap, lfo_f, lfo_d in steps:
+        for side in (0, 1):
+            data = cglib.tone_report(side, freq, dur, gain, lfo_f, lfo_d)
+            if quiet:
+                dev.write(data)              # no logging - the quiz must not leak answers
+            else:
+                w(dev, data, f"tone {freq}Hz/{dur}ms side{side}")
+        time.sleep((dur + gap) / 1000)
+    for side in (0, 1):
+        if quiet:
+            dev.write(cglib.stop_report(side))
+        else:
+            w(dev, cglib.stop_report(side), f"stop side{side}")
+
+
+def audition(dev, gain):
+    """Labeled pass: learn each candidate. Run with gain 0 = production feel."""
+    for name, steps in PATTERNS.items():
+        print(f"\n>>> {name}")
+        time.sleep(1.0)
+        play_pattern(dev, steps, gain)
+        time.sleep(1.5)
+
+
+def quiz(dev, gain, rounds=10):
+    """Blind discrimination test of QUIZ_SET. Don't look at the console while
+    it plays; type l/b/f after each buzz. Confusions mean the vocabulary needs
+    another iteration BEFORE any production logic gets built on it."""
+    import random
+    print(f"Blind test over {QUIZ_SET}. l=launch b=busy f=fail. Starting...")
+    score = 0
+    misses = {}
+    time.sleep(2)
+    for i in range(1, rounds + 1):
+        key = random.choice(list(QUIZ_SET))
+        time.sleep(1.0 + random.random() * 2.5)   # unpredictable onset
+        play_pattern(dev, PATTERNS[QUIZ_SET[key]], gain, quiet=True)
+        guess = (input(f"{i}/{rounds} which? [l/b/f] ").strip().lower() or "?")[0]
+        if guess == key:
+            score += 1
+            print("  correct")
+        else:
+            misses[(key, guess)] = misses.get((key, guess), 0) + 1
+            print(f"  it was {QUIZ_SET[key]}")
+    print(f"\nscore {score}/{rounds}")
+    for (actual, guess), n in sorted(misses.items()):
+        print(f"  {QUIZ_SET[actual]} mistaken for {guess!r} x{n}")
+    if not misses:
+        print("  no confusions - vocabulary is distinct")
+
+
 def sustained(dev, gain):
     for side in (0, 1):
         w(dev, cglib.tone_report(side, 440, SUSTAIN_MS, gain), f"tone 440Hz sustained side{side}")
@@ -125,7 +196,7 @@ def probe(_dev=None, _gain=None):
 
 
 CMDS = {"chirp": chirp, "sustained": sustained, "clearmap": clearmap,
-        "pulse": pulse, "rumble": rumble}
+        "pulse": pulse, "rumble": rumble, "audition": audition, "quiz": quiz}
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "chirp"

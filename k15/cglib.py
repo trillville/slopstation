@@ -34,8 +34,9 @@ HAPTIC_PULSE  = 0x81   # 8B: side u8, on_us u16, off_us u16, repeat u16; zero-fi
 HAPTIC_TONE   = 0x83   # 10B: side u8, gain_db s8, freq u16, duration_ms u16, lfo_freq u16, lfo_depth u8
 
 
-def tone_report(side, freq_hz, duration_ms, gain=0):
-    return struct.pack('<BBbHHHB', HAPTIC_TONE, side, gain, freq_hz, duration_ms, 0, 0)
+def tone_report(side, freq_hz, duration_ms, gain=0, lfo_freq=0, lfo_depth=0):
+    return struct.pack('<BBbHHHB', HAPTIC_TONE, side, gain, freq_hz, duration_ms,
+                       lfo_freq, lfo_depth)
 
 
 def pulse_report(side, on_us, off_us, repeat):
