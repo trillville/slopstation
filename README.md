@@ -33,6 +33,7 @@ paths from their own location, so the folders are relocatable as units.)
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
 | `Wake-Safety.ps1` | Cleans up sessions abandoned before sleep; stands down for network wakes. Task `\CouchGaming\WakeSafety`. |
 | `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
+| `Doctor.ps1` | On-demand chain diagnosis: files, tasks, sshd/firewall/key ACL, VirtualHere, display probe, session state. Read-only; exit code = FAIL count. |
 
 ### K15 (`k15/`)
 
@@ -42,6 +43,7 @@ paths from their own location, so the folders are relocatable as units.)
 | `couch.py` | Orchestrator: Ex-Link TV power → WoL → `ssh enter` → poll READY → switch input → watch loop. `reconcile` subcommand re-adopts or clears a session lock that survived a K15 restart. |
 | `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s; acks a validated chord with a haptic chirp, then fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
+| `doctor.py` | On-demand chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (auto-skipped while the listener owns the Puck), ssh contract, session state. |
 | `exlink.py` | Manual Ex-Link TV control (`python exlink.py power_on\|power_off\|hdmi1..4`); COM port from config. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping). |
