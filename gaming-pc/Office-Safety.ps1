@@ -1,19 +1,16 @@
-$probe = @'
-Add-Type -Namespace W -Name N -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);'
-[void][W.N]::SetProcessDPIAware()
-[W.N]::GetSystemMetrics(1)
-'@
-$enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
-function Get-PrimaryHeight { [int](& powershell.exe -NoProfile -EncodedCommand $enc | Select-Object -Last 1) }
-Start-Transcript "C:\CouchGaming\logs\office-safety-$(Get-Date -Format yyyyMMdd-HHmmss).log"
-for ($try = 1; $try -le 3; $try++) {
-    if ((Get-PrimaryHeight) -ne 2160) { Write-Host "office confirmed (attempt $try)"; break }
-    Write-Host "TV is primary - applying OFFICE (attempt $try)"
-    Start-Process 'C:\CouchGaming\OFFICE.lnk'
-    $end = (Get-Date).AddSeconds(25)
-    while ((Get-Date) -lt $end -and (Get-PrimaryHeight) -eq 2160) { Start-Sleep -Milliseconds 500 }
+# Unconditional OFFICE restore at every logon (Task \CouchGaming\ForceOfficeAtLogon).
+# Normal boots confirm office in one probe and exit; after a crash that left the
+# TV-primary topology it applies OFFICE with verified retries. Sends zero TV
+# commands - a TV that's off stays off, an Apple TV night stays undisturbed.
+. "$PSScriptRoot\CouchGaming.common.ps1"
+Start-CgTranscript 'office-safety'
+if (-not (Test-TvIsPrimary)) {
+    # Fail-open by design: a broken probe reads as "office confirmed" rather
+    # than thrashing displays at every logon.
+    Log 'office confirmed'
+} elseif (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 25 3 'office restored')) {
+    Log 'WARNING: OFFICE never took after 3 attempts'
 }
-if ((Get-PrimaryHeight) -eq 2160) { Write-Host 'WARNING: OFFICE never took after 3 attempts' }
-Get-Process DisplayMagician -ErrorAction SilentlyContinue | Stop-Process -Force
-Remove-Item 'C:\ProgramData\CouchGaming\ready' -ErrorAction SilentlyContinue
+Stop-DisplayMagician
+Clear-ReadyMarker
 Stop-Transcript
