@@ -7,6 +7,15 @@ $ErrorActionPreference = 'Continue'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'exit'
 
+# Conflict rule: teardown wins. If a launch is mid-flight, stop it - this
+# script is the reconciler for whatever half-state the kill leaves (office,
+# Puck release, ready marker are all handled below).
+if (Test-CgTaskRunning 'Enter') {
+    Log 'Enter task is running - stopping it (teardown wins)'
+    Stop-CgTask 'Enter'
+    Start-Sleep 1
+}
+
 # Leave Big Picture FIRST, while still on the TV - Steam's window never gets
 # resolution-yanked mid-render (prevents a garbled desktop-Steam window)
 Start-Process 'steam://close/bigpicture'

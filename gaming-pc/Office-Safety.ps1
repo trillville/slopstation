@@ -4,6 +4,16 @@
 # commands - a TV that's off stays off, an Apple TV night stays undisturbed.
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'office-safety'
+
+# An in-flight session task owns the topology - stand down rather than stomp a
+# live couch launch (cold-boot corner: K15 dispatches Enter seconds after
+# logon; this task fires at logon+20s and would otherwise "recover" it).
+if ((Test-CgTaskRunning 'Enter') -or (Test-CgTaskRunning 'Exit')) {
+    Log 'Enter/Exit task running - standing down (session flow owns the displays)'
+    Stop-Transcript
+    exit 0
+}
+
 if (-not (Test-TvIsPrimary)) {
     # Fail-open by design: a broken probe reads as "office confirmed" rather
     # than thrashing displays at every logon.

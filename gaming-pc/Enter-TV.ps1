@@ -5,6 +5,19 @@
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'enter'
+
+# Conflict rule: teardown wins, launch queues. If an Exit is mid-flight, wait
+# briefly for it to finish; if it won't, abort - nothing has been touched yet
+# and the K15 leaves the TV alone when READY never appears.
+if (Test-CgTaskRunning 'Exit') {
+    Log 'Exit task is running - waiting for teardown to finish'
+    if (-not (Wait-For { -not (Test-CgTaskRunning 'Exit') } 45 'Exit finished')) {
+        Log 'Exit still running - aborting launch, TV untouched'
+        Stop-Transcript
+        throw 'aborted: Exit task still running'
+    }
+}
+
 try {
     # Kick the VirtualHere client immediately so dead-socket detection + reconnect
     # start now and overlap everything below
@@ -55,8 +68,15 @@ try {
     Log 'READY'
 }
 catch {
-    & $CG.Vh -t "STOP USING,$($CG.Puck)" -r $CG.VhResult 2>$null
-    Start-Process $CG.OfficeLnk
+    # The failure path obeys the same rules as the success path: kill
+    # DisplayMagician first (a hung instance is the likeliest reason we're
+    # here), release best-effort, then a VERIFIED office apply. The TV input
+    # was never switched - the K15 gates on READY.
+    Stop-DisplayMagician
+    Request-PuckRelease 1 | Out-Null
+    if (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 20 2 'office restored')) {
+        Log 'WARNING: office did not verify during abort - ForceOfficeAtLogon converges at next logon'
+    }
     Clear-ReadyMarker
     throw
 }

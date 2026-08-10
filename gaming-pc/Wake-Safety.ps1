@@ -5,13 +5,21 @@
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'wake-safety'
 Start-Sleep 3
+
+# Matches this NIC's strings in `powercfg /lastwake` output - free-form,
+# English-locale text. Verify against the raw dump below after any NIC or
+# driver change, and widen if needed.
+$NetworkWakePattern = 'Magic Packet|Ethernet|GbE'
+
 $wake = (powercfg /lastwake | Out-String)
 Write-Host $wake
-if ($wake -match 'Magic Packet|Ethernet|GbE') {
+if ($wake -match $NetworkWakePattern) {
     Log 'network wake - couch launch owns this; standing down'
 } elseif (Test-ReadyMarker) {
     Log 'stale TV session detected - running Exit cleanup'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $CG.Root 'Exit-TV.ps1')
+    # Via the task, not inline: Task Scheduler serializes this against a
+    # tile/hotkey Exit, and the cleanup leaves the normal exit-*.log trail.
+    schtasks /Run /TN '\CouchGaming\Exit' | Out-Null
 } else {
     Log 'clean wake - nothing to do'
 }

@@ -97,7 +97,12 @@ function Request-PuckClaim {
     if (Test-PuckPresent) {
         Log 'stale Puck claim detected - releasing for a fresh instance'
         & $CG.Vh -t "STOP USING,$($CG.Puck)" -r $CG.VhResult
-        Wait-For { -not (Test-PuckPresent) } 6 'stale claim released' | Out-Null
+        if (-not (Wait-For { -not (Test-PuckPresent) } 6 'stale claim released')) {
+            # Proceeding would let the claim gate pass on the stale, dead instance -
+            # reproducing the exact inputs-dead controller this recycle exists to
+            # prevent. A clean abort (TV untouched) beats a fake-successful launch.
+            throw 'stale Puck claim would not release - aborting launch'
+        }
     }
     $claimed = $false
     for ($i = 1; -not $claimed -and $i -le 2; $i++) {
