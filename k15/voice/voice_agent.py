@@ -34,6 +34,7 @@ import cglib                                    # noqa: E402
 import earcons                                  # noqa: E402
 import library                                  # noqa: E402
 import titles                                   # noqa: E402
+import traces                                   # noqa: E402
 from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarGate, GrammarMatcher   # noqa: E402
 from preroll import PrerollFeeder, WakeCapture  # noqa: E402  (pipecat frames
@@ -394,7 +395,12 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
             except Exception as e:
                 log(f"pyaudio terminate failed ({e}) - leaked one host handle")
     if context is not None:                     # cross-session follow-ups
-        CARRY["messages"] = _trim_carry(list(context.messages)[-8:])
+        msgs = list(context.messages)
+        # Trace = the session's full context (carried turns included), i.e.
+        # exactly what the model saw.
+        traces.save("voice", msgs,
+                    {"provider": provider, "dry_run": args.dry_run})
+        CARRY["messages"] = _trim_carry(msgs[-8:])
         CARRY["t"] = time.time()
 
 

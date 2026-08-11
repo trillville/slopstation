@@ -17,6 +17,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
 import library                                  # noqa: E402
+import traces                                   # noqa: E402
 
 RULES = (
     "You are the voice assistant for a couch gaming setup (Steam on a TV). "
@@ -249,8 +250,10 @@ class OpenAIBackend:
         self.effort = effort            # none|minimal|low|medium|high (model-dep)
         self.prev = None
         self.cache_note = ""
+        self.messages = []              # trace mirror; real state is server-side
 
     def turn(self, system_text, user_text, impls):
+        self.messages.append({"role": "user", "content": user_text})
         pending = [{"role": "user", "content": user_text}]
         while True:
             resp = self.client.responses.create(
@@ -263,12 +266,16 @@ class OpenAIBackend:
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
             calls = [o for o in resp.output if o.type == "function_call"]
             if not calls:
+                self.messages.append({"role": "assistant",
+                                      "content": resp.output_text})
                 return resp.output_text
             pending = []
             for c in calls:
                 args = json.loads(c.arguments or "{}")
                 out = impls[c.name](args)
                 print(f"  [tool] {c.name}({args}) -> {out}")
+                self.messages.append({"role": "tool", "name": c.name,
+                                      "args": args, "out": out})
                 pending.append({"type": "function_call_output",
                                 "call_id": c.call_id, "output": json.dumps(out)})
 
@@ -306,22 +313,27 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
     if provider == "openai":
         tag += f" effort={effort}"
     print(f"assistant REPL - {tag}, dry_run={dry_run}. Empty line to quit.")
-    while True:
-        try:
-            q = input("you> ").strip()
-        except EOFError:
-            break
-        if not q:
-            break
-        t0 = time.time()
-        try:
-            text = backend.turn(system_text, q, impls)
-        except Exception as e:
-            # A bad knob value (e.g. an unsupported reasoning effort) or a
-            # transient API error shouldn't kill the bench session - the
-            # error text is the answer to the probe.
-            print(f"API error ({time.time() - t0:.1f}s)> {e}")
-            continue
-        note = f", {backend.cache_note}" if backend.cache_note else ""
-        print(f"assistant ({time.time() - t0:.1f}s{note})> {text}")
+    try:
+        while True:
+            try:
+                q = input("you> ").strip()
+            except EOFError:
+                break
+            if not q:
+                break
+            t0 = time.time()
+            try:
+                text = backend.turn(system_text, q, impls)
+            except Exception as e:
+                # A bad knob value (e.g. an unsupported reasoning effort) or a
+                # transient API error shouldn't kill the bench session - the
+                # error text is the answer to the probe.
+                print(f"API error ({time.time() - t0:.1f}s)> {e}")
+                continue
+            note = f", {backend.cache_note}" if backend.cache_note else ""
+            print(f"assistant ({time.time() - t0:.1f}s{note})> {text}")
+    finally:
+        # Ctrl-C included: a bench conversation worth having is worth keeping.
+        traces.save(f"repl-{provider}", backend.messages,
+                    {"model": backend.model, "dry_run": dry_run})
     return 0
