@@ -95,8 +95,9 @@ def main(argv):
             print(f"volume query: bare ack {resp}, no payload - the set "
                   "accepts the frame but answers no data; blind mute stays")
         else:
-            print(f"volume query: response={resp} - MORE THAN THE ACK. "
-                  "Paste this: real volume/mute state may be readable")
+            print(f"volume query: response={resp} - more than the ack; run "
+                  "decode_volume to check it actually varies with state "
+                  "(S90C verdict 2026-08-10: constant canned echo, no state)")
         return 0
     if len(argv) == 1 and argv[0] == "decode_volume":
         return decode_volume(port)

@@ -29,8 +29,11 @@ EXLINK_FRAMES = {
     "mute_toggle": "082202000000d4",   # discrete mute on/off does not exist
 }
 
-# Bench probe only (C1 drill): status queries are contested on modern sets.
-# One generous read decides real-mute-state vs software-tracked forever.
+# Bench probe only. DECIDED 2026-08-10 (decode_volume drill): the S90C acks
+# this query and emits a CONSTANT canned echo - our command bytes parroted
+# back with a success code (08 f0010000 f1 16), byte-identical at volume
+# 7/23, muted/unmuted. No readable state; mute stays a blind toggle
+# (assumptions row 4, closed).
 EXLINK_VOLUME_QUERY = "0822f0010000e5"
 
 # Proven live on the S90C 2026-08-10: every accepted frame (even the query

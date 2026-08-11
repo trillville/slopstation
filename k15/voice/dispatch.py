@@ -164,9 +164,11 @@ class Dispatch:
         return self._exlink(f"vol_set {clamped}", cglib.vol_set_frame(clamped))
 
     def mute_toggle(self):
-        """Blind toggle: the S90C exposes no discrete mute on/off, and query
-        support is unproven until the C1 probe - no state is tracked, so the
-        vocabulary is 'mute' = toggle, with vol_set as the resync."""
+        """Blind toggle, permanently: the S90C exposes no discrete mute
+        on/off, and the C1 decode drill proved its status query returns a
+        constant canned echo (byte-identical across volume/mute states) -
+        there is no state to read, so none is tracked. The vocabulary is
+        'mute' = toggle, with vol_set as the resync."""
         return self._exlink("mute_toggle", cglib.EXLINK_FRAMES["mute_toggle"])
 
     def switch_input(self, spoken_name):
