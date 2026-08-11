@@ -72,7 +72,7 @@ def main():
         LLMContextAggregatorPair)
     from pipecat.services.anthropic.llm import AnthropicLLMService
     from pipecat.services.deepgram.tts import DeepgramTTSService
-    from pipecat.services.openai.llm import OpenAILLMService
+    from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
     ctx = LLMContext(messages=[], tools=schemas)
     ua, aa = LLMContextAggregatorPair(ctx)
     llm_a = AnthropicLLMService(
@@ -80,16 +80,21 @@ def main():
         settings=AnthropicLLMService.Settings(
             model="claude-haiku-4-5", system_instruction=si,
             enable_prompt_caching=True, max_tokens=400))
-    llm_o = OpenAILLMService(
+    # OpenAI on the Responses API (reasoning + tools coexist), reasoning knob.
+    llm_o = OpenAIResponsesHttpLLMService(
         api_key="x" * 24,
-        settings=OpenAILLMService.Settings(
+        settings=OpenAIResponsesHttpLLMService.Settings(
             model="gpt-5.6-luna", system_instruction=si,
-            max_completion_tokens=400, extra={"reasoning_effort": "none"}))
+            max_completion_tokens=1500, reasoning={"effort": "low"}))
     tts = DeepgramTTSService(api_key="x" * 24, sample_rate=16000,
                              settings=DeepgramTTSService.Settings(
                                  voice="aura-2-thalia-en"))
     assert ua and aa and llm_a and llm_o and tts
-    print("  constructions: LLMContext, Anthropic + OpenAI LLM services, Aura-2 - OK")
+    # OpenAIBackend must default to a REAL reasoning effort, not disable it.
+    import inspect
+    eff = inspect.signature(assistant.OpenAIBackend.__init__).parameters["effort"]
+    assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"
+    print("  constructions: LLMContext, Anthropic + OpenAI Responses, Aura-2 - OK")
 
     # Live metadata (keyless APIs) - tolerant: network may be absent.
     try:

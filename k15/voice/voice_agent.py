@@ -184,17 +184,20 @@ def _make_tts(voice, secrets):
 
 def _make_llm(voice, secrets, system_text):
     """The brain, provider-switchable via config.assistantProvider - so once the
-    --text A/B picks a winner, production follows by flipping one config key."""
+    --text A/B picks a winner, production follows by flipping one config key.
+    OpenAI uses the Responses API (reasoning + tools coexist there); effort is
+    a config knob that trades latency for depth."""
     provider = voice.get("assistantProvider", "anthropic")
     if provider == "openai":
         from assistant import default_model
-        from pipecat.services.openai.llm import OpenAILLMService
-        return OpenAILLMService(
+        from pipecat.services.openai.responses.llm import (
+            OpenAIResponsesHttpLLMService)
+        return OpenAIResponsesHttpLLMService(
             api_key=secrets["openaiApiKey"],
-            settings=OpenAILLMService.Settings(
+            settings=OpenAIResponsesHttpLLMService.Settings(
                 model=default_model({"voice": voice}, "openai"),
-                system_instruction=system_text, max_completion_tokens=400,
-                extra={"reasoning_effort": "none"}))   # tools need reasoning off
+                system_instruction=system_text, max_completion_tokens=1500,
+                reasoning={"effort": voice.get("assistantReasoningEffort", "low")}))
     from pipecat.services.anthropic.llm import AnthropicLLMService
     return AnthropicLLMService(
         api_key=secrets["anthropicApiKey"],
@@ -317,6 +320,8 @@ def main():
                          "always dry-run (actions log, never execute)")
     ap.add_argument("--provider", help="--text A/B: anthropic|openai")
     ap.add_argument("--model", help="--text A/B: model id override")
+    ap.add_argument("--effort", help="--text A/B: openai reasoning effort "
+                                     "(none|minimal|low|medium|high)")
     args = ap.parse_args()
 
     if args.devices:
@@ -334,8 +339,8 @@ def main():
 
     if args.text:
         from assistant import repl
-        return repl(cfg, secrets, log, dry_run=True,
-                    provider=args.provider, model=args.model)
+        return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
+                    model=args.model, effort=args.effort)
 
     import pyaudio
     cglib.rotate_log()

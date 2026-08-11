@@ -153,27 +153,27 @@ def openai_tools():
 
 
 # --- provider backends: one turn (with its tool loop) -> reply text -----------
-# The system prompt, tool schemas, and tool impls are provider-neutral; only the
-# request/response shape and where the system prompt goes differ. Each backend
-# owns a client + model and mutates its own provider-shaped `messages` list.
+# System prompt, tool schemas, and tool impls are provider-neutral; only the
+# request/response shape differs. Each backend holds its own conversation state.
 
 class AnthropicBackend:
     key = "anthropicApiKey"
 
-    def __init__(self, secrets, model):
+    def __init__(self, secrets, model, effort=None):
         import anthropic
         self.client = anthropic.Anthropic(api_key=secrets[self.key])
         self.model = model
+        self.messages = []
 
-    def turn(self, system_text, messages, user_text, impls):
+    def turn(self, system_text, user_text, impls):
         system = [{"type": "text", "text": system_text,
                    "cache_control": {"type": "ephemeral"}}]
-        messages.append({"role": "user", "content": user_text})
+        self.messages.append({"role": "user", "content": user_text})
         while True:
             resp = self.client.messages.create(
                 model=self.model, max_tokens=400, system=system,
-                messages=messages, tools=anthropic_tools())
-            messages.append({"role": "assistant", "content": resp.content})
+                messages=self.messages, tools=anthropic_tools())
+            self.messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason != "tool_use":
                 return " ".join(b.text for b in resp.content if b.type == "text")
             results = []
@@ -183,37 +183,41 @@ class AnthropicBackend:
                     print(f"  [tool] {b.name}({dict(b.input)}) -> {out}")
                     results.append({"type": "tool_result", "tool_use_id": b.id,
                                     "content": json.dumps(out)})
-            messages.append({"role": "user", "content": results})
+            self.messages.append({"role": "user", "content": results})
 
 
 class OpenAIBackend:
+    """Responses API - the interface OpenAI recommends for reasoning models;
+    reasoning and tool calls coexist here (they don't cleanly on the legacy
+    chat-completions endpoint). State is server-side via previous_response_id,
+    which also threads reasoning items across tool calls for us."""
     key = "openaiApiKey"
 
-    def __init__(self, secrets, model):
+    def __init__(self, secrets, model, effort="low"):
         import openai
         self.client = openai.OpenAI(api_key=secrets[self.key])
         self.model = model
+        self.effort = effort            # none|minimal|low|medium|high (model-dep)
+        self.prev = None
 
-    def turn(self, system_text, messages, user_text, impls):
-        messages.append({"role": "user", "content": user_text})
+    def turn(self, system_text, user_text, impls):
+        pending = [{"role": "user", "content": user_text}]
         while True:
-            resp = self.client.chat.completions.create(
-                model=self.model, max_completion_tokens=400,
-                # GPT-5.6 rejects function tools on chat-completions unless
-                # reasoning is off - and a one-sentence answer wants no reasoning.
-                reasoning_effort="none",
-                messages=[{"role": "system", "content": system_text}] + messages,
-                tools=openai_tools())
-            msg = resp.choices[0].message
-            messages.append(msg.model_dump(exclude_none=True))
-            if not msg.tool_calls:
-                return msg.content or ""
-            for tc in msg.tool_calls:
-                args = json.loads(tc.function.arguments or "{}")
-                out = impls[tc.function.name](args)
-                print(f"  [tool] {tc.function.name}({args}) -> {out}")
-                messages.append({"role": "tool", "tool_call_id": tc.id,
-                                 "content": json.dumps(out)})
+            resp = self.client.responses.create(
+                model=self.model, instructions=system_text, input=pending,
+                tools=openai_tools(), reasoning={"effort": self.effort},
+                max_output_tokens=1500, previous_response_id=self.prev)
+            self.prev = resp.id
+            calls = [o for o in resp.output if o.type == "function_call"]
+            if not calls:
+                return resp.output_text
+            pending = []
+            for c in calls:
+                args = json.loads(c.arguments or "{}")
+                out = impls[c.name](args)
+                print(f"  [tool] {c.name}({args}) -> {out}")
+                pending.append({"type": "function_call_output",
+                                "call_id": c.call_id, "output": json.dumps(out)})
 
 
 BACKENDS = {"anthropic": AnthropicBackend, "openai": OpenAIBackend}
@@ -224,11 +228,11 @@ def default_model(cfg, provider):
             if provider == "openai" else cfg["voice"]["assistantModel"])
 
 
-def repl(cfg, secrets, log, dry_run=True, provider=None, model=None):
+def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
     """--text mode: type transcripts, see replies + tool calls + latency. The
     20-query canned set and the model A/B run through this - same system prompt,
     tool schemas, and impls as the voice pipeline, either provider. Pick with
-    --provider anthropic|openai [--model <id>]."""
+    --provider anthropic|openai [--model <id>] [--effort none|low|medium|high]."""
     from dispatch import Dispatch
 
     provider = provider or cfg["voice"].get("assistantProvider", "anthropic")
@@ -241,11 +245,14 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None):
         return 1
 
     impls = tool_impls(Dispatch(cfg, log, dry_run=dry_run), log)
-    backend = BACKENDS[provider](secrets, model or default_model(cfg, provider))
+    effort = effort or cfg["voice"].get("assistantReasoningEffort", "low")
+    backend = BACKENDS[provider](secrets, model or default_model(cfg, provider),
+                                 effort=effort)
     system_text = system_instruction()
-    messages = []
-    print(f"assistant REPL - {provider}/{backend.model}, dry_run={dry_run}. "
-          f"Empty line to quit.")
+    tag = f"{provider}/{backend.model}"
+    if provider == "openai":
+        tag += f" effort={effort}"
+    print(f"assistant REPL - {tag}, dry_run={dry_run}. Empty line to quit.")
     while True:
         try:
             q = input("you> ").strip()
@@ -254,6 +261,6 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None):
         if not q:
             break
         t0 = time.time()
-        text = backend.turn(system_text, messages, q, impls)
+        text = backend.turn(system_text, q, impls)
         print(f"assistant ({time.time() - t0:.1f}s)> {text}")
     return 0
