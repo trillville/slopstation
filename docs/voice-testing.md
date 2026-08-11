@@ -274,8 +274,10 @@ $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"; $sh = N
 
 Day to day: close a window to stop that lane (the supervisors only
 auto-restart crashes, not closes); for bench sessions close the voice window
-first, then run manually with flags. **After a `git pull`, run
-`Start-K15.bat --restart`** — a running agent holds the old modules in memory,
+first, then run manually with flags. **After a `git pull`, double-click
+`Restart-K15.bat`** (or `Start-K15.bat --restart`; a double-clicked `.bat`
+can't carry arguments, which is the only reason the wrapper exists) — a
+running agent holds the old modules in memory,
 and `--restart` kills the agents (never the supervisor windows) so each
 supervisor relaunches its own on the new code after its 10 s backoff. A live
 session is undisturbed: `couch.py reconcile` runs outside that loop, so

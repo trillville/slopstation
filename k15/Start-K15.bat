@@ -36,22 +36,38 @@ if not "%~1"=="" (
 goto start
 
 :restart
+set "RELOADED=1"
 echo [start-k15] reloading agents - supervisors relaunch them after ~10s
 call :reload voice_agent.py "voice agent"
 call :reload chord_listener.py "chord listener"
 
 :start
+set "STARTED="
 call :supervised "%LISTLOCK%"
 if errorlevel 1 (
+  set "STARTED=1"
   start "K15 chord listener" /min /d "%~dp0" Start-Listener.bat
 ) else (
   echo [start-k15] chord lane already supervised
 )
 call :supervised "%VOICELOCK%"
 if errorlevel 1 (
+  set "STARTED=1"
   start "K15 voice" /min /d "%~dp0voice" Start-Voice.bat
 ) else (
   echo [start-k15] voice lane already supervised
+)
+rem Nothing started and nothing reloaded = a double-click that did nothing.
+rem Hold the window open and say so: this path is the one that looks like it
+rem worked, and it's exactly what a post-git-pull double-click lands on.
+rem It cannot fire at boot (both lanes are down then, so both get started).
+if not defined STARTED if not defined RELOADED (
+  echo.
+  echo [start-k15] both lanes were already running - nothing to do.
+  echo [start-k15] if you just pulled, the agents are still on the OLD code:
+  echo [start-k15]     run  Start-K15.bat --restart   ^(or double-click Restart-K15.bat^)
+  echo.
+  pause
 )
 exit /b 0
 
