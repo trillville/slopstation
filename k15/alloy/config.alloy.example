@@ -75,12 +75,13 @@ loki.process "events" {
 
 loki.write "grafana_cloud" {
 	endpoint {
-		// EDIT THIS - copy the exact URL from the Loki "Details" page of the
-		// stack (the region slug is per-stack; do not guess it).
-		url = "https://logs-prod-us-central1.grafana.net/loki/api/v1/push"
+		// This rig's real value (Cloud portal -> Stacks -> Details -> Loki ->
+		// Details). US West / prod-us-west-0. The /loki/api/v1/push suffix is
+		// NOT shown on that page - it lists the datasource base URL only.
+		url = "https://logs-prod-021.grafana.net/loki/api/v1/push"
 
 		basic_auth {
-			username = sys.env("GC_LOKI_USER")
+			username = sys.env("GC_LOKI_USER")   // instance id: 1730320
 			password = sys.env("GC_LOKI_TOKEN")
 		}
 	}

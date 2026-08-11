@@ -85,11 +85,11 @@ loki.source.file "pc_transcripts" {
 
 loki.write "grafana_cloud" {
 	endpoint {
-		// EDIT THIS - the same URL the K15 uses; copy it from the stack.
-		url = "https://logs-prod-us-central1.grafana.net/loki/api/v1/push"
+		// This rig's real value - the same endpoint the K15 uses.
+		url = "https://logs-prod-021.grafana.net/loki/api/v1/push"
 
 		basic_auth {
-			username = sys.env("GC_LOKI_USER")
+			username = sys.env("GC_LOKI_USER")   // instance id: 1730320
 			password = sys.env("GC_LOKI_TOKEN")
 		}
 	}
