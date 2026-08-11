@@ -1,0 +1,41 @@
+# Troubleshooting — when it doesn't work at 9pm
+
+Symptom → diagnosis → fix, for both lanes. The chord lane is load-bearing; the
+voice lane is an overlay and its failures never affect the chord.
+
+**First move, always:** tail `k15/couch.log` (next to `config.json`). Every
+process tags its lines — `[listener]`, `[launch]`, `[voice]`, `[library]`,
+`[supervisor]`. `python doctor.py` on the K15 and `Doctor.ps1` on the PC each
+diagnose their whole chain read-only.
+
+## Chord lane
+
+| Symptom | Diagnosis | Fix |
+|---|---|---|
+| Chord does nothing, no launch console | RDP to K15, tail `couch.log` | No `[listener]` lines → listener not running: run `Start-K15.bat` (check Task Manager for a duplicate python first). `already active/starting - ignoring` → lock is fresh: a session is live, or a crash happened <5 min ago — wait it out or `del state\session.lock` |
+| Listener says `armed` but the chord never fires | Controller firmware update moved the report bytes | `python calibrate.py`, update `RID_INPUT`/`BTN_BYTE`/`CHORD` in `chord_listener.py` |
+| End TV Session tile does nothing | `schtasks /Run /TN \CouchGaming\Exit` says `currently running` — wedged instance | `schtasks /End /TN \CouchGaming\Exit`; the 5-min execution limit also self-clears it |
+| Launch aborts with `stale Puck claim would not release` | The old claim wouldn't die, so launching would give a dead controller | RDP to K15: reseat the Puck's USB or restart the VirtualHere service; at the desk check the vhui64 client |
+| TV switches but shows a black/garbled screen | Enter transcript didn't end `READY`, or the profile failed after READY | Read the newest `enter-*.log`; Ctrl+Alt+E to tear down; check the TV-GAMING profile still applies by hand (guide Stage 6) |
+| TV stuck on HDMI 4 after a session ended | K15 lost the session (rebooted mid-session, or the watch died) | Check `couch.log` tail; reboot the K15 (`reconcile` cleans up); the TV remote is the manual fallback |
+| Session ends by itself mid-game, TV off | `couch.log`: `gaming PC gone` after 3 failed polls — transient network/sshd outage ≥ ~30 s | Ctrl+Alt+E at the desk, then re-chord. If it recurs, raise `WATCH_FAILS` in `couch.py` |
+| `FAILED:1` repeating during a launch | PC is at the login screen — no interactive session, so the Enter task can't start | Log in at the PC; couch launches from **sleep** (the supported couch-ready state) don't hit this |
+| `office-safety` log says `standing down` | An Enter/Exit was genuinely running at logon | Normal. If it repeats every logon, check for a wedged task: `schtasks /Query /TN \CouchGaming\Enter /FO LIST` |
+| Keyboard wake doesn't clean up a stale session | `wake-safety-*.log`'s raw `powercfg /lastwake` dump doesn't match the pattern | Widen `$NetworkWakePattern` in `Wake-Safety.ps1` to match your NIC's actual string |
+| Enter/Exit transcript shows `Log is not recognized` | `CouchGaming.common.ps1` missing or a partial copy | Re-copy all of `gaming-pc/` to `C:\CouchGaming\` |
+
+## Voice lane
+
+| Symptom | Diagnosis | Fix |
+|---|---|---|
+| No wake at all | No `[voice] wake` lines in `couch.log` | Is the supervisor window open? `python doctor.py` → the voice rows report agent/venv/keys. Wrong mic bound: `--devices` and set `inputDeviceName` |
+| `another Start-Voice window is already running` | Single-instance guard — a startup copy is live | Close that window first (it's the off switch; the supervisor only auto-restarts crashes) |
+| Wake fires, then nothing | `session crashed:` in the log | Whatever follows is the real error; the agent returns to dormant either way. A missing/placeholder `deepgramApiKey` disables sessions by design (startup logs it) |
+| `wake stream died (…) - reopening in 5s` | Mic stream death, usually Bluetooth profile churn | Self-healing, no action. If constant, move off BT: see the audio rig note in [voice-assumptions.md](voice-assumptions.md) row 19 |
+| Audio flapping / `-9999` on AirPods | HFP/A2DP endpoint split — the held mic keeps HFP up, so the first playback wakes the suspended A2DP endpoint | Point BOTH `inputDeviceName`/`outputDeviceName` at the "Headset" endpoints, or use a wired mic/speaker |
+| A phrase never matches | The log shows `heard "…" - passing to assistant` | The grammar is deliberately narrow for risky commands. Add the phrasing to `voice/grammar.yaml` and re-run `tests/test_grammar.py` |
+| `play <title>` finds nothing | `no confident title match`, or an ambiguity refusal (near-ties refuse on purpose) | `python library.py sync` then `show`; say more of the title. The index needs the PC awake for the installed layer |
+| `library refresh skipped (… returned non-zero exit status 1)` | The PC's `Dispatch.ps1` is older than the six-verb version — `games` returns `DENIED` | Re-deploy the PC side (voice-testing.md §2b) |
+| Launch says OK but no game starts | Big Picture up, game never asked for | Read the newest `C:\CouchGaming\logs\launchgame-*.log`. A `Remove-Item … Access denied` there means the marker/token fix isn't deployed — re-deploy `Dispatch.ps1` + `Launch-Game.ps1` |
+| TV command silently does nothing | `exlink … FAILED` in the log (acks are validated: `030cf1` or it didn't land) | TV off/asleep, or COM contention. `python exlink.py vol_up` to test the port directly |
+| Mute state feels backwards | Mute is a **blind toggle** — the S90C reports no state (proven; assumptions row 4) | Say a volume number ("volume 20") — an absolute set is the resync |

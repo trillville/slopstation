@@ -1,4 +1,6 @@
-# Voice venv pins - frozen 2026-08-10 against PyPI (see docs/voice-implementation.md).
+# Voice venv pins - frozen 2026-08-10 against PyPI, as-built on the K15.
+# Upgrades are deliberate, never casual: Pipecat moves weekly, so re-read the
+# new version's docs for every service used and re-run tests/ before bumping.
 # The chord listener stays on system python; this venv is voice's alone.
 pipecat-ai[local,silero,deepgram,anthropic,openai]==1.7.0
 openwakeword==0.6.0

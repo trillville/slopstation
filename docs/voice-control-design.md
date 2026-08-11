@@ -1,6 +1,14 @@
 # Voice Control (Project C) — v2 design
 
-**Status: design complete (v2 — conversational). Nothing built. Next actions: order the mic array (C0) and run the Pipecat-on-Windows spike (C1 gate).**
+**Status: BUILT AND SHIPPED (merged to `main` 2026-08-10).** C1–C3 are live on
+the K15 — wake word, command grammar, game launch, and the conversation lane —
+and this document stands as the as-designed record: the *why* behind the
+architecture, the alternatives weighed, the costs and risks. Where the build
+deviated, [voice-assumptions.md](voice-assumptions.md) is authoritative (it
+carries the live verdicts); drills live in
+[voice-testing.md](voice-testing.md). Still ahead: **C0**, the acoustic gate,
+which waits on the mic array (bring-up procedure is in the testing guide), and
+the C4 menu below — options, not commitments.
 
 v2 supersedes the v1 design (git `36d5fa5`) after the UX requirements were elevated:
 the assistant must support **multi-step conversational Q&A with a natural spoken

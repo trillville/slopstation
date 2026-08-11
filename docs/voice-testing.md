@@ -31,7 +31,7 @@ Desktop and `git pull` to update:
 cd %USERPROFILE%\Desktop
 git clone <repo-url> slopstation      (or: git pull, if already cloned)
 cd slopstation
-git checkout voice                    (the testing branch; main after it merges)
+git checkout main
 ```
 
 Per-machine files are gitignored — create them once from the committed examples
@@ -54,8 +54,34 @@ python -m venv .venv        (if python isn't on PATH: py -3.13 -m venv .venv)
 
 From now on, `git pull` updates the code; your `config.json`/`secrets.json` and
 the `.venv` are local and never touched by it. (The chord listener, if running,
-is a separate process — voice runs alongside it and can't disturb it. Point its
-Startup shortcut at this clone's `Start-Listener.bat` if you want it here too.)
+is a separate process — voice runs alongside it and can't disturb it. Both lanes
+share one Startup shortcut; see **Autostart** below.)
+
+## 2b. Gaming PC side — deploy once
+
+The PC deploys **by copy** (its runtime needs gitignored binaries), so a repo
+change there is not live until you copy it. Voice needs the six-verb
+`Dispatch.ps1` (`games`/`playing`/`launch` on top of `enter`/`exit`/`status`)
+plus `Launch-Game.ps1` — without them `library.py sync` logs `refresh skipped`
+and launches never fire. On the **gaming PC**, from its checkout:
+
+```
+Copy-Item <repo>\gaming-pc\*.ps1 -Destination C:\CouchGaming\
+```
+
+Register the launch task once (runs as you, non-elevated, only when logged on —
+a Steam launch needs your interactive session; the 5-minute limit is
+load-bearing, same idiom as Enter/Exit):
+
+```
+$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Launch-Game.ps1'
+$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'LaunchGame' -Action $a -Settings $s
+```
+
+Verify from the K15: `ssh gamepc games` returns JSON (not `DENIED`). That one
+reply proves the forced command, the new verbs, and the key all line up.
+`Doctor.ps1` on the PC also checks the task and warns on a stale marker.
 
 ## 3. Pre-flight — devices + the spike
 
@@ -250,6 +276,33 @@ auto-restart crashes, not closes); for bench sessions close the voice window
 first, then run manually with flags. Remove `Start-K15.lnk` to undo autostart.
 Verify the unattended chain once: reboot, touch nothing — chord a session,
 then "hey jarvis volume up".
+
+## Mic array bring-up — when the ReSpeaker arrives
+
+Everything above works on any mic; the array is what makes wake reliable from
+the couch at movie volume. This is the acoustic gate — the project's top risk,
+decided by data, not taste.
+
+1. **Prep:** USB3/xHCI port; Zadig WinUSB on the control interface;
+   `xvf_host VERSION`; confirm UA/USB 2-ch 16 kHz firmware; check speaker-out
+   audibility at couch distance; run `spike.py` for a 10-minute soak on the
+   array. `Start-Voice.bat`'s `xvf_host REBOOT 1` line un-gates itself once
+   `voice\xvf_host\xvf_host.exe` exists (reboot-hang workaround).
+2. **Aim** (candidate 1: atop the console): `AEC_FIXEDBEAMSONOFF 1` → set both
+   azimuths/elevations at couch-left/right (slight up-tilt) →
+   `AEC_FIXEDBEAMSGATING 1` → validate from each seat via `AEC_SPENERGY_VALUES`
+   + the LED DoA → only after the live config proves out, `SAVE_CONFIGURATION 1`
+   **once**. Learn Safe-Mode recovery first (hold mute at boot) — the brick bug
+   is real.
+3. **Trials:** `voice_agent.py --wake-trials` 20× per condition
+   {movie volume, loud movie} × {couch-left, couch-right}; then
+   `--false-accept-soak` through one ~2 h movie.
+4. **Gate:** ≥18/20 in every condition AND ≤1 false accept per movie. Record
+   the placement, azimuths, and the full table in
+   [voice-assumptions.md](voice-assumptions.md). Miss ⇒ try candidate 2
+   (in-cabinet, foam, against the grate) ⇒ still miss ⇒ add a beam-energy
+   double-gate to the wake loop ⇒ still miss ⇒ stop and reassess mount
+   geometry.
 
 ## Fastest path to "it works"
 

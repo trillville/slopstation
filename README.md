@@ -16,6 +16,10 @@ calls in [docs/voice-assumptions.md](docs/voice-assumptions.md). Voice is an
 overlay, never load-bearing: the chord listener is a separate process and
 survives anything the voice stack does.
 
+When something misbehaves: [docs/troubleshooting.md](docs/troubleshooting.md)
+(both lanes, symptom → fix), or run `python doctor.py` on the K15 /
+`Doctor.ps1` on the PC — each diagnoses its whole chain read-only.
+
 Build narrative, rationale, registration commands, and failure drills:
 [docs/couch-gaming-guide.md](docs/couch-gaming-guide.md) — a **historical record
 of the v4 system** (frozen at v4.4). The scripts here are canonical; guide code
@@ -64,7 +68,7 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), merged into `state/library.json`; auto-synced by the voice agent. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping, voice tuning). |
-| `Start-TV-Gaming.bat` | Desktop recovery launcher for `couch.py`. |
+| `Start-TV-Gaming.bat` | Manual recovery launcher: runs `couch.py start` in a window that stays open. |
 | `Start-K15.bat` | **The** Startup-folder shortcut target: launches both supervisors below in their own minimized windows, then exits. |
 | `Start-Listener.bat` | Chord-lane supervisor: `reconcile` once, then the listener in a 10 s restart loop. Single-instance (a second launch bounces). |
 | `voice/` | The voice overlay: `voice_agent.py` (wake word → per-session Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane), `grammar.yaml` + `titles.py` (command grammar + fuzzy title resolution), `dispatch.py` (every voice side effect, shared by both lanes), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain + `--text` REPL), `tests/` (blind suite). Own venv, own pins. |
