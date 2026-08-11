@@ -1,7 +1,7 @@
 # Observability (Project E) — design
 
-**Status: E0 and E1 BUILT (2026-08-11), blind suite green at 17/17. E2–E6
-planned.** This is the as-designed record for making the couch system legible
+**Status: E0, E1, E2 BUILT (2026-08-11), blind suite green at 17/17. Logs are
+live in Grafana Cloud. E3–E6 planned.** This is the as-designed record for making the couch system legible
 from a phone: what it emits, where that goes, what it costs, and the order to
 build it in. Written 2026-08-11 after a survey of the free-tier landscape;
 load-bearing claims cited inline. Verdicts live in
@@ -506,7 +506,7 @@ are what makes it done.
 |---|---|---|
 | **E0** ✅ | `k15/events.py` + `make_log` structured emit + levels + `env` + scrubber. No network. Migrated all 126 call sites. Daily JSONL files. `events.py emit` CLI wired into the three `.bat` supervisors. Blind test `test_events.py`. | **Done 2026-08-11.** Suite green; `logs/k15-*.jsonl` well-formed; test runs auto-tagged `env=test` **and diverted to `test-*.jsonl`**, so the shipped file never carries drill noise |
 | **E1** ✅ | `turn` id: minted at wake, at chord, and per transcript; threaded through dispatch → `couch.py` → `Dispatch.ps1` → PC scripts and into the transcript filename. `\z`-anchored, case-sensitive, hex-bounded validation at the SSH boundary; `test_turn.py` drills it with 30 hostile strings read from the live patterns. | **Done 2026-08-11.** One simulated voice launch produced 8 events across 2 lanes and a process boundary under a single `turn`, and `ssh gamepc enter --turn bb8cc7` on the wire |
-| **E2** | Grafana Cloud account, Alloy on the K15, first dashboard. | A launch appears in Grafana on the phone within 30 s; labels are exactly the four |
+| **E2** ✅ | Grafana Cloud stack (US West, `logs-prod-021`), Alloy on the K15, `slopstation-write` access policy. | **Done 2026-08-11.** Events reach Loki and are queryable in Explore. Traps hit and recorded in [What E2 found](#what-e2-found); the config itself needed one edit and worked first time |
 | **E3** | Heartbeats + the six alerts + notification channel. | Killing `voice_agent.py` pages within 6 min and self-clears when the supervisor restarts it |
 | **E4** | Alloy on the gaming PC (JSONL + transcripts). | The E1 correlation query works from Grafana, not from a merged local file |
 | **E5** | `voice/tracing.py`: OTel SDK, span tree, GenAI + `langfuse.*` attributes, dual export. Pins added to `requirements.txt`. Blind test `test_tracing.py` (no-op fallback, scrubbing, attribute mapping). | A conversation renders as a tree in Langfuse with non-zero cost, and the same trace is in Tempo |
@@ -549,6 +549,51 @@ Both regex findings came from **drilling the patterns, not reading them** —
 hostile strings at each, so the test can never drill a stale copy. The same
 corpus was then run through real .NET regex, which is what caught the
 case-insensitivity that Python's mirror could not.
+
+## What E2 found
+
+Bring-up took far longer than the config did, and none of it was the config.
+Recorded because every one of these will look identical the next time.
+
+**1. The token from "Generate now" cannot write.** The hosted-logs Details page
+offers a token, and it is scoped from the stack's default `*-hl-read` access
+policy — `logs:read`, no `logs:write`. Pushing with it returns
+`401 ... "invalid scope requested"`. The fix is a **separate access policy**
+(Cloud portal → Security → Access Policies → New) with `logs:write`, and a
+token created under *that*. Ours is `slopstation-write`, and it carries
+`traces:write` too so E5 does not repeat this.
+
+**2. `loki.write` reports Healthy while every push fails.** Component health
+means "started", not "working" — it stayed green through dozens of 401s. The
+Alloy UI is useless for this class of failure. The answer was one command:
+
+```powershell
+Get-WinEvent -LogName Application -MaxEvents 60 |
+  Where-Object { $_.ProviderName -like '*Alloy*' -and $_.Message -like '*error*' }
+```
+
+which printed the exact HTTP status and Loki's own error string. **Go there
+first next time.** Roughly four rounds of symptom-guessing preceded asking the
+log, and the log answered immediately.
+
+**3. Alloy reads its environment at process start.** A token created *after*
+the service started is invisible until `Restart-Service Alloy`, and the
+resulting error is `invalid token` — which reads like a bad value and is
+actually a stale process. If the machine environment ever proves unreliable,
+Alloy also keeps a service-local environment at
+`HKLM\Software\GrafanaLabs\Alloy` → `Environment` (MultiString).
+
+**4. The position file tracks what was READ, not what was SENT.** Lines read
+while pushes are failing are dropped and never retried — restarting does not
+backfill them, because the position already advanced past them. This is
+acceptable here and worth stating plainly: **the local JSONL and `couch.log`
+are the source of truth; Grafana is a mirror.** Nothing that matters may live
+only in the cloud.
+
+**The best cross-check is on Grafana's side**, not the K15's: an access
+policy's token row shows **`Last used at`**. `Never` proves the token never
+reached Grafana at all, which distinguishes "wrong value" from "not being
+sent" in one glance — a distinction the client-side symptoms could not make.
 
 ## Drills
 
