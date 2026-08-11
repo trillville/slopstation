@@ -23,6 +23,7 @@ from pipecat.frames.frames import (BotStartedSpeakingFrame, EndWorkerFrame,
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 import earcons
+import events
 import titles
 
 GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
@@ -139,7 +140,7 @@ class GrammarGate(FrameProcessor):
         they are news, and news is worth a second sound."""
         if (name == "ok" and self.ack is not None
                 and self.ack.age() < self.ACK_COALESCE_S):
-            self.log("ok folded into the wake chime")
+            self.log("earcon_folded", earcon=name)
             return
         await self._earcon(name)
 
@@ -150,7 +151,7 @@ class GrammarGate(FrameProcessor):
         loop so audio and the Flux socket keep flowing while it works."""
         d = self.dispatch
         if intent == "ExitSession":
-            self.log("exit phrase - ending voice session")
+            self.log("session_exit_phrase")
             # No earcon here: the sleep chime now plays from the wake loop
             # after teardown, so every way a session can end - exit phrase,
             # idle, crash - sounds the same and marks the actual moment the
@@ -179,11 +180,11 @@ class GrammarGate(FrameProcessor):
             elif intent in actions:
                 r = await asyncio.to_thread(actions[intent])
             else:
-                self.log(f"grammar matched unknown intent {intent} - ignoring")
+                self.log.error("intent_unknown", intent=intent)
                 return True
         finally:
             self._dispatching -= 1
-        self.log(f"{intent} -> {r.detail}")
+        self.log("dispatch", intent=intent, ok=r.ok, detail=r.detail)
         await self._result_earcon(r.earcon)
         return True
 
@@ -193,7 +194,7 @@ class GrammarGate(FrameProcessor):
         All jobs calls are quick local file reads - no thread hop needed."""
         if intent == "TaskCancel":
             n, running = self.jobs.cancel_queued()
-            self.log(f"task cancel: {n} queued cancelled, running={running}")
+            self.log("task_cancel", cancelled=n, running=running)
             if running:
                 await self.push_frame(TTSSpeakFrame(
                     "One is already running - it will finish or time out. "
@@ -210,7 +211,7 @@ class GrammarGate(FrameProcessor):
                 line or "No finished background tasks."))
             return True
         text = job["detail"] if intent == "TaskDetail" else job["summary"]
-        self.log(f"task {intent}: speaking {job['id']}")
+        self.log("task_spoken", intent=intent, job=job["id"])
         await self.push_frame(TTSSpeakFrame(text))
         self.jobs.mark_read(job["id"])
         return True
@@ -222,13 +223,13 @@ class GrammarGate(FrameProcessor):
                         else (None, None))
         if appid is None:
             if self.assistant_enabled:
-                self.log(f"play '{spoken}' - no confident match, asking the assistant")
+                self.log("title_miss", spoken=spoken, fallback="assistant")
                 return None
-            self.log(f"play '{spoken}' - no confident title match"
-                     + ("" if self.resolve_game else " (no library index yet)"))
+            self.log.warn("title_miss", spoken=spoken, fallback="fail_earcon",
+                          reason=None if self.resolve_game else "no_index")
             from dispatch import Result
             return Result(False, "fail", f"no match for '{spoken}'")
-        self.log(f"play '{spoken}' -> {title} ({appid})")
+        self.log("title_resolved", spoken=spoken, title=title, appid=appid)
         return await asyncio.to_thread(self.dispatch.play_game, appid)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -244,7 +245,7 @@ class GrammarGate(FrameProcessor):
             # Pipecat reports service failures (LLM 401/400, TTS death) via
             # loguru to the console only - mirror them into couch.log so a
             # silent assistant is diagnosable from the one log that matters.
-            self.log(f"pipeline error: {frame.error}")
+            self.log.error("pipeline_error", err=str(frame.error))
             if self._assistant_pending:
                 # The answer isn't coming: say so with the honest earcon
                 # instead of trailing off into silence, and stop pinning the
@@ -254,6 +255,11 @@ class GrammarGate(FrameProcessor):
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
             if text:
+                # A final transcript IS a user intent, so this is where the
+                # turn id is born. Everything it causes - the gate decision,
+                # the dispatch, couch.py, the gaming PC's Enter task - carries
+                # it from here. The session id set at wake survives the merge.
+                events.context(turn=events.new_turn())
                 # Backstop: a final transcript proves the turn ended even if
                 # no UserStoppedSpeakingFrame arrived. Silence here would mean
                 # no feedback at all until the action completes (up to 15 s of
@@ -265,23 +271,23 @@ class GrammarGate(FrameProcessor):
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": not a command, not assistant material -
                     # swallow it and keep listening (no earcon, no LLM turn).
-                    self.log(f'heard "{text}" - wake phrase only, listening')
+                    self.log("stt_final", text=text, outcome="wake_only")
                     return
                 if stripped != text:
-                    self.log(f'wake prefix stripped: "{text}" -> "{stripped}"')
+                    self.log("wake_prefix_stripped", text=text, stripped=stripped)
                     frame.text = stripped       # both lanes see the command only
                     text = stripped
             if text:
                 m = self.matcher.match(text)
                 if m is not None:
-                    self.log(f'heard "{text}" -> {m[0]}')
+                    self.log("gate_match", text=text, intent=m[0])
                     if await self._run_intent(*m):
                         return                      # swallowed: Tier 1 handled it
                 if not self.assistant_enabled:
-                    self.log(f'heard "{text}" - no command match '
-                             f"(assistant lane not enabled)")
+                    self.log.warn("gate_miss", text=text, fallback="none",
+                                  reason="assistant_disabled")
                     await self._earcon("fail")
                     return
-                self.log(f'heard "{text}" - passing to assistant')
+                self.log("gate_miss", text=text, fallback="assistant")
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

@@ -5,6 +5,8 @@ config.json, secrets.json, couch.log, state/, and the scripts that import this.
 """
 import json, os, pathlib, struct, time
 
+import events
+
 BASE = pathlib.Path(__file__).resolve().parent
 
 # Valve Steam Controller Puck (as forwarded by VirtualHere).
@@ -158,22 +160,87 @@ def rotate_log(max_bytes=5_000_000):
         pass
 
 
-def make_log(tag):
-    """Logger that prints and appends to couch.log - one place to look for
-    launcher and listener history alike (chord-launched consoles close with
-    their session; the file survives)."""
-    logf = BASE / "couch.log"
+class _Log:
+    """Logger that prints, appends the human line to couch.log, and emits the
+    same event as structured JSON for the log shipper.
 
-    def log(msg):
-        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{tag}] {msg}"
-        print(line, flush=True)
+    Called as `log("event_name", field=value, ...)`. The event name is a
+    closed vocabulary - it is what dashboards group by and alerts fire on - so
+    variable data goes in fields, never in the name. `log.warn(...)` /
+    `log.error(...)` pick the level; the rule for choosing is whether the
+    thing that just happened cost the user something they would notice.
+
+    Under the blind suite (env=test) the console still gets everything, but
+    couch.log does not: test output and production failures sharing one file
+    in one shape is precisely the confusion this exists to end."""
+
+    def __init__(self, lane):
+        self.lane = lane
+        self._logf = BASE / "couch.log"
+
+    def _write(self, level, event, fields):
+        line = (f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{self.lane}] "
+                + events.human(event, level=level, **fields))
         try:
-            with logf.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except OSError:
-            pass
+            print(line, flush=True)
+        except (OSError, ValueError, AttributeError, UnicodeError):
+            pass            # windowless task: stdout is None or a dead pipe
+        if events.ENV != "test":
+            try:
+                with self._logf.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except OSError:
+                pass
+        events.emit(self.lane, event, level=level, **fields)
 
-    return log
+    def __call__(self, event, **fields):
+        self._write(events.INFO, event, fields)
+
+    def debug(self, event, **fields):
+        self._write(events.DEBUG, event, fields)
+
+    def info(self, event, **fields):
+        self._write(events.INFO, event, fields)
+
+    def warn(self, event, **fields):
+        self._write(events.WARN, event, fields)
+
+    def error(self, event, **fields):
+        self._write(events.ERROR, event, fields)
+
+
+def make_log(lane):
+    """One logger per lane ('voice', 'launch', 'listener', 'library'). The
+    lane is a Loki label, so the set stays small and fixed."""
+    return _Log(lane)
+
+
+class CapturingLog(_Log):
+    """Test double with the PRODUCTION shape - same call signature, same
+    levels - that records instead of writing.
+
+    Shared rather than hand-rolled per test on purpose: the blind suite used
+    to pass `logs.append` as a logger, which silently accepted anything and
+    so could not notice the day the logging interface changed. Tests assert
+    on events and fields now, never on prose, so rewording a message is free
+    and renaming an event (which IS an interface - alerts group by it) is
+    caught."""
+
+    def __init__(self, lane="test", echo=False):
+        super().__init__(lane)
+        self.records = []
+        self.echo = echo
+
+    def _write(self, level, event, fields):
+        self.records.append(dict(fields, level=level, event=event))
+        if self.echo:
+            print(f"[{self.lane}] " + events.human(event, level=level, **fields))
+
+    def events(self):
+        return [r["event"] for r in self.records]
+
+    def find(self, event):
+        return [r for r in self.records if r["event"] == event]
 
 
 def _exlink_txn(frame_hex, port):

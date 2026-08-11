@@ -17,8 +17,15 @@ import time
 from collections import namedtuple
 
 import cglib
+import couch
+import events
 import library
-from couch import ssh          # one ssh implementation - couch.py owns it
+# couch.ssh / couch.ssh_intent are reached through the MODULE, never imported
+# by name. One ssh implementation and, just as importantly, ONE SEAM: swapping
+# couch.ssh intercepts every verb, including the mutating ones that leave via
+# ssh_intent. `from couch import ssh` would give this module a second binding
+# that such a swap silently misses - which is exactly how the blind suite came
+# to be testing an unpatched path.
 
 COUCH = cglib.BASE / "couch.py"
 
@@ -58,7 +65,7 @@ class Dispatch:
     # -- internals -------------------------------------------------------------
 
     def _would(self, what):
-        self.log(f"DRY-RUN would: {what}")
+        self.log("dry_run_would", action=what)
         return _ok(f"dry-run: {what}")
 
     def _exlink(self, what, frame_hex):
@@ -68,10 +75,10 @@ class Dispatch:
             return self._would(f"exlink {what} ({frame_hex})")
         try:
             ack = cglib.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
-            self.log(f"exlink {what} -> {ack or 'no-ack'}")
+            self.log("exlink_send", cmd=what, ack=ack or "no-ack")
             return _ok(f"exlink {what}")
         except Exception as e:
-            self.log(f"exlink {what} FAILED: {e}")
+            self.log.error("exlink_nak", cmd=what, err=str(e))
             return _fail(f"the TV command failed ({what}: {e})")
 
     # -- session ---------------------------------------------------------------
@@ -81,14 +88,19 @@ class Dispatch:
         launch. couch.py owns the whole sequence (and the one rule)."""
         age = cglib.lock_age()
         if age is not None and age < cglib.LOCK_STALE_S:
-            self.log(f"start refused - session lock is fresh ({age:.0f}s)")
+            self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))
             return _busy("a session is already active or starting")
         what = f"couch.py start{f' {appid}' if appid else ''}"
         if self.dry_run:
             return self._would(what)
         args = [sys.executable, str(COUCH), "start"] + ([str(appid)] if appid else [])
+        # couch.py runs in its own console, so the id has to travel as an
+        # argument - a ContextVar does not survive a process boundary.
+        turn = events.current().get("turn")
+        if turn:
+            args += ["--turn", turn]
         subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        self.log(f"dispatched {what}")
+        self.log("session_dispatched", appid=appid)
         return _ok(f"starting a session ({what})")
 
     def end_session(self):
@@ -97,14 +109,14 @@ class Dispatch:
         if self.dry_run:
             return self._would("ssh exit")
         try:
-            out = ssh("exit")
+            out = couch.ssh_intent("exit")
         except Exception as e:
-            self.log(f"end session failed: {e}")
+            self.log.error("end_session_failed", err=str(e))
             return _fail(f"couldn't reach the PC (ssh exit: {e})")
         if out == "OK":
-            self.log("end session dispatched")
+            self.log("end_session_dispatched")
             return _ok("ending the session")
-        self.log(f"end session refused: {out}")
+        self.log.warn("end_session_refused", answer=out)
         return _fail(f"the PC refused the exit (ssh exit: {out})")
 
     def now_playing(self):
@@ -113,7 +125,7 @@ class Dispatch:
         if self.dry_run:
             return self._would("ssh playing")
         try:
-            out = ssh("playing").strip()
+            out = couch.ssh("playing").strip()
         except Exception as e:
             return _fail(f"couldn't reach the PC (ssh playing: {e})")
         return _ok(out if out.isdigit() else "0")
@@ -128,11 +140,11 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            out = ssh(f"launch {appid}")
+            out = couch.ssh_intent(f"launch {appid}")
         except Exception as e:
-            self.log(f"launch {appid} failed: {e}")
+            self.log.error("launch_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh launch: {e})")
-        self.log(f"launch {appid} -> {out}")
+        self.log("launch_dispatched", appid=appid, answer=out)
         if out == "OK":
             return _ok(f"launching {_name(appid)}")
         if out == "ALREADY":
@@ -177,7 +189,7 @@ class Dispatch:
         vmax = int(self.voice["volumeMax"])
         clamped = max(0, min(vmax, int(level)))
         if clamped != int(level):
-            self.log(f"vol_set {level} clamped to {clamped} (volumeMax {vmax})")
+            self.log("volume_clamped", asked=int(level), set=clamped, max=vmax)
         return self._exlink(f"vol_set {clamped}", cglib.vol_set_frame(clamped))
 
     def mute_toggle(self):
@@ -204,17 +216,17 @@ class Dispatch:
             if age is None or age >= cglib.LOCK_STALE_S:
                 # Local lock check first: a sleeping PC costs no ssh timeout
                 # before the launch kicks off.
-                self.log(f"input {cmd} with no session - starting one")
+                self.log("input_starts_session", input=cmd)
                 return self.start_session()
             if self.dry_run:
                 return self._would(f"check READY then exlink {cmd}")
             try:
-                if ssh("status") == "NOTREADY":
-                    self.log(f"input {cmd} deferred - session still starting")
+                if couch.ssh("status") == "NOTREADY":
+                    self.log("input_deferred", input=cmd, reason="not_ready")
                     return _busy("the session is still starting - the TV will "
                                  "switch over on its own when it's ready")
             except Exception as e:
-                self.log(f"input {cmd} refused - status check failed ({e})")
+                self.log.error("input_refused", input=cmd, err=str(e))
                 return _fail(f"couldn't reach the PC (status check: {e})")
         frame_hex = cglib.EXLINK_FRAMES.get(cmd)
         if frame_hex is None:

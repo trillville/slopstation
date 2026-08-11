@@ -1,9 +1,24 @@
 # Observability (Project E) — design
 
-**Status: PLANNED, nothing built.** This is the as-designed record for making
-the couch system legible from a phone: what it emits, where that goes, what it
-costs, and the order to build it in. Written 2026-08-11 after a survey of the
-free-tier landscape; load-bearing claims cited inline.
+**Status: E0 and E1 BUILT (2026-08-11), blind suite green at 17/17. E2–E6
+planned.** This is the as-designed record for making the couch system legible
+from a phone: what it emits, where that goes, what it costs, and the order to
+build it in. Written 2026-08-11 after a survey of the free-tier landscape;
+load-bearing claims cited inline. Verdicts live in
+[Decisions and open questions](#decisions-and-open-questions) — one build-time
+check (clock skew) is the only thing still open, and it is cosmetic.
+
+Everything through E1 is local: structured events, levels, the scrubber, and
+one `turn` id carried from the wake word or the chord to the gaming PC's
+scheduled task. No account, no credential, no network call. What the build
+taught is recorded in [What E0/E1 found](#what-e0e1-found) — two of the three
+findings were in code this plan was not otherwise touching.
+
+Every file reference and line number below was re-verified against `adb1992`
+("the repo a new person would want"), which rewrote `cglib.py`, `exlink.py`,
+and `voice_agent.py` and deleted `spike.py`. Nothing this plan depends on
+moved: the five `make_log` lanes, `rotate_log`'s rename, and the `couch.log`
+contract all survived unchanged.
 
 The verdict up front: **Grafana Cloud** for the ops lane (logs, dashboards,
 alerts) and **Langfuse** for the agent lane (trace trees, tokens, cost). Both
@@ -29,7 +44,7 @@ A dead process writes no logs. Silence and idle look identical.
 
 | Surface | Today | Gap |
 |---|---|---|
-| K15 logs | [`cglib.make_log(tag)`](../k15/cglib.py) → `[stamp] [tag] free text`, print + append to one `couch.log`, 5 MB two-generation rotation, ~120 call sites | No levels, no fields, no ids, local-only |
+| K15 logs | [`cglib.make_log(tag)`](../k15/cglib.py) → `[stamp] [tag] free text`, print + append to one `couch.log`, 5 MB two-generation rotation, ~126 call sites | No levels, no fields, no ids, local-only |
 | PC logs | `Start-CgTranscript` per run → `logs/{tag}-{stamp}.log`, stopwatch prefix, 30-day cleanup | Local-only; never correlated with the K15 |
 | Agent traces | [`voice/traces.py`](../k15/voice/traces.py) → one JSON per conversation, 14-day TTL | Messages only: no spans, no latency, no tokens |
 | Jobs | `state/jobs.json`, last 10 finished, created/finished stamps | Not queryable, not alertable |
@@ -71,9 +86,9 @@ load-bearing*. Everything below is downstream of them.
   file writes, batched off-thread exporters, drop-on-backpressure. The existing
   [`traces.py`](../k15/voice/traces.py) docstring already says this; it becomes
   policy.
-- **`couch.log` stays the offline truth.** The cloud is a mirror. `doctor.py`
-  keeps reading local files, and a K15 with no uplink loses nothing but the
-  mirror.
+- **`couch.log` stays the offline truth.** The cloud is a mirror. Every local
+  file `doctor.py` reads stays where it is, and a K15 with no uplink loses
+  nothing but the mirror.
 - **The chord lane gains zero dependencies.** Structured logging is stdlib
   JSON. No OpenTelemetry, no HTTP client, no network call in `chord_listener.py`
   or `couch.py`.
@@ -95,8 +110,10 @@ flowchart LR
     A1["Grafana Alloy<br/>(Windows service)"] -.tails.-> J1
   end
   subgraph GAMEPC["Gaming PC"]
-    P["Enter/Exit/Launch<br/>+ Dispatch"] -->|"JSONL"| J2["logs/pc-YYYYMMDD.jsonl"]
+    P["Enter/Exit/Launch<br/>+ Dispatch"] -->|"milestones"| J2["logs/pc-YYYYMMDD.jsonl"]
+    P -->|"narrative"| T2["logs/enter-*.log<br/>(Start-Transcript)"]
     A2["Grafana Alloy"] -.tails.-> J2
+    A2 -.tails.-> T2
   end
   A1 --> LOKI["Grafana Cloud<br/>Loki + dashboards + alerts"]
   A2 --> LOKI
@@ -151,8 +168,14 @@ fail-soft that self-healed and cost the user nothing; **error** is a fail-soft
 that lost user-visible function. The test is "do I want to know about this
 tomorrow morning?"
 
-`env` is `prod` or `test`. The blind suite sets `test`, and every dashboard and
-alert filters `env="prod"`. That is the fix for the `WinError 183` noise.
+`env` is `prod` or `test`, and it is **auto-detected** (`sys.argv[0]` under a
+`tests/` directory) rather than opt-in — the failure being fixed is precisely a
+test that forgot to say it was a test, so an opt-in flag would have reproduced
+it. As built this went one better than planned: under `env=test` the events go
+to `logs/test-YYYYMMDD.jsonl` instead of the shipped file and the `couch.log`
+append is skipped entirely, so Alloy's glob never even sees drill traffic. The
+field remains as belt-and-braces for anything that slips through. That closes
+the `WinError 183` noise at the source rather than filtering it downstream.
 
 ### Event names are an API
 
@@ -168,12 +191,13 @@ vocabulary:
 | `listener` | `chord`, `chord_busy`, `launch_signal_fail`, `heartbeat` |
 | `library` | `sync_start`, `sync_done`, `meta_fetched`, `meta_failed` |
 | `jobs` | `job_queued`, `job_running`, `job_done`, `job_failed`, `job_announced` |
+| `supervisor` | `start`, `restart` (with exit code), `bounce` — emitted by the `.bat` supervisors via the `events.py` CLI |
 | `pc` | `enter_start`, `profile_applied`, `puck_claimed`, `ready`, `enter_failed`, `exit_start`, `exit_done` |
 | `doctor` | `doctor_result` (with pass/warn/fail counts) |
 
 ### The API
 
-Small enough that ~120 call sites migrate mechanically, and shaped so the
+Small enough that ~126 call sites migrate mechanically, and shaped so the
 human line survives unchanged:
 
 ```python
@@ -221,6 +245,31 @@ stream to **date-stamped daily files** (`logs/k15-20260811.jsonl`) matched by a
 glob, with files older than 14 days deleted. No renames, no open-handle races,
 and Alloy's position tracking stays valid. `couch.log` itself keeps its current
 rotation — nothing tails it.
+
+### `couch.log` earns its keep (Q6, decided)
+
+**Keep it, permanently.** The duplication is real but it is not cruft, for two
+reasons that survive scrutiny:
+
+- **It has a writer that isn't Python.** [`Start-Listener.bat:25`](../k15/Start-Listener.bat)
+  appends its supervisor line with a bare `echo >> couch.log` from cmd.exe.
+  Any "retire the text log" plan has to answer for that line first.
+- **It is the documented first move.** [troubleshooting.md](troubleshooting.md)
+  opens with *"First move, always: tail `k15/couch.log`"*, and the voice drills
+  ask for `couch.log` chunks by name. That is a real interface with a real
+  user, and it works with zero tooling on a box that is misbehaving.
+
+Both files come from the same `log()` call, so there is no drift risk — one
+call site, two writes, one of them ugly-but-greppable and one of them
+queryable. Cost is a few MB a month on a mini PC.
+
+What *is* worth fixing while we're here: that cmd.exe supervisor line is
+currently invisible to everything. A crash-restart loop in the chord lane —
+the load-bearing lane — leaves no signal anyone watches. So E0 also adds a
+tiny `events.py` CLI (`python events.py emit --lane supervisor --event
+restart --code %errorlevel%`) that the three `.bat` supervisors call alongside
+their existing echo, which makes "the listener restarted four times in ten
+minutes" an alertable event instead of a line nobody reads.
 
 ## Part 2 — Spans
 
@@ -286,10 +335,12 @@ minute.
 Langfuse specifics: OTLP over **HTTP only** (no gRPC), endpoint
 `https://cloud.langfuse.com/api/public/otel/v1/traces`, `Authorization: Basic
 base64(pk:sk)`, plus `x-langfuse-ingestion-version: 4` for real-time ingestion.
-Grafana: `https://otlp-gateway-<region>.grafana.net/otlp/v1/traces`, basic auth
-with instance ID and token — and note the documented Python quirk that the
-space in `Basic ` must be written `Basic%20` inside
-`OTEL_EXPORTER_OTLP_HEADERS`.
+Grafana: **US region** (decided 2026-08-11), endpoint
+`https://otlp-gateway-<region>.grafana.net/otlp/v1/traces`, basic auth with
+instance ID and token. Copy the exact `otlp-gateway-prod-us-*` hostname from the
+OpenTelemetry tile in the Grafana Cloud stack rather than guessing it — the
+region slug is per-stack. Note the documented Python quirk: the space in
+`Basic ` must be written `Basic%20` inside `OTEL_EXPORTER_OTLP_HEADERS`.
 
 ## Part 3 — Shipping
 
@@ -299,9 +350,26 @@ space in `Basic ` must be written `Basic%20` inside
 
 Each machine's config is the same three components: match the daily JSONL glob,
 parse the JSON to lift `level`/`lane` into labels, write to Grafana Cloud Loki.
-The gaming PC adds a second source for the PowerShell transcripts — those stay
-human-readable text, shipped as-is with a `lane="pc-transcript"` label, because
-they are a narrative, not events.
+
+**The gaming PC ships both, and this is not a compromise** (DECIDED 2026-08-11).
+The two files answer different questions and neither substitutes for the other:
+
+- `Log` in [`CouchGaming.common.ps1`](../gaming-pc/CouchGaming.common.ps1) gains
+  a second write that appends a JSON line to `logs/pc-YYYYMMDD.jsonl` for the
+  **milestones** — `enter_start`, `profile_applied`, `puck_claimed`, `ready`,
+  `enter_failed`, `exit_done`. Those are what dashboards count, what alerts
+  fire on, and what carries the `turn`.
+- `Start-Transcript` keeps writing the full **narrative** to
+  `logs/{tag}-{stamp}.log`, unchanged, shipped as-is under
+  `lane="pc-transcript"`. A transcript captures every line of PowerShell
+  output — including the things nobody thought to instrument, which is
+  precisely what you need when an enter fails in a new way.
+
+Converting the transcript to JSONL would mean either hand-instrumenting every
+`Write-Host` (churn, and it would still miss unexpected output) or wrapping
+each line in a JSON envelope that adds nothing (`{"msg":"[+  1.2s] focused …"}`).
+Free text is the right shape for a narrative. Loki indexes it by label and
+greps the rest, which is all a transcript needs.
 
 Labels, and only these: `service` (`k15` | `gamepc`), `lane`, `level`, `env`.
 
@@ -339,6 +407,7 @@ Free tier: 10k metrics series, 50 GB logs, 50 GB traces, 14-day retention,
 | Voice lane down | no `heartbeat` from `lane="voice"` in 5 min | the supervisor died, or the box did |
 | Chord lane down | same for `lane="listener"` | the load-bearing lane — this is the important one |
 | Launch failed | any `launch_failed` | with the `turn` in the payload, ready to query |
+| Crash loop | > 3 `supervisor` / `restart` for one lane in 10 min | the supervisor is dutifully restarting something that keeps dying — today this is completely invisible |
 | Error burst | > 5 `level="error"` in 10 min | something is wedged and retrying |
 | TV unreachable | any `exlink_nak` | serial or TV power problem |
 | Spend | daily tokens over budget | catches a runaway worker loop |
@@ -386,27 +455,28 @@ behaviour) — a filter on the Langfuse processor only, Grafana keeps everything
   the cloud tier stays open, and the OTLP interface means the escape costs an
   endpoint change.
 
-## Privacy — decide this before writing code
+## Privacy
 
-Traces will carry transcripts of the living room and the full Steam library,
-and they will leave the house. Today that data is local-only. Three deliberate
-positions, pick one now:
+**DECIDED 2026-08-11: ship everything (position 1).** Transcripts, completions,
+and the full Steam library go to Grafana and Langfuse as content, not just as
+structure. This is a single-user home system with no other occupants' voices in
+scope, and the debugging value of reading what the model actually heard is the
+whole point of the agent lane.
 
-1. **Ship everything.** Best debugging, most exposure. Reasonable for a
-   single-user home system with no other occupants' voices in scope.
+Recorded here so it is a decision and not a default. The alternatives, kept for
+the day this itches:
+
 2. **Ship structure, not content** — spans, durations, verbs, token counts;
-   the transcript and the completion stay in local `state/traces/*.json`, with
-   the trace id printed so you can look it up over RDP when you actually need
-   it. Costs one click on the rare deep debug.
-3. **Self-host Langfuse** later if (1) starts to itch. The OTLP interface makes
-   this an endpoint swap.
+   transcripts and completions stay in local `state/traces/*.json`, with the
+   trace id printed so you can look one up over RDP when you actually need it.
+   Costs one click on the rare deep debug.
+3. **Self-host Langfuse** (MIT, Docker) — the OTLP interface makes this an
+   endpoint swap, not a rewrite.
 
-Recommendation: start at (1) with the scrubber in place, and note the date, so
-the choice is on the record rather than a default. Independently and
-non-negotiably: `secrets.json` values, the VirtualHere EasyFind ID/PIN, and the
-Steam API key must never reach a field or a span attribute. One `scrub()` at
-the emit boundary, one blind test that greps a synthetic payload for every key
-prefix.
+Independent of that choice and non-negotiable: `secrets.json` values, the
+VirtualHere EasyFind ID/PIN, and the Steam API key must never reach a field or
+a span attribute. One `scrub()` at the emit boundary, one blind test that greps
+a synthetic payload for every key prefix (drill 8).
 
 ## Build order
 
@@ -415,8 +485,8 @@ are what makes it done.
 
 | Phase | Work | Exit criteria |
 |---|---|---|
-| **E0** | `k15/events.py` + `make_log` structured emit + levels + `env` + scrubber. No network. Migrate all ~120 call sites. Daily JSONL files. Blind test `test_events.py`. | Blind suite green; `couch.log` byte-comparable to before; `logs/k15-*.jsonl` well-formed; test runs tagged `env=test` |
-| **E1** | `turn` id: minted at wake and at chord, threaded through dispatch → `couch.py` → `Dispatch.ps1` → PC scripts. Validation + blind test on the SSH argument. | One `grep` on a merged log returns a whole launch across both machines; a malformed id is rejected and the launch still succeeds |
+| **E0** ✅ | `k15/events.py` + `make_log` structured emit + levels + `env` + scrubber. No network. Migrated all 126 call sites. Daily JSONL files. `events.py emit` CLI wired into the three `.bat` supervisors. Blind test `test_events.py`. | **Done 2026-08-11.** Suite green; `logs/k15-*.jsonl` well-formed; test runs auto-tagged `env=test` **and diverted to `test-*.jsonl`**, so the shipped file never carries drill noise |
+| **E1** ✅ | `turn` id: minted at wake, at chord, and per transcript; threaded through dispatch → `couch.py` → `Dispatch.ps1` → PC scripts and into the transcript filename. `\z`-anchored, case-sensitive, hex-bounded validation at the SSH boundary; `test_turn.py` drills it with 30 hostile strings read from the live patterns. | **Done 2026-08-11.** One simulated voice launch produced 8 events across 2 lanes and a process boundary under a single `turn`, and `ssh gamepc enter --turn bb8cc7` on the wire |
 | **E2** | Grafana Cloud account, Alloy on the K15, first dashboard. | A launch appears in Grafana on the phone within 30 s; labels are exactly the four |
 | **E3** | Heartbeats + the six alerts + notification channel. | Killing `voice_agent.py` pages within 6 min and self-clears when the supervisor restarts it |
 | **E4** | Alloy on the gaming PC (JSONL + transcripts). | The E1 correlation query works from Grafana, not from a merged local file |
@@ -426,6 +496,40 @@ are what makes it done.
 
 E0 and E1 are the majority of the value and involve no vendor at all. If the
 project stalls after E1, the system is still much better than it is today.
+
+## What E0/E1 found
+
+Three things the build turned up that the plan did not predict. Two were in
+code this project was not otherwise touching, which is the usual return on
+instrumenting something properly.
+
+**1. The blind suite was testing an unpatched path.** `dispatch.py` did
+`from couch import ssh`, so the suite's `dp.ssh = ...` monkeypatch swapped
+*dispatch's* binding. The moment mutating verbs started leaving through
+`ssh_intent` — which resolves `couch.ssh` — the patch stopped covering them and
+`test_dispatch` failed loudly. Two seams existed where the module docstring
+claimed one ("there is no second dispatch path to drift"). Fixed by reaching
+the transport through the module (`couch.ssh(...)`) so a single swap intercepts
+everything; the test now patches `couch.ssh`.
+
+**2. `$` is not end-of-string.** In .NET, as in most engines, `$` also matches
+just before a trailing newline — so `'^status$'` accepted `"status\n"`. No bad
+capture was reachable (`[0-9a-f]` cannot eat a newline), but on the one file
+that *is* the remote attack surface, an anchor needing a paragraph of reasoning
+to call safe is the wrong anchor. All six verbs now end in `\z`.
+
+**3. PowerShell regex is case-insensitive by default.** `switch -Regex`, like
+`-match`, ignores case unless told otherwise — so `[0-9a-f]{1,8}` quietly
+accepted `9F2C1A`. Harmless as a filename, but it meant the pattern was not the
+validation its own comment claimed, and that gap is where the next bug lives.
+The turn group is now `(?-i:[0-9a-f]{1,8})`; the verbs stay case-insensitive,
+exactly as before.
+
+Both regex findings came from **drilling the patterns, not reading them** —
+`test_turn.py` reads the live patterns out of `Dispatch.ps1` and throws 30
+hostile strings at each, so the test can never drill a stale copy. The same
+corpus was then run through real .NET regex, which is what caught the
+case-insensitivity that Python's mirror could not.
 
 ## Drills
 
@@ -439,18 +543,26 @@ In the style of [voice-testing.md](voice-testing.md) — each says what it prove
    shows one session, two turns, a tree per turn, non-zero tokens and cost.
 4. **Liveness.** Kill `voice_agent.py` and leave the supervisor stopped.
    *Proves*: the alert fires within 6 min; restarting clears it.
-5. **Partition.** Pull the K15's uplink for 5 minutes mid-session. *Proves*:
+5. **Crash loop.** Make `chord_listener.py` exit immediately (bad import), let
+   `Start-Listener.bat` restart it four times. *Proves*: four `supervisor` /
+   `restart` events with exit codes, and the crash-loop alert fires — the
+   failure mode that is entirely invisible today.
+6. **Partition.** Pull the K15's uplink for 5 minutes mid-session. *Proves*:
    turn latency is unchanged (measured, not asserted), no crash, and logs
    backfill on reconnect.
-6. **Backpressure.** Point the exporters at a black-hole endpoint. *Proves*:
+7. **Backpressure.** Point the exporters at a black-hole endpoint. *Proves*:
    the queue drops rather than grows, and the voice lane is unaffected.
-7. **Leak.** Run the scrubber test, then grep a full day of shipped logs for
+8. **Leak.** Run the scrubber test, then grep a full day of shipped logs for
    every key prefix in `secrets.json`. *Proves*: zero hits.
-8. **Rotation.** Force a date rollover. *Proves*: Alloy follows to the new file
+9. **Rotation.** Force a date rollover. *Proves*: Alloy follows to the new file
    with no duplicated and no dropped lines.
-9. **Injection.** `ssh gamepc enter --turn "../../evil"`. *Proves*: rejected by
-   validation, launch proceeds uncorrelated, event logged.
-10. **Drill vs outage.** Run the full blind suite. *Proves*: no alert fires,
+10. **Injection.** `ssh gamepc enter --turn "../../evil"`. *Proves*: `DENIED` —
+    Dispatch fails closed, matching no verb at all. The other half is that a
+    malformed id can never get that far: `ssh_intent` re-validates at the wire
+    and drops the tag, so a telemetry bug costs correlation, never a launch.
+    Both halves are covered blind by `test_turn.py`; this drill confirms it
+    against the real sshd.
+11. **Drill vs outage.** Run the full blind suite. *Proves*: no alert fires,
     and no `env=prod` line is written.
 
 ## Deliberately not doing
@@ -470,16 +582,19 @@ In the style of [voice-testing.md](voice-testing.md) — each says what it prove
 - **Tracing background maintenance.** Library sync and metadata fetches are
   logs. Nobody is waiting on them.
 
-## Open questions
+## Decisions and open questions
 
-| # | Question | Owner | Status |
-|---|---|---|---|
-| 1 | Privacy position 1, 2, or 3 (above) | user | **decide before E5** |
-| 2 | Grafana Cloud region — US vs EU endpoint | user | decide at E2 |
-| 3 | Does the PC transcript stay free text, or become JSONL too? | build | lean free text; revisit if E4 queries are awkward |
-| 4 | Is 14-day Grafana retention enough, given Langfuse gives 30? | — | probably; the long-lived record is git and the design docs |
-| 5 | Clock skew between K15 and PC | build | check at E4; correlation is by `turn`, not timestamp, so this is cosmetic |
-| 6 | `couch.log` — keep forever, or retire once JSONL is proven? | — | keep; `doctor.py` and the offline path depend on it |
+All product decisions closed 2026-08-11, before any code. One build-time check
+remains, and it is cosmetic by construction.
+
+| # | Question | Verdict |
+|---|---|---|
+| 1 | Privacy position | **CLOSED — position 1, ship everything.** Content included, scrubber non-negotiable. See [Privacy](#privacy) |
+| 2 | Grafana Cloud region | **CLOSED — US.** Exact `otlp-gateway-prod-us-*` hostname copied from the stack's OpenTelemetry tile at E2, not guessed |
+| 3 | PC transcript: free text or JSONL | **CLOSED — both, by role.** Milestones as JSONL events (dashboards, alerts, `turn`); the `Start-Transcript` narrative shipped as-is. Free text is the right shape for output nobody thought to instrument |
+| 4 | Is 14-day Grafana retention enough | **CLOSED — yes.** Langfuse holds agent traces 30 days; the long-lived record is git and these docs. Nothing here is a compliance artifact |
+| 5 | Clock skew between K15 and PC | **OPEN — check at E4.** Correlation is by `turn`, not timestamp, so skew only misorders a merged view. Windows Time Service on both is expected to be sufficient; measure rather than assume |
+| 6 | `couch.log` — keep or retire | **CLOSED — keep, permanently.** It has a non-Python writer (`Start-Listener.bat`) and it is troubleshooting.md's documented first move. Single call site means no drift. [Full reasoning](#couchlog-earns-its-keep-q6-decided) |
 
 ## Costs and limits
 

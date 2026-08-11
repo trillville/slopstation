@@ -113,13 +113,13 @@ def refresh(local=False):
     try:
         rows = fetch_installed_local() if local else fetch_installed_ssh()
     except Exception as e:
-        log(f"library refresh skipped ({e})")
+        log.warn("sync_skipped", layer="installed", err=str(e))
         return 1
     index = load()
     index["refreshed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     index["installed"] = rows
     save(index)
-    log(f"library refreshed - {len(rows)} installed games")
+    log("sync_done", layer="installed", games=len(rows))
     return 0
 
 
@@ -217,9 +217,9 @@ def refresh_meta(appids, limit=200):
         try:
             cache[str(appid)] = fetch_meta_one(appid)
             _save_meta(cache)
-            log(f"meta {appid} fetched ({i + 1}/{len(todo)})")
+            log("meta_fetched", appid=appid, n=i + 1, of=len(todo))
         except Exception as e:
-            log(f"meta {appid} failed ({e}) - will retry next refresh")
+            log.warn("meta_failed", appid=appid, err=str(e))
         time.sleep(2.1)
     return cache
 
@@ -227,13 +227,13 @@ def refresh_meta(appids, limit=200):
 def refresh_owned():
     s = cglib.load_secrets()
     if not (cglib.real_key(s.get("steamApiKey")) and str(s.get("steamId64", "")).isdigit()):
-        log("owned-layer skipped: steamApiKey/steamId64 not set in secrets.json")
+        log("sync_skipped", layer="owned", reason="steamApiKey/steamId64 not set")
         return 1
     index = load()
     index["owned"] = fetch_owned(s["steamApiKey"], s["steamId64"])
     index["ownedRefreshed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     save(index)
-    log(f"owned layer refreshed - {len(index['owned'])} games")
+    log("sync_done", layer="owned", games=len(index["owned"]))
     return 0
 
 
@@ -277,7 +277,7 @@ def sync(meta_limit=200):
         if any(str(a) not in load_meta() for a in appids):
             refresh_meta(list(appids), meta_limit)  # layer 3 (top-up only)
     except Exception as e:
-        log(f"sync error ({e}) - partial index kept")
+        log.error("sync_failed", err=str(e))
     finally:
         _sync_lock.release()
 

@@ -42,7 +42,7 @@ def save(kind, messages, meta=None):
                 f.unlink()
             except OSError:
                 pass                            # locked/open file: next save
-        log(f"saved {path.name} ({len(messages)} messages"
-            + (f", pruned {len(expired)} expired" if expired else "") + ")")
+        log("trace_saved", file=path.name, messages=len(messages),
+            pruned=len(expired) or None)
     except Exception as e:
-        log(f"trace save failed ({e}) - conversation not recorded")
+        log.warn("trace_save_failed", err=str(e))

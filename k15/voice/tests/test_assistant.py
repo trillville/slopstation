@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import assistant
+import cglib
 import library
 from dispatch import Dispatch
 
@@ -23,9 +24,9 @@ CFG_MIN = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
 
 
 def main():
-    logs = []
-    d = Dispatch(CFG_MIN, logs.append, dry_run=True)
-    impls = assistant.tool_impls(d, logs.append)
+    log = cglib.CapturingLog("assistant")
+    d = Dispatch(CFG_MIN, log, dry_run=True)
+    impls = assistant.tool_impls(d, log)
 
     rows = library.load()["installed"]
     real_appid = rows[0]["appid"]
@@ -73,7 +74,7 @@ def main():
     class FakeJobs:
         def enqueue(self, task):
             return True, "queued - the result will be announced"
-    jimpls = assistant.tool_impls(d, logs.append, jobs=FakeJobs())
+    jimpls = assistant.tool_impls(d, log, jobs=FakeJobs())
     r = jimpls["background_task"]({"task": "find coop deals"})
     assert r["ok"] and "queued" in r["detail"]
     assert not jimpls["background_task"]({"task": "  "})["ok"]

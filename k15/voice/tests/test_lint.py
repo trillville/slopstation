@@ -13,7 +13,7 @@ from pyflakes import api, reporter
 
 K15 = Path(__file__).resolve().parents[2]        # .../k15
 MODULES = [K15 / n for n in
-           ("cglib.py", "couch.py", "library.py", "exlink.py",
+           ("cglib.py", "events.py", "couch.py", "library.py", "exlink.py",
             "chord_listener.py", "doctor.py", "calibrate.py")]
 MODULES += sorted((K15 / "voice").glob("*.py"))
 

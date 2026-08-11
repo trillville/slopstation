@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import announce
+import cglib
 import jobs as jobs_mod
 import workers
 
@@ -30,8 +31,7 @@ def wait_for(pred, timeout=5.0):
 
 
 def main():
-    logs = []
-    log = lambda m: logs.append(m)  # noqa: E731
+    log = cglib.CapturingLog("jobs")
 
     # -- parse_reply: contract, fenced, prose fallback ------------------------
     r = workers.parse_reply('{"summary": "Two picks.", "detail": "Long text."}')

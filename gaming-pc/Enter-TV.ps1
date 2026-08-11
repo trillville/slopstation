@@ -13,6 +13,7 @@ if (Test-CgTaskRunning 'Exit') {
     Log 'Exit task is running - waiting for teardown to finish'
     if (-not (Wait-For { -not (Test-CgTaskRunning 'Exit') } 45 'Exit finished')) {
         Log 'Exit still running - aborting launch, TV untouched'
+        Write-CgEvent 'enter_failed' @{ reason = 'exit_still_running' } 'error'
         Stop-Transcript
         throw 'aborted: Exit task still running'
     }
@@ -40,11 +41,13 @@ try {
 
     # 3b. Claim the Puck (stale-claim recycle + enumeration-verified, see lib)
     Request-PuckClaim
+    Write-CgEvent 'puck_claimed'
 
     # 4. NOW verify the profile actually took (it had the whole USB phase to settle)
     if (-not (Wait-For { Test-TvIsPrimary } 20 'TV is primary (2160p)')) {
         throw 'TV-GAMING profile did not take'
     }
+    Write-CgEvent 'profile_applied' @{ profile = 'TV-GAMING' }
     Start-Sleep -Milliseconds 500   # audio-device settle margin
     Stop-DisplayMagician
 
@@ -66,12 +69,16 @@ try {
     # 6. Ready marker - the K15 switches the TV input only after seeing this
     Set-ReadyMarker
     Log 'READY'
+    # The milestone the whole system is gated on: dur_ms here IS time-to-READY,
+    # which is the distribution the launch-health dashboard is built from.
+    Write-CgEvent 'ready' @{ focused = $focused }
 }
 catch {
     # The failure path obeys the same rules as the success path: kill
     # DisplayMagician first (a hung instance is the likeliest reason we're
     # here), release best-effort, then a VERIFIED office apply. The TV input
     # was never switched - the K15 gates on READY.
+    Write-CgEvent 'enter_failed' @{ err = "$_" } 'error'
     Stop-DisplayMagician
     Request-PuckRelease 1 | Out-Null
     if (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 20 2 'office restored')) {

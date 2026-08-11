@@ -26,12 +26,20 @@ Log 'closing Big Picture'
 Start-Sleep 2   # blind wait by design: Big Picture exposes no reliable closed signal
 
 # Office first: controller stays live during teardown
-if (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 15 2 'ultrawide restored')) {
+$officeOk = Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 15 2 'ultrawide restored'
+if (-not $officeOk) {
     Log 'WARNING: office did not verify - ForceOfficeAtLogon will converge at next logon'
+    Write-CgEvent 'profile_apply_failed' @{ profile = 'OFFICE' } 'warn'
+} else {
+    Write-CgEvent 'profile_applied' @{ profile = 'OFFICE' }
 }
 
-if (Request-PuckRelease 3) { Log 'Puck released' }
-else { Log 'WARNING: Puck may still be claimed - check VirtualHere client' }
+$puckOk = Request-PuckRelease 3
+if ($puckOk) { Log 'Puck released'; Write-CgEvent 'puck_released' }
+else {
+    Log 'WARNING: Puck may still be claimed - check VirtualHere client'
+    Write-CgEvent 'puck_release_failed' @{} 'warn'
+}
 
 # Repaint guard: minimize desktop Steam so it re-lays-out fresh (at the ultrawide's
 # resolution) the next time it's opened - prevents the stale-4K garbled window
@@ -41,4 +49,5 @@ if ($sp) { [void][P2.W]::ShowWindow($sp.MainWindowHandle, 6); Log 'Steam minimiz
 
 Clear-ReadyMarker
 Log 'done'
+Write-CgEvent 'exit_done' @{ office_ok = $officeOk; puck_ok = $puckOk }
 Stop-Transcript

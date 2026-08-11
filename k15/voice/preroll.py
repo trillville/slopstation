@@ -161,8 +161,7 @@ class PrerollFeeder(FrameProcessor):
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
         if isinstance(frame, StartFrame) and self.pcm:
-            self._log(f"pre-roll: feeding {len(self.pcm) / BYTES_PER_S:.1f}s "
-                      f"of wake-window audio to STT")
+            self._log("preroll_fed", audio_s=round(len(self.pcm) / BYTES_PER_S, 1))
             for f in self._frames():
                 await self.push_frame(f)
             self.pcm = b""

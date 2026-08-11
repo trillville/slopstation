@@ -8,6 +8,16 @@ process tags its lines — `[listener]`, `[launch]`, `[voice]`, `[library]`,
 `[supervisor]`. `python doctor.py` on the K15 and `Doctor.ps1` on the PC each
 diagnose their whole chain read-only.
 
+**When one launch is the question**, the same events are also in
+`k15/logs/k15-YYYYMMDD.jsonl` with a `turn` id that follows a single intent
+from the wake word or the chord all the way to the gaming PC (whose half is in
+`C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`, and whose transcript filename carries
+the same id). One launch, both machines:
+
+```bash
+grep '"turn":"9f2c1a"' k15/logs/k15-*.jsonl
+```
+
 ## Chord lane
 
 | Symptom | Diagnosis | Fix |

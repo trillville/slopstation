@@ -32,7 +32,11 @@ try {
         Log "launching appid $id (-applaunch, into the running Big Picture session)"
         & $exe -applaunch $id
         Log 'launch handed to Steam'
+        Write-CgEvent 'game_launched' @{ appid = [long]$id }
     }
+} catch {
+    Write-CgEvent 'game_launch_failed' @{ err = "$_" } 'error'
+    throw
 } finally {
     Stop-Transcript | Out-Null
 }

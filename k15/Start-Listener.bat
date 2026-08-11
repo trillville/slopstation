@@ -19,9 +19,16 @@ exit /b
 
 :main
 python couch.py reconcile
+python events.py emit supervisor start what=listener >nul 2>&1
 :listener
 python chord_listener.py
-echo [supervisor] listener exited (code %errorlevel%) - restarting in 10s
-echo [%date% %time%] [supervisor] listener exited (code %errorlevel%) - restarting in 10s>> couch.log
+rem Capture the exit code FIRST: every command after this resets %errorlevel%,
+rem so reading it twice is reading the echo's success the second time.
+set "CODE=%errorlevel%"
+echo [supervisor] listener exited (code %CODE%) - restarting in 10s
+echo [%date% %time%] [supervisor] listener exited (code %CODE%) - restarting in 10s>> couch.log
+rem Structured twin of the line above, so a crash LOOP is alertable rather
+rem than just recorded. Output suppressed - the console already has it.
+python events.py emit supervisor restart what=listener code=%CODE% --level warn >nul 2>&1
 timeout /t 10 /nobreak >nul
 goto listener

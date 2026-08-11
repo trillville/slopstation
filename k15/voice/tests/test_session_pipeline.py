@@ -18,12 +18,16 @@ from dispatch import Dispatch
 from grammar_gate import GrammarGate, GrammarMatcher
 from preroll import WakeAck
 
+# (utterance, event the gate must emit, intent field where the event carries one).
+# Asserting on events rather than prose: a reworded message is free, a renamed
+# event is caught - which is the right way round, because dashboards and alerts
+# group by event name.
 SCRIPT = [
-    ("volume up", "VolumeUp -> dry-run"),
-    ("switch to the apple tv", "SwitchInput -> dry-run"),
-    ("start a session", "StartSession -> dry-run"),
-    ("what mech games do i have", "passing to assistant"),
-    ("thanks", "exit phrase"),
+    ("volume up", "dispatch", "VolumeUp"),
+    ("switch to the apple tv", "dispatch", "SwitchInput"),
+    ("start a session", "dispatch", "StartSession"),
+    ("what mech games do i have", "gate_miss", None),
+    ("thanks", "session_exit_phrase", None),
 ]
 
 
@@ -35,11 +39,7 @@ async def run():
                                                 LocalAudioTransportParams)
     from pipecat.workers.runner import WorkerRunner
 
-    lines = []
-
-    def log(msg):
-        print(f"[log] {msg}")
-        lines.append(msg)
+    log = cglib.CapturingLog("voice", echo=True)
 
     cfg = cglib.load_config()
     # assistant_enabled without an LLM stage: the no-match line exercises the
@@ -65,7 +65,7 @@ async def run():
     run_task = asyncio.create_task(runner.run())
 
     await asyncio.sleep(1.5)           # pipeline up
-    for text, _ in SCRIPT[:-1]:
+    for text, _, _ in SCRIPT[:-1]:
         await worker.queue_frame(TranscriptionFrame(
             text=text, user_id="test", timestamp="t"))
         await asyncio.sleep(0.9)       # let earcons play
@@ -79,23 +79,26 @@ async def run():
     await asyncio.sleep(0.9)
     assert gate._assistant_pending == 0.0, "ErrorFrame must clear in-flight"
 
-    text, _ = SCRIPT[-1]               # "thanks" ends the worker
+    text = SCRIPT[-1][0]               # "thanks" ends the worker
     await worker.queue_frame(TranscriptionFrame(
         text=text, user_id="test", timestamp="t"))
 
     await asyncio.wait_for(run_task, timeout=10)   # exit phrase must end it
 
-    missing = [want for _, want in SCRIPT
-               if not any(want in l for l in lines)]
-    assert not missing, f"missing log evidence: {missing}"
-    assert any("pipeline error" in l for l in lines)
+    missing = [f"{ev}({intent or ''})" for _, ev, intent in SCRIPT
+               if not any(r["event"] == ev
+                          and (intent is None or r.get("intent") == intent)
+                          for r in log.records)]
+    assert not missing, f"missing event evidence: {missing}\ngot {log.events()}"
+    assert log.find("pipeline_error"), log.events()
     # The lock arbiter ran for real (no lock on this machine = launchable).
-    assert any("couch.py start" in l for l in lines)
+    assert any("couch.py start" in r.get("action", "")
+               for r in log.find("dry_run_would")), log.records
     # The wake chime is claimed by the FIRST transcript, and only that first
     # command's success is close enough to fold into it - the later ones are
     # 0.9 s behind (past ACK_COALESCE_S) and must ack normally, or a real
     # session would go silent on everything after the wake.
-    folded = sum("folded into the wake chime" in l for l in lines)
+    folded = len(log.find("earcon_folded"))
     assert folded == 1, f"{folded} acks folded, want exactly the first"
     print("OK - session pipeline: gate matched/dry-dispatched/acked, first ok "
           "folded into the wake chime, error cleared the in-flight flag, "

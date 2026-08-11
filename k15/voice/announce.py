@@ -129,19 +129,19 @@ class Announcer:
                 # Offline, dead key, dead output device: say SOMETHING (the
                 # earcon alone still means "news"), keep the job unread, and
                 # let the next wake mention it.
-                self.log(f"announce failed ({e}) - earcon only, result stays "
-                         "unread for the next wake")
+                self.log.warn("announce_failed", job=job_id, err=str(e),
+                              fallback="earcon")
                 try:
                     self._play(earcons.pcm("announce"))
                 except OSError as e2:
-                    self.log(f"announce playback failed too ({e2})")
+                    self.log.error("announce_earcon_failed", job=job_id, err=str(e2))
                 continue
             if done:
                 self.jobs.mark_read(job_id)
-                self.log(f"announced job {job_id}")
+                self.log("job_announced", job=job_id)
                 if self.follow_up_enabled:
                     # Only after a bulletin heard in FULL - opening the mic
                     # off an announcement nobody heard is just an open mic.
                     self.follow_up.set()
             else:
-                self.log(f"announcement of {job_id} cut short - stays unread")
+                self.log("announce_cut_short", job=job_id)

@@ -31,19 +31,21 @@ if not "%~1"=="" echo [start-k15] note: no arguments needed - this always reload
 call :supervised "%TEMP%\couch-listener-supervisor.lock"
 if errorlevel 1 (
   echo [start-k15] chord lane down - starting it
+  python "%~dp0events.py" emit supervisor lane_started what=listener >nul 2>&1
   start "K15 chord listener" /min /d "%~dp0" Start-Listener.bat
 ) else (
   set "RELOADED=1"
-  call :reload chord_listener.py "chord listener"
+  call :reload chord_listener.py "chord listener" listener
 )
 
 call :supervised "%TEMP%\couch-voice-supervisor.lock"
 if errorlevel 1 (
   echo [start-k15] voice lane down - starting it
+  python "%~dp0events.py" emit supervisor lane_started what=voice >nul 2>&1
   start "K15 voice" /min /d "%~dp0voice" Start-Voice.bat
 ) else (
   set "RELOADED=1"
-  call :reload voice_agent.py "voice agent"
+  call :reload voice_agent.py "voice agent" voice
 )
 
 rem Pause ONLY when something was reloaded, which is the double-click case: a
@@ -67,7 +69,7 @@ if defined FREE (endlocal & exit /b 1)
 endlocal & exit /b 0
 
 :reload
-rem %~1 = agent script name, %~2 = label. Kills the python running that script
+rem %~1 = agent script name, %~2 = label, %~3 = lane. Kills the python running that script
 rem so its supervisor relaunches it on fresh code. Name-filtered to python* so
 rem the powershell process running the match - whose own command line
 rem necessarily contains the script name - can never match itself. The exit
@@ -76,7 +78,9 @@ rem too and still reports honestly.
 powershell -NoProfile -Command "$p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*%~1*' }); $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; exit $p.Count"
 if errorlevel 1 (
   echo [start-k15] stopped the %~2 - its supervisor will relaunch it
+  python "%~dp0events.py" emit supervisor lane_reloaded what=%~3 killed=1 >nul 2>&1
 ) else (
   echo [start-k15] %~2 was already down - its supervisor will bring it back
+  python "%~dp0events.py" emit supervisor lane_reloaded what=%~3 killed=0 >nul 2>&1
 )
 goto :eof

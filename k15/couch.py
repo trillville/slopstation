@@ -5,6 +5,7 @@ the TV exactly as the viewer had it."""
 import socket, subprocess, sys, time
 
 import cglib
+import events
 from cglib import LOCK, LOCK_STALE_S
 
 CFG  = cglib.load_config()
@@ -30,9 +31,10 @@ def touch_lock():
 def exlink(name):
     try:
         ack = cglib.exlink_send(name, CFG["tvComPort"])
-        log(f"exlink {name} -> {ack or 'no-ack'}")
+        log("exlink_send", cmd=name, ack=ack or "no-ack")
     except Exception as e:
-        log(f"exlink {name} FAILED: {e}")   # non-fatal: PC readiness is independent
+        # non-fatal: PC readiness is independent of whether the TV heard us
+        log.error("exlink_nak", cmd=name, err=str(e))
 
 
 def wol():
@@ -41,7 +43,7 @@ def wol():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.sendto(pkt, ("255.255.255.255", 9))
-    log("WOL sent")
+    log("wol_sent")
 
 
 def ssh(cmd, timeout=15):
@@ -58,6 +60,19 @@ def ssh(cmd, timeout=15):
     return r.stdout.strip()
 
 
+def ssh_intent(cmd, **kw):
+    """A MUTATING verb, tagged with this launch's turn id so the gaming PC's
+    transcript and events join the same story as ours. Read-only polls
+    (status/games/playing) deliberately go through plain ssh(): they are not
+    intents, and tagging them would just multiply the id across noise."""
+    turn = events.current().get("turn")
+    # Re-validate at the wire, not just at mint: Dispatch fails CLOSED on a
+    # malformed id (it would match no verb and answer DENIED), so a telemetry
+    # bug must not be able to take launches down with it. Uncorrelated beats
+    # refused, every time.
+    return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd, **kw)
+
+
 def wait_port(timeout=PORT_WAIT_S):
     end = time.time() + timeout
     while time.time() < end:
@@ -69,26 +84,39 @@ def wait_port(timeout=PORT_WAIT_S):
     return False
 
 
-def start(appid=None):
+def start(appid=None, turn=None):
+    # One id for one intent: the voice agent or the listener mints it so the
+    # whole chain - wake, dispatch, this launch, the PC's Enter task - shares
+    # one story. A direct run (Start-TV-Gaming.bat, a bench invocation) mints
+    # its own, so nothing is ever uncorrelated.
+    events.context(turn=turn if events.valid_turn(turn) else events.new_turn())
     age = cglib.lock_age()
     if age is not None and age < LOCK_STALE_S:
-        log("session already active/starting - ignoring"); return 1
+        log("launch_busy", lock_age_s=round(age)); return 1
     if age is not None:
-        log(f"stale session lock ({age:.0f}s old, owner dead) - recycling")
+        log.warn("lock_recycled", lock_age_s=round(age))
     LOCK.parent.mkdir(exist_ok=True); touch_lock()
+    t0 = time.time()
+
+    def ms():
+        """Every milestone carries its distance from the chord/voice trigger,
+        so time-to-READY is a distribution in Grafana rather than a number
+        someone once measured by hand."""
+        return round((time.time() - t0) * 1000)
+
     try:
-        log("=== LAUNCH ===")
+        log("launch_start", appid=appid)
         exlink("power_on")
         wol()
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
-        log("ssh port up")
+        log("ssh_up", dur_ms=ms())
         for _ in range(ENTER_ATTEMPTS):
             touch_lock()
             try:
-                if ssh("enter") == "OK":
-                    log("enter dispatched"); break
+                if ssh_intent("enter") == "OK":
+                    log("enter_dispatched", dur_ms=ms()); break
             except Exception as e:
-                log(f"enter attempt failed ({e}) - retrying")
+                log.warn("enter_retry", err=str(e))
             time.sleep(1)
         else: raise RuntimeError("could not trigger Enter task")
         end = time.time() + READY_WAIT_S
@@ -98,9 +126,9 @@ def start(appid=None):
             try:
                 st = ssh("status")
                 if st != "NOTREADY":
-                    log(f"host READY ({st})"); ready = True; break
+                    log("host_ready", status=st, dur_ms=ms()); ready = True; break
             except Exception as e:
-                log(f"status poll failed ({e}) - retrying")
+                log.warn("status_poll_failed", err=str(e))
             time.sleep(1)
         if not ready: raise RuntimeError("host never reported READY")
         cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
@@ -110,12 +138,13 @@ def start(appid=None):
             # is READY. Best-effort - a failed game launch never fails the
             # session; Big Picture being up is already a working outcome.
             try:
-                log(f"game launch {appid} -> {ssh(f'launch {appid}')}")
+                log("game_launch", appid=appid,
+                    result=ssh_intent(f"launch {appid}"))
             except Exception as e:
-                log(f"game launch {appid} failed ({e}) - session continues")
-        log("=== GAMING ==="); watch()
+                log.warn("game_launch_failed", appid=appid, err=str(e))
+        log("session_gaming", dur_ms=ms()); watch()
     except Exception as e:
-        log(f"launch failed: {e} - TV input untouched")
+        log.error("launch_failed", err=str(e), dur_ms=ms())
         try:
             # The listener polls this and signals the failure haptically (3 thuds).
             cglib.LAST_ERROR.write_text(str(e))
@@ -134,11 +163,11 @@ def watch():
         try:
             st = ssh("status"); fails = 0
             if st == "NOTREADY":
-                log("host reports session ended"); break
+                log("session_ended", reason="host"); break
         except Exception:
             fails += 1
             if fails >= WATCH_FAILS:
-                log("gaming PC gone (slept/crashed) - treating as ended")
+                log.warn("session_ended", reason="ssh_fails", fails=fails)
                 died_by_fails = True
                 break
     if died_by_fails:
@@ -148,13 +177,13 @@ def watch():
         # transient blip, its teardown restores the desk and sends the Puck
         # home; if it's truly asleep, this raises and nothing changes.
         try:
-            if ssh("exit") == "OK":
-                log("watch died on ssh failures - dispatched exit to release the desk/Puck")
+            if ssh_intent("exit") == "OK":
+                log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
     exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
     LOCK.unlink(missing_ok=True)
-    log("=== IDLE ===")
+    log("session_idle")
 
 
 def reconcile():
@@ -169,34 +198,51 @@ def reconcile():
     cglib.rotate_log()
     if not LOCK.exists():
         return 0
-    log("reconcile: session lock survived a restart - checking the host")
+    # A reconcile is its own intent (nobody asked for it; a restart caused
+    # it), so it gets its own id rather than inheriting a dead session's.
+    events.context(turn=events.new_turn())
+    log("reconcile_found")
     for _ in range(3):                  # boot-time network may need a moment
         try:
             if ssh("status") != "NOTREADY":
-                log("reconcile: session still live - resuming watch")
+                log("reconcile_resumed")
                 touch_lock()
                 watch()
                 return 0
             break                       # definitive NOTREADY - session is dead
         except Exception:
             time.sleep(2)
-    log("reconcile: stale lock from a dead session - clearing, TV untouched")
+    log.warn("reconcile_cleared", reason="dead_session")
     LOCK.unlink(missing_ok=True)
     return 0
 
 
 def usage():
-    print("usage: couch.py [start [appid]|reconcile]")
+    print("usage: couch.py [start [appid] [--turn <hex>]|reconcile]")
     return 2
 
 
+def take_turn(argv):
+    """Pull `--turn <id>` out of argv (mutating it) and return the id, or None.
+    Hand-rolled rather than argparse to keep this lane's import list as short
+    as it has always been."""
+    if "--turn" in argv:
+        i = argv.index("--turn")
+        turn = argv[i + 1] if i + 1 < len(argv) else None
+        del argv[i:i + 2]
+        return turn
+    return None
+
+
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
+    argv = sys.argv[1:]
+    turn = take_turn(argv)
+    cmd = argv[0] if argv else "start"
     if cmd == "start":
-        if len(sys.argv) > 2 and not sys.argv[2].isdigit():
+        if len(argv) > 1 and not argv[1].isdigit():
             sys.exit(usage())               # a non-digit appid is a caller bug
-        appid = sys.argv[2] if len(sys.argv) > 2 else None
-        sys.exit(start(appid))
+        appid = argv[1] if len(argv) > 1 else None
+        sys.exit(start(appid, turn))
     elif cmd == "reconcile":
         sys.exit(reconcile())
     else:

@@ -15,14 +15,77 @@ $CG = @{
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
     ReadyMarker = 'C:\ProgramData\CouchGaming\ready'   # cross-context state - deliberately not under Root
+    TurnMarker  = 'C:\ProgramData\CouchGaming\turn'    # written by Dispatch, read here (schtasks can't pass args)
 }
 
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-function Log($m) { Write-Host ("[+{0,5:n1}s] {1}" -f $script:CgStopwatch.Elapsed.TotalSeconds, $m) }
+# The K15's correlation id for whatever caused this run. Re-validated on read
+# even though Dispatch's regex already enforced it: this file is on disk, the
+# value ends up in a filename, and a second cheap check is worth more than the
+# assumption that nothing else can ever write there. Absent or malformed = no
+# correlation, never a failure - the session matters, the telemetry does not.
+# Age-gated for the same reason the session lock is: the marker outlives its
+# run (the LaunchGame task is not elevated, so it cannot reliably delete a
+# file the elevated Dispatch context created - see Dispatch.ps1), and a logon
+# hours later must not tag Office-Safety's events with a long-dead launch.
+$script:CgTurnStaleSec = 300
+
+function Get-CgTurn {
+    try {
+        $f = Get-Item $CG.TurnMarker -ErrorAction Stop
+        if (((Get-Date) - $f.LastWriteTime).TotalSeconds -gt $script:CgTurnStaleSec) { return '' }
+        $t = (Get-Content $CG.TurnMarker -ErrorAction Stop -Raw).Trim()
+        if ($t -match '^[0-9a-f]{1,8}$') { return $t }
+    } catch { }
+    return ''
+}
+
+$script:CgTurn = Get-CgTurn
+# Lane defaults to the script that dot-sourced us, so a script with no
+# transcript (Office-Safety, Wake-Safety) still emits under a sensible label.
+$script:CgLane = if ($MyInvocation.PSCommandPath) {
+    [IO.Path]::GetFileNameWithoutExtension($MyInvocation.PSCommandPath).ToLower()
+} else { 'pc' }
+
+function Log($m) {
+    Write-Host ("[+{0,5:n1}s] {1}" -f $script:CgStopwatch.Elapsed.TotalSeconds, $m)
+}
+
+# Structured twin of Log, for the MILESTONES a dashboard counts and an alert
+# fires on. The transcript stays the narrative - it catches the lines nobody
+# thought to instrument - and this catches the ones we did.
+function Write-CgEvent {
+    param([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 'info')
+    try {
+        $rec = [ordered]@{
+            ts      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            level   = $Level
+            env     = 'prod'
+            service = 'gamepc'
+            lane    = $script:CgLane
+            event   = $Event
+        }
+        if ($script:CgTurn) { $rec.turn = $script:CgTurn }
+        $rec.host = $env:COMPUTERNAME
+        $rec.dur_ms = [int]$script:CgStopwatch.Elapsed.TotalMilliseconds
+        foreach ($k in $Fields.Keys) { $rec[$k] = $Fields[$k] }
+        $file = Join-Path $CG.LogDir ("pc-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
+        $line = ConvertTo-Json -InputObject $rec -Compress -Depth 4
+        Add-Content -Path $file -Value $line -Encoding utf8 -ErrorAction Stop
+    } catch { }     # telemetry never costs a session
+}
 
 function Start-CgTranscript([string]$Tag) {
-    Start-Transcript (Join-Path $CG.LogDir ("{0}-{1}.log" -f $Tag, (Get-Date -Format yyyyMMdd-HHmmss)))
+    $script:CgLane = $Tag
+    New-Item -ItemType Directory -Force -Path $CG.LogDir -ErrorAction SilentlyContinue | Out-Null
+    # The turn rides in the FILENAME too, so "which transcript belongs to the
+    # 9pm launch" is answerable by looking at the folder, not by opening files.
+    $stamp = Get-Date -Format yyyyMMdd-HHmmss
+    $name = if ($script:CgTurn) { "{0}-{1}-{2}.log" -f $Tag, $stamp, $script:CgTurn }
+            else                { "{0}-{1}.log" -f $Tag, $stamp }
+    Start-Transcript (Join-Path $CG.LogDir $name)
+    Write-CgEvent "${Tag}_start"
 }
 
 function Wait-For([scriptblock]$Cond, [double]$TimeoutSec, [string]$What) {
@@ -141,7 +204,10 @@ function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | O
 # Called from Office-Safety (every logon) and Wake-Safety (every desk wake -
 # the real cadence, since sleep-centric use makes logons rare).
 function Clear-OldLogs([int]$Days = 30) {
-    Get-ChildItem $CG.LogDir -Filter *.log -ErrorAction SilentlyContinue |
+    # Both streams age out together: transcripts (the narrative) and the
+    # daily .jsonl (the milestones Alloy ships).
+    Get-ChildItem $CG.LogDir -Include *.log, *.jsonl -File -Recurse `
+            -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$Days) } |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }

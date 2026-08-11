@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
+import couch                 # THE ssh seam - dispatch reaches it through the module
 import dispatch as dp
 
 CFG = {
@@ -25,8 +26,8 @@ CFG = {
 
 class Harness:
     def __init__(self, dry_run=False):
-        self.lines = []
-        self.d = dp.Dispatch(CFG, self.lines.append, dry_run=dry_run)
+        self.log = cglib.CapturingLog("dispatch")
+        self.d = dp.Dispatch(CFG, self.log, dry_run=dry_run)
 
 
 def with_temp_lock(age_s):
@@ -56,7 +57,9 @@ def main():
     h = Harness(dry_run=True)
     r = h.d.start_session(appid=12345)
     assert r.ok and "couch.py start 12345" in r.detail, r
-    assert any("DRY-RUN" in l for l in h.lines)
+    # Assert on the EVENT, not its prose: rewording is free, renaming is not
+    # (alerts and dashboards group by event name).
+    assert "dry_run_would" in h.log.events(), h.log.records
 
     with_temp_lock(999)                               # stale lock = launchable
     h = Harness(dry_run=True)
@@ -68,7 +71,10 @@ def main():
     dp.subprocess.Popen = lambda args, **kw: spawned.append(args)
     h = Harness()
     r = h.d.start_session(appid=777)
-    assert r.ok and spawned[0][-2:] == [ "start", "777" ], spawned
+    # Positional, not tail-anchored: a turn id may follow (E1), and this
+    # assertion is about the verb and the appid.
+    i = spawned[0].index("start")
+    assert r.ok and spawned[0][i:i + 2] == ["start", "777"], spawned
 
     # --- volume: stepping, clamp, mute ---------------------------------------
     h = Harness(); sent.clear()
@@ -107,36 +113,36 @@ def main():
         (r, spawned, sent)
     # Mid-launch (fresh lock, host pre-READY): truthful busy, no switch.
     with_temp_lock(10)
-    dp.ssh = lambda cmd, **kw: "NOTREADY"
+    couch.ssh = lambda cmd, **kw: "NOTREADY"
     sent.clear()
     r = h.d.switch_input("the pc")
     assert not r.ok and r.earcon == "busy" and not sent, r
     # Live READY session: flips instantly.
-    dp.ssh = lambda cmd, **kw: "2026-08-10T20:00:00"  # READY timestamp
+    couch.ssh = lambda cmd, **kw: "2026-08-10T20:00:00"  # READY timestamp
     assert h.d.switch_input("the pc").ok and sent == [cglib.EXLINK_FRAMES["hdmi4"]]
     # Fresh lock but host unreachable: honest fail, no switch.
     def ssh_down(cmd, **kw): raise RuntimeError("unreachable")
-    dp.ssh = ssh_down
+    couch.ssh = ssh_down
     sent.clear()
     assert not h.d.switch_input("the pc").ok and not sent
 
     # --- end session over ssh outcomes ---------------------------------------
-    dp.ssh = lambda cmd, **kw: "OK"
+    couch.ssh = lambda cmd, **kw: "OK"
     assert Harness().d.end_session().ok
-    dp.ssh = lambda cmd, **kw: "FAILED:1"
+    couch.ssh = lambda cmd, **kw: "FAILED:1"
     assert not Harness().d.end_session().ok
-    dp.ssh = ssh_down
+    couch.ssh = ssh_down
     r = Harness().d.end_session()
     assert not r.ok and r.earcon == "fail"
 
     # --- play_game: session-live ssh outcomes + cold-start delegation --------
     with_temp_lock(10)                                # fresh lock = session up
     h = Harness()
-    dp.ssh = lambda cmd, **kw: "OK"
+    couch.ssh = lambda cmd, **kw: "OK"
     assert h.d.play_game(1888160).ok
-    dp.ssh = lambda cmd, **kw: "ALREADY"
+    couch.ssh = lambda cmd, **kw: "ALREADY"
     assert h.d.play_game(1).ok
-    dp.ssh = lambda cmd, **kw: "BUSY:42"
+    couch.ssh = lambda cmd, **kw: "BUSY:42"
     r = h.d.play_game(1)
     # The blocker is named for the assistant lane (detail is all it sees);
     # an index miss degrades to the bare id, never to a crash.
@@ -147,19 +153,20 @@ def main():
     assert "controller" in r.detail, r          # and what to do about it
     dp.library.installed_name = lambda a: None
     assert "app 42 is already running" in h.d.play_game(1).detail
-    dp.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
+    couch.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
     r = h.d.play_game(1)
     assert not r.ok and r.earcon == "busy"
-    dp.ssh = lambda cmd, **kw: "NOTINSTALLED"         # PC-side install guard
+    couch.ssh = lambda cmd, **kw: "NOTINSTALLED"         # PC-side install guard
     r = h.d.play_game(1)
     assert not r.ok and r.earcon == "fail" and "not installed" in r.detail
     assert "controller" in r.detail, r
-    dp.ssh = ssh_down
+    couch.ssh = ssh_down
     assert Harness().d.play_game(1).earcon == "fail"
     with_temp_lock(None)                              # cold: full couch launch
     spawned.clear()
     r = Harness().d.play_game(777)
-    assert r.ok and spawned[0][-2:] == ["start", "777"], spawned
+    i = spawned[0].index("start")
+    assert r.ok and spawned[0][i:i + 2] == ["start", "777"], spawned
 
     time.sleep = real_sleep
     print("OK - dispatch: lock arbiter, dry-run, spawn args, volume step/clamp, "

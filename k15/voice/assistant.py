@@ -86,7 +86,8 @@ def tool_impls(dispatch, log, jobs=None):
     def launch_game(args):
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
-            log(f"tool launch_game REFUSED unknown appid {appid}")
+            log.warn("tool_refused", tool="launch_game", reason="unknown_appid",
+                     appid=appid)
             return {"ok": False, "error": f"appid {appid} is not in the catalog"}
         if library.installed_name(appid) is None:
             return {"ok": False, "error": "that game is owned but not "
@@ -143,7 +144,7 @@ def tool_impls(dispatch, log, jobs=None):
             return {"ok": False, "error": "background tasks aren't available "
                     "right now - answer from what you know instead"}
         ok, detail = jobs.enqueue(task)
-        log(f"tool background_task {'queued' if ok else 'refused'}: {task[:80]}")
+        log("tool_call", tool="background_task", ok=ok, task=task[:200])
         return {"ok": ok, "detail" if ok else "error": detail}
 
     return {"launch_game": launch_game, "control": control,

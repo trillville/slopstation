@@ -21,7 +21,7 @@ separate process and survives anything the voice stack does.
 | [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. |
 | [voice-control-design.md](docs/voice-control-design.md) | Why the voice stack is shaped the way it is — pipeline, alternatives weighed, costs, edges. |
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
-| [observability-design.md](docs/observability-design.md) | Planned, nothing built: making the system legible from a phone. |
+| [observability-design.md](docs/observability-design.md) | Making the system legible from a phone. E0/E1 built (structured events + the `turn` id across both machines); Grafana and Langfuse still to wire. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
 run `python doctor.py` on the K15 or `Doctor.ps1` on the PC — each diagnoses its
@@ -61,7 +61,8 @@ checkout runs without its local config/keys ever fighting `git pull`:
 
 | File | Role |
 |---|---|
-| `cglib.py` | Shared module: Ex-Link frame table, Puck VID/PID, config loading, tagged logging to `couch.log`. |
+| `cglib.py` | Shared module: Ex-Link frame table, Puck VID/PID, config loading, and the per-lane logger (`log("event", field=…)` → console + `couch.log` + structured JSONL). |
+| `events.py` | The event core, stdlib-only so the chord lane gains no dependency: JSONL writer, daily files, secret scrubber, the `turn` correlation id, and an `emit` CLI the `.bat` supervisors call so a crash-restart loop is visible. |
 | `couch.py` | Orchestrator: Ex-Link TV power → WoL → `ssh enter` → poll READY → switch input → watch loop. `reconcile` subcommand re-adopts or clears a session lock that survived a K15 restart. |
 | `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s and answers through the controller — 1 thud = launching, 2 = busy, 3 = the launch failed — then fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
@@ -107,7 +108,7 @@ checkout runs without its local config/keys ever fighting `git pull`:
 - **`OFFICE.lnk` / `TV-GAMING.lnk`** — machine-generated DisplayMagician profile shortcuts; recreate per guide Stage 6.
 - **`k15/config.json`, `k15/secrets.json`** — per-machine config and API keys; create once from `config.example.json` / `secrets.template.json`. Gitignored so a checkout runs without them fighting `git pull`.
 - **Scheduled task registrations, sshd setup, firewall rules** — one-time commands, all in the guide (Stages 6–8).
-- **Logs and runtime state** (`logs/`, `state/session.lock`, `couch.log`), and the voice `.venv` (created on-machine).
+- **Logs and runtime state** (`logs/` — both the PC's transcripts and the daily `*.jsonl` event stream — plus `state/session.lock` and `couch.log`), and the voice `.venv` (created on-machine).
 
 ## Conventions
 

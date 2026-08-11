@@ -6,21 +6,62 @@
 # Verbs: enter/exit/status (session), games (installed-library JSON), playing
 # (RunningAppID), launch <appid> (READY-gated, BUSY/ALREADY-truthful; the appid
 # travels via marker file because schtasks /Run cannot pass arguments).
+# The three mutating verbs also take an optional ` --turn <hex>` correlation id
+# (see Set-Turn below); the read-only polls deliberately do not.
 $ready = 'C:\ProgramData\CouchGaming\ready'
+$turnFile = 'C:\ProgramData\CouchGaming\turn'
+
+# Correlation id for one user intent, minted on the K15 and travelling with
+# the three MUTATING verbs so this machine's transcript and events join that
+# story. Like the appid it rides a marker file, because schtasks /Run cannot
+# pass arguments.
+#
+# SECURITY: the '[0-9a-f]{1,8}' in each pattern below IS the validation, and
+# the patterns are anchored - so a turn that is not short lowercase hex never
+# matches a verb at all and falls through to DENIED. That matters because the
+# value reaches a FILENAME on the far side: anything laxer here would be a
+# path-traversal primitive. Fail closed; the K15 only ever sends ids it minted.
+#
+# Two regex-dialect traps this file has to dodge, both found by drilling the
+# patterns rather than by reading them:
+#
+#  * Every verb ends in \z, not $. In .NET (as in most engines) '$' also
+#    matches just BEFORE a trailing newline, so '^status$' accepts "status`n".
+#    No bad capture was reachable that way - [0-9a-f] cannot eat a newline -
+#    but an anchor that needs a paragraph of reasoning to call safe is the
+#    wrong anchor on the one file that is the whole remote attack surface.
+#
+#  * The turn group is wrapped in (?-i: ) because switch -Regex, like -match,
+#    is CASE-INSENSITIVE by default: plain [0-9a-f] quietly also accepts
+#    '9F2C1A'. Still a harmless filename, but then the pattern is not the
+#    validation its own comment claims, and that gap is where the next bug
+#    lives. The verbs themselves stay case-insensitive, exactly as before.
+#
+# voice/tests/test_turn.py reads these patterns out of this file (so it can
+# never drill a stale copy) and fails if one loses its anchor or its bound.
+function Set-Turn($t) {
+  Remove-Item $turnFile -Force -ErrorAction SilentlyContinue
+  if ($t) { Set-Content $turnFile $t }
+}
+
 switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
-  '^enter$'  { schtasks /Run /TN '\CouchGaming\Enter' | Out-Null
+  '^enter( --turn ((?-i:[0-9a-f]{1,8})))?\z'
+             { Set-Turn $Matches[2]
+               schtasks /Run /TN '\CouchGaming\Enter' | Out-Null
                if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
                break }
-  '^exit$'   { schtasks /Run /TN '\CouchGaming\Exit'  | Out-Null
+  '^exit( --turn ((?-i:[0-9a-f]{1,8})))?\z'
+             { Set-Turn $Matches[2]
+               schtasks /Run /TN '\CouchGaming\Exit'  | Out-Null
                if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
                break }
-  '^status$' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
+  '^status\z' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
                break }
-  '^playing$' {
+  '^playing\z' {
       $v = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
       if ($null -eq $v) { '0' } else { "$v" }
       break }
-  '^games$' {
+  '^games\z' {
       $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
       if (-not $steam) { '[]'; break }
       $steam = $steam -replace '/', '\'
@@ -55,8 +96,9 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       }
       ConvertTo-Json -InputObject @($apps) -Compress -Depth 3
       break }
-  '^launch (\d{1,10})$' {
+  '^launch (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       $id = $Matches[1]
+      Set-Turn $Matches[3]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
       $run = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
       if ($run -and $run -ne 0) {

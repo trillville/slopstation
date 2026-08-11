@@ -2,6 +2,7 @@ import subprocess, sys, time
 import hid
 
 import cglib
+import events
 from cglib import VID, PID
 
 RID_INPUT = 0x42                  # input report type, from calibrate.py ("report type: 42")
@@ -26,10 +27,10 @@ def buzz(dev, pattern, what):
     """Best-effort by rule: a haptic failure must never delay or block anything."""
     try:
         cglib.play_pattern(dev, pattern, HAPTIC_GAIN)
-        log(f"{what} buzz sent")
+        log("buzz_sent", pattern=what)
         return True
     except Exception as e:
-        log(f"{what} buzz failed ({e}) - continuing")
+        log.warn("buzz_failed", pattern=what, err=str(e))
         return False
 
 
@@ -43,7 +44,7 @@ def signal_last_error(dev):
         return
     if age > ERR_STALE_S:
         cglib.LAST_ERROR.unlink(missing_ok=True)
-        log(f"stale last_error discarded ({age:.0f}s old)")
+        log("stale_error_discarded", age_s=round(age))
         return
     if buzz(dev, cglib.PATTERN_FAIL, "fail"):
         try:
@@ -51,7 +52,7 @@ def signal_last_error(dev):
         except OSError:
             reason = "?"
         cglib.LAST_ERROR.unlink(missing_ok=True)
-        log(f"launch failure signaled to controller ({reason})")
+        log("launch_failure_signaled", reason=reason)
 
 class Puck:
     def __init__(self): self.handles, self.active = [], None
@@ -99,16 +100,16 @@ while True:
         if not puck.open_all():
             time.sleep(1)                        # Puck truly absent (session active)
             continue
-        log(f"Puck present - {len(puck.handles)} interfaces open, waiting for controller")
+        log("puck_present", interfaces=len(puck.handles))
         held, armed = None, False
     try:
         r = puck.read_input()
     except (OSError, ValueError):
-        log("device vanished (claimed) - standing by")
+        log("puck_vanished", reason="claimed")
         puck.close(); time.sleep(3); continue
     if r:
         if not armed:
-            log(f"input stream found (type {RID_INPUT:02x}) - armed")
+            log("armed", report_type=f"{RID_INPUT:02x}")
             armed = True
         if len(r) > BTN_BYTE and (r[BTN_BYTE] & CHORD) == CHORD:
             held = held or time.time()
@@ -118,15 +119,20 @@ while True:
                     # A launch/session already owns the lock - couch.py would
                     # refuse anyway; say "busy", don't promise a launch.
                     if time.time() - last_busy >= BUSY_COOLDOWN_S:
-                        log(f"chord heard but the session lock is fresh ({age:.0f}s) - busy")
+                        log("chord_busy", lock_age_s=round(age))
                         buzz(puck.active, cglib.PATTERN_BUSY, "busy")
                         last_busy = time.time()
                     held = None
                 else:
-                    log("chord! launching session")
+                    # The chord is where this intent begins, so the id is
+                    # minted here and handed to couch.py - which passes it on
+                    # to the gaming PC. One chord, one story, two machines.
+                    turn = events.new_turn()
+                    log("chord", turn=turn)
                     buzz(puck.active, cglib.PATTERN_LAUNCH, "launch")
                     puck.close()
-                    subprocess.Popen([sys.executable, str(COUCH), "start"],
+                    subprocess.Popen([sys.executable, str(COUCH), "start",
+                                      "--turn", turn],
                                      creationflags=subprocess.CREATE_NEW_CONSOLE)
                     time.sleep(20); held, armed = None, False
         else:

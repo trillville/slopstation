@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import cglib
 from preroll import CHUNK_BYTES, CHUNK_SAMPLES, PrerollFeeder, WakeAck, WakeCapture
 
 
@@ -229,7 +230,7 @@ def test_wake_ack_is_claimed_exactly_once():
 
 
 def test_feeder_chunking():
-    feeder = PrerollFeeder(lambda m: None)
+    feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
     feeder.pcm = b"\xaa" * (CHUNK_BYTES * 2 + 100)
     frames = feeder._frames()
     assert [len(f.audio) for f in frames] == [CHUNK_BYTES, CHUNK_BYTES, 100]
@@ -265,7 +266,7 @@ async def test_pipeline_ordering():
             await self.push_frame(frame, direction)
 
     marker = b"".join(bytes([0xA0 + i]) * CHUNK_BYTES for i in range(4))
-    feeder = PrerollFeeder(lambda m: None)
+    feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
     feeder.pcm = marker
     collector = Collector()
 

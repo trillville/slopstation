@@ -90,7 +90,7 @@ class JobStore:
                                 "ask again to re-run it")
             self._save(jobs)
         for j in orphans:
-            self.log(f"jobs reconcile: {j['id']} RUNNING -> FAILED (restart)")
+            self.log.warn("job_orphaned", job=j["id"], reason="restart")
         return len(orphans)
 
     def start(self):
@@ -108,7 +108,7 @@ class JobStore:
                    "provider": self.adapter.exe, "created": int(time.time()),
                    "summary": "", "detail": "", "read": True}
             self._save(jobs + [job])
-        self.log(f"job {job['id']} queued: {task[:80]}")
+        self.log("job_queued", job=job["id"], task=task[:200])
         self._kick.set()
         return True, "queued - the result will be announced"
 
@@ -133,22 +133,25 @@ class JobStore:
                 job = self._next_queued()
                 if job is None:
                     break
-                self.log(f"job {job['id']} running ({self.adapter.exe}"
-                         + (", dry-run" if self.dry_run else "") + ")")
+                self.log("job_running", job=job["id"], provider=self.adapter.exe,
+                         dry_run=self.dry_run or None)
                 t0 = time.time()
                 r = self.adapter.run(self._task_text(job), self.timeout_s)
                 status = DONE if r["ok"] else FAILED
                 self._update(job["id"], status=status, read=False,
                              finished=int(time.time()),
                              summary=r["summary"], detail=r["detail"])
-                self.log(f"job {job['id']} {status} in {time.time() - t0:.0f}s")
+                emit = self.log if r["ok"] else self.log.error
+                emit("job_done" if r["ok"] else "job_failed", job=job["id"],
+                     status=status, dur_ms=round((time.time() - t0) * 1000))
                 if self.on_done:
                     job.update(status=status, summary=r["summary"],
                                detail=r["detail"])
                     try:
                         self.on_done(job)
                     except Exception as e:
-                        self.log(f"job {job['id']} announce hook failed: {e!r}")
+                        self.log.error("job_announce_hook_failed",
+                                       job=job["id"], err=repr(e))
 
     # -- the voice surface ----------------------------------------------------
 

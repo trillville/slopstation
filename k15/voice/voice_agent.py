@@ -33,6 +33,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
 import earcons                                  # noqa: E402
+import events                                   # noqa: E402
 import library                                  # noqa: E402
 import titles                                   # noqa: E402
 import traces                                   # noqa: E402
@@ -96,16 +97,16 @@ def resolve_device(pa, fragment, want_input):
     to spot from couch.log that voice bound the wrong endpoint."""
     kind = "input" if want_input else "output"
     if not fragment:
-        log(f"{kind} device: system default")
+        log("audio_device", kind=kind, device="system default")
         return None
     frag = fragment.lower()
     for i in range(pa.get_device_count()):
         d = pa.get_device_info_by_index(i)
         channels = d["maxInputChannels"] if want_input else d["maxOutputChannels"]
         if channels and frag in d["name"].lower():
-            log(f"{kind} device: '{d['name']}' (index {i})")
+            log("audio_device", kind=kind, device=d["name"], index=i)
             return i
-    log(f"WARNING: no {kind} device matching '{fragment}' - using system default")
+    log.warn("audio_device_missing", kind=kind, wanted=fragment)
     return None
 
 
@@ -169,13 +170,13 @@ def rebuild_audio(old_pa, voice, listener):
     try:
         old_pa.terminate()
     except Exception as e:
-        log(f"stale PyAudio teardown failed ({e}) - abandoning it")
+        log.warn("audio_teardown_failed", err=str(e))
     while True:
         time.sleep(5)
         try:
             pa, input_idx, output_idx = build_audio(voice)
         except Exception as e:
-            log(f"audio rebuild failed ({e}) - retrying in 5s")
+            log.error("audio_rebuild_failed", err=str(e), retry_s=5)
             continue
         listener.rebind(pa, input_idx)
         return pa, input_idx, output_idx
@@ -203,7 +204,7 @@ def play_pcm(pa, pcm, device_index=None):
             if attempt == 1:
                 time.sleep(0.5)
             else:
-                log(f"earcon playback failed ({e}) - continuing without it")
+                log.warn("earcon_failed", err=str(e))
 
 
 def close_stream_quietly(stream):
@@ -242,7 +243,7 @@ class WakeListener:
         from openwakeword.utils import download_models
         res = Path(openwakeword.__file__).parent / "resources" / "models"
         if not (res / f"{self.model_name}.onnx").exists():
-            log(f"wake model {self.model_name} missing - downloading once")
+            log("wake_model_download", model=self.model_name)
             download_models([self.key])
 
     def rebind(self, pa, device_index):
@@ -377,10 +378,10 @@ def _make_tts(voice, secrets):
     if voice.get("ttsLocal"):
         try:
             from pipecat.services.kokoro.tts import KokoroTTSService
-            log("TTS: Kokoro (local; first run downloads the model)")
+            log("tts_selected", engine="kokoro", local=True)
             return KokoroTTSService()
         except Exception as e:
-            log(f"Kokoro unavailable ({e}) - falling back to Aura-2")
+            log.warn("tts_fallback", wanted="kokoro", using="aura-2", err=str(e))
     from pipecat.services.deepgram.tts import DeepgramTTSService
     return DeepgramTTSService(
         api_key=secrets["deepgramApiKey"], sample_rate=16000,
@@ -531,9 +532,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         # only when the user isn't speaking and no dispatch is in flight;
         # otherwise defer and let the next idle window re-check.
         if gate.is_busy():
-            log("idle timeout deferred - user/dispatch still active")
+            log("idle_deferred", reason="busy")
             return
-        log("idle - ending session")
+        log("session_idle_timeout")
         await worker.cancel(reason="idle")
 
     runner = WorkerRunner(handle_sigint=False)
@@ -562,7 +563,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
             try:
                 pa.terminate()
             except Exception as e:
-                log(f"pyaudio terminate failed ({e}) - leaked one host handle")
+                log.warn("pyaudio_terminate_failed", err=str(e))
     if context is not None:                     # cross-session follow-ups
         msgs = list(context.messages)
         # Trace = the session's full context (carried turns included), i.e.
@@ -609,7 +610,7 @@ def main():
     voice = cfg["voice"]
     missing = [k for k in REQUIRED_VOICE if k not in voice]
     if missing:
-        log(f"config.json voice section missing keys: {missing} - fix and restart")
+        log.error("config_invalid", missing=missing)
         return 1
     secrets = cglib.load_secrets()
     # Earcon volume is taste, and taste needs a knob you can turn from the
@@ -618,9 +619,9 @@ def main():
 
     if args.earcons:
         pa, _, output_idx = build_audio(voice)
-        log(f"earcon audition (gain {earcons.GAIN})")
+        log("earcon_audition", gain=earcons.GAIN)
         for name in earcons.SPECS:
-            log(f"  {name}")
+            log("earcon_play", earcon=name)
             play_pcm(pa, earcons.pcm(name), output_idx)
             time.sleep(0.7)
         return 0
@@ -628,15 +629,14 @@ def main():
     if args.announce_test:
         import announce
         ann = announce.Announcer(voice, secrets, log)
-        log("announce test - the path a finished background task takes")
+        log("announce_test_start")
         try:
             done = ann.speak("Test announcement. This is how a finished "
                              "background task will reach you.")
         except Exception as e:
-            log(f"announce FAILED ({e}) - check the Deepgram key and the "
-                "output device; a real result would fall back to the earcon")
+            log.error("announce_test_failed", err=str(e))
             return 1
-        log("announcement played in full" if done else "announcement cut short")
+        log("announce_test_done", complete=done)
         return 0
 
     if args.text:
@@ -649,8 +649,7 @@ def main():
 
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
-        log("deepgramApiKey is a placeholder - wake word runs, but sessions "
-            "are DISABLED until a real key lands in secrets.json")
+        log.warn("lane_disabled", lane="stt", reason="deepgram key is a placeholder")
     from assistant import BACKENDS
     brain = BACKENDS.get(voice["assistantProvider"])
     brain_live = bool(brain and cglib.real_key(secrets.get(brain.key)))
@@ -661,14 +660,14 @@ def main():
     # keep the agent down, it just has to stop being a silent trap for the
     # day someone flips assistantProvider.
     if not voice["assistantModelAnthropic"].startswith("claude-"):
-        log(f"assistantModelAnthropic '{voice['assistantModelAnthropic']}' is "
-            "not a full API model id - the assistant lane has no aliases "
-            "(use e.g. claude-haiku-4-5); the worker lane's CLI does")
+        log.warn("config_suspect", setting="assistantModelAnthropic",
+                 value=voice["assistantModelAnthropic"],
+                 reason="not a full API model id (the assistant lane has no aliases)")
     if (voice["assistantWebSearch"]
             and voice["assistantProvider"] != "openai"):
-        log("assistantWebSearch: production search runs on the openai lane "
-            "only (pipecat's anthropic adapter has no native-tool "
-            "passthrough); the --text REPL searches on both")
+        log.warn("config_suspect", setting="assistantWebSearch",
+                 value=voice["assistantProvider"],
+                 reason="production search runs on the openai lane only")
 
     # Build the grammar once (a YAML typo fails here, not per-wake); warm the
     # library index and the heavy pipeline imports in the background so the
@@ -679,10 +678,11 @@ def main():
     if brain_live:
         from assistant import default_model
         ap = voice["assistantProvider"]
-        log(f"assistant lane - {ap}/{default_model(cfg, ap)}"
-            + (f" effort={voice['assistantReasoningEffort']}"
-               if ap == "openai" else "")     # anthropic has no effort knob
-            + (" +websearch" if voice["assistantWebSearch"] else ""))
+        log("lane_up", lane="assistant", provider=ap,
+            model=default_model(cfg, ap),
+            # anthropic has no effort knob
+            effort=voice["assistantReasoningEffort"] if ap == "openai" else None,
+            websearch=voice["assistantWebSearch"] or None)
 
     # Tier-3 worker lane, fail-soft like every other lane: a missing CLI turns
     # background tasks off with a clear message - wake, commands, and the
@@ -695,16 +695,17 @@ def main():
     adapter = (WORKERS[wp](voice[MODEL_KEY[wp]], voice["workerEffort"])
                if wp in WORKERS else None)
     if adapter is None:
-        log(f"worker lane DISABLED - unknown workerProvider '{wp}' "
-            f"(one of {list(WORKERS)})")
+        log.warn("lane_disabled", lane="worker", reason="unknown workerProvider",
+                 provider=wp, known=list(WORKERS))
     elif not adapter.available():
-        log(f"worker lane DISABLED - '{adapter.exe}' CLI not on PATH "
-            "(background tasks off; everything else runs)")
+        log.warn("lane_disabled", lane="worker", reason="CLI not on PATH",
+                 exe=adapter.exe)
     elif not (stt_live and brain_live):
         # The lane rides the assistant (only its background_task tool can
         # queue work) and Deepgram (announcements + retrieval TTS) - without
         # either it would be a store nothing fills and frames nothing speaks.
-        log("worker lane DISABLED - it needs live Deepgram AND assistant keys")
+        log.warn("lane_disabled", lane="worker",
+                 reason="needs live Deepgram AND assistant keys")
     else:
         announcer = announce.Announcer(voice, secrets, log)
         jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],
@@ -715,34 +716,35 @@ def main():
         jobs.start()
         # Spell the effective settings into the log: config says what to run,
         # this line says what IS running (an empty model = the CLI's own).
-        log(f"worker lane up - {wp}/{adapter.exe} "
-            f"model={adapter.model or '(cli default)'} "
-            f"effort={adapter.effort or '(cli default)'}"
-            + (f", {orphans} orphaned job(s) marked failed" if orphans else ""))
+        # Spell out what IS running, not what config asked for: an empty
+        # model means the CLI's own default.
+        log("lane_up", lane="worker", provider=wp, exe=adapter.exe,
+            model=adapter.model or "(cli default)",
+            effort=adapter.effort or "(cli default)", orphans=orphans or None)
 
     listener = WakeListener(pa, voice, input_idx)
-    log(f"voice agent up - wake model {listener.model_name}, "
-        f"threshold {voice['wakeThreshold']}"
-        + (" [DRY-RUN]" if args.dry_run else ""))
+    log("agent_up", wake_model=listener.model_name,
+        threshold=voice["wakeThreshold"], dry_run=args.dry_run or None)
 
     if args.wake_trials:
-        log("wake-trials mode: say the wake word; every detection logs. Ctrl+C to stop.")
+        log("wake_trials_start")
         n = 0
         while True:
             score = listener.wait_for_wake(voice["wakeThreshold"])
             n += 1
-            log(f"wake #{n} (score {score:.2f})")
+            log("wake_trial", n=n, score=round(score, 2))
             play_pcm(pa, earcons.pcm("wake"), output_idx)
             time.sleep(1.0)                     # refractory: one hit per attempt
 
     if args.false_accept_soak:
-        log("false-accept soak: leave the room noisy; every wake is a false accept.")
+        log("false_accept_soak_start")
         t0, n = time.time(), 0
         while True:
             listener.wait_for_wake(voice["wakeThreshold"])
             n += 1
             hrs = (time.time() - t0) / 3600
-            log(f"FALSE ACCEPT #{n} after {hrs:.2f}h ({n / max(hrs, 0.01):.1f}/hr)")
+            log.warn("wake_false", n=n, hours=round(hrs, 2),
+                     per_hour=round(n / max(hrs, 0.01), 1))
             time.sleep(1.0)
 
     while True:
@@ -767,7 +769,7 @@ def main():
             # voice is not load-bearing. Rebuild the PortAudio world, not
             # just the stream: reopening on the old instance is what went
             # deaf overnight (see rebuild_audio).
-            log(f"wake stream died ({e}) - rebuilding audio in 5s")
+            log.error("wake_stream_died", err=str(e))
             pa, input_idx, output_idx = rebuild_audio(pa, voice, listener)
             continue
         if score is None:
@@ -777,9 +779,9 @@ def main():
             # has the result in context (job_messages).
             announcer.follow_up.clear()
             ack.claim()
-            log("follow-up window - session open without a wake word")
+            log("wake", trigger="follow_up")
         else:
-            log(f"wake (score {score:.2f})")
+            log("wake", trigger="wake_word", score=round(score, 2))
             if announcer:
                 announcer.abort_current()       # user intent beats a bulletin
         if not stt_live:
@@ -788,7 +790,12 @@ def main():
             ack.claim()                         # no session: fail is the answer
             play_pcm(pa, earcons.pcm("fail"), output_idx)
             continue
-        log("session open")
+        # One id per conversation, minted before the session's event loop
+        # exists so asyncio.run carries it into every task inside (and
+        # to_thread carries it into dispatch). Langfuse groups a wake plus its
+        # follow-ups into one conversation on exactly this id at E5.
+        events.context(session=events.new_turn())
+        log("session_open")
         if announcer:
             announcer.session_active.set()
         ending = "close"
@@ -797,7 +804,7 @@ def main():
                                     input_idx, output_idx, capture,
                                     jobs=jobs, ack=ack))
         except Exception as e:
-            log(f"session crashed: {e!r} - back to dormant")
+            log.error("session_crashed", err=repr(e))
             ending = "fail"
         finally:
             if capture:                         # None on a follow-up open
@@ -809,7 +816,7 @@ def main():
         # actually goes dormant - and every ending sounds the same, whether it
         # was an exit phrase, the idle timeout or a crash (fail says which).
         play_pcm(pa, earcons.pcm(ending), output_idx)
-        log("session closed - dormant")
+        log("session_close", ending=ending)
         if args.once:
             return 0
 
@@ -818,4 +825,4 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        log("voice agent stopped (Ctrl+C)")
+        log("agent_stopped", reason="ctrl_c")
