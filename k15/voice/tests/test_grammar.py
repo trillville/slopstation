@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from grammar_gate import GrammarMatcher
+from grammar_gate import GrammarMatcher, strip_wake
 
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",
                         "ps5": "hdmi2", "the pc": "hdmi4"}}
@@ -62,6 +62,23 @@ TABLE = [
     ("kill the session please maybe", None, {}),
 ]
 
+# Wake-prefix stripping (pre-roll makes transcripts start with the wake
+# phrase): (transcript, what the lanes should see; "" = swallowed entirely).
+STRIP = [
+    ("hey jarvis volume up", "volume up"),
+    ("Hey, Jarvis, volume up.", "volume up."),
+    ("jarvis volume up", "volume up"),
+    ("hey jervis play hades", "play hades"),            # fuzzy mishear >= 80
+    ("okay jarvis louder", "louder"),
+    ("hey jarvis hey jarvis volume up", "volume up"),   # stutter/double wake
+    ("hey jarvis", ""),
+    ("Jarvis!", ""),
+    ("volume up", "volume up"),
+    ("travis strikes again", "travis strikes again"),   # real word ~67, kept
+    ("hey volume up", "hey volume up"),                 # no anchor, untouched
+    ("play jarvis game", "play jarvis game"),           # mid-text is content
+]
+
 
 def main():
     m = GrammarMatcher(VOICE_CFG)
@@ -88,11 +105,20 @@ def main():
             if not ok:
                 failures.append(f"'{text}': slot {k}={got_v!r}, want {v!r}")
 
+    for text, want in STRIP:
+        got = strip_wake(text)
+        if got != want:
+            failures.append(f"strip '{text}': got {got!r}, want {want!r}")
+    # Strip output must still match the grammar (the whole point).
+    stripped = strip_wake("hey jarvis volume up")
+    if m.match(stripped) is None or m.match(stripped)[0] != "VolumeUp":
+        failures.append(f"stripped {stripped!r} no longer matches VolumeUp")
+
     for f in failures:
         print("FAIL", f)
     assert not failures, f"{len(failures)} grammar failures"
     print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
-          f"risky-command narrowness")
+          f"risky-command narrowness; {len(STRIP)} wake-strip cases")
 
 
 if __name__ == "__main__":

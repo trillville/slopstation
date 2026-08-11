@@ -20,6 +20,7 @@ separate process on system python and must survive anything that happens here.
 """
 import argparse
 import asyncio
+import collections
 import sys
 import threading
 import time
@@ -35,6 +36,8 @@ import library                                  # noqa: E402
 import titles                                   # noqa: E402
 from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarGate, GrammarMatcher   # noqa: E402
+from preroll import PrerollFeeder, WakeCapture  # noqa: E402  (pipecat frames
+# are already loaded via grammar_gate, so this adds no startup cost)
 
 log = cglib.make_log("voice")
 
@@ -124,6 +127,7 @@ class WakeListener:
     releases it before a session pipeline opens it."""
 
     CHUNK = 1280                                # oWW's native 80 ms hop
+    PREROLL_CHUNKS = 25                         # 2 s ring kept ahead of detection
 
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np
@@ -148,25 +152,50 @@ class WakeListener:
         scores = self.model.predict(chunk_int16)
         return max(scores.values())
 
+    def _open_stream(self):
+        import pyaudio
+        return self.pa.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                            input=True, frames_per_buffer=self.CHUNK,
+                            input_device_index=self.device_index)
+
+    def _listen(self, stream, threshold, on_score, ring):
+        while True:
+            data = stream.read(self.CHUNK, exception_on_overflow=False)
+            if ring is not None:
+                ring.append(data)
+            score = self.score_chunk(self.np.frombuffer(data, self.np.int16))
+            if on_score:
+                on_score(score)
+            if score >= threshold:
+                self.model.reset()
+                return score
+
     def wait_for_wake(self, threshold, on_score=None):
         """Blocks until the wake word fires; returns the score. The stream is
-        closed before returning so the session pipeline can own the device."""
-        import pyaudio
-        stream = self.pa.open(format=pyaudio.paInt16, channels=1, rate=16000,
-                              input=True, frames_per_buffer=self.CHUNK,
-                              input_device_index=self.device_index)
+        closed before returning (trials/soak modes - no session follows)."""
+        stream = self._open_stream()
         try:
-            while True:
-                data = stream.read(self.CHUNK, exception_on_overflow=False)
-                score = self.score_chunk(self.np.frombuffer(data, self.np.int16))
-                if on_score:
-                    on_score(score)
-                if score >= threshold:
-                    self.model.reset()
-                    return score
+            return self._listen(stream, threshold, on_score, None)
         finally:
             stream.stop_stream()
             stream.close()
+
+    def wait_for_wake_capture(self, threshold):
+        """Blocks until the wake word fires; returns (score, WakeCapture). The
+        stream is handed to the capture - NOT closed - so speech overlapping or
+        right after the wake phrase ("hey jarvis volume up", no pause) survives
+        the session build. The ring seeds the capture with the ~2 s before
+        detection, wake phrase included; strip_wake removes it text-side.
+        Caller must stop() the capture (idempotent) to release the mic."""
+        stream = self._open_stream()
+        ring = collections.deque(maxlen=self.PREROLL_CHUNKS)
+        try:
+            score = self._listen(stream, threshold, None, ring)
+        except Exception:
+            stream.stop_stream()
+            stream.close()
+            raise
+        return score, WakeCapture(stream, ring)
 
 
 # --- the per-session pipeline -------------------------------------------------
@@ -237,7 +266,8 @@ def _make_llm(voice, secrets, system_text):
             enable_prompt_caching=True, max_tokens=400))
 
 
-async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
+async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
+                      capture=None):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
                                        TranscriptionFrame,
@@ -250,7 +280,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
     from pipecat.workers.runner import WorkerRunner
 
     voice = cfg["voice"]
-    keyterms = load_titles(voice["keytermCount"])
+    game_terms = load_titles(voice["keytermCount"])
+    # "hey_jarvis_v0.1" -> "hey jarvis"; keyterm-boosted so the pre-roll's wake
+    # phrase transcribes canonically and strip_wake lands every time.
+    wake_phrase = voice["wakeModel"].rsplit("_v", 1)[0].replace("_", " ")
 
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
@@ -268,7 +301,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
             eager_eot_threshold=(voice["eagerEotThreshold"]
                                  if voice.get("eagerEnabled", True) else None),
             numerals=True,
-            **({"keyterm": keyterms} if keyterms else {}),
+            keyterm=[wake_phrase] + game_terms,
         ),
     )
 
@@ -279,11 +312,13 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
     gate = GrammarGate(
         matcher, dispatcher, log,
         resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])
-                      if keyterms else None),
+                      if game_terms else None),
         assistant_enabled=assistant_live,
+        wake_word=wake_phrase.split()[-1],      # "jarvis" - the strip anchor
     )
 
-    stages = [transport.input(), stt, gate]
+    feeder = PrerollFeeder(log)
+    stages = [transport.input(), feeder, stt, gate]
     context = None
     if assistant_live:
         from assistant import function_schemas, system_instruction, tool_impls
@@ -326,6 +361,11 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
         await worker.cancel(reason="idle")
 
     runner = WorkerRunner(handle_sigint=False)
+    if capture is not None:
+        # Stop as late as possible: every slow build step is behind us, only
+        # worker start + the transport's mic-open remain, so the uncaptured
+        # gap is ~100-200 ms instead of the whole session build.
+        feeder.pcm = capture.stop()
     try:
         await runner.add_workers(worker)
         await runner.run()
@@ -426,18 +466,21 @@ def main():
             time.sleep(1.0)
 
     while True:
-        score = listener.wait_for_wake(voice["wakeThreshold"])
+        score, capture = listener.wait_for_wake_capture(voice["wakeThreshold"])
         log(f"wake (score {score:.2f})")
         if not stt_live:
+            capture.stop()
             play_pcm(pa, earcons.pcm("fail"), output_idx)
             continue
         play_pcm(pa, earcons.pcm("wake"), output_idx)
         log("session open")
         try:
             asyncio.run(run_session(cfg, secrets, matcher, args,
-                                    input_idx, output_idx))
+                                    input_idx, output_idx, capture))
         except Exception as e:
             log(f"session crashed: {e!r} - back to dormant")
+        finally:
+            capture.stop()                      # idempotent; frees the mic if the build crashed
         refresh_library_bg()                    # pick up installs between sessions
         log("session closed - dormant")
         if args.once:

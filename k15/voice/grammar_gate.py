@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 from hassil import Intents, TextSlotList, recognize
+from rapidfuzz import fuzz
 
 from pipecat.frames.frames import (EndWorkerFrame, Frame, OutputAudioRawFrame,
                                    TranscriptionFrame, UserStartedSpeakingFrame,
@@ -22,6 +23,27 @@ import earcons
 import titles
 
 GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
+
+GREETINGS = {"hey", "hi", "ok", "okay"}
+_PUNCT = ",.!?"
+
+
+def strip_wake(text, anchor="jarvis"):
+    """Remove a leading wake phrase ("hey jarvis", "jarvis", mishears like
+    "jervis") from a transcript. The pre-roll buffer deliberately includes the
+    wake phrase - Flux transcribes the whole utterance and text-side stripping
+    is more reliable than trimming it out of the audio. Fuzzy on the anchor
+    word only, >=80 (mishears like "jervis" score ~83; real words like
+    "travis" ~67); greeting optional; repeated, so a stuttered "hey jarvis
+    hey jarvis volume up" still cleans up. Leading only - a mid-sentence
+    "jarvis" is content."""
+    while True:
+        toks = text.split()
+        i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
+        if i < len(toks) and fuzz.ratio(toks[i].strip(_PUNCT).lower(), anchor) >= 80:
+            text = " ".join(toks[i + 1:])
+            continue
+        return text
 
 
 def load_intents():
@@ -55,13 +77,14 @@ class GrammarGate(FrameProcessor):
     """intent -> dispatch call; Result.earcon -> tone pushed to the speaker."""
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
-                 assistant_enabled=False):
+                 assistant_enabled=False, wake_word=None):
         super().__init__()
         self.matcher = matcher
         self.dispatch = dispatch
         self.log = log
         self.resolve_game = resolve_game        # C2: fuzzy title -> appid
         self.assistant_enabled = assistant_enabled
+        self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
 
@@ -137,6 +160,18 @@ class GrammarGate(FrameProcessor):
             self._speaking = False
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
+            if text and self.wake_word:
+                stripped = strip_wake(text, self.wake_word)
+                if not stripped:
+                    # Pre-roll means a pause-style wake transcribes as just
+                    # "hey jarvis": not a command, not assistant material -
+                    # swallow it and keep listening (no earcon, no LLM turn).
+                    self.log(f'heard "{text}" - wake phrase only, listening')
+                    return
+                if stripped != text:
+                    self.log(f'wake prefix stripped: "{text}" -> "{stripped}"')
+                    frame.text = stripped       # both lanes see the command only
+                    text = stripped
             if text:
                 m = self.matcher.match(text)
                 if m is not None:

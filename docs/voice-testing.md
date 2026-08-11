@@ -119,6 +119,26 @@ grammar + earcons end-to-end.** Paste a chunk of the log. This is where you'll
 feel the rhythm — wake-to-tick gap, how long after you stop talking it reacts,
 whether phrasings you'd naturally use actually match. Jot down any that don't.
 
+## 5b. Natural sentences — the pre-roll buffer
+
+No pause needed anymore: the wake stream keeps recording through the session
+build (seeded with the 2 s before detection), replays it into Flux ahead of
+live mic audio, and the gate strips the wake phrase from the transcript. Say
+each as ONE flowing sentence, no gap after "jarvis":
+
+- "hey jarvis volume up" → log shows `pre-roll: feeding N.Ns …` then
+  `wake prefix stripped: "hey jarvis volume up" -> "volume up"` → `VolumeUp`
+- "hey jarvis play armored core six" → same, longer sentence — the command
+  words span the build gap, this is the stress case
+- "hey jarvis" alone, pause, then "volume up" → the old style must still work:
+  first turn logs `wake phrase only, listening`, second turn matches
+- "hey jarvis what mech games do I have" → strip + assistant lane
+
+Pass = the strip line appears and the intent matches, both styles. If a long
+sentence loses a syllable ~2 s in, that's the residual ~100–200 ms capture→mic
+handoff gap — paste the transcript it produced and we'll move the handoff into
+the transport.
+
 ## 6. Ex-Link TV frames — careful, TV on
 
 Volume/mute go over the serial cable to the TV. **A one-byte slip in this family
