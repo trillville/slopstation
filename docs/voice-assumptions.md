@@ -66,6 +66,20 @@ HW = needs the hardware pass · KEY = needs a real key.
 
 ## Project D rows (assistant expansion — D1 web search, built 2026-08-11)
 
+> **Live pass, 2026-08-11 (evening) — drills clean, shipped as-is.** Built and
+> proven the same day on the K15: in-lane web search (spoken answers, no
+> citations leaking, quick turns unchanged), the Tier-3 worker lane end to end
+> (queue → announce → pull → follow-up), and the doc-sourced CLI flags holding
+> on first real contact. **Worker verdict: `sonnet` stays** — answers good
+> enough that no model pin change is wanted, and desk Opus quota stays
+> untouched. Sound and timing settled by ear along the way: think ticks built
+> and **removed** (D1c), `holdWindowS` 8 → 10 (row 9), announcements
+> proactive and followed by an open mic (D19). Rows below with an empty
+> verdict were either covered by that sweep or are noted here as still open:
+> the **injection canary (10c.6)** and the **movie-window false-fire check
+> (10c.1b)** are the two worth confirming explicitly, since both are safety
+> gates rather than taste.
+
 Built live on the dev box with real keys (REPL probes, both providers);
 prod pipeline changes are blind until the K15 drill. Spec:
 [assistant-expansion-design.md](assistant-expansion-design.md).
