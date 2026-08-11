@@ -69,7 +69,7 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping, voice tuning). |
 | `Start-TV-Gaming.bat` | Manual recovery launcher: runs `couch.py start` in a window that stays open. |
-| `Start-K15.bat` | **The** Startup-folder shortcut target: launches both supervisors below in their own minimized windows, then exits. |
+| `Start-K15.bat` | **The** Startup-folder shortcut target: launches both supervisors below in their own minimized windows, then exits. Safe to re-run (it probes their single-instance locks and starts only what's down); `--restart` reloads both agents after a `git pull` without bouncing the supervisors — or a live session's watch loop. |
 | `Start-Listener.bat` | Chord-lane supervisor: `reconcile` once, then the listener in a 10 s restart loop. Single-instance (a second launch bounces). |
 | `voice/` | The voice overlay: `voice_agent.py` (wake word → per-session Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane), `grammar.yaml` + `titles.py` (command grammar + fuzzy title resolution), `dispatch.py` (every voice side effect, shared by both lanes), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain + `--text` REPL), `tests/` (blind suite). Own venv, own pins. |
 | `voice/Start-Voice.bat` | Voice-lane supervisor (launched by `Start-K15.bat`): bootstraps the venv on first run, then supervises the agent (single-instance, 10 s crash restart). |

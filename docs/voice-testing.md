@@ -262,10 +262,11 @@ production to the winner.
 `Start-K15.bat` is the single Startup-folder shortcut target: it launches the
 listener supervisor and the voice supervisor in their own minimized windows
 and exits (Autologon makes login = boot). Both supervisors are
-**single-instance** — a second launch of either bounces with a message — so a
-stray old shortcut or a manual run can't double-listen on the Puck or fight
-over the mic. One paste on the K15 removes any old per-lane shortcuts and
-installs the one shortcut:
+**single-instance** — an fd-9 handle on a lock file, held for the window's
+lifetime — so a stray old shortcut or a manual run can't double-listen on the
+Puck or fight over the mic. `Start-K15.bat` probes those same locks, so it is
+safe to re-run: it starts only the lanes that are actually down. One paste on
+the K15 removes any old per-lane shortcuts and installs the one shortcut:
 
 ```
 $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"; $sh = New-Object -ComObject WScript.Shell; Get-ChildItem "$startup\*.lnk" | Where-Object { $sh.CreateShortcut($_.FullName).TargetPath -match 'Start-(Listener|Voice|K15)\.bat$' } | ForEach-Object { "removing $($_.Name)"; Remove-Item $_.FullName }; $sc = $sh.CreateShortcut("$startup\Start-K15.lnk"); $sc.TargetPath = "$env:USERPROFILE\Desktop\slopstation\k15\Start-K15.bat"; $sc.WorkingDirectory = "$env:USERPROFILE\Desktop\slopstation\k15"; $sc.WindowStyle = 7; $sc.Save(); "installed Start-K15.lnk"
@@ -273,7 +274,13 @@ $startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"; $sh = N
 
 Day to day: close a window to stop that lane (the supervisors only
 auto-restart crashes, not closes); for bench sessions close the voice window
-first, then run manually with flags. Remove `Start-K15.lnk` to undo autostart.
+first, then run manually with flags. **After a `git pull`, run
+`Start-K15.bat --restart`** — a running agent holds the old modules in memory,
+and `--restart` kills the agents (never the supervisor windows) so each
+supervisor relaunches its own on the new code after its 10 s backoff. A live
+session is undisturbed: `couch.py reconcile` runs outside that loop, so
+bouncing the listener agent can't re-trigger it against a session already
+being watched. Remove `Start-K15.lnk` to undo autostart.
 Verify the unattended chain once: reboot, touch nothing — chord a session,
 then "hey jarvis volume up".
 
