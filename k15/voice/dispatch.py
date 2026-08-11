@@ -1,9 +1,9 @@
 """One set of hands: every voice-triggered side effect lives here.
-GrammarGate (Tier 1) and the assistant's tools (Tier 2, C3) call the same
+GrammarGate (Tier 1) and the assistant's tools (Tier 2) call the same
 functions - there is no second dispatch path to drift.
 
 Actions return a Result the caller acks with: `earcon` names the count-coded
-tone to play, `say` (C3) is optional speech, `detail` goes to the log.
+tone to play, `say` is optional speech, `detail` goes to the log.
 
 dry_run=True logs intent instead of acting - the blind-test mode. The lock
 check stays live even then (local, deterministic, side-effect-free).
@@ -165,7 +165,7 @@ class Dispatch:
 
     def mute_toggle(self):
         """Blind toggle, permanently: the S90C exposes no discrete mute
-        on/off, and the C1 decode drill proved its status query returns a
+        on/off, and the decode drill proved its status query returns a
         constant canned echo (byte-identical across volume/mute states) -
         there is no state to read, so none is tracked. The vocabulary is
         'mute' = toggle, with vol_set as the resync."""

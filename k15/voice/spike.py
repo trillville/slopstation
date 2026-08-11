@@ -1,4 +1,4 @@
-"""C1 step-0 spike: does Pipecat's LocalAudioTransport behave on this Windows box?
+"""Audio spike: does Pipecat's LocalAudioTransport behave on this Windows box?
 
 Proves, with any USB mic + any speaker, on the actual K15:
   1. the pinned wheels import (PyAudio cp313, pipecat 1.7.0)

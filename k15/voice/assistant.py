@@ -1,4 +1,4 @@
-"""C3 assistant lane: the catalog-in-context brain.
+"""Assistant lane: the catalog-in-context brain.
 
 One source of truth for the system prompt, the tool schemas, and the tool
 implementations - the Pipecat pipeline (voice) and the --text REPL (bench +

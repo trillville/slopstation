@@ -5,6 +5,9 @@ is stopped (doctor detects it and skips - the one-process Puck rule is
 enforced here, not by the operator). Run when the chord "does nothing", after
 Windows/controller-firmware updates, or as a preflight.
 
+Voice rows at the end are WARN-only: voice is an overlay, never load-bearing,
+so its problems must not turn the chain diagnosis red.
+
 Exit code = number of FAILs.
 """
 import subprocess, sys, time
@@ -80,14 +83,18 @@ def check_puck():
     return False
 
 
+def _python_cmdlines():
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" "
+         "| Select-Object -ExpandProperty CommandLine"],
+        capture_output=True, text=True, timeout=20)
+    return r.stdout or ""
+
+
 def check_listener():
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" "
-             "| Select-Object -ExpandProperty CommandLine"],
-            capture_output=True, text=True, timeout=20)
-        running = "chord_listener" in (r.stdout or "")
+        running = "chord_listener" in _python_cmdlines()
     except Exception as e:
         report(WARN, "listener", f"could not detect ({e})", "assuming not running")
         return False
@@ -165,6 +172,69 @@ def check_session_state():
         report(PASS, "last_error", "none")
 
 
+def check_voice(cfg):
+    """Voice overlay health - WARN-only by design: voice is never load-bearing,
+    so a broken voice lane must not turn the chain doctor red (exit code =
+    FAILs, and the chord's chain is what that number means). Filesystem +
+    process checks only - doctor runs on system python, which deliberately
+    does not have the voice venv's deps."""
+    voice_dir = cglib.BASE / "voice"
+    if not (cfg and isinstance(cfg.get("voice"), dict)):
+        report(WARN, "voice config", "no voice section in config.json",
+               "copy the voice block from config.example.json to enable voice")
+        return
+    try:
+        secrets = cglib.load_secrets()
+    except Exception as e:
+        report(WARN, "voice secrets", f"unreadable ({e})",
+               "recreate from secrets.template.json")
+        secrets = {}
+    lanes = {"deepgramApiKey": "STT+TTS", "anthropicApiKey": "assistant",
+             "openaiApiKey": "assistant A/B", "steamApiKey": "library owned/meta"}
+    live = [what for key, what in lanes.items() if cglib.real_key(secrets.get(key))]
+    dead = [what for key, what in lanes.items() if not cglib.real_key(secrets.get(key))]
+    report(PASS if "STT+TTS" in live else WARN, "voice keys",
+           f"live: {', '.join(live) or 'none'}"
+           + (f" | disabled: {', '.join(dead)}" if dead else ""),
+           "sessions need a real deepgramApiKey in secrets.json")
+    if (voice_dir / ".venv" / "deps-ok").exists():
+        report(PASS, "voice venv", "bootstrapped (deps-ok sentinel present)")
+        model = cfg["voice"].get("wakeModel", "")
+        onnx = (voice_dir / ".venv" / "Lib" / "site-packages" / "openwakeword"
+                / "resources" / "models" / f"{model}.onnx")
+        if onnx.exists():
+            report(PASS, "wake model", f"{model}.onnx in the venv")
+        else:
+            report(WARN, "wake model", f"{model}.onnx not downloaded yet",
+                   "auto-fetched on the agent's first run")
+    else:
+        report(WARN, "voice venv", "not bootstrapped (no .venv\\deps-ok)",
+               "run voice\\Start-Voice.bat once (~2 min with network)")
+    lib = cglib.BASE / "state" / "library.json"
+    try:
+        import json
+        data = json.loads(lib.read_text(encoding="utf-8"))
+        age_h = (time.time() - lib.stat().st_mtime) / 3600
+        report(PASS, "voice library", f"{len(data.get('installed', []))} installed / "
+               f"{len(data.get('owned', []))} owned, refreshed {age_h:.0f}h ago")
+    except OSError:
+        report(WARN, "voice library", "no index yet",
+               "fills itself on the agent's first run (PC awake for installed)")
+    except Exception as e:
+        report(WARN, "voice library", f"unreadable ({e})",
+               "delete state\\library.json; the agent rebuilds it")
+    try:
+        running = "voice_agent" in _python_cmdlines()
+    except Exception as e:
+        report(WARN, "voice agent", f"could not detect ({e})", "")
+        return
+    if running:
+        report(PASS, "voice agent", "running (wake word armed)")
+    else:
+        report(WARN, "voice agent", "not running - wake word deaf (chord unaffected)",
+               "run voice\\Start-Voice.bat or the startup shortcut")
+
+
 if __name__ == "__main__":
     cfg = check_config()
     check_imports()
@@ -175,5 +245,6 @@ if __name__ == "__main__":
         check_haptics()
     check_ssh()
     check_session_state()
+    check_voice(cfg)
     print(f"\n{_counts[PASS]} pass, {_counts[WARN]} warn, {_counts[FAIL]} fail")
     sys.exit(_counts[FAIL])

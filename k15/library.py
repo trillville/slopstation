@@ -1,13 +1,13 @@
 """Game-library index builder (Project C).
 
-Layer 1 (C2): installed games - `ssh gamepc games` (the Dispatch verb) when
-run on the K15, or --local-steam (direct ACF scan) on the gaming PC itself
+Layer 1: installed games - `ssh gamepc games` (the Dispatch verb) when run on
+the K15, or --local-steam (direct ACF scan) on the gaming PC itself
 (dev/testing). Layers 2-3 (owned/playtime via Steam Web API, metadata via
-appdetails + SteamSpy) arrive in C3 and merge into the same file.
+appdetails + SteamSpy) merge into the same file.
 
 Output: state/library.json  {"refreshed": iso-utc, "installed": [rows]}
 written atomically (tmp + os.replace). Consumers: Flux keyterms, the grammar's
-{game} slot, fuzzy launch resolution, and (C3) the assistant's catalog.
+{game} slot, fuzzy launch resolution, and the assistant's catalog.
 
 The voice agent calls sync() on a background thread at startup and after each
 session - installed refreshes when the PC is awake, owned/metadata whenever a
@@ -128,7 +128,7 @@ def show():
     return 0
 
 
-# --- layers 2-3 (C3): owned/playtime + metadata -------------------------------
+# --- layers 2-3: owned/playtime + metadata ------------------------------------
 
 META_CACHE = STATE / "metadata-cache.json"
 _CTRL = {28: "full", 18: "partial"}          # Steam category ids

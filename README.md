@@ -7,6 +7,15 @@ TV-only, claims the controller Puck over VirtualHere, launches Big Picture, and
 only then switches the TV input — one visible transition, and any failure before
 READY leaves the TV exactly where it was.
 
+Or skip the chord: **"hey jarvis, play armored core six"** does the same launch
+by voice — wake word on-device, grammar-first command matching, an LLM assistant
+lane for everything else ("what should I play tonight?"), TV volume/input/mute
+included. Design in [docs/voice-control-design.md](docs/voice-control-design.md),
+bring-up drills in [docs/voice-testing.md](docs/voice-testing.md), judgment
+calls in [docs/voice-assumptions.md](docs/voice-assumptions.md). Voice is an
+overlay, never load-bearing: the chord listener is a separate process and
+survives anything the voice stack does.
+
 Build narrative, rationale, registration commands, and failure drills:
 [docs/couch-gaming-guide.md](docs/couch-gaming-guide.md) — a **historical record
 of the v4 system** (frozen at v4.4). The scripts here are canonical; guide code
@@ -38,7 +47,8 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `Exit-TV.ps1` | Teardown: close Big Picture, restore OFFICE, release Puck. Task `\CouchGaming\Exit`. Stops a mid-flight Enter first (teardown wins). |
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
 | `Wake-Safety.ps1` | Cleans up sessions abandoned before sleep; stands down for network wakes. Task `\CouchGaming\WakeSafety`. |
-| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
+| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `games` / `playing` / `launch <appid>`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
+| `Launch-Game.ps1` | Task `\CouchGaming\LaunchGame`, fired by the `launch` verb: reads the appid marker, re-validates, `steam -applaunch` into the running Big Picture session. |
 | `Doctor.ps1` | On-demand chain diagnosis: files, tasks, sshd/firewall/key ACL, VirtualHere, display probe, session state. Read-only; exit code = FAIL count. |
 
 ### K15 (`k15/`)
@@ -49,12 +59,15 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `couch.py` | Orchestrator: Ex-Link TV power → WoL → `ssh enter` → poll READY → switch input → watch loop. `reconcile` subcommand re-adopts or clears a session lock that survived a K15 restart. |
 | `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s and answers through the controller — 1 thud = launching, 2 = busy, 3 = the launch failed — then fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
-| `doctor.py` | On-demand chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (auto-skipped while the listener owns the Puck), ssh contract, session state. |
-| `exlink.py` | Manual Ex-Link TV control (`python exlink.py power_on\|power_off\|hdmi1..4`); COM port from config. |
+| `doctor.py` | On-demand chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (auto-skipped while the listener owns the Puck), ssh contract, session state, voice overlay (WARN-only). |
+| `exlink.py` | Manual Ex-Link TV control: power/inputs/volume/mute, plus the `probe_volume`/`decode_volume` bench drills; COM port from config. |
+| `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), merged into `state/library.json`; auto-synced by the voice agent. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
-| `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping). |
+| `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping, voice tuning). |
 | `Start-TV-Gaming.bat` | Desktop recovery launcher for `couch.py`. |
 | `Start-Listener.bat` | Startup-folder shortcut target: runs `reconcile`, then the chord listener. |
+| `voice/` | The voice overlay: `voice_agent.py` (wake word → per-session Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane), `grammar.yaml` + `titles.py` (command grammar + fuzzy title resolution), `dispatch.py` (every voice side effect, shared by both lanes), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain + `--text` REPL), `tests/` (blind suite). Own venv, own pins. |
+| `voice/Start-Voice.bat` | Startup-folder shortcut target: bootstraps the venv on first run, then supervises the agent (single-instance, 10 s crash restart). |
 
 ## Code architecture
 
@@ -99,5 +112,5 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | Ex-Link serial | `COM3` on the K15 · 9600 8N1 |
 | TV inputs | HDMI1 Apple TV · HDMI2 PS5 · HDMI3 eARC · HDMI4 PC |
 | TV EDID name | `QCQ90S` |
-| Remote surface | `ssh gamepc enter\|exit\|status` — nothing else exists |
+| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>` — nothing else exists |
 | The one rule | Nothing switches the TV to HDMI 4 before the host writes `READY` |

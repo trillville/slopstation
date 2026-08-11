@@ -193,7 +193,7 @@ def _exlink_txn(frame_hex, port):
 
 def exlink_send_hex(frame_hex, port):
     """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK on success,
-    raises ExlinkNak on any other answer (the C1 probe proved the live TV acks
+    raises ExlinkNak on any other answer (the live probe proved the TV acks
     every accepted frame with 03 0c f1, so anything else means the command did
     not land - a NAK is not retried, only reported). serial is imported lazily
     so machines without pyserial can import cglib. One retry after 1 s is for

@@ -5,6 +5,17 @@ plan). Every judgment call that would normally be a paste-back lands here
 instead. **Verdict column is yours** — fill it during the hardware pass; rows
 with a failed verdict become the fix list.
 
+> **Hardware pass, 2026-08-10 — gate passed, merged to main.** Proven live on
+> the K15/TV/PC in one evening: wake → pre-roll ("hey jarvis play armored core
+> six" as one sentence) → strip → grammar → fuzzy resolution → cold couch
+> launch → AC6 actually starting (after the marker-ACL fix), plus validated
+> Ex-Link sends, the switch-to-pc rework (row 3), the canned-echo verdict
+> (row 4), and the BT self-heal (rows 10/19). Rows still open after merge are
+> tuning-taste, not gate items: volume step feel (5), earcon tones (6), hold
+> window feel (9), launch-refusal drills (13, partially), TTS voice audition
+> (15), follow-up carry drill (17), and the provider A/B (18, needs
+> `openaiApiKey`).
+
 Legend: BT = blind-tested during the build (unit/file-driven/local-real) ·
 HW = needs the hardware pass · KEY = needs a real key.
 

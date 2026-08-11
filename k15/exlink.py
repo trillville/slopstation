@@ -2,9 +2,10 @@
 
     python exlink.py power_on|power_off|hdmi1..4|vol_up|vol_down|mute_toggle
     python exlink.py vol_set <0-100>
-    python exlink.py probe_volume     (C1 drill: does this set answer queries?)
-    python exlink.py decode_volume    (audible: probe at known states so the
-                                       volume/mute bytes identify themselves)
+    python exlink.py probe_volume     (bench: raw answer to the status query -
+                                       decided 2026-08-10: canned echo, no state)
+    python exlink.py decode_volume    (audible: probe at known states so any
+                                       volume/mute bytes would identify themselves)
 
 Frames and the COM port come from cglib/config.json - one home for both."""
 import sys

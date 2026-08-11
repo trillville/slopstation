@@ -2,8 +2,8 @@
 
 Sits between STT and everything else. Every FINAL transcript is screened here
 FIRST - command matches are swallowed (the LLM lane never sees them), acked
-with a count-coded earcon, and dispatched. Non-matches flow downstream (C3:
-the assistant; until then they dead-end with a fail earcon).
+with a count-coded earcon, and dispatched. Non-matches flow downstream to the
+assistant lane (or dead-end with a fail earcon when no LLM key is configured).
 
 Exit phrases end the session by pushing EndWorkerFrame downstream.
 """
@@ -51,7 +51,7 @@ def load_intents():
 
 
 class GrammarMatcher:
-    """Pure logic (no pipecat) so tests and the C3 --text REPL reuse it.
+    """Pure logic (no pipecat) so tests and the --text REPL reuse it.
     Runtime slot lists: inputs from config, game titles from the library."""
 
     def __init__(self, voice_cfg):
@@ -82,7 +82,7 @@ class GrammarGate(FrameProcessor):
         self.matcher = matcher
         self.dispatch = dispatch
         self.log = log
-        self.resolve_game = resolve_game        # C2: fuzzy title -> appid
+        self.resolve_game = resolve_game        # fuzzy title -> appid (titles.py)
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
         self._speaking = False                  # user turn open (Flux)
