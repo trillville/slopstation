@@ -347,7 +347,9 @@ npm i -g @openai/codex && codex login
 ```
 
 `config.json` picks the worker: `workerProvider` (`claude`|`codex`),
-`workerModel` (empty = the CLI's own default), `workerEffort` (ships `high` —
+`workerModel` (ships `sonnet`; **empty inherits whatever model your CLI is set
+to** — Opus on a Max plan, which spends your desk quota), `workerEffort`
+(ships `high` —
 latency is free here, so depth is the axis worth spending on; empty inherits
 the CLI's default), `workerTimeoutS`. Missing CLI = lane off with a
 clear startup line, everything else runs. **The `--text` REPL refuses
