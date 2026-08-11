@@ -299,8 +299,16 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
         await runner.add_workers(worker)
         await runner.run()
     finally:
-        transport._pyaudio.terminate()          # pipecat 1.7 owns but never
-        #                                         terminates its PyAudio handle
+        # pipecat 1.7 owns but never terminates the PyAudio handle it creates,
+        # and exposes no public cleanup - and we build a fresh transport per
+        # wake, so this must run. Guard the private name: a future upstream
+        # rename should leak one host handle with a log line, not crash.
+        pa = getattr(transport, "_pyaudio", None)
+        if pa is not None:
+            try:
+                pa.terminate()
+            except Exception as e:
+                log(f"pyaudio terminate failed ({e}) - leaked one host handle")
     if context is not None:                     # cross-session follow-ups
         CARRY["messages"] = _trim_carry(list(context.messages)[-8:])
         CARRY["t"] = time.time()
