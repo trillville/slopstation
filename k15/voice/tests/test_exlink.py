@@ -74,6 +74,28 @@ def main():
             assert False, "second failure must propagate"
         except fake_serial.SerialException:
             pass
+
+        # --- ack validation (proven live 2026-08-10: 030cf1 or it didn't land)
+        FakePort.__init__ = lambda self, *a, **k: None
+
+        FakePort.read = lambda self, n: bytes.fromhex("030cff")   # NAK
+        try:
+            cglib.exlink_send_hex("082202000000d4", "COMX")
+            assert False, "NAK must raise ExlinkNak"
+        except cglib.ExlinkNak:
+            pass
+
+        FakePort.read = lambda self, n: b""                       # TV silent/off
+        try:
+            cglib.exlink_send_hex("082202000000d4", "COMX")
+            assert False, "missing ack must raise ExlinkNak"
+        except cglib.ExlinkNak:
+            pass
+
+        # The probe reads generously (a payload stays visible) and validates
+        # nothing - its job is to show the raw answer.
+        FakePort.read = lambda self, n: bytes.fromhex("030cf114")
+        assert cglib.exlink_probe(cglib.EXLINK_VOLUME_QUERY, "COMX") == "030cf114"
     finally:
         time.sleep = _real_sleep
         del sys.modules["serial"]
@@ -85,7 +107,8 @@ def main():
         assert len(b) == 7, f"{name}: {len(b)} bytes"
         assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"
 
-    print(f"OK - {len(SPECS)} frames cross-checked, vol_set clamps, query frame verified")
+    print(f"OK - {len(SPECS)} frames cross-checked, vol_set clamps, query frame "
+          f"verified, ack validation raises on NAK/silence, probe reads raw")
 
 
 if __name__ == "__main__":

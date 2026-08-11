@@ -154,10 +154,11 @@ named commands. TV on, from `k15`:
 ```
 
 (run from the `k15` folder, or `python exlink.py …` with its own interpreter).
-Each should print a `030cf1` ack and move the TV. **`probe_volume` is a real
-question:** if it returns bytes, the TV answers status queries (we can validate
-acks and read true mute state); if silence, we stay with software-tracked mute.
-**Paste what `probe_volume` returns** — it decides an open design item.
+Each send should print `ack 030cf1` and move the TV — acks are now validated,
+so a `FAILED` line means the command really didn't land. **`probe_volume` is a
+real question:** it reads 16 bytes (a payload can't hide behind the ack) and
+prints its own verdict — bare ack = the set answers no data, blind mute stays;
+anything longer = paste it, real volume/mute state may be readable.
 
 ## 7. Live commands — real dispatch
 

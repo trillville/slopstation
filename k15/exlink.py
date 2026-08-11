@@ -18,18 +18,35 @@ def main(argv):
             print("vol_set takes 0-100")
             return 2
         frame = cglib.vol_set_frame(level)
-        ack = cglib.exlink_send_hex(frame, port)
-        print(f"vol_set {level}: sent {frame}, response={ack or '(none)'}")
-        return 0
+        try:
+            cglib.exlink_send_hex(frame, port)
+            print(f"vol_set {level}: sent {frame}, ack {cglib.EXLINK_ACK}")
+            return 0
+        except cglib.ExlinkNak as e:
+            print(f"vol_set {level}: FAILED - {e}")
+            return 1
     if len(argv) == 1 and argv[0] == "probe_volume":
-        ack = cglib.exlink_send_hex(cglib.EXLINK_VOLUME_QUERY, port)
-        verdict = ack or "(none - set is write-only; software mute state it is)"
-        print(f"volume query: response={verdict}")
+        # Generous 16-byte read: a payload after the ack can't hide behind
+        # exlink_send_hex's read(3). The answer decides mute-state design.
+        resp = cglib.exlink_probe(cglib.EXLINK_VOLUME_QUERY, port)
+        if not resp:
+            print("volume query: no response - set is write-only; "
+                  "software mute state it is")
+        elif resp == cglib.EXLINK_ACK:
+            print(f"volume query: bare ack {resp}, no payload - the set "
+                  "accepts the frame but answers no data; blind mute stays")
+        else:
+            print(f"volume query: response={resp} - MORE THAN THE ACK. "
+                  "Paste this: real volume/mute state may be readable")
         return 0
     if len(argv) == 1 and argv[0] in cglib.EXLINK_FRAMES:
-        ack = cglib.exlink_send(argv[0], port)
-        print(f"{argv[0]}: sent, response={ack or '(none)'}")
-        return 0
+        try:
+            cglib.exlink_send(argv[0], port)
+            print(f"{argv[0]}: sent, ack {cglib.EXLINK_ACK}")
+            return 0
+        except cglib.ExlinkNak as e:
+            print(f"{argv[0]}: FAILED - {e}")
+            return 1
     print("usage: exlink.py " + "|".join(cglib.EXLINK_FRAMES)
           + " | vol_set <0-100> | probe_volume")
     return 2

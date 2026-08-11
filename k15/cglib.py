@@ -30,8 +30,17 @@ EXLINK_FRAMES = {
 }
 
 # Bench probe only (C1 drill): status queries are contested on modern sets.
-# One 500 ms read decides real-mute-state vs software-tracked forever.
+# One generous read decides real-mute-state vs software-tracked forever.
 EXLINK_VOLUME_QUERY = "0822f0010000e5"
+
+# Proven live on the S90C 2026-08-10: every accepted frame (even the query
+# frame) acks with exactly these three bytes.
+EXLINK_ACK = "030cf1"
+
+
+class ExlinkNak(RuntimeError):
+    """The TV answered something other than EXLINK_ACK (or nothing at all) -
+    the command did not land. Callers abort fast; no blind retries."""
 
 
 def exlink_frame(c1, c2, c3, value):
@@ -172,22 +181,43 @@ def make_log(tag):
     return log
 
 
+def _exlink_txn(frame_hex, port):
+    import serial
+    with serial.Serial(port, 9600, timeout=1) as s:
+        s.write(bytes.fromhex(frame_hex))
+        return s.read(3).hex()
+
+
 def exlink_send_hex(frame_hex, port):
-    """Send one raw Ex-Link frame (hex string); returns the ack as hex ('' if
-    none). serial is imported lazily so machines without pyserial can import
-    cglib. Success ack is 03 0c f1. One retry after 1 s: couch.py and the
-    voice agent now share this port from separate processes in
-    open-write-close bursts, so a transient open collision gets patience."""
+    """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK on success,
+    raises ExlinkNak on any other answer (the C1 probe proved the live TV acks
+    every accepted frame with 03 0c f1, so anything else means the command did
+    not land - a NAK is not retried, only reported). serial is imported lazily
+    so machines without pyserial can import cglib. One retry after 1 s is for
+    PORT CONTENTION only: couch.py and the voice agent share this port from
+    separate processes in open-write-close bursts, so a transient open
+    collision gets patience."""
     import serial
     try:
-        with serial.Serial(port, 9600, timeout=1) as s:
-            s.write(bytes.fromhex(frame_hex))
-            return s.read(3).hex()
+        ack = _exlink_txn(frame_hex, port)
     except serial.SerialException:
         time.sleep(1)
-        with serial.Serial(port, 9600, timeout=1) as s:
-            s.write(bytes.fromhex(frame_hex))
-            return s.read(3).hex()
+        ack = _exlink_txn(frame_hex, port)
+    if ack != EXLINK_ACK:
+        raise ExlinkNak(f"TV answered {ack or 'nothing'} (want {EXLINK_ACK}) "
+                        f"for frame {frame_hex}")
+    return ack
+
+
+def exlink_probe(frame_hex, port):
+    """Bench only: send a frame and read GENEROUSLY (16 bytes, 1 s timeout) so
+    a payload after the 3-byte ack can't hide - exlink_send_hex's read(3)
+    would report a bare 030cf1 even if the set appended a value byte. No ack
+    validation: the whole point is to see the raw answer."""
+    import serial
+    with serial.Serial(port, 9600, timeout=1) as s:
+        s.write(bytes.fromhex(frame_hex))
+        return s.read(16).hex()
 
 
 def exlink_send(name, port):
