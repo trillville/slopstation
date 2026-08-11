@@ -11,6 +11,7 @@ Modes:
   (default)             run the agent
   --devices             list audio devices and exit
   --earcons             play the earcon vocabulary and exit (volume audition)
+  --announce-test       speak a canned job announcement and exit (audio path)
   --dry-run             full pipeline; side effects logged, not executed
   --wake-trials         log wake detections + confidences; never start sessions
   --false-accept-soak   count spurious wakes over hours; never start sessions
@@ -512,6 +513,10 @@ def main():
     ap.add_argument("--wake-trials", action="store_true")
     ap.add_argument("--false-accept-soak", action="store_true")
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--announce-test", action="store_true",
+                    help="speak a canned background-task announcement and "
+                         "exit: the out-of-session audio path (earcon, Aura "
+                         "synth, chunked playback) with no job, no quota")
     ap.add_argument("--text", action="store_true",
                     help="assistant REPL: typed transcripts, no audio; "
                          "always dry-run (actions log, never execute)")
@@ -544,6 +549,20 @@ def main():
             log(f"  {name}")
             play_pcm(pa, earcons.pcm(name), output_idx)
             time.sleep(0.7)
+        return 0
+
+    if args.announce_test:
+        import announce
+        ann = announce.Announcer(voice, secrets, log)
+        log("announce test - the path a finished background task takes")
+        try:
+            done = ann.speak("Test announcement. This is how a finished "
+                             "background task will reach you.")
+        except Exception as e:
+            log(f"announce FAILED ({e}) - check the Deepgram key and the "
+                "output device; a real result would fall back to the earcon")
+            return 1
+        log("announcement played in full" if done else "announcement cut short")
         return 0
 
     if args.text:
@@ -615,7 +634,8 @@ def main():
     else:
         announcer = announce.Announcer(voice, secrets, log)
         jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],
-                                 on_done=announcer.submit)
+                                 on_done=announcer.submit,
+                                 dry_run=args.dry_run)
         announcer.jobs = jobs
         orphans = jobs.reconcile()
         jobs.start()

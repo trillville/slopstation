@@ -137,6 +137,11 @@ def main():
     store = jobs_mod.JobStore(log, fake, timeout_s=5, on_done=done_hook.append)
     store.start()
 
+    # --dry-run can't gate a worker's shell the way Dispatch gates Tier 1/2,
+    # so the task itself carries the notice (advisory, and logged).
+    dry = jobs_mod.JobStore(log, fake, timeout_s=5, dry_run=True)
+    assert dry._task_text({"task": "x"}) == jobs_mod.JobStore.DRY_NOTE + "x"
+    assert store._task_text({"task": "x"}) == "x"
     ok, detail = store.enqueue("find coop games")
     assert ok and "queued" in detail
     assert wait_for(lambda: len(done_hook) == 1)
@@ -198,6 +203,11 @@ def main():
     ann.submit(store.latest_result())
     time.sleep(0.4)
     assert store.unread(), "an aborted announcement must stay unread"
+    # speak() is the whole out-of-session path in one call - what
+    # --announce-test rehearses, and what _run uses per job.
+    ann._play = lambda pcm: played.append(len(pcm)) or True
+    played.clear()
+    assert ann.speak("bench line") and played
     print("  announcer: defers for sessions, marks read only after full playback")
 
     # latest_result orders by COMPLETION time, not file position: _save

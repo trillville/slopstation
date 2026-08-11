@@ -57,6 +57,15 @@ class Announcer:
         """jobs.on_done hook - called off-thread when a job finishes."""
         self._q.put(job["id"])
 
+    def speak(self, text):
+        """Earcon + one synthesized line, outside any session. True = it
+        played to the end (a wake or a session start cuts it short). The
+        whole out-of-session audio path in one call, so --announce-test
+        rehearses exactly what a finished job will do."""
+        pcm = synth(text, self.secrets["deepgramApiKey"],
+                    self.voice["ttsVoice"])
+        return self._play(earcons.pcm("announce") + pcm)
+
     def abort_current(self):
         self.abort.set()
 
@@ -111,20 +120,17 @@ class Announcer:
             if job is None:
                 continue                        # already heard via pull
             try:
-                pcm = synth(job["summary"], self.secrets["deepgramApiKey"],
-                            self.voice["ttsVoice"])
+                done = self.speak(job["summary"])
             except Exception as e:
-                self.log(f"announce synth failed ({e}) - earcon only, "
-                         "result stays unread for the next wake")
+                # Offline, dead key, dead output device: say SOMETHING (the
+                # earcon alone still means "news"), keep the job unread, and
+                # let the next wake mention it.
+                self.log(f"announce failed ({e}) - earcon only, result stays "
+                         "unread for the next wake")
                 try:
                     self._play(earcons.pcm("announce"))
                 except OSError as e2:
-                    self.log(f"announce playback failed ({e2})")
-                continue
-            try:
-                done = self._play(earcons.pcm("announce") + pcm)
-            except OSError as e:
-                self.log(f"announce playback failed ({e}) - stays unread")
+                    self.log(f"announce playback failed too ({e2})")
                 continue
             if done:
                 self.jobs.mark_read(job_id)

@@ -333,6 +333,33 @@ Production searches only on the **openai lane** (pipecat's anthropic adapter
 has no native-tool passthrough — startup logs this if you're on anthropic
 with the knob on; the REPL searches on both).
 
+### Doing all of this dry
+
+`voice_agent.py --dry-run` runs the whole stack with every Tier-1/Tier-2 side
+effect logged instead of executed — no TV, no PC, no launches. Stop the
+supervised agent first (close its window) or two wake loops fight over the
+mic. What dry-run does and doesn't cover:
+
+| | Under `--dry-run` |
+|---|---|
+| Commands, launches, TV, session control | logged, never executed |
+| Web search (10b) | **real** — searches actually run (pennies, no house side effects) |
+| Background jobs (10c) | **real** — the CLI really runs and really announces; that IS the thing under test |
+
+A worker holds a shell and calls the CLIs directly, so `--dry-run` can't gate
+it the way it gates dispatch. The task text carries a dry-run notice instead
+(advisory — `AGENTS.md` already says side effects need an explicit ask), so a
+dry drill won't start a session on a TV someone's watching. To rehearse the
+announcement audio with no job and no quota at all:
+
+```
+.venv\Scripts\python voice_agent.py --announce-test
+```
+
+That plays the real path — announce earcon, Aura synth, chunked playback on
+the configured output — and says in couch.log whether it finished. It's the
+fastest way to settle announcement volume and voice before drill 10c.1.
+
 ## 10c. Background tasks (Project D2)
 
 One-time K15 setup (the CLIs auth on-machine, outside secrets.json). **Run

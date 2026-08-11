@@ -26,11 +26,21 @@ class JobStore:
     """adapter = a workers.*Worker (never None - the caller gates the lane);
     on_done = fn(job dict), called off-thread when a job finishes."""
 
-    def __init__(self, log, adapter, timeout_s, on_done=None):
+    # A worker holds a shell and reaches the CLIs directly, so --dry-run
+    # can't gate its side effects the way Dispatch gates Tier 1/2. The honest
+    # thing is to tell it: advisory, not enforcement (AGENTS.md already says
+    # side effects need an explicit ask), so a dry-run drill doesn't start
+    # sessions on a TV someone is watching.
+    DRY_NOTE = ("[The couch system is in DRY-RUN: research and report only. "
+                "Do not run couch.py, exlink.py, or any other command that "
+                "changes system state.] ")
+
+    def __init__(self, log, adapter, timeout_s, on_done=None, dry_run=False):
         self.log = log
         self.adapter = adapter
         self.timeout_s = timeout_s
         self.on_done = on_done
+        self.dry_run = dry_run
         self._lock = threading.Lock()
         self._kick = threading.Event()
 
@@ -94,6 +104,9 @@ class JobStore:
         self._kick.set()
         return True, "queued - the result will be announced"
 
+    def _task_text(self, job):
+        return (self.DRY_NOTE + job["task"]) if self.dry_run else job["task"]
+
     def _next_queued(self):
         with self._lock:
             jobs = self._load()
@@ -112,9 +125,10 @@ class JobStore:
                 job = self._next_queued()
                 if job is None:
                     break
-                self.log(f"job {job['id']} running ({self.adapter.exe})")
+                self.log(f"job {job['id']} running ({self.adapter.exe}"
+                         + (", dry-run" if self.dry_run else "") + ")")
                 t0 = time.time()
-                r = self.adapter.run(job["task"], self.timeout_s)
+                r = self.adapter.run(self._task_text(job), self.timeout_s)
                 status = DONE if r["ok"] else FAILED
                 self._update(job["id"], status=status, read=False,
                              finished=int(time.time()),
