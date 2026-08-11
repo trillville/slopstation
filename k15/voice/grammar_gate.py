@@ -92,6 +92,13 @@ class GrammarGate(FrameProcessor):
     # that answers inside the interval never cues at all.
     THINK_CUE_S = 3.0
 
+    # A success earcon arriving while the wake chime is still ringing is one
+    # sound too many - a local command dispatches in ~100 ms, so the two used
+    # to run together. Fold it in: you just heard "got it", and nothing
+    # further means it worked. Anything longer (ssh, a launch) clears the
+    # window and acks normally, which is where "done" actually carries news.
+    ACK_COALESCE_S = 0.8
+
     def __init__(self, matcher, dispatch, log, resolve_game=None,
                  assistant_enabled=False, wake_word=None, jobs=None,
                  ack=None):
@@ -152,6 +159,16 @@ class GrammarGate(FrameProcessor):
         if self.ack is not None and self.ack.claim():
             await self._earcon("wake")
 
+    async def _result_earcon(self, name):
+        """Ack a dispatch result - unless it is a plain success still landing
+        on the wake chime (see ACK_COALESCE_S). busy and fail always play:
+        they are news, and news is worth a second sound."""
+        if (name == "ok" and self.ack is not None
+                and self.ack.age() < self.ACK_COALESCE_S):
+            self.log("ok folded into the wake chime")
+            return
+        await self._earcon(name)
+
     async def _run_intent(self, intent, slots):
         """Returns True if the utterance was consumed here (the usual case);
         False = hand it to the assistant lane after all (unresolvable title).
@@ -193,7 +210,7 @@ class GrammarGate(FrameProcessor):
         finally:
             self._dispatching -= 1
         self.log(f"{intent} -> {r.detail}")
-        await self._earcon(r.earcon)
+        await self._result_earcon(r.earcon)
         return True
 
     async def _task_intent(self, intent):
@@ -208,7 +225,9 @@ class GrammarGate(FrameProcessor):
                     "One is already running - it will finish or time out. "
                     + (f"Cancelled {n} queued." if n else "")))
             else:
-                await self._earcon("ok" if n else "fail")
+                # Same fold rule as a dispatch ack: cancelling is a local file
+                # read, so its ok would land inside the wake chime.
+                await self._result_earcon("ok" if n else "fail")
             return True
         job = self.jobs.latest_result()
         if job is None:

@@ -135,8 +135,11 @@ touches neither the TV nor the PC.
 ```
 
 Say "hey jarvis" (chime lands when you stop, not over you), then try:
-- "volume up" · "mute" · "switch to the apple tv" → chime, then one action
-  earcon + a `DRY-RUN would: …` line
+- "volume up" · "mute" · "switch to the apple tv" → chime + a `DRY-RUN would:
+  …` line. **One sound, not two**: an instant success folds into the chime
+  (`ok folded into the wake chime` in the log). Slow ones — a real launch, an
+  ssh input switch — clear the window and ack with the `ok` bell when they
+  actually land
 - "start a session" → `DRY-RUN would: couch.py start`
 - "what mech games do I have" → no command match (fail earcon unless the
   Anthropic key is in, in which case it goes to the assistant)

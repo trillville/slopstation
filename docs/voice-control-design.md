@@ -96,7 +96,9 @@ DORMANT ──wake word──▶ SESSION OPEN (Flux connects, LED on; wake chime
   ▲                        │            played when you stop talking)
   │                        ▼ per final transcript
   │                   GrammarGate
-  │                   ├─ command match ──▶ earcon + dispatch ──▶ LINGER (~5 s, chained commands) ──▶ DORMANT
+  │                   ├─ command match ──▶ dispatch + earcon (a success still
+  │                   │                     inside the wake chime folds into
+  │                   │                     it) ──▶ LINGER (~5 s, chained) ──▶ DORMANT
   │                   └─ no match ──▶ THINKING (Haiku, streaming)
   │                                        │ first sentence boundary
   │                                        ▼

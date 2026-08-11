@@ -48,19 +48,28 @@ class WakeAck:
     """One wake chime per session, claimed by whichever side first sees the
     user stop talking: the capture watcher below (mic still ours, chime played
     straight to PyAudio) or GrammarGate once the pipeline owns the mic (chime
-    pushed as a frame). Those are different threads, hence the lock."""
+    pushed as a frame). Those are different threads, hence the lock.
+
+    It also remembers WHEN, which is what lets the gate fold a success earcon
+    landing on top of the chime into it."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._claimed = False
+        self._at = None
 
     def claim(self):
         """True for exactly one caller - the winner plays the chime."""
         with self._lock:
-            if self._claimed:
+            if self._at is not None:
                 return False
-            self._claimed = True
+            self._at = time.monotonic()
             return True
+
+    def age(self):
+        """Seconds since the chime was claimed; inf while unclaimed, so a
+        caller asking "did it just chime?" gets a truthful no."""
+        with self._lock:
+            return float("inf") if self._at is None else time.monotonic() - self._at
 
 
 class WakeCapture:

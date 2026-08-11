@@ -222,7 +222,10 @@ def test_wake_ack_is_claimed_exactly_once():
         t.join()
     assert sum(wins) == 1, f"{sum(wins)} claimants won the wake chime"
     assert not ack.claim(), "a later claim must still lose"
-    print("OK - wake ack: exactly one of 8 racing claimants wins")
+    # age() is what the gate folds a fast success earcon against.
+    assert 0 <= ack.age() < 1, f"age {ack.age()} after an immediate claim"
+    assert WakeAck().age() == float("inf"), "unclaimed must not read as 'just chimed'"
+    print("OK - wake ack: exactly one of 8 racing claimants wins, age tracks it")
 
 
 def test_feeder_chunking():

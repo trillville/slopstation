@@ -1,8 +1,9 @@
 """Blind test (C1 s3+s5): a REAL session pipeline end-to-end minus STT -
 LocalAudioTransport on real devices, GrammarGate, dry-run dispatch, earcons
-through the actual speaker, and the exit phrase ending the worker. Scripted
-TranscriptionFrames stand in for Flux (its own connect path needs the key).
-Brief tones will be audible. Run:
+through the actual speaker (wake chime included, plus the fold rule that keeps
+an instant success from doubling it), and the exit phrase ending the worker.
+Scripted TranscriptionFrames stand in for Flux (its own connect path needs the
+key). Brief tones will be audible. Run:
     .venv\\Scripts\\python tests\\test_session_pipeline.py
 """
 import asyncio
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 from dispatch import Dispatch
 from grammar_gate import GrammarGate, GrammarMatcher
+from preroll import WakeAck
 
 SCRIPT = [
     ("volume up", "VolumeUp -> dry-run"),
@@ -47,7 +49,7 @@ async def run():
     # output transport.
     gate = GrammarGate(GrammarMatcher(cfg["voice"]),
                        Dispatch(cfg, log, dry_run=True), log,
-                       assistant_enabled=True)
+                       assistant_enabled=True, ack=WakeAck())
     gate.THINK_CUE_S = 0.4             # a tick lands inside the script pacing
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
@@ -93,8 +95,14 @@ async def run():
         "cue task never ticked inside the live pipeline"
     # The lock arbiter ran for real (no lock on this machine = launchable).
     assert any("couch.py start" in l for l in lines)
-    print("OK - session pipeline: gate matched/dry-dispatched/acked, "
-          "fall-through earconed, error cleared the in-flight flag, "
+    # The wake chime is claimed by the FIRST transcript, and only that first
+    # command's success is close enough to fold into it - the later ones are
+    # 0.9 s behind (past ACK_COALESCE_S) and must ack normally, or a real
+    # session would go silent on everything after the wake.
+    folded = sum("folded into the wake chime" in l for l in lines)
+    assert folded == 1, f"{folded} acks folded, want exactly the first"
+    print("OK - session pipeline: gate matched/dry-dispatched/acked, first ok "
+          "folded into the wake chime, error cleared the in-flight flag, "
           "exit phrase ended the worker cleanly")
 
 
