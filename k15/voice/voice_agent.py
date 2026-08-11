@@ -85,18 +85,59 @@ def prewarm_imports_bg(provider):
 # --- audio plumbing outside the pipeline --------------------------------------
 
 def resolve_device(pa, fragment, want_input):
-    """Config name-fragment -> PyAudio device index; None = system default."""
+    """Config name-fragment -> PyAudio device index; None = system default.
+    Logs the bound NAME: after an audio rebuild the index alone says nothing
+    about which physical mic/speaker is live, and the name is the only way
+    to spot from couch.log that voice bound the wrong endpoint."""
+    kind = "input" if want_input else "output"
     if not fragment:
+        log(f"{kind} device: system default")
         return None
     frag = fragment.lower()
     for i in range(pa.get_device_count()):
         d = pa.get_device_info_by_index(i)
         channels = d["maxInputChannels"] if want_input else d["maxOutputChannels"]
         if channels and frag in d["name"].lower():
+            log(f"{kind} device: '{d['name']}' (index {i})")
             return i
-    log(f"WARNING: no {'input' if want_input else 'output'} device matching "
-        f"'{fragment}' - using system default")
+    log(f"WARNING: no {kind} device matching '{fragment}' - using system default")
     return None
+
+
+def build_audio(voice):
+    """One PortAudio world: a fresh instance plus both devices resolved by
+    name. PortAudio snapshots the device table at init, so a fresh instance
+    is the ONLY way to see endpoints that (re)appeared since the last one -
+    never resolve against a pa that predates a device change."""
+    import pyaudio
+    pa = pyaudio.PyAudio()
+    return (pa,
+            resolve_device(pa, voice["inputDeviceName"], want_input=True),
+            resolve_device(pa, voice["outputDeviceName"], want_input=False))
+
+
+def rebuild_audio(old_pa, voice, listener):
+    """Recovery from a dead wake stream: tear the whole PortAudio instance
+    down and rebuild against the current device table. Reopening on the old
+    instance retries a stale index - a reconnected headset gets a NEW index
+    the old snapshot can't see - so the reopen either fails forever or
+    'succeeds' onto a dead endpoint and goes deaf (live 2026-08-11: 240
+    blind reopens over 2.6 h, then a zombie stream, deaf until morning).
+    Loops until an audio host answers: voice is not load-bearing, and
+    dormant-but-alive beats crashed."""
+    try:
+        old_pa.terminate()
+    except Exception as e:
+        log(f"stale PyAudio teardown failed ({e}) - abandoning it")
+    while True:
+        time.sleep(5)
+        try:
+            pa, input_idx, output_idx = build_audio(voice)
+        except Exception as e:
+            log(f"audio rebuild failed ({e}) - retrying in 5s")
+            continue
+        listener.rebind(pa, input_idx)
+        return pa, input_idx, output_idx
 
 
 def play_pcm(pa, pcm, device_index=None):
@@ -141,6 +182,7 @@ class WakeListener:
 
     CHUNK = 1280                                # oWW's native 80 ms hop
     PREROLL_CHUNKS = 25                         # 2 s ring kept ahead of detection
+    SILENT_CHUNKS = 375                         # 30 s of literal zeros = dead stream
 
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np
@@ -161,6 +203,12 @@ class WakeListener:
             log(f"wake model {self.model_name} missing - downloading once")
             download_models([self.key])
 
+    def rebind(self, pa, device_index):
+        """Adopt a fresh PyAudio instance + re-resolved mic after an audio
+        rebuild; the wake model and its state carry over untouched."""
+        self.pa = pa
+        self.device_index = device_index
+
     def score_chunk(self, chunk_int16):
         scores = self.model.predict(chunk_int16)
         return max(scores.values())
@@ -172,11 +220,24 @@ class WakeListener:
                             input_device_index=self.device_index)
 
     def _listen(self, stream, threshold, on_score, ring):
+        silent = 0
         while True:
             data = stream.read(self.CHUNK, exception_on_overflow=False)
+            chunk = self.np.frombuffer(data, self.np.int16)
+            # Zombie watchdog: a WASAPI stream can outlive its endpoint (BT
+            # profile flap) and keep delivering exact zeros forever - no error
+            # to catch, just deafness (live 2026-08-11: 8.5 h). A real mic
+            # always carries a noise floor, so a solid 30 s of literal zeros
+            # means dead stream (or a hardware-muted mic, where a rebuild is
+            # a harmless log line every 30 s). Raise into the same recovery
+            # path as an honest stream death.
+            silent = silent + 1 if not chunk.any() else 0
+            if silent >= self.SILENT_CHUNKS:
+                raise OSError("stream delivered only zeros for 30s - "
+                              "endpoint presumed dead")
             if ring is not None:
                 ring.append(data)
-            score = self.score_chunk(self.np.frombuffer(data, self.np.int16))
+            score = self.score_chunk(chunk)
             if on_score:
                 on_score(score)
             if score >= threshold:
@@ -445,12 +506,8 @@ def main():
         return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
                     model=args.model, effort=args.effort)
 
-    import pyaudio
     cglib.rotate_log()
-
-    pa = pyaudio.PyAudio()
-    input_idx = resolve_device(pa, voice["inputDeviceName"], want_input=True)
-    output_idx = resolve_device(pa, voice["outputDeviceName"], want_input=False)
+    pa, input_idx, output_idx = build_audio(voice)
 
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
@@ -495,10 +552,11 @@ def main():
         except OSError as e:
             # Mic stream death mid-listen (BT profile flap, device yanked,
             # AirPods multipoint wandering off) must never kill the agent -
-            # voice is not load-bearing. Breathe, then reopen fresh: the next
-            # open binds whatever device is back.
-            log(f"wake stream died ({e}) - reopening in 5s")
-            time.sleep(5)
+            # voice is not load-bearing. Rebuild the PortAudio world, not
+            # just the stream: reopening on the old instance is what went
+            # deaf overnight (see rebuild_audio).
+            log(f"wake stream died ({e}) - rebuilding audio in 5s")
+            pa, input_idx, output_idx = rebuild_audio(pa, voice, listener)
             continue
         log(f"wake (score {score:.2f})")
         if not stt_live:

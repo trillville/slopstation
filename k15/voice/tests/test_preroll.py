@@ -113,6 +113,52 @@ def test_dead_wake_stream_surfaces_original_error():
     print("OK - dead wake stream: original error surfaces, quiet close swallows")
 
 
+def test_zombie_stream_trips_silence_watchdog():
+    """Live deafness 2026-08-11: after a device flap the reopened stream
+    'worked' but delivered only zeros - no error, no wake, all night. A solid
+    run of zero chunks must raise into the same OSError recovery path as an
+    honest stream death, and any real audio must reset the counter (a live
+    mic always carries a noise floor)."""
+    import numpy as np
+    import voice_agent
+
+    NOISY_AT = 10                       # one real chunk mid-run resets the count
+
+    class ZombieStream:
+        def __init__(self):
+            self.n = 0
+
+        def read(self, n, exception_on_overflow=True):
+            self.n += 1
+            if self.n == NOISY_AT:
+                return b"\x01\x00" * n
+            return b"\x00" * (n * 2)
+
+        def stop_stream(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeModel:
+        def predict(self, chunk):
+            return {"hey_jarvis": 0.0}
+
+    lst = voice_agent.WakeListener.__new__(voice_agent.WakeListener)
+    lst.np = np
+    lst.model = FakeModel()
+    stream = ZombieStream()
+    try:
+        lst._listen(stream, 0.5, None, None)
+        assert False, "zombie stream must raise"
+    except OSError as e:
+        assert "zeros" in str(e), f"wrong error: {e}"
+    want = NOISY_AT + voice_agent.WakeListener.SILENT_CHUNKS
+    assert stream.n == want, f"tripped after {stream.n} chunks, want {want}"
+    print(f"OK - zombie stream: watchdog trips after {want} chunks, "
+          f"real audio resets the count")
+
+
 def test_feeder_chunking():
     feeder = PrerollFeeder(lambda m: None)
     feeder.pcm = b"\xaa" * (CHUNK_BYTES * 2 + 100)
@@ -189,6 +235,7 @@ def main():
     test_capture_survives_device_death()
     test_capture_runaway_cap()
     test_dead_wake_stream_surfaces_original_error()
+    test_zombie_stream_trips_silence_watchdog()
     test_feeder_chunking()
     asyncio.run(test_pipeline_ordering())
     print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")
