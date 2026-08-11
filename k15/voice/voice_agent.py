@@ -396,7 +396,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
 
     dispatcher = Dispatch(cfg, log, dry_run=args.dry_run)
     from assistant import BACKENDS
-    provider = voice.get("assistantProvider", "anthropic")
+    provider = voice["assistantProvider"]
     assistant_live = cglib.real_key(secrets.get(BACKENDS[provider].key))
     gate = GrammarGate(
         matcher, dispatcher, log,

@@ -227,13 +227,26 @@ def check_voice(cfg):
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
     if wp:
-        cli = shutil.which(wp)
-        if cli:
-            report(PASS, "worker CLI", f"{wp} on PATH ({cli})")
-        else:
-            report(WARN, "worker CLI", f"'{wp}' not on PATH - background "
-                   "tasks disabled (everything else runs)",
-                   f"npm i -g the {wp} CLI and log in once")
+        # provider -> CLI name lives in workers.py and nowhere else; it is
+        # stdlib-only, so system python can import it (voice venv deps are
+        # still off-limits here).
+        sys.path.insert(0, str(voice_dir))
+        try:
+            from workers import WORKERS
+            exe = WORKERS[wp].exe
+        except Exception as e:
+            exe = None
+            report(WARN, "worker CLI", f"can't resolve provider '{wp}' ({e})",
+                   "workerProvider is anthropic|openai (see config.example.json)")
+        if exe:
+            cli = shutil.which(exe)
+            if cli:
+                report(PASS, "worker CLI", f"{wp} -> {exe} on PATH ({cli})")
+            else:
+                report(WARN, "worker CLI", f"'{exe}' not on PATH - background "
+                       "tasks disabled (everything else runs)",
+                       f"npm i -g the {exe} CLI and log in once, "
+                       "as the autologon user")
         if not (voice_dir / "worker_home" / "AGENTS.md").exists():
             report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
                    "git pull should restore it - workers act unbriefed without it")

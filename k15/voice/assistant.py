@@ -369,7 +369,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
     --provider anthropic|openai [--model <id>] [--effort none|low|medium|high]."""
     from dispatch import Dispatch
 
-    provider = provider or cfg["voice"].get("assistantProvider", "anthropic")
+    provider = provider or cfg["voice"]["assistantProvider"]
     if provider not in BACKENDS:
         print(f"unknown provider '{provider}' - one of {list(BACKENDS)}")
         return 2
@@ -379,7 +379,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
         return 1
 
     impls = tool_impls(Dispatch(cfg, log, dry_run=dry_run), log)
-    effort = effort or cfg["voice"].get("assistantReasoningEffort", "low")
+    effort = effort or cfg["voice"]["assistantReasoningEffort"]
     backend = BACKENDS[provider](secrets, model or default_model(cfg, provider),
                                  effort=effort, voice=cfg["voice"])
     system_text = system_instruction(cfg)
