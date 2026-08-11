@@ -649,7 +649,7 @@ def main():
 
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
-        log.warn("lane_disabled", lane="stt", reason="deepgram key is a placeholder")
+        log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
     from assistant import BACKENDS
     brain = BACKENDS.get(voice["assistantProvider"])
     brain_live = bool(brain and cglib.real_key(secrets.get(brain.key)))
@@ -678,7 +678,7 @@ def main():
     if brain_live:
         from assistant import default_model
         ap = voice["assistantProvider"]
-        log("lane_up", lane="assistant", provider=ap,
+        log("lane_up", what="assistant", provider=ap,
             model=default_model(cfg, ap),
             # anthropic has no effort knob
             effort=voice["assistantReasoningEffort"] if ap == "openai" else None,
@@ -695,16 +695,16 @@ def main():
     adapter = (WORKERS[wp](voice[MODEL_KEY[wp]], voice["workerEffort"])
                if wp in WORKERS else None)
     if adapter is None:
-        log.warn("lane_disabled", lane="worker", reason="unknown workerProvider",
+        log.warn("lane_disabled", what="worker", reason="unknown workerProvider",
                  provider=wp, known=list(WORKERS))
     elif not adapter.available():
-        log.warn("lane_disabled", lane="worker", reason="CLI not on PATH",
+        log.warn("lane_disabled", what="worker", reason="CLI not on PATH",
                  exe=adapter.exe)
     elif not (stt_live and brain_live):
         # The lane rides the assistant (only its background_task tool can
         # queue work) and Deepgram (announcements + retrieval TTS) - without
         # either it would be a store nothing fills and frames nothing speaks.
-        log.warn("lane_disabled", lane="worker",
+        log.warn("lane_disabled", what="worker",
                  reason="needs live Deepgram AND assistant keys")
     else:
         announcer = announce.Announcer(voice, secrets, log)
@@ -718,7 +718,7 @@ def main():
         # this line says what IS running (an empty model = the CLI's own).
         # Spell out what IS running, not what config asked for: an empty
         # model means the CLI's own default.
-        log("lane_up", lane="worker", provider=wp, exe=adapter.exe,
+        log("lane_up", what="worker", provider=wp, exe=adapter.exe,
             model=adapter.model or "(cli default)",
             effort=adapter.effort or "(cli default)", orphans=orphans or None)
 

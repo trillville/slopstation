@@ -69,7 +69,16 @@ function Write-CgEvent {
         if ($script:CgTurn) { $rec.turn = $script:CgTurn }
         $rec.host = $env:COMPUTERNAME
         $rec.dur_ms = [int]$script:CgStopwatch.Elapsed.TotalMilliseconds
-        foreach ($k in $Fields.Keys) { $rec[$k] = $Fields[$k] }
+        # A caller field must never overwrite a key the emitter owns (those are
+        # Loki labels, and a record that misdescribes itself is worse than a
+        # missing one). Keep the value under a prefixed name rather than
+        # dropping it. Same rule as events.py - no binding hazard here, because
+        # fields arrive in a hashtable rather than as splatted parameters.
+        $owned = @('ts','level','env','service','lane','event','host')
+        foreach ($k in $Fields.Keys) {
+            if ($owned -contains $k) { $rec["f_$k"] = $Fields[$k] }
+            else { $rec[$k] = $Fields[$k] }
+        }
         $file = Join-Path $CG.LogDir ("pc-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
         $line = ConvertTo-Json -InputObject $rec -Compress -Depth 4
         # AppendAllText with an explicit BOM-less encoder, NOT

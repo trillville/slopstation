@@ -49,12 +49,34 @@ def main():
     assert "appid" not in r and r["status"] == "READY"
 
     # -- levels ----------------------------------------------------------------
-    r = events.emit("launch", "launch_failed", level=events.ERROR, err="boom")
+    # level is positional-only (see the collision test below), so it is passed
+    # positionally here too - the same way cglib._Log calls it.
+    r = events.emit("launch", "launch_failed", events.ERROR, err="boom")
     assert r["level"] == "error"
-    assert events.human("launch_failed", level=events.ERROR, err="boom") \
+    assert events.human("launch_failed", events.ERROR, err="boom") \
         .startswith("ERROR "), "errors must be visible in the console line"
     assert not events.human("wake", score=0.7).startswith("INFO"), \
         "info is the default and should not shout"
+
+    # -- a caller field may be named ANYTHING ----------------------------------
+    # Regression, and the expensive kind: `log("lane_up", lane="assistant")`
+    # used to raise TypeError at argument BINDING - before any try/except
+    # inside emit could run - which crash-looped the voice agent. Telemetry
+    # taking down the lane it exists to describe is the one outcome this
+    # module must make impossible, so every parameter is positional-only and
+    # the emitter's own keys win with the caller's value kept under f_*.
+    log = cglib.CapturingLog("voice")
+    for name in ("ts", "level", "env", "service", "lane", "event", "host",
+                 "turn", "session", "job", "dur_ms", "err", "msg", "self"):
+        r = events.emit("voice", "collide", events.INFO, **{name: "X"})
+        assert r is not None, f"emit() died on a field named {name!r}"
+        assert r["lane"] == "voice" and r["event"] == "collide", \
+            f"field {name!r} clobbered an emitter-owned key: {r}"
+        assert "X" in r.values(), f"field {name!r} was dropped silently: {r}"
+        # And the same through the real logger, which is how it actually broke.
+        log(f"collide_{name}", **{name: "X"})
+    assert len(log.records) == 14, log.records
+    print("  collisions: 14 reserved field names, none fatal, none clobbering")
 
     # -- correlation context ---------------------------------------------------
     tok = events.context(turn="9f2c1a", session="3b7e")

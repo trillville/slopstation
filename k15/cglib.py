@@ -179,33 +179,43 @@ class _Log:
         self._logf = BASE / "couch.log"
 
     def _write(self, level, event, fields):
-        line = (f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{self.lane}] "
-                + events.human(event, level=level, **fields))
+        # The whole body is guarded, not just the I/O. "Telemetry never costs
+        # a session" has to be structural: this is the single choke point every
+        # log call in the system funnels through, so if anything in here can
+        # raise, it can crash the lane it was meant to describe - and once did.
         try:
-            print(line, flush=True)
-        except (OSError, ValueError, AttributeError, UnicodeError):
-            pass            # windowless task: stdout is None or a dead pipe
-        if events.ENV != "test":
+            # level passed POSITIONALLY on both calls - see events.emit's
+            # docstring. Passing it by keyword would reintroduce exactly the
+            # collision this is designed out of, for a field named `level`.
+            line = (f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{self.lane}] "
+                    + events.human(event, level, **fields))
             try:
-                with self._logf.open("a", encoding="utf-8") as f:
-                    f.write(line + "\n")
-            except OSError:
-                pass
-        events.emit(self.lane, event, level=level, **fields)
+                print(line, flush=True)
+            except (OSError, ValueError, AttributeError, UnicodeError):
+                pass        # windowless task: stdout is None or a dead pipe
+            if events.ENV != "test":
+                try:
+                    with self._logf.open("a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except OSError:
+                    pass
+            events.emit(self.lane, event, level, **fields)
+        except Exception:
+            pass
 
-    def __call__(self, event, **fields):
+    def __call__(self, event, /, **fields):
         self._write(events.INFO, event, fields)
 
-    def debug(self, event, **fields):
+    def debug(self, event, /, **fields):
         self._write(events.DEBUG, event, fields)
 
-    def info(self, event, **fields):
+    def info(self, event, /, **fields):
         self._write(events.INFO, event, fields)
 
-    def warn(self, event, **fields):
+    def warn(self, event, /, **fields):
         self._write(events.WARN, event, fields)
 
-    def error(self, event, **fields):
+    def error(self, event, /, **fields):
         self._write(events.ERROR, event, fields)
 
 
@@ -234,7 +244,7 @@ class CapturingLog(_Log):
     def _write(self, level, event, fields):
         self.records.append(dict(fields, level=level, event=event))
         if self.echo:
-            print(f"[{self.lane}] " + events.human(event, level=level, **fields))
+            print(f"[{self.lane}] " + events.human(event, level, **fields))
 
     def events(self):
         return [r["event"] for r in self.records]

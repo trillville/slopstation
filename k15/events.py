@@ -45,6 +45,13 @@ DEBUG, INFO, WARN, ERROR = "debug", "info", "warn", "error"
 _RESERVED = ("ts", "level", "env", "service", "lane", "event",
              "turn", "session", "job", "dur_ms", "err")
 
+# Of those, the ones the EMITTER owns - a caller field of the same name would
+# either shadow a Loki label or make the record lie about itself, so it gets
+# renamed rather than dropped (losing the value silently would be worse).
+# dur_ms/err are absent on purpose: those are ordinary caller fields.
+_EMITTER_OWNED = frozenset(("ts", "level", "env", "service", "lane", "event",
+                            "host"))
+
 # Field names whose VALUE is always redacted, whatever it is. Belt to the
 # secrets.json braces below: a key that never reaches secrets.json (an OAuth
 # token in flight, say) is still caught by its name.
@@ -192,10 +199,19 @@ def _prune():
         pass
 
 
-def emit(lane, event, level=INFO, **fields):
+def emit(lane, event, level=INFO, /, **fields):
     """Append one event. Never raises, never blocks on anything but a local
     append. Returns the record (handy in tests); None if it could not be
-    built at all."""
+    built at all.
+
+    EVERY parameter is POSITIONAL-ONLY (the `/`), so no caller field name can
+    ever collide with one - they all land in **fields. Without it,
+    `log("lane_up", lane="assistant")` raises TypeError at call BINDING,
+    before any try/except in here can run, and takes down the caller. Which
+    is exactly what it did: a crash-looping voice agent, caused by the
+    telemetry that was supposed to explain crashes. Argument binding is the
+    one failure this module cannot catch from the inside, so it is designed
+    out rather than guarded against."""
     global _last_day
     try:
         now = datetime.now(timezone.utc)
@@ -216,8 +232,12 @@ def emit(lane, event, level=INFO, **fields):
                 rec[k] = ctx[k]
         rec["host"] = HOST
         for k, v in fields.items():
-            if v is not None:
-                rec[k] = scrub(k, v)
+            if v is None:
+                continue
+            # A caller field must never overwrite a label or make the record
+            # misdescribe itself; keep the value under a prefixed name so
+            # nothing is lost quietly.
+            rec["f_" + k if k in _EMITTER_OWNED else k] = scrub(k, v)
     except Exception:
         return None
 
@@ -236,7 +256,7 @@ def emit(lane, event, level=INFO, **fields):
 
 # --- the human line -----------------------------------------------------------
 
-def human(event, level=INFO, **fields):
+def human(event, level=INFO, /, **fields):
     """Render an event the way couch.log has always read: the event, then its
     fields as k=v. Values are elided at 80 chars so a transcript does not
     swamp a console - the JSONL keeps them whole."""
@@ -286,9 +306,9 @@ def _cli(argv):
                 fields[k] = v
         # anything else is ignored: a supervisor must never die on its own
         # telemetry, and cmd.exe quoting is a hostile environment.
-    rec = emit(lane, event, level=level, **fields)
+    rec = emit(lane, event, level, **fields)        # positional: see emit()
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{lane}] "
-          + human(event, level=level, **fields), flush=True)
+          + human(event, level, **fields), flush=True)
     return 0 if rec else 1
 
 
