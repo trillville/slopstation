@@ -1,7 +1,7 @@
 """Shared pieces for the K15 couch-gaming scripts.
 
-Everything lives beside this file (the K15 desktop): config.json, couch.log,
-state/session.lock, and the scripts that import this.
+Everything lives beside this file (the k15/ folder, wherever it's checked out):
+config.json, secrets.json, couch.log, state/, and the scripts that import this.
 """
 import json, os, pathlib, struct, time
 
