@@ -96,15 +96,27 @@ def resolve_device(pa, fragment, want_input):
 
 
 def play_pcm(pa, pcm, device_index=None):
-    """Blocking playback for the wake tick (the pipeline isn't up yet)."""
+    """Blocking playback for the wake tick (the pipeline isn't up yet).
+    One retry after a settle: Bluetooth outputs (AirPods) renegotiate
+    profiles around our stream churn and can transiently refuse to open
+    (-9999). A missed tick must never take the agent down either way."""
     import pyaudio
-    s = pa.open(format=pyaudio.paInt16, channels=1, rate=earcons.SAMPLE_RATE,
-                output=True, output_device_index=device_index)
-    try:
-        s.write(pcm)
-    finally:
-        s.stop_stream()
-        s.close()
+    for attempt in (1, 2):
+        try:
+            s = pa.open(format=pyaudio.paInt16, channels=1,
+                        rate=earcons.SAMPLE_RATE, output=True,
+                        output_device_index=device_index)
+            try:
+                s.write(pcm)
+            finally:
+                s.stop_stream()
+                s.close()
+            return
+        except OSError as e:
+            if attempt == 1:
+                time.sleep(0.5)
+            else:
+                log(f"earcon playback failed ({e}) - continuing without it")
 
 
 class WakeListener:
