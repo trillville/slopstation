@@ -5,8 +5,18 @@ voice lane is an overlay and its failures never affect the chord.
 
 **First move, always:** tail `k15/couch.log` (next to `config.json`). Every
 process tags its lines — `[listener]`, `[launch]`, `[voice]`, `[library]`,
-`[supervisor]`. `python doctor.py` on the K15 and `Doctor.ps1` on the PC each
-diagnose their whole chain read-only.
+`[supervisor]`. `python doctor.py` on the K15 and, on the PC:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
+```
+
+Each diagnoses its whole chain read-only. The `-ExecutionPolicy Bypass` is not
+optional and not a workaround: this box's policy is `Restricted` (the Windows
+client default), so a bare `C:\CouchGaming\Doctor.ps1` fails with
+`running scripts is disabled on this system`. Every scheduled task and the sshd
+forced command already invoke PowerShell exactly this way — so running it by
+hand like this is also the closest match to how the real thing runs.
 
 **When one launch is the question**, the same events are also in
 `k15/logs/k15-YYYYMMDD.jsonl` with a `turn` id that follows a single intent

@@ -24,8 +24,11 @@ separate process and survives anything the voice stack does.
 | [observability-design.md](docs/observability-design.md) | Making the system legible from a phone. E0/E1 built (structured events + the `turn` id across both machines); Grafana and Langfuse still to wire. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
-run `python doctor.py` on the K15 or `Doctor.ps1` on the PC — each diagnoses its
-whole chain read-only, and exits with the FAIL count.
+run `python doctor.py` on the K15, or on the PC
+`powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1`
+(the policy flag is required — the box is `Restricted`, and it is how every task
+invokes these scripts anyway). Each diagnoses its whole chain read-only, and
+exits with the FAIL count.
 
 ## Layout
 
