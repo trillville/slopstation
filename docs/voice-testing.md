@@ -231,24 +231,25 @@ Reasoning happens *before* the first spoken word, so effort trades latency for
 depth — that's the tradeoff to feel. Flip `config.assistantProvider` to move
 production to the winner.
 
-## Autostart — voice at boot (once §7 feels right)
+## Autostart — one shortcut starts everything
 
-Same pattern as the listener: a Startup-folder shortcut, so both consoles come
-up on login (Autologon makes login = boot). One paste on the K15 creates it,
-minimized:
+`Start-K15.bat` is the single Startup-folder shortcut target: it launches the
+listener supervisor and the voice supervisor in their own minimized windows
+and exits (Autologon makes login = boot). Both supervisors are
+**single-instance** — a second launch of either bounces with a message — so a
+stray old shortcut or a manual run can't double-listen on the Puck or fight
+over the mic. One paste on the K15 removes any old per-lane shortcuts and
+installs the one shortcut:
 
 ```
-$sc = (New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Start-Voice.lnk"); $sc.TargetPath = "$env:USERPROFILE\Desktop\slopstation\k15\voice\Start-Voice.bat"; $sc.WorkingDirectory = "$env:USERPROFILE\Desktop\slopstation\k15\voice"; $sc.WindowStyle = 7; $sc.Save()
+$startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"; $sh = New-Object -ComObject WScript.Shell; Get-ChildItem "$startup\*.lnk" | Where-Object { $sh.CreateShortcut($_.FullName).TargetPath -match 'Start-(Listener|Voice|K15)\.bat$' } | ForEach-Object { "removing $($_.Name)"; Remove-Item $_.FullName }; $sc = $sh.CreateShortcut("$startup\Start-K15.lnk"); $sc.TargetPath = "$env:USERPROFILE\Desktop\slopstation\k15\Start-K15.bat"; $sc.WorkingDirectory = "$env:USERPROFILE\Desktop\slopstation\k15"; $sc.WindowStyle = 7; $sc.Save(); "installed Start-K15.lnk"
 ```
 
-Two consoles run side by side from then on: the listener (load-bearing, system
-python) and the voice supervisor (overlay, its own venv). `Start-Voice.bat` is
-**single-instance**: a second launch — e.g. a manual `--dry-run` while the
-startup copy is live — prints "already running" and bounces instead of
-fighting over the mic. So for bench sessions, close the startup window first
-(the supervisor restarts the agent in 10 s if it merely crashes; closing the
-window is the off switch). Remove the shortcut to undo autostart. Verify the
-unattended chain once: reboot, touch nothing, say "hey jarvis volume up".
+Day to day: close a window to stop that lane (the supervisors only
+auto-restart crashes, not closes); for bench sessions close the voice window
+first, then run manually with flags. Remove `Start-K15.lnk` to undo autostart.
+Verify the unattended chain once: reboot, touch nothing — chord a session,
+then "hey jarvis volume up".
 
 ## Fastest path to "it works"
 
