@@ -35,7 +35,7 @@
     "location": {"city": "", "region": "", "country": "US", "timezone": ""},
     "workerProvider": "anthropic",
     "workerModelAnthropic": "sonnet",
-    "workerModelOpenai": "",
+    "workerModelOpenai": "gpt-5.6-terra",
     "workerEffort": "high",
     "workerTimeoutS": 600,
     "inputs": {

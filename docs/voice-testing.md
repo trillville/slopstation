@@ -349,7 +349,8 @@ npm i -g @openai/codex && codex login
 `config.json` picks the worker with the same vendor vocabulary as the
 assistant lane: `workerProvider` (`anthropic` → the claude CLI, `openai` →
 codex), `workerModelAnthropic` (ships `sonnet`), `workerModelOpenai` (ships
-empty = whatever your codex CLI is set to), `workerEffort` (ships `high` —
+`gpt-5.6-terra` — the mid tier, so the A/B compares like with like instead of
+pitting a flagship against a workhorse), `workerEffort` (ships `high` —
 latency is free here, so depth is the axis worth spending on), and
 `workerTimeoutS`. **Empty model = your CLI's own preference**, which on a Max
 plan is Opus and spends the same weekly limit as your desk sessions — that's
