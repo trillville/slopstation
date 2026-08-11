@@ -1,0 +1,159 @@
+{
+  "title": "Couch - launch health",
+  "uid": "couch-launch-health",
+  "description": "How well is the one job working? Time-to-READY is the number the whole system is judged on - the guide measured 6-8s warm and 8-13s from sleep ONCE, by hand. This makes it a distribution you can watch drift.",
+  "tags": ["couch", "slopstation"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "",
+  "time": { "from": "now-7d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Launches (7d)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "sum(count_over_time({service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"host_ready\" [7d]))"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "none" },
+      "fieldConfig": { "defaults": { "noValue": "0" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Failures (7d)",
+      "description": "launch_failed means the TV input was never switched - the one rule held.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "sum(count_over_time({service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"launch_failed\" [7d]))"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "none" },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Median time to READY",
+      "description": "dur_ms on host_ready, measured from the chord or the wake word - not from when Enter started. This is what the couch actually experiences.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "quantile_over_time(0.5, {service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"host_ready\" | unwrap dur_ms [7d])"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "ms", "noValue": "no data yet" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "p95 time to READY",
+      "description": "The bad night. A warm enter is ~6-8s; wake-from-sleep 8-13s. If p95 climbs past that, something is degrading.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "quantile_over_time(0.95, {service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"host_ready\" | unwrap dur_ms [7d])"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "none" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "no data yet",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 15000 }, { "color": "red", "value": 30000 }] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Time to READY, per launch",
+      "description": "Points, not an average - with a handful of launches a day the individual values ARE the signal, and an average would hide the one that took 40 seconds.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "time to READY",
+          "expr": "max_over_time({service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"host_ready\" | unwrap dur_ms [$__auto])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "points", "pointSize": 8, "showPoints": "always", "lineWidth": 0 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Milestones within a launch",
+      "description": "ssh_up is the PC waking; enter_dispatched is sshd answering; host_ready is Enter finishing. Which line moved tells you WHICH stage got slower.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "ssh_up",
+          "expr": "max_over_time({service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"ssh_up\" | unwrap dur_ms [$__auto])"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "enter_dispatched",
+          "expr": "max_over_time({service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"enter_dispatched\" | unwrap dur_ms [$__auto])"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "host_ready",
+          "expr": "max_over_time({service=\"k15\", lane=\"launch\", env=\"prod\"} | json | event=\"host_ready\" | unwrap dur_ms [$__auto])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "points", "pointSize": 6, "showPoints": "always", "lineWidth": 0 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Recent launches, end to end",
+      "description": "Both machines. Once E4 ships the gaming PC, a single launch's K15 and PC lines interleave here by turn.",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=~\"k15|gamepc\", lane=~\"launch|listener|enter|exit|launchgame\", env=\"prod\"}"
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
+    }
+  ]
+}

@@ -29,6 +29,7 @@ import pathlib
 import platform
 import re
 import sys
+import threading
 import time
 import uuid
 
@@ -252,6 +253,46 @@ def emit(lane, event, level=INFO, /, **fields):
     except (OSError, ValueError, TypeError):
         pass                        # the event is lost; the caller is not
     return rec
+
+
+# --- liveness -----------------------------------------------------------------
+
+HEARTBEAT_S = 60
+
+
+def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
+    """Emit `heartbeat` from a daemon thread for as long as this process runs.
+
+    This is the ONE signal logs cannot otherwise give you: a dead process
+    writes nothing, so silence and idle look identical. A tick every minute
+    makes absence measurable.
+
+    Deliberately writes JSONL ONLY - not through cglib's logger, so it never
+    reaches the console or couch.log. A line a minute would be ~1440/day of
+    pure noise in the one file a human reads, and couch.log's entire value is
+    that it is readable. Grafana wants the tick; people do not.
+
+    Daemon thread: it must never hold the process open at shutdown. Every
+    emit is already fail-soft, and the loop swallows anything else, because a
+    liveness probe that can kill the thing it is probing is worse than none.
+
+    NOTE for the alerting side (see docs/grafana-implementation.md): the alert
+    cannot be "heartbeat count < 1". A dead lane emits NO lines, so the query
+    returns no series and a threshold never evaluates at all. The rule has to
+    fire through Grafana's *No data* handling. Getting that wrong leaves the
+    two most important alerts in the system permanently inert.
+    """
+    def tick():
+        while True:
+            try:
+                emit(lane, "heartbeat", INFO, interval_s=interval_s, **fields)
+            except Exception:
+                pass
+            time.sleep(interval_s)
+
+    t = threading.Thread(target=tick, daemon=True, name=f"heartbeat-{lane}")
+    t.start()
+    return t
 
 
 # --- the human line -----------------------------------------------------------

@@ -21,6 +21,12 @@ ERR_STALE_S     = 600   # failures older than this are history, not news
 
 cglib.rotate_log()
 log = cglib.make_log("listener")
+# Liveness for the LOAD-BEARING lane - the one whose silent death is the
+# expensive failure, because a deaf chord is only discovered from the couch.
+# A thread rather than a check in the read loop: the loop can block in
+# hid.read or sit in the 3 s stand-by sleep, and a heartbeat that stops when
+# the Puck is claimed would page during every normal session.
+events.start_heartbeat("listener")
 
 
 def buzz(dev, pattern, what):

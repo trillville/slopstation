@@ -134,6 +134,20 @@ def main():
     assert not old.exists(), "expired daily file survived the rollover prune"
     print(f"  rollover: file older than {events.TTL_DAYS}d pruned, current kept")
 
+    # -- heartbeat -------------------------------------------------------------
+    # The signal absence is measured against, so it has to actually tick.
+    events._last_day = None
+    events.start_heartbeat("listener", interval_s=0.05, source="unit")
+    time.sleep(0.3)
+    beats = [r for r in read(tmp / f"test-{time.strftime('%Y%m%d')}.jsonl")
+             if r["event"] == "heartbeat"]
+    assert len(beats) >= 3, f"only {len(beats)} beats in 0.3s at 50ms"
+    assert beats[0]["lane"] == "listener" and beats[0]["source"] == "unit"
+    # Daemon, or a dead agent would hang on exit instead of dying cleanly.
+    assert all(t.daemon for t in __import__("threading").enumerate()
+               if t.name.startswith("heartbeat-"))
+    print(f"  heartbeat: {len(beats)} ticks on a daemon thread, JSONL only")
+
     # -- the CLI the .bat supervisors call -------------------------------------
     events._last_day = None
     assert events._cli(["emit", "supervisor", "restart",

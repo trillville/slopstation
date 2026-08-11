@@ -725,6 +725,13 @@ def main():
     listener = WakeListener(pa, voice, input_idx)
     log("agent_up", wake_model=listener.model_name,
         threshold=voice["wakeThreshold"], dry_run=args.dry_run or None)
+    # Liveness. The wake loop blocks in wait_for_wake_capture for minutes at a
+    # time, so this has to be its own thread rather than a check in the loop.
+    # Started only for a REAL run - the bench modes below exit, and a wake
+    # trial or an --once session must not look like a live agent that then
+    # went quiet (which would page).
+    if not (args.wake_trials or args.false_accept_soak or args.once):
+        events.start_heartbeat("voice")
 
     if args.wake_trials:
         log("wake_trials_start")
