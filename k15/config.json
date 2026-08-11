@@ -23,7 +23,9 @@
     "fuzzyTitleThreshold": 87,
     "ttsVoice": "aura-2-thalia-en",
     "ttsLocal": false,
+    "assistantProvider": "anthropic",
     "assistantModel": "claude-haiku-4-5",
+    "assistantModelOpenai": "gpt-5.6-luna",
     "inputs": {
       "apple tv": "hdmi1", "appletv": "hdmi1", "the apple tv": "hdmi1",
       "playstation": "hdmi2", "ps5": "hdmi2", "the playstation": "hdmi2",

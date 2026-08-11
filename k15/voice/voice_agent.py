@@ -42,7 +42,7 @@ log = cglib.make_log("voice")
 REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "eotThreshold", "eagerEotThreshold", "keytermCount",
                   "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
-                  "assistantModel", "inputs")
+                  "assistantProvider", "assistantModel", "inputs")
 
 
 def load_titles(count):
@@ -182,6 +182,27 @@ def _make_tts(voice, secrets):
         settings=DeepgramTTSService.Settings(voice=voice["ttsVoice"]))
 
 
+def _make_llm(voice, secrets, system_text):
+    """The brain, provider-switchable via config.assistantProvider - so once the
+    --text A/B picks a winner, production follows by flipping one config key."""
+    provider = voice.get("assistantProvider", "anthropic")
+    if provider == "openai":
+        from assistant import default_model
+        from pipecat.services.openai.llm import OpenAILLMService
+        return OpenAILLMService(
+            api_key=secrets["openaiApiKey"],
+            settings=OpenAILLMService.Settings(
+                model=default_model({"voice": voice}, "openai"),
+                system_instruction=system_text, max_completion_tokens=400,
+                extra={"reasoning_effort": "none"}))   # tools need reasoning off
+    from pipecat.services.anthropic.llm import AnthropicLLMService
+    return AnthropicLLMService(
+        api_key=secrets["anthropicApiKey"],
+        settings=AnthropicLLMService.Settings(
+            model=voice["assistantModel"], system_instruction=system_text,
+            enable_prompt_caching=True, max_tokens=400))
+
+
 async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
@@ -218,7 +239,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
     )
 
     dispatcher = Dispatch(cfg, log, dry_run=args.dry_run)
-    assistant_live = cglib.real_key(secrets.get("anthropicApiKey"))
+    from assistant import BACKENDS
+    provider = voice.get("assistantProvider", "anthropic")
+    assistant_live = cglib.real_key(secrets.get(BACKENDS[provider].key))
     gate = GrammarGate(
         matcher, dispatcher, log,
         resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])
@@ -229,12 +252,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
     stages = [transport.input(), stt, gate]
     context = None
     if assistant_live:
-        from assistant import (function_schemas, system_instruction,
-                               tool_impls)
+        from assistant import function_schemas, system_instruction, tool_impls
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.aggregators.llm_response_universal import (
             LLMContextAggregatorPair)
-        from pipecat.services.anthropic.llm import AnthropicLLMService
 
         carry = (list(CARRY["messages"])
                  if time.time() - CARRY["t"] < voice["followupCarryS"] else [])
@@ -242,15 +263,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx):
             messages=carry,
             tools=function_schemas(tool_impls(dispatcher, log)))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
-        llm = AnthropicLLMService(
-            api_key=secrets["anthropicApiKey"],
-            settings=AnthropicLLMService.Settings(
-                model=voice["assistantModel"],
-                system_instruction=system_instruction(),
-                enable_prompt_caching=True,
-                max_tokens=400))
-        stages += [user_agg, llm, _make_tts(voice, secrets),
-                   transport.output(), asst_agg]
+        stages += [user_agg, _make_llm(voice, secrets, system_instruction()),
+                   _make_tts(voice, secrets), transport.output(), asst_agg]
     else:
         stages += [transport.output()]
 
@@ -301,6 +315,8 @@ def main():
     ap.add_argument("--text", action="store_true",
                     help="assistant REPL: typed transcripts, no audio; "
                          "always dry-run (actions log, never execute)")
+    ap.add_argument("--provider", help="--text A/B: anthropic|openai")
+    ap.add_argument("--model", help="--text A/B: model id override")
     args = ap.parse_args()
 
     if args.devices:
@@ -317,11 +333,9 @@ def main():
     secrets = cglib.load_secrets()
 
     if args.text:
-        if not cglib.real_key(secrets.get("anthropicApiKey")):
-            print("anthropicApiKey is a placeholder - the REPL needs a real key")
-            return 1
         from assistant import repl
-        return repl(cfg, secrets, log, dry_run=True)
+        return repl(cfg, secrets, log, dry_run=True,
+                    provider=args.provider, model=args.model)
 
     import pyaudio
     cglib.rotate_log()

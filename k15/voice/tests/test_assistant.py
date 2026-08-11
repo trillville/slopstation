@@ -52,7 +52,19 @@ def main():
     assert r["ok"] and r["name"] == rows[0]["name"]
     print("  control/get_now_playing/get_game_details: routed and validated")
 
-    # Pipecat + anthropic constructions with dummy keys (no network at init).
+    # Both tool renderers cover every tool, in each provider's shape.
+    at, ot = assistant.anthropic_tools(), assistant.openai_tools()
+    names = {n for n, *_ in assistant.TOOL_DEFS}
+    assert {t["name"] for t in at} == names
+    assert {t["function"]["name"] for t in ot} == names
+    assert all(t["type"] == "function" and "parameters" in t["function"] for t in ot)
+    assert all("input_schema" in t for t in at)
+    assert set(assistant.BACKENDS) == {"anthropic", "openai"}
+    assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"
+    assert assistant.BACKENDS["openai"].key == "openaiApiKey"
+    print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
+
+    # Pipecat constructions with dummy keys (no network at init), both providers.
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 4
     from pipecat.processors.aggregators.llm_context import LLMContext
@@ -60,19 +72,24 @@ def main():
         LLMContextAggregatorPair)
     from pipecat.services.anthropic.llm import AnthropicLLMService
     from pipecat.services.deepgram.tts import DeepgramTTSService
+    from pipecat.services.openai.llm import OpenAILLMService
     ctx = LLMContext(messages=[], tools=schemas)
     ua, aa = LLMContextAggregatorPair(ctx)
-    llm = AnthropicLLMService(
+    llm_a = AnthropicLLMService(
         api_key="x" * 24,
         settings=AnthropicLLMService.Settings(
             model="claude-haiku-4-5", system_instruction=si,
             enable_prompt_caching=True, max_tokens=400))
+    llm_o = OpenAILLMService(
+        api_key="x" * 24,
+        settings=OpenAILLMService.Settings(
+            model="gpt-5.6-luna", system_instruction=si,
+            max_completion_tokens=400, extra={"reasoning_effort": "none"}))
     tts = DeepgramTTSService(api_key="x" * 24, sample_rate=16000,
                              settings=DeepgramTTSService.Settings(
                                  voice="aura-2-thalia-en"))
-    assert ua and aa and llm and tts
-    assert len(assistant.anthropic_tools()) == 4
-    print("  constructions: LLMContext+aggregators, Anthropic, Aura-2 - OK")
+    assert ua and aa and llm_a and llm_o and tts
+    print("  constructions: LLMContext, Anthropic + OpenAI LLM services, Aura-2 - OK")
 
     # Live metadata (keyless APIs) - tolerant: network may be absent.
     try:

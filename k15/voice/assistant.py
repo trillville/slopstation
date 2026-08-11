@@ -145,20 +145,106 @@ def anthropic_tools():
             for n, d, p, r in TOOL_DEFS]
 
 
-def repl(cfg, secrets, log, dry_run=True, model=None):
-    """--text mode: type transcripts, see replies + tool calls. The 20-query
-    canned set and the model A/B run through this. Raw Anthropic SDK with the
-    SAME system prompt + tool impls as the voice pipeline."""
-    import anthropic
+def openai_tools():
+    return [{"type": "function", "function": {
+                "name": n, "description": d,
+                "parameters": {"type": "object", "properties": p, "required": r}}}
+            for n, d, p, r in TOOL_DEFS]
+
+
+# --- provider backends: one turn (with its tool loop) -> reply text -----------
+# The system prompt, tool schemas, and tool impls are provider-neutral; only the
+# request/response shape and where the system prompt goes differ. Each backend
+# owns a client + model and mutates its own provider-shaped `messages` list.
+
+class AnthropicBackend:
+    key = "anthropicApiKey"
+
+    def __init__(self, secrets, model):
+        import anthropic
+        self.client = anthropic.Anthropic(api_key=secrets[self.key])
+        self.model = model
+
+    def turn(self, system_text, messages, user_text, impls):
+        system = [{"type": "text", "text": system_text,
+                   "cache_control": {"type": "ephemeral"}}]
+        messages.append({"role": "user", "content": user_text})
+        while True:
+            resp = self.client.messages.create(
+                model=self.model, max_tokens=400, system=system,
+                messages=messages, tools=anthropic_tools())
+            messages.append({"role": "assistant", "content": resp.content})
+            if resp.stop_reason != "tool_use":
+                return " ".join(b.text for b in resp.content if b.type == "text")
+            results = []
+            for b in resp.content:
+                if b.type == "tool_use":
+                    out = impls[b.name](dict(b.input))
+                    print(f"  [tool] {b.name}({dict(b.input)}) -> {out}")
+                    results.append({"type": "tool_result", "tool_use_id": b.id,
+                                    "content": json.dumps(out)})
+            messages.append({"role": "user", "content": results})
+
+
+class OpenAIBackend:
+    key = "openaiApiKey"
+
+    def __init__(self, secrets, model):
+        import openai
+        self.client = openai.OpenAI(api_key=secrets[self.key])
+        self.model = model
+
+    def turn(self, system_text, messages, user_text, impls):
+        messages.append({"role": "user", "content": user_text})
+        while True:
+            resp = self.client.chat.completions.create(
+                model=self.model, max_completion_tokens=400,
+                # GPT-5.6 rejects function tools on chat-completions unless
+                # reasoning is off - and a one-sentence answer wants no reasoning.
+                reasoning_effort="none",
+                messages=[{"role": "system", "content": system_text}] + messages,
+                tools=openai_tools())
+            msg = resp.choices[0].message
+            messages.append(msg.model_dump(exclude_none=True))
+            if not msg.tool_calls:
+                return msg.content or ""
+            for tc in msg.tool_calls:
+                args = json.loads(tc.function.arguments or "{}")
+                out = impls[tc.function.name](args)
+                print(f"  [tool] {tc.function.name}({args}) -> {out}")
+                messages.append({"role": "tool", "tool_call_id": tc.id,
+                                 "content": json.dumps(out)})
+
+
+BACKENDS = {"anthropic": AnthropicBackend, "openai": OpenAIBackend}
+
+
+def default_model(cfg, provider):
+    return (cfg["voice"].get("assistantModelOpenai", "gpt-5.6-luna")
+            if provider == "openai" else cfg["voice"]["assistantModel"])
+
+
+def repl(cfg, secrets, log, dry_run=True, provider=None, model=None):
+    """--text mode: type transcripts, see replies + tool calls + latency. The
+    20-query canned set and the model A/B run through this - same system prompt,
+    tool schemas, and impls as the voice pipeline, either provider. Pick with
+    --provider anthropic|openai [--model <id>]."""
     from dispatch import Dispatch
 
+    provider = provider or cfg["voice"].get("assistantProvider", "anthropic")
+    if provider not in BACKENDS:
+        print(f"unknown provider '{provider}' - one of {list(BACKENDS)}")
+        return 2
+    keyname = BACKENDS[provider].key
+    if not cglib.real_key(secrets.get(keyname)):
+        print(f"{keyname} is a placeholder - add it to secrets.json for {provider}")
+        return 1
+
     impls = tool_impls(Dispatch(cfg, log, dry_run=dry_run), log)
-    client = anthropic.Anthropic(api_key=secrets["anthropicApiKey"])
-    model = model or cfg["voice"]["assistantModel"]
-    system = [{"type": "text", "text": system_instruction(),
-               "cache_control": {"type": "ephemeral"}}]
+    backend = BACKENDS[provider](secrets, model or default_model(cfg, provider))
+    system_text = system_instruction()
     messages = []
-    print(f"assistant REPL - model {model}, dry_run={dry_run}. "
+    print(f"assistant REPL - {provider}/{backend.model}, dry_run={dry_run}. "
           f"Empty line to quit.")
     while True:
         try:
@@ -167,24 +253,7 @@ def repl(cfg, secrets, log, dry_run=True, model=None):
             break
         if not q:
             break
-        messages.append({"role": "user", "content": q})
         t0 = time.time()
-        while True:
-            resp = client.messages.create(model=model, max_tokens=400,
-                                          system=system, messages=messages,
-                                          tools=anthropic_tools())
-            messages.append({"role": "assistant", "content": resp.content})
-            if resp.stop_reason != "tool_use":
-                break
-            results = []
-            for block in resp.content:
-                if block.type == "tool_use":
-                    out = impls[block.name](dict(block.input))
-                    print(f"  [tool] {block.name}({dict(block.input)}) -> {out}")
-                    results.append({"type": "tool_result",
-                                    "tool_use_id": block.id,
-                                    "content": json.dumps(out)})
-            messages.append({"role": "user", "content": results})
-        text = " ".join(b.text for b in resp.content if b.type == "text")
+        text = backend.turn(system_text, messages, q, impls)
         print(f"assistant ({time.time() - t0:.1f}s)> {text}")
     return 0
