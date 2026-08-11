@@ -283,7 +283,14 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
         if not q:
             break
         t0 = time.time()
-        text = backend.turn(system_text, q, impls)
+        try:
+            text = backend.turn(system_text, q, impls)
+        except Exception as e:
+            # A bad knob value (e.g. an unsupported reasoning effort) or a
+            # transient API error shouldn't kill the bench session - the
+            # error text is the answer to the probe.
+            print(f"API error ({time.time() - t0:.1f}s)> {e}")
+            continue
         note = f", {backend.cache_note}" if backend.cache_note else ""
         print(f"assistant ({time.time() - t0:.1f}s{note})> {text}")
     return 0
