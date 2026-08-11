@@ -90,28 +90,32 @@ def main():
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
-    # Pipecat constructions with dummy keys (no network at init), both providers.
+    # Pipecat constructions with dummy keys (no network at init), both
+    # providers - built through the PRODUCTION _make_llm, not a test-local
+    # copy: the copy passed a dict for `reasoning` while the dataclass
+    # settings accepted it silently, and the crash only surfaced at live
+    # inference ("'dict' object has no attribute 'model_dump'", 2026-08-11).
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 4
+    import voice_agent
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMContextAggregatorPair)
-    from pipecat.services.anthropic.llm import AnthropicLLMService
     from pipecat.services.deepgram.tts import DeepgramTTSService
-    from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
     ctx = LLMContext(messages=[], tools=schemas)
     ua, aa = LLMContextAggregatorPair(ctx)
-    llm_a = AnthropicLLMService(
-        api_key="x" * 24,
-        settings=AnthropicLLMService.Settings(
-            model="claude-haiku-4-5", system_instruction=si,
-            enable_prompt_caching=True, max_tokens=400))
-    # OpenAI on the Responses API (reasoning + tools coexist), reasoning knob.
-    llm_o = OpenAIResponsesHttpLLMService(
-        api_key="x" * 24,
-        settings=OpenAIResponsesHttpLLMService.Settings(
-            model="gpt-5.6-luna", system_instruction=si,
-            max_completion_tokens=1500, reasoning={"effort": "low"}))
+    dummy = {"anthropicApiKey": "x" * 24, "openaiApiKey": "x" * 24}
+    voice_a = {**CFG_MIN["voice"], "assistantProvider": "anthropic",
+               "assistantModel": "claude-haiku-4-5"}
+    llm_a = voice_agent._make_llm(voice_a, dummy, si)
+    voice_o = {**voice_a, "assistantProvider": "openai",
+               "assistantModelOpenai": "gpt-5.6-luna",
+               "assistantReasoningEffort": "low"}
+    llm_o = voice_agent._make_llm(voice_o, dummy, si)
+    # Prove the inference path's model_dump() call survives - exactly the
+    # line that died live when reasoning was a plain dict.
+    assert llm_o._settings.reasoning.model_dump(exclude_none=True) == {
+        "effort": "low"}, llm_o._settings.reasoning
     tts = DeepgramTTSService(api_key="x" * 24, sample_rate=16000,
                              settings=DeepgramTTSService.Settings(
                                  voice="aura-2-thalia-en"))

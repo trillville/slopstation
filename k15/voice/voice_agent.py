@@ -262,13 +262,18 @@ def _make_llm(voice, secrets, system_text):
     if provider == "openai":
         from assistant import default_model
         from pipecat.services.openai.responses.llm import (
-            OpenAIResponsesHttpLLMService)
+            OpenAIResponsesHttpLLMService, OpenAIResponsesReasoningConfig)
+        # reasoning must be the TYPED config, not a dict: pipecat's dataclass
+        # settings accept anything at construction, then call .model_dump()
+        # at inference - a dict here died live with "'dict' object has no
+        # attribute 'model_dump'" (2026-08-11).
         return OpenAIResponsesHttpLLMService(
             api_key=secrets["openaiApiKey"],
             settings=OpenAIResponsesHttpLLMService.Settings(
                 model=default_model({"voice": voice}, "openai"),
                 system_instruction=system_text, max_completion_tokens=1500,
-                reasoning={"effort": voice.get("assistantReasoningEffort", "low")}))
+                reasoning=OpenAIResponsesReasoningConfig(
+                    effort=voice.get("assistantReasoningEffort", "low"))))
     from pipecat.services.anthropic.llm import AnthropicLLMService
     return AnthropicLLMService(
         api_key=secrets["anthropicApiKey"],
