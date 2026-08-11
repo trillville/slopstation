@@ -561,6 +561,16 @@ def main():
     from assistant import BACKENDS
     brain = BACKENDS.get(voice["assistantProvider"])
     brain_live = bool(brain and cglib.real_key(secrets.get(brain.key)))
+    # The two lanes take different value grammars for the same-looking key:
+    # the assistant calls the Messages API (full ids only), the worker calls
+    # the claude CLI (aliases fine, and preferable - they follow the latest).
+    # Warn rather than refuse: a bad value for the INACTIVE provider must not
+    # keep the agent down, it just has to stop being a silent trap for the
+    # day someone flips assistantProvider.
+    if not voice["assistantModelAnthropic"].startswith("claude-"):
+        log(f"assistantModelAnthropic '{voice['assistantModelAnthropic']}' is "
+            "not a full API model id - the assistant lane has no aliases "
+            "(use e.g. claude-haiku-4-5); the worker lane's CLI does")
     if (voice["assistantWebSearch"]
             and voice["assistantProvider"] != "openai"):
         log("assistantWebSearch: production search runs on the openai lane "
