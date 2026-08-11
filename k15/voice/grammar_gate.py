@@ -84,6 +84,13 @@ class GrammarGate(FrameProcessor):
     # turn can't pin the session open forever.
     ASSISTANT_WAIT_S = 30
 
+    # Soft "still working" tick cadence while an answer is in flight. Covers
+    # every silent stretch the same way - web search, a long reasoning pass,
+    # a 15s ssh tool call - on any provider, with zero knowledge of WHY the
+    # model is quiet. First tick doubles as the fast-turn guard: anything
+    # that answers inside the interval never cues at all.
+    THINK_CUE_S = 3.0
+
     def __init__(self, matcher, dispatch, log, resolve_game=None,
                  assistant_enabled=False, wake_word=None):
         super().__init__()
@@ -96,6 +103,7 @@ class GrammarGate(FrameProcessor):
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
+        self._cue_task = None                   # think-tick loop (one per answer)
 
     def is_busy(self):
         """True while the user is mid-turn, a dispatch is running, or an
@@ -112,6 +120,23 @@ class GrammarGate(FrameProcessor):
         await self.push_frame(OutputAudioRawFrame(
             audio=earcons.pcm(name), sample_rate=earcons.SAMPLE_RATE,
             num_channels=1))
+
+    async def _think_cues(self):
+        """Tick every THINK_CUE_S while the answer is still in flight. The
+        pending flag is re-checked right before each tick, so the loop dies
+        the moment the bot speaks (or an error clears it) and can never
+        outlive ASSISTANT_WAIT_S. Task lifecycle rides FrameProcessor
+        cleanup - a cancelled session takes the loop down with it."""
+        ticked = False
+        while True:
+            await asyncio.sleep(self.THINK_CUE_S)
+            started = self._assistant_pending
+            if not started or time.time() - started >= self.ASSISTANT_WAIT_S:
+                return
+            if not ticked:                      # once per answer, not per tick
+                self.log("assistant still working - think ticks on")
+                ticked = True
+            await self._earcon("think")
 
     async def _run_intent(self, intent, slots):
         """Returns True if the utterance was consumed here (the usual case);
@@ -179,6 +204,12 @@ class GrammarGate(FrameProcessor):
             # loguru to the console only - mirror them into couch.log so a
             # silent assistant is diagnosable from the one log that matters.
             self.log(f"pipeline error: {frame.error}")
+            if self._assistant_pending:
+                # The answer isn't coming: stop the think ticks and say so
+                # with the honest earcon instead of trailing off into
+                # silence (and stop pinning the idle handler open).
+                self._assistant_pending = 0.0
+                await self._earcon("fail")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
             if text and self.wake_word:
@@ -206,4 +237,6 @@ class GrammarGate(FrameProcessor):
                     return
                 self.log(f'heard "{text}" - passing to assistant')
                 self._assistant_pending = time.time()
+                if self._cue_task is None or self._cue_task.done():
+                    self._cue_task = self.create_task(self._think_cues())
         await self.push_frame(frame, direction)

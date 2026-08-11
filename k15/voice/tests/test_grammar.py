@@ -131,12 +131,40 @@ def main():
     if g.is_busy():
         failures.append("expired assistant turn must not pin the session")
 
+    # Think cues: tick while an answer is in flight, exit on their own the
+    # moment the pending flag clears (bot spoke), never start on an expired
+    # turn. Interval shrunk so the test runs in a blink.
+    import asyncio
+
+    async def cue_run():
+        g2 = GrammarGate(m, None, lambda s: None)
+        g2.THINK_CUE_S = 0.05
+        ticks = []
+
+        async def note(name):
+            ticks.append(name)
+        g2._earcon = note
+        g2._assistant_pending = _t.time()
+        task = asyncio.create_task(g2._think_cues())
+        await asyncio.sleep(0.22)
+        g2._assistant_pending = 0.0             # bot started speaking
+        await asyncio.wait_for(task, 1)         # loop must exit unaided
+        if not (2 <= len(ticks) <= 6) or set(ticks) != {"think"}:
+            failures.append(f"think cues while pending: got {ticks}")
+        ticks.clear()
+        g2._assistant_pending = _t.time() - (GrammarGate.ASSISTANT_WAIT_S + 1)
+        await asyncio.wait_for(asyncio.create_task(g2._think_cues()), 1)
+        if ticks:
+            failures.append(f"expired turn must not tick, got {ticks}")
+    asyncio.run(cue_run())
+
     for f in failures:
         print("FAIL", f)
     assert not failures, f"{len(failures)} grammar failures"
     print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
           f"risky-command narrowness; {len(STRIP)} wake-strip cases; "
-          f"is_busy defers for in-flight assistant turns")
+          f"is_busy defers for in-flight assistant turns; think cues "
+          f"tick-and-stop")
 
 
 if __name__ == "__main__":

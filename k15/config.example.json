@@ -29,6 +29,9 @@
     "assistantModel": "claude-haiku-4-5",
     "assistantModelOpenai": "gpt-5.6-luna",
     "assistantReasoningEffort": "low",
+    "assistantWebSearch": false,
+    "assistantSearchMaxUses": 2,
+    "location": {"city": "", "region": "", "country": "US", "timezone": ""},
     "inputs": {
       "apple tv": "hdmi1", "appletv": "hdmi1", "the apple tv": "hdmi1",
       "playstation": "hdmi2", "ps5": "hdmi2", "the playstation": "hdmi2",

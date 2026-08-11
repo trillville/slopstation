@@ -64,6 +64,22 @@ HW = needs the hardware pass · KEY = needs a real key.
 
 - **Ex-Link ack validation** (deferred to the hardware pass, CLOSED 2026-08-10): the live probe proved the ack bytes — even the query frame acks `030cf1` — so `exlink_send_hex` now validates every send and raises `ExlinkNak` on anything else (no retry for a NAK; the 1 s retry stays port-contention-only). `dispatch._exlink` turns it into a fail earcon and `_vol_steps` aborts on the first failed frame; couch.py logs and continues (PC readiness is independent of the TV). `probe_volume` reads 16 bytes now so a payload can't hide behind `read(3)`.
 
+## Project D rows (assistant expansion — D1 web search, built 2026-08-11)
+
+Built live on the dev box with real keys (REPL probes, both providers);
+prod pipeline changes are blind until the K15 drill. Spec:
+[assistant-expansion-design.md](assistant-expansion-design.md).
+
+| # | Area | Assumption / decision | Why | Resolves by | Verdict |
+|---|---|---|---|---|---|
+| D1 | cue | **Think ticks replace the spec'd "cue on web_search_call event"**: a soft `think` earcon every `THINK_CUE_S` (3 s) while an assistant answer is in flight (the row-9 pending flag), stopping the moment the bot speaks. No pipecat event sniffing at all | Covers every silent stretch identically — search, long reasoning, a 15 s ssh tool call — on any provider; the event-sniffing version was OpenAI-only and coupled to service internals. First tick doubles as the fast-turn guard: answers inside 3 s never cue | HW: drill 10b.4 — tick feel, interval taste | |
+| D2 | cue | An `ErrorFrame` while an answer is in flight clears the pending flag and plays the fail earcon (previously: silence + up to 30 s of idle-pinning) | The ticks made the gap audible: cueing "working…" and then trailing off into nothing is worse than an honest fail tone | BT (session-pipeline test) + HW: kill the network mid-question | |
+| D3 | search | **Citation stripping is prompt-enforced only** — the search rule forbids URLs/citations/parentheticals in the reply; no deterministic text filter between LLM and TTS | Live probe: Luna's first searched answer embedded `([domain](url))`; after the hardened rule, clean on repeated probes. A streaming-safe filter means buffering sentence chunks — build it only if a citation ever actually gets spoken | HW: drill 10b.1, listen for leaked sources | |
+| D4 | search | Haiku narrates pre-search ("I'll search for…") despite the don't-announce rule; accepted | The lane is REPL-only for search in prod (see D5); cosmetic on a bench instrument. Revisit prompt-side if the provider ever swaps back | A/B bench notes | |
+| D5 | search | Prod search is **openai-lane only**: pipecat 1.7's `AdapterType` has no ANTHROPIC, so native server tools can't ride the anthropic adapter; startup logs the mismatch when the knob is on with the anthropic provider | Native-tool passthrough exists only for OpenAI/Gemini adapters in 1.7; the REPL covers Anthropic search via the raw SDK meanwhile | pipecat upgrade watch, or a service subclass if the A/B picks Haiku for prod | |
+| D6 | search | OpenAI has no `max_uses` cap knob — cost control there is the prompt ("search only when…") plus `search_context_size: low`; Anthropic gets `max_uses` from config | Vendor asymmetry, not a design choice; at ~$0.01/search and couch volume this is pennies either way | cost eyeball after a month | |
+| D7 | bench | Anthropic REPL cache oddity observed: turn 1 `w10222/r0`, turn 2 `w0/r0` (expected a prefix read) with search-result blocks in history | Unexplained; possibly search content interacting with the prefix cache. Bench-only concern today (prod search is openai-lane) | A/B bench: watch cache notes with the knob on/off | |
+
 ## Open questions
 
 (appended as they arise; each gets an owner: a drill, a key, or a decision of yours)

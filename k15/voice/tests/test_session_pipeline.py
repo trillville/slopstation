@@ -58,20 +58,37 @@ async def run():
     run_task = asyncio.create_task(runner.run())
 
     await asyncio.sleep(1.5)           # pipeline up
-    for text, _ in SCRIPT:
+    for text, _ in SCRIPT[:-1]:
         await worker.queue_frame(TranscriptionFrame(
             text=text, user_id="test", timestamp="t"))
         await asyncio.sleep(0.9)       # let earcons play
+
+    # Error honesty: an ErrorFrame while an answer is "in flight" must clear
+    # the pending flag (stops think ticks AND idle pinning) and play the fail
+    # earcon instead of trailing off into silence.
+    import time as _time
+
+    from pipecat.frames.frames import ErrorFrame
+    gate._assistant_pending = _time.time()
+    await worker.queue_frame(ErrorFrame(error="bench: synthetic LLM failure"))
+    await asyncio.sleep(0.9)
+    assert gate._assistant_pending == 0.0, "ErrorFrame must clear in-flight"
+
+    text, _ = SCRIPT[-1]               # "thanks" ends the worker
+    await worker.queue_frame(TranscriptionFrame(
+        text=text, user_id="test", timestamp="t"))
 
     await asyncio.wait_for(run_task, timeout=10)   # exit phrase must end it
 
     missing = [want for _, want in SCRIPT
                if not any(want in l for l in lines)]
     assert not missing, f"missing log evidence: {missing}"
+    assert any("pipeline error" in l for l in lines)
     # The lock arbiter ran for real (no lock on this machine = launchable).
     assert any("couch.py start" in l for l in lines)
     print("OK - session pipeline: gate matched/dry-dispatched/acked, "
-          "fall-through earconed, exit phrase ended the worker cleanly")
+          "fall-through earconed, error cleared the in-flight flag, "
+          "exit phrase ended the worker cleanly")
 
 
 if __name__ == "__main__":

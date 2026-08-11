@@ -23,7 +23,8 @@ def burst_count(x, silence=100, block_ms=2):
 
 
 def main():
-    expected_counts = {"wake": 1, "ok": 1, "busy": 2, "fail": 3, "close": 1}
+    expected_counts = {"wake": 1, "ok": 1, "busy": 2, "fail": 3, "close": 1,
+                       "think": 1}
     assert set(expected_counts) == set(earcons.SPECS)
 
     for name, want in expected_counts.items():

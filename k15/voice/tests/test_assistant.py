@@ -16,6 +16,9 @@ from dispatch import Dispatch
 
 CFG_MIN = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
            "voice": {"volumeStep": 2, "volumeMax": 40,
+                     "assistantWebSearch": False, "assistantSearchMaxUses": 2,
+                     "location": {"city": "", "region": "", "country": "",
+                                  "timezone": ""},
                      "inputs": {"apple tv": "hdmi1", "gaming": "hdmi4"}}}
 
 
@@ -90,6 +93,57 @@ def main():
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
+    # Server-side search: knob off -> absent everywhere (prompt included);
+    # knob on -> each provider's NATIVE entry, next to (never instead of)
+    # the function tools; empty location fields fold away entirely.
+    voice_off = CFG_MIN["voice"]
+    assert assistant.server_tools(voice_off, "anthropic") == []
+    assert assistant.server_tools(voice_off, "openai") == []
+    assert "search the web" not in si
+    voice_on = {**voice_off, "assistantWebSearch": True,
+                "location": {"city": "Portland", "region": "",
+                             "country": "US", "timezone": ""}}
+    aw, = assistant.server_tools(voice_on, "anthropic")
+    ow, = assistant.server_tools(voice_on, "openai")
+    assert aw["type"] == "web_search_20250305" and aw["max_uses"] == 2
+    assert ow["type"] == "web_search" and ow["search_context_size"] == "low"
+    assert aw["user_location"] == ow["user_location"] == {
+        "type": "approximate", "city": "Portland", "country": "US"}
+    bare = {**voice_on, "location": {"city": "", "region": "", "country": "",
+                                     "timezone": ""}}
+    assert "user_location" not in assistant.server_tools(bare, "openai")[0]
+    si_on = assistant.system_instruction({**CFG_MIN, "voice": voice_on})
+    # The two spoken-register guardrails that came out of the live probes:
+    # no citations in TTS output, no narrating the search itself.
+    assert "search the web" in si_on and "NO citations" in si_on
+    assert "Never announce or offer to search" in si_on
+    print("  server_tools: knob-gated, provider-native shapes, location folding")
+
+    # pause_turn continuation (a long server-side search pauses the turn):
+    # the partial assistant content is re-sent as-is and the spoken text
+    # accumulates across the pause - the API's documented contract.
+    import types
+    b = assistant.AnthropicBackend({"anthropicApiKey": "x" * 24},
+                                   "claude-haiku-4-5", voice=voice_on)
+    script = [
+        types.SimpleNamespace(
+            content=[types.SimpleNamespace(type="server_tool_use"),
+                     types.SimpleNamespace(type="text", text="Checking.")],
+            stop_reason="pause_turn", usage=None),
+        types.SimpleNamespace(
+            content=[types.SimpleNamespace(type="text", text="June 2026.")],
+            stop_reason="end_turn", usage=None),
+    ]
+    calls = []
+    b.client = types.SimpleNamespace(messages=types.SimpleNamespace(
+        create=lambda **kw: (calls.append(kw), script.pop(0))[1]))
+    out = b.turn("sys", "when did the dlc ship", {})
+    assert out == "Checking. June 2026.", out
+    assert len(calls) == 2 and not script
+    assert calls[0]["tools"][-1]["type"] == "web_search_20250305"
+    assert calls[1]["messages"][-1]["role"] == "assistant"   # partial re-sent
+    print("  pause_turn: continuation re-sent as-is, text accumulated")
+
     # Pipecat constructions with dummy keys (no network at init), both
     # providers - built through the PRODUCTION _make_llm, not a test-local
     # copy: the copy passed a dict for `reasoning` while the dataclass
@@ -120,6 +174,18 @@ def main():
                              settings=DeepgramTTSService.Settings(
                                  voice="aura-2-thalia-en"))
     assert ua and aa and llm_a and llm_o and tts
+    # The prod search passthrough: native tools ride ToolsSchema.custom_tools
+    # through the OpenAI Responses adapter VERBATIM, after the function tools
+    # - exactly the shape run_session builds when the knob is on.
+    from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
+    ts = ToolsSchema(standard_tools=schemas,
+                     custom_tools={AdapterType.OPENAI:
+                                   assistant.server_tools(voice_on, "openai")})
+    rendered = llm_o.get_llm_adapter().to_provider_tools_format(ts)
+    assert [t["name"] for t in rendered[:-1]] == [s.name for s in schemas]
+    assert rendered[-1]["type"] == "web_search"
+    assert LLMContext(messages=[], tools=ts)
+    print("  ToolsSchema: native web_search rendered after the function tools")
     # OpenAIBackend must default to a REAL reasoning effort, not disable it.
     import inspect
     eff = inspect.signature(assistant.OpenAIBackend.__init__).parameters["effort"]

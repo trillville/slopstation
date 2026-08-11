@@ -257,6 +257,46 @@ Reasoning happens *before* the first spoken word, so effort trades latency for
 depth — that's the tradeoff to feel. Flip `config.assistantProvider` to move
 production to the winner.
 
+## 10b. Web search + think ticks (Project D1)
+
+Ships dark: set `"assistantWebSearch": true` in config.json's `voice` section
+(the key must exist either way — the agent refuses to start without it). Fill
+`location` if you want "near me"-flavored answers. Text-first:
+
+```
+.venv\Scripts\python voice_agent.py --text --provider openai
+```
+
+The banner shows `+websearch`. Drills:
+
+1. **Searched turn** — "is the elden ring nightreign dlc out yet". Expect a
+   plain-spoken answer, **no URLs or bracketed sources in the text** (they'd
+   be read letter by letter; the prompt forbids them — bench-proven on Luna,
+   paste back any citation that leaks). 4–8 s is normal.
+2. **Unsearched turn** — "what mech games do i have". Latency must be
+   unchanged from step 9 and the answer must come from the catalog (no
+   search: verify no `web_search` trace in the saved REPL trace file).
+3. **Both providers** — repeat 1 on `--provider anthropic`. Haiku may narrate
+   "I'll search…" (ledger row D4, cosmetic, REPL-only lane) and the two
+   models may disagree on freshness — that's A/B material, note it.
+
+Then live (knob on, `Start-K15.bat` or `voice_agent.py` directly):
+
+4. **Think ticks** — "hey jarvis, is the nightreign dlc out yet": one soft
+   tick ~3 s in, repeating until the answer speaks. couch.log shows
+   `assistant still working - think ticks on` once per slow answer. Ticks
+   also cover slow *tool* answers now — "hey jarvis, end the session" with
+   the PC asleep should tick through the ssh wait instead of dead air.
+5. **Tier-1 during a search** — ask a searched question, then say "volume
+   up" while it thinks: the command must dispatch instantly (grammar runs on
+   every transcript, search or no search).
+6. **Tick tone/cadence taste** — `think` earcon spec and `THINK_CUE_S` are
+   placeholder-tunable (earcons.py / grammar_gate.py) like every other tone.
+
+Production searches only on the **openai lane** (pipecat's anthropic adapter
+has no native-tool passthrough — startup logs this if you're on anthropic
+with the knob on; the REPL searches on both).
+
 ## Autostart — one shortcut starts everything
 
 `Start-K15.bat` is the single Startup-folder shortcut target: it launches the

@@ -47,7 +47,8 @@ log = cglib.make_log("voice")
 REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "eotThreshold", "eagerEotThreshold", "keytermCount",
                   "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
-                  "assistantProvider", "assistantModel", "inputs")
+                  "assistantProvider", "assistantModel", "inputs",
+                  "assistantWebSearch", "assistantSearchMaxUses", "location")
 
 
 def load_titles(count):
@@ -401,16 +402,27 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     stages = [transport.input(), feeder, stt, gate]
     context = None
     if assistant_live:
-        from assistant import function_schemas, system_instruction, tool_impls
+        from assistant import (function_schemas, server_tools,
+                               system_instruction, tool_impls)
+        from pipecat.adapters.schemas.tools_schema import (AdapterType,
+                                                           ToolsSchema)
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.aggregators.llm_response_universal import (
             LLMContextAggregatorPair)
 
         carry = (list(CARRY["messages"])
                  if time.time() - CARRY["t"] < voice["followupCarryS"] else [])
+        # Native (provider-executed) tools ride custom_tools - the adapter
+        # appends them verbatim after the function tools. Only the OpenAI
+        # adapter has this passthrough in pipecat 1.7 (AdapterType has no
+        # ANTHROPIC), so with the anthropic provider the knob reaches the
+        # REPL but not production - main() logs that at startup.
+        native = server_tools(voice, "openai") if provider == "openai" else []
         context = LLMContext(
             messages=carry,
-            tools=function_schemas(tool_impls(dispatcher, log)))
+            tools=ToolsSchema(
+                standard_tools=function_schemas(tool_impls(dispatcher, log)),
+                custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
         stages += [user_agg, _make_llm(voice, secrets, system_instruction(cfg)),
                    _make_tts(voice, secrets), transport.output(), asst_agg]
@@ -499,6 +511,11 @@ def main():
     if missing:
         log(f"config.json voice section missing keys: {missing} - fix and restart")
         return 1
+    if (voice["assistantWebSearch"]
+            and voice["assistantProvider"] != "openai"):
+        log("assistantWebSearch: production search runs on the openai lane "
+            "only (pipecat's anthropic adapter has no native-tool "
+            "passthrough); the --text REPL searches on both")
     secrets = cglib.load_secrets()
 
     if args.text:

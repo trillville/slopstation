@@ -56,6 +56,16 @@ def system_instruction(cfg):
         f"Volume runs 0-{voice['volumeMax']}, higher requests are clamped - "
         "confirm the level the tool actually returns. Mute is a blind toggle "
         "with no readable state - say you toggled it, never claim on or off.")
+    if voice["assistantWebSearch"]:
+        tail.append(
+            "You can search the web for current facts the catalog can't "
+            "answer (release dates, game news, prices). Search only when the "
+            "catalog genuinely can't answer, and keep the reply to two short "
+            "sentences. Never announce or offer to search - just search and "
+            "state the result. Your reply is read aloud by TTS: state facts in "
+            "plain words with NO citations, links, URLs, source names, or "
+            "parenthetical references of any kind - a bracketed source "
+            "would be spoken letter by letter.")
     return (RULES + " " + " ".join(tail) + "\n\n"
             "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM or "
             "never|inst/notinst|controller full/partial/none/?):\n"
@@ -185,6 +195,34 @@ def openai_tools():
             for n, d, p, r in TOOL_DEFS]
 
 
+def _user_location(voice):
+    """Non-empty location fields -> the 'approximate' user_location dict.
+    Both providers accept the identical shape; None when nothing is set."""
+    loc = {k: v for k, v in voice["location"].items() if v}
+    return {"type": "approximate", **loc} if loc else None
+
+
+def server_tools(voice, provider):
+    """Provider-NATIVE server-side tools (the provider executes them; nothing
+    in tool_impls), appended to the request next to the TOOL_DEFS renders.
+    Today: web search behind config.assistantWebSearch. The capability is
+    neutral, the entry is per-provider - same split as anthropic_tools()/
+    openai_tools(). Knob asymmetry is the vendors': Anthropic caps calls via
+    max_uses; OpenAI has no cap knob, so cost control there is prompt-side
+    plus search_context_size low (smallest/fastest retrieval)."""
+    if not voice["assistantWebSearch"]:
+        return []
+    if provider == "openai":
+        tool = {"type": "web_search", "search_context_size": "low"}
+    else:
+        tool = {"type": "web_search_20250305", "name": "web_search",
+                "max_uses": voice["assistantSearchMaxUses"]}
+    loc = _user_location(voice)
+    if loc:
+        tool["user_location"] = loc
+    return [tool]
+
+
 # --- provider backends: one turn (with its tool loop) -> reply text -----------
 # System prompt, tool schemas, and tool impls are provider-neutral; only the
 # request/response shape differs. Each backend holds its own conversation state.
@@ -192,12 +230,13 @@ def openai_tools():
 class AnthropicBackend:
     key = "anthropicApiKey"
 
-    def __init__(self, secrets, model, effort=None):
+    def __init__(self, secrets, model, effort=None, voice=None):
         import anthropic
         self.client = anthropic.Anthropic(api_key=secrets[self.key])
         self.model = model
         self.messages = []
         self.cache_note = ""
+        self.server_tools = server_tools(voice, "anthropic") if voice else []
 
     def turn(self, system_text, user_text, impls):
         # cache_control on the system block caches tools+system together
@@ -208,17 +247,29 @@ class AnthropicBackend:
         system = [{"type": "text", "text": system_text,
                    "cache_control": {"type": "ephemeral"}}]
         self.messages.append({"role": "user", "content": user_text})
+        spoken = []          # text carried across pause_turn continuations
         while True:
             resp = self.client.messages.create(
                 model=self.model, max_tokens=400, system=system,
-                messages=self.messages, tools=anthropic_tools())
+                messages=self.messages,
+                tools=anthropic_tools() + self.server_tools)
             u = resp.usage
             self.cache_note = (
                 f"cache w{getattr(u, 'cache_creation_input_tokens', 0) or 0}"
                 f"/r{getattr(u, 'cache_read_input_tokens', 0) or 0}")
             self.messages.append({"role": "assistant", "content": resp.content})
+            text = " ".join(b.text for b in resp.content if b.type == "text")
+            if resp.stop_reason == "pause_turn":
+                # A long server-side search paused the turn mid-flight; the
+                # documented contract is to re-send the partial assistant
+                # content as-is and let the model continue. Server tool
+                # blocks need no client-side result - only the accumulated
+                # text matters to the caller.
+                if text:
+                    spoken.append(text)
+                continue
             if resp.stop_reason != "tool_use":
-                return " ".join(b.text for b in resp.content if b.type == "text")
+                return " ".join(spoken + [text]) if spoken else text
             results = []
             for b in resp.content:
                 if b.type == "tool_use":
@@ -236,7 +287,7 @@ class OpenAIBackend:
     which also threads reasoning items across tool calls for us."""
     key = "openaiApiKey"
 
-    def __init__(self, secrets, model, effort="low"):
+    def __init__(self, secrets, model, effort="low", voice=None):
         import openai
         self.client = openai.OpenAI(api_key=secrets[self.key])
         self.model = model
@@ -244,6 +295,7 @@ class OpenAIBackend:
         self.prev = None
         self.cache_note = ""
         self.messages = []              # trace mirror; real state is server-side
+        self.server_tools = server_tools(voice, "openai") if voice else []
 
     def turn(self, system_text, user_text, impls):
         self.messages.append({"role": "user", "content": user_text})
@@ -251,7 +303,8 @@ class OpenAIBackend:
         while True:
             resp = self.client.responses.create(
                 model=self.model, instructions=system_text, input=pending,
-                tools=openai_tools(), reasoning={"effort": self.effort},
+                tools=openai_tools() + self.server_tools,
+                reasoning={"effort": self.effort},
                 max_output_tokens=1500, previous_response_id=self.prev)
             self.prev = resp.id
             det = getattr(resp.usage, "input_tokens_details", None)
@@ -300,11 +353,13 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
     impls = tool_impls(Dispatch(cfg, log, dry_run=dry_run), log)
     effort = effort or cfg["voice"].get("assistantReasoningEffort", "low")
     backend = BACKENDS[provider](secrets, model or default_model(cfg, provider),
-                                 effort=effort)
+                                 effort=effort, voice=cfg["voice"])
     system_text = system_instruction(cfg)
     tag = f"{provider}/{backend.model}"
     if provider == "openai":
         tag += f" effort={effort}"
+    if backend.server_tools:
+        tag += " +websearch"
     print(f"assistant REPL - {tag}, dry_run={dry_run}. Empty line to quit.")
     try:
         while True:
