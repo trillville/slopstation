@@ -56,8 +56,10 @@ def main():
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
     names = {n for n, *_ in assistant.TOOL_DEFS}
     assert {t["name"] for t in at} == names
-    assert {t["function"]["name"] for t in ot} == names
-    assert all(t["type"] == "function" and "parameters" in t["function"] for t in ot)
+    # Responses API tools are FLAT (name/parameters at top level, no nesting).
+    assert {t["name"] for t in ot} == names
+    assert all(t["type"] == "function" and "parameters" in t and "function" not in t
+               for t in ot)
     assert all("input_schema" in t for t in at)
     assert set(assistant.BACKENDS) == {"anthropic", "openai"}
     assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"

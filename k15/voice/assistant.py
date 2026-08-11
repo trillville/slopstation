@@ -146,9 +146,10 @@ def anthropic_tools():
 
 
 def openai_tools():
-    return [{"type": "function", "function": {
-                "name": n, "description": d,
-                "parameters": {"type": "object", "properties": p, "required": r}}}
+    # Responses API tool shape is FLAT (name/parameters at top level) - the
+    # nested {"function": {...}} form is chat-completions only.
+    return [{"type": "function", "name": n, "description": d,
+             "parameters": {"type": "object", "properties": p, "required": r}}
             for n, d, p, r in TOOL_DEFS]
 
 

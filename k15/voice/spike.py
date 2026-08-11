@@ -84,11 +84,11 @@ async def main():
     import numpy as np
     from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame
     from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.pipeline.runner import PipelineRunner
-    from pipecat.pipeline.task import PipelineTask
+    from pipecat.pipeline.worker import PipelineWorker
     from pipecat.processors.frame_processor import FrameProcessor
     from pipecat.transports.local.audio import (LocalAudioTransport,
                                                 LocalAudioTransportParams)
+    from pipecat.workers.runner import WorkerRunner
 
     tone = make_tone()
 
@@ -133,13 +133,15 @@ async def main():
         audio_out_enabled=True, audio_out_sample_rate=RATE,
     ))
     probe = HOLDER["probe"] = SpikeProbe()
-    task = PipelineTask(Pipeline([transport.input(), probe, transport.output()]))
+    worker = PipelineWorker(Pipeline([transport.input(), probe, transport.output()]))
 
     print("[spike] pipeline up - speak near the mic; expect a tone back.")
     print("[spike] leave running ~10 min, then Ctrl+C for the summary.")
     # handle_sigint=False: pipecat's signal hook uses loop.add_signal_handler,
     # which Windows' event loop doesn't implement - we catch KeyboardInterrupt.
-    await PipelineRunner(handle_sigint=False).run(task)
+    runner = WorkerRunner(handle_sigint=False)
+    await runner.add_workers(worker)
+    await runner.run()
 
 def summary(probe, err):
     print("\n========== SPIKE SUMMARY (paste everything back) ==========")
