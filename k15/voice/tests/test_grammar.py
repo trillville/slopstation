@@ -114,11 +114,29 @@ def main():
     if m.match(stripped) is None or m.match(stripped)[0] != "VolumeUp":
         failures.append(f"stripped {stripped!r} no longer matches VolumeUp")
 
+    # is_busy: an assistant turn in flight defers the idle timeout (a model
+    # slower than holdWindowS must not get its session killed mid-answer),
+    # but a hung turn expires after ASSISTANT_WAIT_S so it can't pin the
+    # session open.
+    import time as _t
+
+    from grammar_gate import GrammarGate
+    g = GrammarGate(m, None, lambda s: None)
+    if g.is_busy():
+        failures.append("fresh gate must not be busy")
+    g._assistant_pending = _t.time()
+    if not g.is_busy():
+        failures.append("assistant turn in flight must defer idle")
+    g._assistant_pending = _t.time() - (GrammarGate.ASSISTANT_WAIT_S + 1)
+    if g.is_busy():
+        failures.append("expired assistant turn must not pin the session")
+
     for f in failures:
         print("FAIL", f)
     assert not failures, f"{len(failures)} grammar failures"
     print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
-          f"risky-command narrowness; {len(STRIP)} wake-strip cases")
+          f"risky-command narrowness; {len(STRIP)} wake-strip cases; "
+          f"is_busy defers for in-flight assistant turns")
 
 
 if __name__ == "__main__":

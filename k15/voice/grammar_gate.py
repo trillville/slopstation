@@ -8,13 +8,15 @@ assistant lane (or dead-end with a fail earcon when no LLM key is configured).
 Exit phrases end the session by pushing EndWorkerFrame downstream.
 """
 import asyncio
+import time
 from pathlib import Path
 
 import yaml
 from hassil import Intents, TextSlotList, recognize
 from rapidfuzz import fuzz
 
-from pipecat.frames.frames import (EndWorkerFrame, Frame, OutputAudioRawFrame,
+from pipecat.frames.frames import (BotStartedSpeakingFrame, EndWorkerFrame,
+                                   ErrorFrame, Frame, OutputAudioRawFrame,
                                    TranscriptionFrame, UserStartedSpeakingFrame,
                                    UserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -76,6 +78,12 @@ class GrammarMatcher:
 class GrammarGate(FrameProcessor):
     """intent -> dispatch call; Result.earcon -> tone pushed to the speaker."""
 
+    # How long an assistant turn may stay "in flight" before the idle handler
+    # stops deferring for it. Covers a reasoning model's think-before-speak
+    # (GPT at low effort) and a tool call's 15s ssh; caps so a hung or errored
+    # turn can't pin the session open forever.
+    ASSISTANT_WAIT_S = 30
+
     def __init__(self, matcher, dispatch, log, resolve_game=None,
                  assistant_enabled=False, wake_word=None):
         super().__init__()
@@ -87,11 +95,18 @@ class GrammarGate(FrameProcessor):
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
+        self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
 
     def is_busy(self):
-        """True while the user is mid-turn or a dispatch is running - the idle
-        handler defers session-end until both are clear."""
-        return self._speaking or self._dispatching > 0
+        """True while the user is mid-turn, a dispatch is running, or an
+        assistant answer is still in flight (LLM reasoning + tool calls +
+        TTS start, cleared when the bot starts speaking) - the idle handler
+        defers session-end until all are clear. Without the in-flight check,
+        a model slower than holdWindowS gets its session killed mid-answer
+        (live 2026-08-11: GPT at 8s+ vs holdWindowS=8)."""
+        pending = (self._assistant_pending
+                   and time.time() - self._assistant_pending < self.ASSISTANT_WAIT_S)
+        return self._speaking or self._dispatching > 0 or bool(pending)
 
     async def _earcon(self, name):
         await self.push_frame(OutputAudioRawFrame(
@@ -157,6 +172,13 @@ class GrammarGate(FrameProcessor):
             self._speaking = True
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._speaking = False
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            self._assistant_pending = 0.0       # answer arrived; idle clock owns it now
+        elif isinstance(frame, ErrorFrame):
+            # Pipecat reports service failures (LLM 401/400, TTS death) via
+            # loguru to the console only - mirror them into couch.log so a
+            # silent assistant is diagnosable from the one log that matters.
+            self.log(f"pipeline error: {frame.error}")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
             if text and self.wake_word:
@@ -183,4 +205,5 @@ class GrammarGate(FrameProcessor):
                     await self._earcon("fail")
                     return
                 self.log(f'heard "{text}" - passing to assistant')
+                self._assistant_pending = time.time()
         await self.push_frame(frame, direction)
