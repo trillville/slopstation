@@ -72,7 +72,14 @@ function Write-CgEvent {
         foreach ($k in $Fields.Keys) { $rec[$k] = $Fields[$k] }
         $file = Join-Path $CG.LogDir ("pc-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
         $line = ConvertTo-Json -InputObject $rec -Compress -Depth 4
-        Add-Content -Path $file -Value $line -Encoding utf8 -ErrorAction Stop
+        # AppendAllText with an explicit BOM-less encoder, NOT
+        # `Add-Content -Encoding utf8`: on Windows PowerShell 5.1 that flag
+        # means "UTF-8 with BOM", and the three bytes it puts in front of the
+        # first '{' make that line unparseable JSON forever after. Verified on
+        # 5.1.26100 - the file starts EF BB BF 7B.
+        [IO.File]::AppendAllText(
+            $file, $line + [Environment]::NewLine,
+            (New-Object System.Text.UTF8Encoding($false)))
     } catch { }     # telemetry never costs a session
 }
 
