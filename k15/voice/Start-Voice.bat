@@ -5,8 +5,23 @@ rem system python and does not care what happens in here.
 rem First run: creates the venv + installs pinned deps (internet, ~2 min).
 rem Args pass through: Start-Voice.bat --dry-run  runs the whole agent
 rem with side effects logged instead of executed.
+rem
+rem SINGLE INSTANCE: an fd-9 handle on a lock file is held for this window's
+rem lifetime, so a second launch (a manual test run while the startup copy is
+rem live, or vice versa) bounces instead of fighting over the mic and double-
+rem dispatching. The handle self-releases on ANY exit - crash, Ctrl+C, window
+rem close - so a dead supervisor can never wedge the next one.
 cd /d "%~dp0"
+set "STARTED="
+2>nul ( 9>"%TEMP%\couch-voice-supervisor.lock" ( set STARTED=1 & call :main %* ) )
+if not defined STARTED (
+  echo [supervisor] another Start-Voice window is already running - close it first
+  pause
+  exit /b 1
+)
+exit /b
 
+:main
 rem Gate on a sentinel written only after pip succeeds - a half-built venv
 rem (network died mid-install) must re-install, not skip forever on "python.exe
 rem exists". Bail out loudly on bootstrap failure instead of crash-looping.

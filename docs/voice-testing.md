@@ -231,6 +231,25 @@ Reasoning happens *before* the first spoken word, so effort trades latency for
 depth — that's the tradeoff to feel. Flip `config.assistantProvider` to move
 production to the winner.
 
+## Autostart — voice at boot (once §7 feels right)
+
+Same pattern as the listener: a Startup-folder shortcut, so both consoles come
+up on login (Autologon makes login = boot). One paste on the K15 creates it,
+minimized:
+
+```
+$sc = (New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Start-Voice.lnk"); $sc.TargetPath = "$env:USERPROFILE\Desktop\slopstation\k15\voice\Start-Voice.bat"; $sc.WorkingDirectory = "$env:USERPROFILE\Desktop\slopstation\k15\voice"; $sc.WindowStyle = 7; $sc.Save()
+```
+
+Two consoles run side by side from then on: the listener (load-bearing, system
+python) and the voice supervisor (overlay, its own venv). `Start-Voice.bat` is
+**single-instance**: a second launch — e.g. a manual `--dry-run` while the
+startup copy is live — prints "already running" and bounces instead of
+fighting over the mic. So for bench sessions, close the startup window first
+(the supervisor restarts the agent in 10 s if it merely crashes; closing the
+window is the off switch). Remove the shortcut to undo autostart. Verify the
+unattended chain once: reboot, touch nothing, say "hey jarvis volume up".
+
 ## Fastest path to "it works"
 
 Keys (Deepgram) → §2 setup → §3 devices+spike → §4 wake → **§5 dry-run** (proves
