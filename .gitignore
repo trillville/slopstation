@@ -29,6 +29,12 @@ __pycache__/
 # Voice: wake-word model binaries - fetched on first run, not vendored
 k15/voice/models/
 
+# Voice: Tier-3 worker scratch - the briefing + guardrails are committed,
+# everything a worker writes is runtime state
+k15/voice/worker_home/*
+!k15/voice/worker_home/AGENTS.md
+!k15/voice/worker_home/.claude/
+
 # OS / editor cruft
 Thumbs.db
 .DS_Store

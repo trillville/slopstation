@@ -223,6 +223,38 @@ def check_voice(cfg):
     except Exception as e:
         report(WARN, "voice library", f"unreadable ({e})",
                "delete state\\library.json; the agent rebuilds it")
+    # Tier-3 worker lane (Project D2) - stdlib checks only, same WARN-only
+    # posture: background tasks off must never redden the chain doctor.
+    import shutil
+    wp = cfg["voice"].get("workerProvider", "")
+    if wp:
+        cli = shutil.which(wp)
+        if cli:
+            report(PASS, "worker CLI", f"{wp} on PATH ({cli})")
+        else:
+            report(WARN, "worker CLI", f"'{wp}' not on PATH - background "
+                   "tasks disabled (everything else runs)",
+                   f"npm i -g the {wp} CLI and log in once")
+        if not (voice_dir / "worker_home" / "AGENTS.md").exists():
+            report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
+                   "git pull should restore it - workers act unbriefed without it")
+    jobs_file = cglib.BASE / "state" / "jobs.json"
+    if jobs_file.exists():
+        try:
+            import json as _json
+            rows = _json.loads(jobs_file.read_text(encoding="utf-8"))
+            running_jobs = [j for j in rows if j.get("status") == "RUNNING"]
+            unread = [j for j in rows if not j.get("read", True)]
+            note = (f"{len(rows)} recorded, {len(running_jobs)} running, "
+                    f"{len(unread)} unread")
+            if running_jobs and "voice_agent" not in _python_cmdlines():
+                report(WARN, "worker jobs", note + " - RUNNING with no agent "
+                       "(orphan)", "the agent's next start reconciles it to FAILED")
+            else:
+                report(PASS, "worker jobs", note)
+        except Exception as e:
+            report(WARN, "worker jobs", f"jobs.json unreadable ({e})",
+                   "delete state\\jobs.json; the store recreates it")
     try:
         running = "voice_agent" in _python_cmdlines()
     except Exception as e:

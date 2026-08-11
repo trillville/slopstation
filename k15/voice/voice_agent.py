@@ -48,7 +48,8 @@ REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "eotThreshold", "eagerEotThreshold", "keytermCount",
                   "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
                   "assistantProvider", "assistantModel", "inputs",
-                  "assistantWebSearch", "assistantSearchMaxUses", "location")
+                  "assistantWebSearch", "assistantSearchMaxUses", "location",
+                  "workerProvider", "workerModel", "workerTimeoutS")
 
 
 def load_titles(count):
@@ -345,10 +346,10 @@ def _make_llm(voice, secrets, system_text):
 
 
 async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
-                      capture=None):
+                      capture=None, jobs=None):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
-                                       TranscriptionFrame,
+                                       TranscriptionFrame, TTSSpeakFrame,
                                        UserStartedSpeakingFrame)
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -396,6 +397,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
                       if game_terms else None),
         assistant_enabled=assistant_live,
         wake_word=wake_phrase.split()[-1],      # "jarvis" - the strip anchor
+        jobs=jobs,
     )
 
     feeder = PrerollFeeder(log)
@@ -421,7 +423,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         context = LLMContext(
             messages=carry,
             tools=ToolsSchema(
-                standard_tools=function_schemas(tool_impls(dispatcher, log)),
+                standard_tools=function_schemas(
+                    tool_impls(dispatcher, log, jobs=jobs)),
                 custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
         stages += [user_agg, _make_llm(voice, secrets, system_instruction(cfg)),
@@ -460,6 +463,13 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         feeder.pcm = capture.stop()
     try:
         await runner.add_workers(worker)
+        if jobs is not None and assistant_live and jobs.unread():
+            # Next-wake mention (an aborted or synth-failed announcement
+            # lands here): one line through the session TTS, result kept
+            # unread until actually retrieved.
+            await worker.queue_frame(TTSSpeakFrame(
+                "By the way, a background task finished - say what did "
+                "you find to hear it."))
         await runner.run()
     finally:
         # pipecat 1.7 owns but never terminates the PyAudio handle it creates,
@@ -538,6 +548,33 @@ def main():
     refresh_library_bg()
     prewarm_imports_bg(voice.get("assistantProvider", "anthropic"))
 
+    # Tier-3 worker lane (Project D2), fail-soft like every other lane: a
+    # missing CLI turns background tasks off with a clear message - wake,
+    # commands, and the assistant are untouched either way.
+    import announce
+    import jobs as jobs_mod
+    from workers import WORKERS
+    jobs = announcer = None
+    wp = voice["workerProvider"]
+    adapter = WORKERS[wp](voice["workerModel"]) if wp in WORKERS else None
+    if adapter is None:
+        log(f"worker lane DISABLED - unknown workerProvider '{wp}' "
+            f"(one of {list(WORKERS)})")
+    elif not adapter.available():
+        log(f"worker lane DISABLED - '{wp}' CLI not on PATH "
+            "(background tasks off; everything else runs)")
+    elif not stt_live:
+        log("worker lane DISABLED - announcements need the Deepgram key")
+    else:
+        announcer = announce.Announcer(voice, secrets, log)
+        jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],
+                                 on_done=announcer.submit)
+        announcer.jobs = jobs
+        orphans = jobs.reconcile()
+        jobs.start()
+        log(f"worker lane up - {wp}"
+            + (f", {orphans} orphaned job(s) marked failed" if orphans else ""))
+
     listener = WakeListener(pa, voice, input_idx)
     log(f"voice agent up - wake model {listener.model_name}, "
         f"threshold {voice['wakeThreshold']}"
@@ -576,19 +613,25 @@ def main():
             pa, input_idx, output_idx = rebuild_audio(pa, voice, listener)
             continue
         log(f"wake (score {score:.2f})")
+        if announcer:
+            announcer.abort_current()           # user intent beats a bulletin
         if not stt_live:
             capture.stop()
             play_pcm(pa, earcons.pcm("fail"), output_idx)
             continue
         play_pcm(pa, earcons.pcm("wake"), output_idx)
         log("session open")
+        if announcer:
+            announcer.session_active.set()
         try:
             asyncio.run(run_session(cfg, secrets, matcher, args,
-                                    input_idx, output_idx, capture))
+                                    input_idx, output_idx, capture, jobs=jobs))
         except Exception as e:
             log(f"session crashed: {e!r} - back to dormant")
         finally:
             capture.stop()                      # idempotent; frees the mic if the build crashed
+            if announcer:
+                announcer.session_active.clear()
         refresh_library_bg()                    # pick up installs between sessions
         log("session closed - dormant")
         if args.once:

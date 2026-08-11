@@ -65,6 +65,18 @@ def main():
     assert r["ok"]                                # dry-run path
     r = impls["get_game_details"]({"appid": real_appid})
     assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
+    # background_task: truthful refusal with no JobStore (REPL / CLI missing),
+    # queues through one when present, empty task refused.
+    r = impls["background_task"]({"task": "find coop deals"})
+    assert not r["ok"] and "aren't available" in r["error"]
+
+    class FakeJobs:
+        def enqueue(self, task):
+            return True, "queued - the result will be announced"
+    jimpls = assistant.tool_impls(d, logs.append, jobs=FakeJobs())
+    r = jimpls["background_task"]({"task": "find coop deals"})
+    assert r["ok"] and "queued" in r["detail"]
+    assert not jimpls["background_task"]({"task": "  "})["ok"]
     # Owned-but-not-installed must still come back named (review gap: the
     # model got details for a game it couldn't name).
     inst_ids = {row["appid"] for row in rows}
@@ -150,7 +162,7 @@ def main():
     # settings accepted it silently, and the crash only surfaced at live
     # inference ("'dict' object has no attribute 'model_dump'", 2026-08-11).
     schemas = assistant.function_schemas(impls)
-    assert len(schemas) == 4
+    assert len(schemas) == 5
     import voice_agent
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (

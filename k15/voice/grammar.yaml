@@ -59,6 +59,24 @@ intents:
           - "nevermind"
           - "cancel"
           - "go back to sleep"
+  # Background-task surface (Project D). Deliberately narrow: "cancel" alone
+  # stays ExitSession, and conversational phrasings ("tell me more") must
+  # keep falling through to the assistant lane.
+  TaskResult:
+    data:
+      - sentences:
+          - "what did you find [out]"
+          - "any updates [on the (task|research)]"
+          - "task update"
+  TaskDetail:
+    data:
+      - sentences:
+          - "[give me] the details"
+          - "task details"
+  TaskCancel:
+    data:
+      - sentences:
+          - "cancel the (task|research|job)"
   # LAST on purpose: {game} is a wildcard, so "start a session" must hit
   # StartSession above before "start {game}" can eat it. Title resolution is
   # the fuzzy resolver's job (titles.py), not this grammar's.

@@ -23,6 +23,8 @@ SPECS = {
     "close": (4500, [(440, 55)]),
     "think": (4500, [(880, 40)]),   # soft "still working" tick, repeats while
                                     # an assistant answer is in flight
+    "announce": (5000, [(988, 50), (1319, 70)]),  # rising pair = "news!" -
+                                    # precedes a background-task announcement
 }
 
 _cache = {}

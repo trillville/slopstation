@@ -79,8 +79,10 @@ def known_appids():
     return ids
 
 
-def tool_impls(dispatch, log):
-    """name -> fn(args: dict) -> dict. Shared by pipeline and REPL."""
+def tool_impls(dispatch, log, jobs=None):
+    """name -> fn(args: dict) -> dict. Shared by pipeline and REPL. jobs is
+    the Tier-3 JobStore; None (REPL, or worker CLI missing) makes
+    background_task refuse truthfully instead of pretending."""
     def launch_game(args):
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
@@ -133,9 +135,21 @@ def tool_impls(dispatch, log):
         return {"ok": True, "name": name, "installed": installed,
                 **(meta or {})}
 
+    def background_task(args):
+        task = str(args.get("task", "")).strip()
+        if not task:
+            return {"ok": False, "error": "background_task needs a task"}
+        if jobs is None:
+            return {"ok": False, "error": "background tasks aren't available "
+                    "right now - answer from what you know instead"}
+        ok, detail = jobs.enqueue(task)
+        log(f"tool background_task {'queued' if ok else 'refused'}: {task[:80]}")
+        return {"ok": ok, "detail" if ok else "error": detail}
+
     return {"launch_game": launch_game, "control": control,
             "get_now_playing": get_now_playing,
-            "get_game_details": get_game_details}
+            "get_game_details": get_game_details,
+            "background_task": background_task}
 
 
 TOOL_DEFS = [
@@ -159,6 +173,15 @@ TOOL_DEFS = [
     ("get_now_playing", "What game is currently running, if any.", {}, []),
     ("get_game_details", "Details (tags, description, score) for one appid.",
      {"appid": {"type": "integer"}}, ["appid"]),
+    ("background_task", "Queue a background agent for work that needs real "
+     "research or many steps (compare reviews, find deals, dig into "
+     "something) - minutes, not seconds. The result is announced aloud "
+     "later. After queueing, tell the user you'll get back to them. Never "
+     "use it for anything the catalog or a quick search answers.",
+     {"task": {"type": "string",
+               "description": "self-contained task description for the "
+               "background agent - include every constraint the user said"}},
+     ["task"]),
 ]
 
 

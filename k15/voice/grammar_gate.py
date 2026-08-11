@@ -17,7 +17,8 @@ from rapidfuzz import fuzz
 
 from pipecat.frames.frames import (BotStartedSpeakingFrame, EndWorkerFrame,
                                    ErrorFrame, Frame, OutputAudioRawFrame,
-                                   TranscriptionFrame, UserStartedSpeakingFrame,
+                                   TranscriptionFrame, TTSSpeakFrame,
+                                   UserStartedSpeakingFrame,
                                    UserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -92,7 +93,7 @@ class GrammarGate(FrameProcessor):
     THINK_CUE_S = 3.0
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
-                 assistant_enabled=False, wake_word=None):
+                 assistant_enabled=False, wake_word=None, jobs=None):
         super().__init__()
         self.matcher = matcher
         self.dispatch = dispatch
@@ -100,6 +101,7 @@ class GrammarGate(FrameProcessor):
         self.resolve_game = resolve_game        # fuzzy title -> appid (titles.py)
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
+        self.jobs = jobs                        # JobStore; None = worker lane off
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
@@ -149,6 +151,10 @@ class GrammarGate(FrameProcessor):
             await self._earcon("close")
             await self.push_frame(EndWorkerFrame(reason="exit phrase"))
             return True
+        if intent in ("TaskResult", "TaskDetail", "TaskCancel"):
+            if self.jobs is None:
+                return False                    # worker lane off -> Tier 2
+            return await self._task_intent(intent)
         actions = {
             "StartSession": d.start_session,
             "EndSession": d.end_session,
@@ -173,6 +179,32 @@ class GrammarGate(FrameProcessor):
             self._dispatching -= 1
         self.log(f"{intent} -> {r.detail}")
         await self._earcon(r.earcon)
+        return True
+
+    async def _task_intent(self, intent):
+        """Background-task retrieval speaks through the session TTS (the
+        speech IS the feedback, no earcon); read only after it was spoken.
+        All jobs calls are quick local file reads - no thread hop needed."""
+        if intent == "TaskCancel":
+            n, running = self.jobs.cancel_queued()
+            self.log(f"task cancel: {n} queued cancelled, running={running}")
+            if running:
+                await self.push_frame(TTSSpeakFrame(
+                    "One is already running - it will finish or time out. "
+                    + (f"Cancelled {n} queued." if n else "")))
+            else:
+                await self._earcon("ok" if n else "fail")
+            return True
+        job = self.jobs.latest_result()
+        if job is None:
+            line = self.jobs.status_line()
+            await self.push_frame(TTSSpeakFrame(
+                line or "No finished background tasks."))
+            return True
+        text = job["detail"] if intent == "TaskDetail" else job["summary"]
+        self.log(f"task {intent}: speaking {job['id']}")
+        await self.push_frame(TTSSpeakFrame(text))
+        self.jobs.mark_read(job["id"])
         return True
 
     async def _play_game(self, spoken):

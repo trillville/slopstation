@@ -49,6 +49,17 @@ TABLE = [
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
+    ("cancel", "ExitSession", {}),          # bare cancel stays conversation-close
+    # Background-task surface (Project D2) - narrow by design.
+    ("what did you find", "TaskResult", {}),
+    ("what did you find out", "TaskResult", {}),
+    ("any updates", "TaskResult", {}),
+    ("any updates on the research", "TaskResult", {}),
+    ("task update", "TaskResult", {}),
+    ("give me the details", "TaskDetail", {}),
+    ("task details", "TaskDetail", {}),
+    ("cancel the task", "TaskCancel", {}),
+    ("cancel the job", "TaskCancel", {}),
     # --- MUST fall through (assistant lane / no action) ----------------------
     ("what mech games do i have", None, {}),
     ("suggest a shooter i haven't played in a while", None, {}),
@@ -60,6 +71,9 @@ TABLE = [
     ("end it", None, {}),
     ("stop", None, {}),
     ("kill the session please maybe", None, {}),
+    # Conversational phrasings stay in the assistant lane.
+    ("tell me more", None, {}),
+    ("what did you find in the garage", None, {}),
 ]
 
 # Wake-prefix stripping (pre-roll makes transcripts start with the wake
