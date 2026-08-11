@@ -21,6 +21,7 @@ couch.log.*
 # `git pull` for updates without tuning/keys ever fighting the merge.
 secrets.json
 config.json
+config.alloy
 
 # Voice: per-machine python env and caches (listener stays on system python)
 .venv/

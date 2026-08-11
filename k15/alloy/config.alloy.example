@@ -1,0 +1,89 @@
+// Grafana Alloy - K15 log shipper.  (docs/observability-design.md, phase E2)
+//
+// Copy to the install dir and restart the service:
+//   copy k15\alloy\config.alloy.example "%PROGRAMFILES%\GrafanaLabs\Alloy\config.alloy"
+//   Restart-Service Alloy
+//
+// Then set the two secrets ONCE as machine environment variables (they are not
+// in this file and must never be committed - same posture as secrets.json):
+//   [Environment]::SetEnvironmentVariable('GC_LOKI_USER','<instance id>','Machine')
+//   [Environment]::SetEnvironmentVariable('GC_LOKI_TOKEN','<token>','Machine')
+// Both come from the Grafana Cloud stack's Loki "Details" page. Restart the
+// service after setting them - a Windows service reads its environment at start.
+//
+// WHAT THIS SHIPS: only the daily event stream. couch.log is deliberately NOT
+// tailed - it is the human mirror of the same events, and shipping both would
+// double the volume to say the same thing twice. Note the glob is k15-*.jsonl,
+// so blind-suite runs (which write test-*.jsonl) never leave the machine at all.
+
+livedebugging { enabled = true }     // http://localhost:12345 while setting up
+
+local.file_match "events" {
+	path_targets = [{
+		// EDIT THIS if the clone does not live on the Desktop.
+		__path__ = "C:/Users/minipc/Desktop/slopstation/k15/logs/k15-*.jsonl",
+	}]
+	// The file rolls over at midnight UTC and old ones are deleted by
+	// events.py, never renamed - so discovery just needs to notice the new
+	// name, and no open handle is ever moved out from under us.
+	sync_period = "30s"
+}
+
+loki.source.file "events" {
+	targets    = local.file_match.events.targets
+	forward_to = [loki.process.events.receiver]
+}
+
+loki.process "events" {
+	// Lift ONLY the four low-cardinality fields into labels. turn, session,
+	// appid, score and friends stay inside the line: they are what you filter
+	// by after selecting a stream (`| json | turn="9f2c1a"`), and promoting an
+	// id to a label would mint a new stream per launch and blow the index.
+	stage.json {
+		expressions = {
+			level   = "level",
+			lane    = "lane",
+			env     = "env",
+			service = "service",
+			ts      = "ts",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level   = "",
+			lane    = "",
+			env     = "",
+			service = "",
+		}
+	}
+
+	// Use the event's own UTC timestamp, not the moment Alloy read the file.
+	// Without this, a shipper that was down for an hour backfills everything
+	// stamped "now" and the launch you are trying to reconstruct loses its
+	// ordering.
+	stage.timestamp {
+		source = "ts"
+		format = "RFC3339"
+	}
+
+	forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+loki.write "grafana_cloud" {
+	endpoint {
+		// EDIT THIS - copy the exact URL from the Loki "Details" page of the
+		// stack (the region slug is per-stack; do not guess it).
+		url = "https://logs-prod-us-central1.grafana.net/loki/api/v1/push"
+
+		basic_auth {
+			username = sys.env("GC_LOKI_USER")
+			password = sys.env("GC_LOKI_TOKEN")
+		}
+	}
+
+	// A dead uplink must cost telemetry, never the couch: Alloy buffers to
+	// disk and retries on its own, and nothing in the voice or chord lane
+	// waits on it either way.
+	external_labels = {}
+}

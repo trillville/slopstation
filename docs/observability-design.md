@@ -373,15 +373,34 @@ greps the rest, which is all a transcript needs.
 
 Labels, and only these: `service` (`k15` | `gamepc`), `lane`, `level`, `env`.
 
-Config lives outside the repo (it carries the Grafana token). Commit
-`k15/alloy/config.alloy.example` and `gaming-pc/alloy/config.alloy.example`,
-following the existing `config.example.json` convention: per-machine files are
-created once from a committed example and never fight `git pull`.
+**Both configs are written and committed** —
+[`k15/alloy/config.alloy.example`](../k15/alloy/config.alloy.example) and
+[`gaming-pc/alloy/config.alloy.example`](../gaming-pc/alloy/config.alloy.example)
+— following the existing `config.example.json` convention: per-machine files
+are created once from a committed example and never fight `git pull`.
 
-Credentials go in `secrets.json` for the app (Langfuse keys, Grafana OTLP
-token) and directly in the Alloy config for the shipper. `secrets.template.json`
-gains the new keys, and `real_key()` already handles the placeholder-is-absent
-case.
+One deviation from the sketch above, decided while writing them: **the Grafana
+credentials are machine environment variables (`GC_LOKI_USER` /
+`GC_LOKI_TOKEN`) read via `sys.env()`, not literals in the config file.** That
+keeps the committed example byte-identical to the deployed file except for two
+paths and a URL, so "did someone edit the shipper?" is a one-line diff rather
+than an eyeball comparison against a file with a secret in the middle of it.
+Langfuse's keys still go in `secrets.json` at E5, where `real_key()` already
+handles the placeholder-is-absent case.
+
+### E2 runbook
+
+1. Create the Grafana Cloud free stack (**US region**). From the stack's Loki
+   **Details** page copy the push URL, the instance ID (user), and generate a
+   token.
+2. On the K15: `winget install GrafanaLabs.Alloy`, then copy the example config
+   over `%PROGRAMFILES%\GrafanaLabs\Alloy\config.alloy`, edit the clone path
+   and the URL, set the two environment variables at Machine scope, and
+   `Restart-Service Alloy`.
+3. Watch `http://localhost:12345` (live debugging is on in the example) until
+   lines appear, then confirm the same lines in Grafana from a phone.
+4. Only then repeat on the gaming PC (E4). One machine at a time — if labels
+   come out wrong, fixing it once is cheaper than fixing it twice.
 
 ## Part 4 — Grafana Cloud
 
@@ -491,7 +510,7 @@ are what makes it done.
 | **E3** | Heartbeats + the six alerts + notification channel. | Killing `voice_agent.py` pages within 6 min and self-clears when the supervisor restarts it |
 | **E4** | Alloy on the gaming PC (JSONL + transcripts). | The E1 correlation query works from Grafana, not from a merged local file |
 | **E5** | `voice/tracing.py`: OTel SDK, span tree, GenAI + `langfuse.*` attributes, dual export. Pins added to `requirements.txt`. Blind test `test_tracing.py` (no-op fallback, scrubbing, attribute mapping). | A conversation renders as a tree in Langfuse with non-zero cost, and the same trace is in Tempo |
-| **E6** | `doctor.py` telemetry section (Alloy service up? last export? clock skew?), README + docs updates. | `python doctor.py` fails when the shipper is down |
+| **E6** ◐ | `doctor.py` telemetry section, README + docs updates. | **Partly done 2026-08-11**: doctor now reports the event stream's freshness and size, files past TTL, and the Alloy service state (WARN-only, like voice — losing telemetry must never turn the chain diagnosis red). Clock skew still to add at E4 |
 | **later** | Langfuse datasets + scored evals for grammar-gate regressions and title resolution; span metrics if LogQL dashboards get slow. | — |
 
 E0 and E1 are the majority of the value and involve no vendor at all. If the

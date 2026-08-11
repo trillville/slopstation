@@ -278,6 +278,50 @@ def check_voice(cfg):
                "run voice\\Start-Voice.bat or the startup shortcut")
 
 
+def check_telemetry():
+    """Is the event stream actually being written, and is anything shipping it?
+
+    WARN-only, like voice: losing telemetry costs you the ability to diagnose
+    from the couch, never the ability to launch. But it has to be VISIBLE -
+    a silent shipper is the failure that makes every later dashboard a lie."""
+    import events
+    today = events._path(time.strftime("%Y%m%d", time.gmtime()))
+    try:
+        age = time.time() - today.stat().st_mtime
+        size_kb = today.stat().st_size / 1024
+        report(PASS, "event stream",
+               f"{today.name} {size_kb:.0f} KB, last write {age / 60:.0f} min ago")
+    except OSError:
+        report(WARN, "event stream", f"{today.name} not written yet",
+               "normal on a quiet boot; suspicious if the lanes are up")
+
+    # Retention is delete-on-rollover, so a pile of old files means the prune
+    # never ran - i.e. nothing has emitted since midnight on some past day.
+    try:
+        stale = [f.name for f in events.LOG_DIR.glob("*.jsonl")
+                 if time.time() - f.stat().st_mtime > events.TTL_DAYS * 86400]
+        if stale:
+            report(WARN, "event retention", f"{len(stale)} file(s) past TTL",
+                   "harmless; the next rollover prunes them")
+    except OSError:
+        pass
+
+    # The shipper (E2). Absent is fine and expected until Alloy is installed.
+    try:
+        out = subprocess.run(["sc", "query", "Alloy"], capture_output=True,
+                             text=True, timeout=10).stdout
+        if "RUNNING" in out:
+            report(PASS, "log shipper", "Alloy service running")
+        elif "STOPPED" in out:
+            report(WARN, "log shipper", "Alloy installed but STOPPED",
+                   "Start-Service Alloy - nothing reaches Grafana meanwhile")
+        else:
+            report(WARN, "log shipper", "Alloy not installed",
+                   "events are local-only; see docs/observability-design.md E2")
+    except Exception as e:
+        report(WARN, "log shipper", f"could not query ({e})", "")
+
+
 if __name__ == "__main__":
     cfg = check_config()
     check_imports()
@@ -288,6 +332,7 @@ if __name__ == "__main__":
         check_haptics()
     check_ssh()
     check_session_state()
+    check_telemetry()
     check_voice(cfg)
     print(f"\n{_counts[PASS]} pass, {_counts[WARN]} warn, {_counts[FAIL]} fail")
     sys.exit(_counts[FAIL])

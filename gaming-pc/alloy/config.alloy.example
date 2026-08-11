@@ -1,0 +1,96 @@
+// Grafana Alloy - gaming PC log shipper. (docs/observability-design.md, E4)
+//
+// Same install and same two environment variables as the K15 copy
+// (k15/alloy/config.alloy.example has the full setup notes); only the paths
+// and the second source differ.
+//
+// This machine ships TWO streams, deliberately, because they answer different
+// questions:
+//
+//   pc-YYYYMMDD.jsonl   the MILESTONES - enter_start, profile_applied,
+//                       puck_claimed, ready, enter_failed, exit_done. Structured,
+//                       carries the turn id, and is what dashboards count and
+//                       alerts fire on.
+//
+//   enter-*.log etc.    the NARRATIVE - Start-Transcript's full capture of the
+//                       run, including every line nobody thought to instrument.
+//                       Shipped as free text under lane="pc-transcript". This is
+//                       what you actually read when an enter fails in a NEW way,
+//                       and converting it to JSON would only wrap prose in
+//                       punctuation. Its filename carries the turn id too.
+
+livedebugging { enabled = true }
+
+// ---------------------------------------------------------------- milestones
+
+local.file_match "pc_events" {
+	path_targets = [{
+		__path__ = "C:/CouchGaming/logs/pc-*.jsonl",
+	}]
+	sync_period = "30s"
+}
+
+loki.source.file "pc_events" {
+	targets    = local.file_match.pc_events.targets
+	forward_to = [loki.process.pc_events.receiver]
+}
+
+loki.process "pc_events" {
+	stage.json {
+		expressions = {
+			level   = "level",
+			lane    = "lane",
+			env     = "env",
+			service = "service",
+			ts      = "ts",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level   = "",
+			lane    = "",
+			env     = "",
+			service = "",
+		}
+	}
+
+	stage.timestamp {
+		source = "ts"
+		format = "RFC3339"
+	}
+
+	forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+// ---------------------------------------------------------------- transcripts
+
+local.file_match "pc_transcripts" {
+	path_targets = [{
+		__path__ = "C:/CouchGaming/logs/*.log",
+		service  = "gamepc",
+		lane     = "pc-transcript",
+		env      = "prod",
+		level    = "info",
+	}]
+	sync_period = "30s"
+}
+
+loki.source.file "pc_transcripts" {
+	targets    = local.file_match.pc_transcripts.targets
+	forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+// -------------------------------------------------------------------- output
+
+loki.write "grafana_cloud" {
+	endpoint {
+		// EDIT THIS - the same URL the K15 uses; copy it from the stack.
+		url = "https://logs-prod-us-central1.grafana.net/loki/api/v1/push"
+
+		basic_auth {
+			username = sys.env("GC_LOKI_USER")
+			password = sys.env("GC_LOKI_TOKEN")
+		}
+	}
+}
