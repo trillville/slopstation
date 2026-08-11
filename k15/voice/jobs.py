@@ -153,9 +153,10 @@ class JobStore:
     # -- the voice surface ----------------------------------------------------
 
     def cancel_queued(self):
-        """Cancel every QUEUED job (a RUNNING subprocess is not killable
-        mid-flight in v1 - the honest answer is it finishes or times out).
-        Returns (n_cancelled, running_now)."""
+        """Cancel every QUEUED job. A RUNNING subprocess is not killed - the
+        honest answer is that it finishes or times out, since killing an
+        agent's child process tree cleanly on Windows is real work for a rare
+        want. Returns (n_cancelled, running_now)."""
         with self._lock:
             jobs = self._load()
             cancelled = 0

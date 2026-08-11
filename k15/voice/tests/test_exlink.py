@@ -1,6 +1,6 @@
-"""Blind test (C1 s4): the frozen EXLINK_FRAMES literals, the checksum
-builder, and vol_set clamping must all agree. Rebuilds every table entry from
-its (c1, c2, c3, value) spec - if a literal was ever hand-typed wrong, or the
+"""Blind test: the frozen EXLINK_FRAMES literals, the checksum builder, and
+vol_set clamping must all agree. Rebuilds every table entry from its
+(c1, c2, c3, value) spec - if a literal was ever hand-typed wrong, or the
 builder's checksum math drifts, this fails. Run:
     .venv\\Scripts\\python tests\\test_exlink.py
 """
@@ -39,11 +39,8 @@ def main():
     assert cglib.vol_set_frame(-5) == cglib.vol_set_frame(0)      # clamp low
     assert cglib.vol_set_frame(250) == cglib.vol_set_frame(100)   # clamp high
 
-    # The bench query probe frame is also builder-consistent.
-    assert cglib.EXLINK_VOLUME_QUERY == cglib.exlink_frame(0xF0, 0x01, 0x00, 0x00)
-
-    # COM-port contention retry (moved here so couch.py's sends get it too):
-    # one SerialException retries after a settle; a second one propagates.
+    # COM-port contention retry: one SerialException retries after a settle;
+    # a second one propagates.
     import types
     calls = {"n": 0}
 
@@ -75,7 +72,7 @@ def main():
         except fake_serial.SerialException:
             pass
 
-        # --- ack validation (proven live 2026-08-10: 030cf1 or it didn't land)
+        # --- ack validation: 030cf1 or the command didn't land
         FakePort.__init__ = lambda self, *a, **k: None
 
         FakePort.read = lambda self, n: bytes.fromhex("030cff")   # NAK
@@ -91,46 +88,18 @@ def main():
             assert False, "missing ack must raise ExlinkNak"
         except cglib.ExlinkNak:
             pass
-
-        # The probe drains until quiet (a multi-frame payload stays whole) and
-        # validates nothing - its job is to show the raw answer.
-        reads = {"n": 0}
-
-        def _read_then_quiet(self, n):
-            reads["n"] += 1
-            return bytes.fromhex("030cf114") if reads["n"] <= 2 else b""
-
-        FakePort.read = _read_then_quiet
-        assert (cglib.exlink_probe(cglib.EXLINK_VOLUME_QUERY, "COMX")
-                == "030cf114" * 2), "probe must keep reading until quiet"
     finally:
         time.sleep = _real_sleep
         del sys.modules["serial"]
 
-    # decode_volume's diff helper flags exactly the moved byte.
-    import contextlib
-    import io
-
-    import exlink
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        exlink._diff("a", "030cf107", "b", "030cf117")
-        exlink._diff("a", "030cf1", "b", "030cf1")
-        exlink._diff("a", "030cf1", "b", "030cf107")
-    text = out.getvalue()
-    assert "byte[3] 07->17" in text, text
-    assert "identical" in text, text
-    assert "lengths differ" in text, text
-
     # Every frame is 7 bytes and its own checksum verifies.
-    for name, hexs in {**cglib.EXLINK_FRAMES,
-                       "volume_query": cglib.EXLINK_VOLUME_QUERY}.items():
+    for name, hexs in cglib.EXLINK_FRAMES.items():
         b = bytes.fromhex(hexs)
         assert len(b) == 7, f"{name}: {len(b)} bytes"
         assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"
 
-    print(f"OK - {len(SPECS)} frames cross-checked, vol_set clamps, query frame "
-          f"verified, ack validation raises on NAK/silence, probe reads raw")
+    print(f"OK - {len(SPECS)} frames cross-checked, vol_set clamps, "
+          f"ack validation raises on NAK/silence")
 
 
 if __name__ == "__main__":

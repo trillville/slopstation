@@ -1,4 +1,4 @@
-"""Blind test (sync job): library.sync orchestration - layer 1 always, owned
+"""Blind test: library.sync orchestration - layer 1 always, owned
 gated on staleness + key, metadata top-up only, and the non-reentrant guard so
 rapid session-boundary calls can't stack concurrent crawls. All layer fns are
 mocked; no network. Run:

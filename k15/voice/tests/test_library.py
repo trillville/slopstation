@@ -1,4 +1,4 @@
-"""Blind test (C2): library layer 1 + title resolution against the REAL Steam
+"""Blind test: library layer 1 + title resolution against the REAL Steam
 install on this machine, cross-validated against the actual Dispatch.ps1
 `games` verb (python scan and PowerShell verb must agree row-for-row), plus
 the ARMORED-CORE-™-VI-vs-"armored core six" normalization problem. Run:

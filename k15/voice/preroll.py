@@ -2,8 +2,7 @@
 
 "hey jarvis volume up" spoken as one sentence used to lose "volume up": the
 wake stream closed at detection and the session transport reopens the mic
-~0.5-2 s later, so command words landed in dead air (assumptions row 10).
-Two pieces close the gap:
+~0.5-2 s later, so command words landed in dead air. Two pieces close the gap:
 
   WakeCapture   - at detection the wake stream is NOT closed; a thread keeps
                   reading it (seeded with a rolling pre-detection ring, so the

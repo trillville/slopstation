@@ -1,4 +1,4 @@
-"""Blind test (review fix): _trim_carry must never hand the next session a
+"""Blind test: _trim_carry must never hand the next session a
 tool_result without its tool_use (Anthropic 400s on that). It trims the
 carried slice to whole exchanges starting at a plain user turn. Run:
     .venv\\Scripts\\python tests\\test_carry.py

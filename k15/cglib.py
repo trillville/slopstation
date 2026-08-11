@@ -13,10 +13,10 @@ VID, PID = 0x28DE, 0x1304
 
 # Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum,
 # checksum = (0x100 - sum(first 6)) & 0xFF. Serial is 9600 baud, 8N1.
-# Volume/mute family from Samsung's official RS-232 worksheet (voice design
-# doc has the citation). DANGER: a one-byte slip in this family is power_off -
-# entries are frozen literals, cross-checked against exlink_frame() by
-# voice/tests/test_exlink.py, and never hand-typed anywhere else.
+# Volume/mute family from Samsung's official RS-232 worksheet. DANGER: a
+# one-byte slip in this family is power_off - entries are frozen literals,
+# cross-checked against exlink_frame() by voice/tests/test_exlink.py, and never
+# hand-typed anywhere else.
 EXLINK_FRAMES = {
     "power_on":  "082200000002d4",
     "power_off": "082200000001d5",
@@ -29,15 +29,7 @@ EXLINK_FRAMES = {
     "mute_toggle": "082202000000d4",   # discrete mute on/off does not exist
 }
 
-# Bench probe only. DECIDED 2026-08-10 (decode_volume drill): the S90C acks
-# this query and emits a CONSTANT canned echo - our command bytes parroted
-# back with a success code (08 f0010000 f1 16), byte-identical at volume
-# 7/23, muted/unmuted. No readable state; mute stays a blind toggle
-# (assumptions row 4, closed).
-EXLINK_VOLUME_QUERY = "0822f0010000e5"
-
-# Proven live on the S90C 2026-08-10: every accepted frame (even the query
-# frame) acks with exactly these three bytes.
+# Every frame the S90C accepts acks with exactly these three bytes.
 EXLINK_ACK = "030cf1"
 
 
@@ -193,13 +185,12 @@ def _exlink_txn(frame_hex, port):
 
 def exlink_send_hex(frame_hex, port):
     """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK on success,
-    raises ExlinkNak on any other answer (the live probe proved the TV acks
-    every accepted frame with 03 0c f1, so anything else means the command did
-    not land - a NAK is not retried, only reported). serial is imported lazily
-    so machines without pyserial can import cglib. One retry after 1 s is for
-    PORT CONTENTION only: couch.py and the voice agent share this port from
-    separate processes in open-write-close bursts, so a transient open
-    collision gets patience."""
+    raises ExlinkNak on any other answer - the TV acks every accepted frame, so
+    anything else means the command did not land. A NAK is not retried, only
+    reported. serial is imported lazily so machines without pyserial can import
+    cglib. The one retry after 1 s is for PORT CONTENTION only: couch.py and
+    the voice agent share this port from separate processes in
+    open-write-close bursts, so a transient open collision gets patience."""
     import serial
     try:
         ack = _exlink_txn(frame_hex, port)
@@ -210,24 +201,6 @@ def exlink_send_hex(frame_hex, port):
         raise ExlinkNak(f"TV answered {ack or 'nothing'} (want {EXLINK_ACK}) "
                         f"for frame {frame_hex}")
     return ack
-
-
-def exlink_probe(frame_hex, port):
-    """Bench only: send a frame and read until the set goes quiet (64-byte
-    requests, 1 s timeout per read, 5-read cap) so a multi-frame answer
-    arrives whole - the first probe's read(16) filled exactly, proving
-    truncation was possible. No ack validation: the whole point is to see
-    the raw answer."""
-    import serial
-    with serial.Serial(port, 9600, timeout=1) as s:
-        s.write(bytes.fromhex(frame_hex))
-        out = b""
-        for _ in range(5):
-            chunk = s.read(64)
-            if not chunk:
-                break
-            out += chunk
-        return out.hex()
 
 
 def exlink_send(name, port):

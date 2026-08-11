@@ -5,14 +5,13 @@ shape, so nothing above this file knows or cares which harness ran - swapping
 is config.workerProvider, exactly like assistantProvider (and keyed by the
 same vendor names: anthropic runs the claude CLI, openai runs codex).
 
-Fail-soft (rule 1's convention, new lane): a missing CLI disables the lane
-with a clear startup + doctor message, never a crash. run() never raises -
-every failure mode is a truthful FAILED result the voice lane can speak.
+Fail-soft, like every other lane: a missing CLI disables background tasks with
+a clear startup + doctor message, never a crash. run() never raises - every
+failure mode is a truthful FAILED result the voice lane can speak.
 
 Both CLIs read worker_home/AGENTS.md as the standing briefing; the prompt is
 fed via STDIN (both CLIs accept it), which sidesteps cmd.exe quoting for the
-.cmd shims npm installs. Exact flag sets are pinned live at the K15 deploy
-drill (ledger rows D9/D10)."""
+.cmd shims npm installs."""
 import json
 import os
 import re

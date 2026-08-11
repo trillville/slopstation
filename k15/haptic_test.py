@@ -5,21 +5,19 @@ Puck. Close the listener console first; restart it (Start-Listener.bat) when don
 Wake the controller (tap any button) before running - writes need it awake.
 
 Usage:
-    python haptic_test.py [chirp|sustained|clearmap|pulse|rumble|probe] [gain]
+    python haptic_test.py [chirp|sustained|pulse|rumble|probe|audition] [gain]
 
-Subcommands, in bench order (first one that buzzes wins):
-  chirp      hypothesis A: two short self-terminating 0x83 tones + stops [default]
-  sustained  fallback B, bridge-proven: long tones retriggered + explicit stops
-  clearmap   stock-state contingency: one-shot clear-digital-mappings feature
-             report (transient, auto-restores in seconds), then the chirp
+Subcommands (try them in this order if the controller stays silent):
+  chirp      two short self-terminating 0x83 tones + stops [default]
+  sustained  long tones retriggered + explicit stops - the fallback if the
+             self-terminating form stops working after a firmware update
   pulse      0x81 as a real pulse train (side 0 then side 1)
   rumble     one-shot 0x80 back-motor rumble (hardware self-stops in ~50 ms)
   probe      list all Puck HID interfaces and which one streams 0x42
-  audition   labeled tour of the haptic-vocabulary candidates (run with gain 0)
-  quiz       blind l/b/f discrimination test of QUIZ_SET (run with gain 0)
+  audition   labeled tour of the production vocabulary (run with gain 0)
 
-Optional trailing integer = gain for tone commands (s8; default 120, the
-bridge-proven loud value - firmware clamps; negative attenuates).
+Optional trailing integer = gain for tone commands (s8; default 120, a known
+loud value - firmware clamps; negative attenuates).
 
 Standing rule: after any controller firmware update, re-run calibrate.py AND
 `haptic_test.py chirp` (the protocol headers are a Valve snapshot, not a contract).
@@ -86,55 +84,23 @@ def chirp(dev, gain):
         w(dev, cglib.stop_report(side), f"stop side{side}")
 
 
-# --- Vocabulary audition / blind quiz ----------------------------------------
-# The production trio lives in cglib (count is the message: 1 launch / 2 busy
-# / 3 fail) and is played by the same engine the listener uses. Extra entries
-# here are experiments/retired candidates; edit freely and re-quiz.
+# The production vocabulary lives in cglib - count is the message: 1 launch,
+# 2 busy, 3 fail - and is played by the same engine the listener uses, so what
+# you audition here is exactly what ships.
 PATTERNS = {
     "launch": cglib.PATTERN_LAUNCH,
     "busy":   cglib.PATTERN_BUSY,
     "fail":   cglib.PATTERN_FAIL,
-    "old-ack":    ((440, 60, 10, 0, 0), (660, 90, 0, 0, 0)),   # retired rising chirp
-    "fail-rough": ((180, 500, 0, 12, 200),),                   # LFO texture experiment
 }
-QUIZ_SET = {"l": "launch", "b": "busy", "f": "fail"}
 
 
 def audition(dev, gain):
-    """Labeled pass: learn each candidate. Run with gain 0 = production feel.
-    Playback goes through cglib.play_pattern - identical to production."""
+    """Labeled pass over the vocabulary. Run with gain 0 for production feel."""
     for name, steps in PATTERNS.items():
         print(f"\n>>> {name}")
         time.sleep(1.0)
         cglib.play_pattern(dev, steps, gain)
         time.sleep(1.5)
-
-
-def quiz(dev, gain, rounds=10):
-    """Blind discrimination test of QUIZ_SET. Don't look at the console while
-    it plays; type l/b/f after each buzz. Confusions mean the vocabulary needs
-    another iteration BEFORE any production logic gets built on it."""
-    import random
-    print(f"Blind test over {QUIZ_SET}. l=launch b=busy f=fail. Starting...")
-    score = 0
-    misses = {}
-    time.sleep(2)
-    for i in range(1, rounds + 1):
-        key = random.choice(list(QUIZ_SET))
-        time.sleep(1.0 + random.random() * 2.5)   # unpredictable onset
-        cglib.play_pattern(dev, PATTERNS[QUIZ_SET[key]], gain)
-        guess = (input(f"{i}/{rounds} which? [l/b/f] ").strip().lower() or "?")[0]
-        if guess == key:
-            score += 1
-            print("  correct")
-        else:
-            misses[(key, guess)] = misses.get((key, guess), 0) + 1
-            print(f"  it was {QUIZ_SET[key]}")
-    print(f"\nscore {score}/{rounds}")
-    for (actual, guess), n in sorted(misses.items()):
-        print(f"  {QUIZ_SET[actual]} mistaken for {guess!r} x{n}")
-    if not misses:
-        print("  no confusions - vocabulary is distinct")
 
 
 def sustained(dev, gain):
@@ -146,16 +112,6 @@ def sustained(dev, gain):
     time.sleep(0.09)
     for side in (0, 1):
         w(dev, cglib.stop_report(side), f"stop side{side}")
-
-
-def clearmap(dev, gain):
-    # Feature report [report_id=0x01, cmd=0x81 CLEAR_DIGITAL_MAPPINGS, len=0x00],
-    # padded to 64 - format confirmed in SDL triton driver and the bridge.
-    buf = bytes([0x01, 0x81, 0x00]) + b"\x00" * 61
-    n = dev.send_feature_report(buf)
-    log(f"feature clear-digital-mappings -> {n}")
-    time.sleep(0.1)
-    chirp(dev, gain)
 
 
 def pulse(dev, _gain):
@@ -177,8 +133,8 @@ def probe(_dev=None, _gain=None):
     d.close()
 
 
-CMDS = {"chirp": chirp, "sustained": sustained, "clearmap": clearmap,
-        "pulse": pulse, "rumble": rumble, "audition": audition, "quiz": quiz}
+CMDS = {"chirp": chirp, "sustained": sustained, "pulse": pulse,
+        "rumble": rumble, "audition": audition}
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "chirp"

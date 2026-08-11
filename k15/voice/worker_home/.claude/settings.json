@@ -1,5 +1,5 @@
 {
-  "_comment": "ClaudeWorker guardrails (Project D). The deny rules are the secrets backstop behind AGENTS.md's ground rules - the injection canary drill (voice-testing 10c) is what proves them on this machine. Codex's equivalent is its workspace-write sandbox. NOTE: Edit(...) covers every file-editing tool - a Write(...) deny is not evaluated by file permission checks and the CLI warns about it at startup (live 2026-08-11).",
+  "_comment": "ClaudeWorker guardrails. The deny rules are the secrets backstop behind AGENTS.md's ground rules - the injection canary drill (voice-testing 10c) is what proves them on this machine. Codex's equivalent is its workspace-write sandbox. NOTE: Edit(...) covers every file-editing tool - a Write(...) deny is not evaluated by file permission checks and the CLI warns about it at startup.",
   "permissions": {
     "deny": [
       "Read(**/secrets.json)",

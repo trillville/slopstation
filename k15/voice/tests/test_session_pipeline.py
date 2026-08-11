@@ -1,4 +1,4 @@
-"""Blind test (C1 s3+s5): a REAL session pipeline end-to-end minus STT -
+"""Blind test: a REAL session pipeline end-to-end minus STT -
 LocalAudioTransport on real devices, GrammarGate, dry-run dispatch, earcons
 through the actual speaker (wake chime included, plus the fold rule that keeps
 an instant success from doubling it), and the exit phrase ending the worker.

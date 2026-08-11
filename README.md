@@ -10,20 +10,22 @@ READY leaves the TV exactly where it was.
 Or skip the chord: **"hey jarvis, play armored core six"** does the same launch
 by voice — wake word on-device, grammar-first command matching, an LLM assistant
 lane for everything else ("what should I play tonight?"), TV volume/input/mute
-included. Design in [docs/voice-control-design.md](docs/voice-control-design.md),
-bring-up drills in [docs/voice-testing.md](docs/voice-testing.md), judgment
-calls in [docs/voice-assumptions.md](docs/voice-assumptions.md). Voice is an
-overlay, never load-bearing: the chord listener is a separate process and
-survives anything the voice stack does.
+included. Voice is an overlay, never load-bearing: the chord listener is a
+separate process and survives anything the voice stack does.
 
-When something misbehaves: [docs/troubleshooting.md](docs/troubleshooting.md)
-(both lanes, symptom → fix), or run `python doctor.py` on the K15 /
-`Doctor.ps1` on the PC — each diagnoses its whole chain read-only.
+## Docs
 
-Build narrative, rationale, registration commands, and failure drills:
-[docs/couch-gaming-guide.md](docs/couch-gaming-guide.md) — a **historical record
-of the v4 system** (frozen at v4.4). The scripts here are canonical; guide code
-listings are no longer maintained in lockstep.
+| | |
+|---|---|
+| [couch-gaming-guide.md](docs/couch-gaming-guide.md) | **Start here to build one.** Physical install → TV settings → VirtualHere gate → display profiles → sshd + tasks → orchestrator → the chord. One-time commands, failure drills, acceptance checklist. |
+| [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. |
+| [voice-control-design.md](docs/voice-control-design.md) | Why the voice stack is shaped the way it is — pipeline, alternatives weighed, costs, edges. |
+| [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
+| [observability-design.md](docs/observability-design.md) | Planned, nothing built: making the system legible from a phone. |
+
+When something misbehaves, troubleshooting is symptom-first; for a full sweep,
+run `python doctor.py` on the K15 or `Doctor.ps1` on the PC — each diagnoses its
+whole chain read-only, and exits with the FAIL count.
 
 ## Layout
 
@@ -64,7 +66,7 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s and answers through the controller — 1 thud = launching, 2 = busy, 3 = the launch failed — then fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
 | `doctor.py` | On-demand chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (auto-skipped while the listener owns the Puck), ssh contract, session state, voice overlay (WARN-only). |
-| `exlink.py` | Manual Ex-Link TV control: power/inputs/volume/mute, plus the `probe_volume`/`decode_volume` bench drills; COM port from config. |
+| `exlink.py` | Manual Ex-Link TV control: power/inputs/volume/mute; COM port from config. |
 | `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), merged into `state/library.json`; auto-synced by the voice agent. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping, voice tuning). |

@@ -10,10 +10,10 @@ CHORD    = 0x01 | 0x80            # Steam + right-trigger click
 HOLD_S   = 2.0
 COUCH    = cglib.BASE / "couch.py"
 
-# Haptic vocabulary (patterns in cglib, played via the same engine the bench
-# tool's audition/quiz use): count is the message - 1 thud launch, 2 busy,
-# 3 fail. Re-bench after controller firmware updates.
-HAPTIC_GAIN     = 0     # s8 dB-ish; 0 = natural level (bench-tuned 2026-08-10; 120 = clamped max)
+# Haptic vocabulary (patterns in cglib, played via the same engine haptic_test's
+# audition uses): count is the message - 1 thud launch, 2 busy, 3 fail.
+# Re-bench after controller firmware updates.
+HAPTIC_GAIN     = 0     # s8 dB-ish; 0 = natural level, 120 = clamped max
 BUSY_COOLDOWN_S = 5.0   # a held chord re-validates every ~2s; don't machine-gun the busy buzz
 FAIL_CHECK_S    = 2.0   # how often to look for couch.py's last_error marker
 ERR_STALE_S     = 600   # failures older than this are history, not news

@@ -1,4 +1,4 @@
-"""Blind test (C3): catalog + system prompt from the REAL library, tool-impl
+"""Blind test: catalog + system prompt from the REAL library, tool-impl
 validation (unknown appids REFUSED at the boundary), pipecat/anthropic
 constructions with dummy keys, and a tolerant live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
@@ -160,7 +160,7 @@ def main():
     # providers - built through the PRODUCTION _make_llm, not a test-local
     # copy: the copy passed a dict for `reasoning` while the dataclass
     # settings accepted it silently, and the crash only surfaced at live
-    # inference ("'dict' object has no attribute 'model_dump'", 2026-08-11).
+    # inference ("'dict' object has no attribute 'model_dump'").
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 5
     import voice_agent

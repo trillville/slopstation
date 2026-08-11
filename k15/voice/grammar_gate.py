@@ -113,8 +113,7 @@ class GrammarGate(FrameProcessor):
         assistant answer is still in flight (LLM reasoning + tool calls +
         TTS start, cleared when the bot starts speaking) - the idle handler
         defers session-end until all are clear. Without the in-flight check,
-        a model slower than holdWindowS gets its session killed mid-answer
-        (live 2026-08-11: GPT at 8s+ vs holdWindowS=8)."""
+        a model slower than holdWindowS gets its session killed mid-answer."""
         pending = (self._assistant_pending
                    and time.time() - self._assistant_pending < self.ASSISTANT_WAIT_S)
         return self._speaking or self._dispatching > 0 or bool(pending)

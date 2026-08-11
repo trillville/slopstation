@@ -92,8 +92,8 @@ class Dispatch:
         return _ok(f"starting a session ({what})")
 
     def end_session(self):
-        """Works mid-game (the exit asymmetry, closed) and mid-launch
-        (teardown wins - Exit stops a running Enter on the host)."""
+        """Works mid-game and mid-launch alike (teardown wins - Exit stops a
+        running Enter on the host)."""
         if self.dry_run:
             return self._would("ssh exit")
         try:
@@ -192,10 +192,10 @@ class Dispatch:
         """Config owns the spoken-name -> input map. The GAMING input means
         "get me gaming": with no session it STARTS one (identical UX to
         "start a session" - refusing with a hint was worse than doing the
-        thing, user call 2026-08-10); mid-launch it answers "still starting";
-        with a READY session it flips instantly. The one rule is untouched
-        either way - couch.py switches the input only at READY, so nothing
-        dead is ever shown. Other inputs switch freely, like a remote."""
+        thing); mid-launch it answers "still starting"; with a READY session it
+        flips instantly. The one rule is untouched either way - couch.py
+        switches the input only at READY, so nothing dead is ever shown. Other
+        inputs switch freely, like a remote."""
         cmd = self.voice["inputs"].get(spoken_name.strip().lower())
         if cmd is None:
             return _fail(f"there is no input called '{spoken_name}'")

@@ -1,4 +1,4 @@
-"""Blind test (C1 s3): the Tier-1 grammar, offline - utterance -> intent+slots
+"""Blind test: the Tier-1 grammar, offline - utterance -> intent+slots
 table, negatives that MUST fall through to the assistant lane, and the
 risky-command narrowness rule. Run:
     .venv\\Scripts\\python tests\\test_grammar.py
@@ -50,7 +50,7 @@ TABLE = [
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
     ("cancel", "ExitSession", {}),          # bare cancel stays conversation-close
-    # Background-task surface (Project D2) - narrow by design.
+    # Background-task surface - narrow by design.
     ("what did you find", "TaskResult", {}),
     ("what did you find out", "TaskResult", {}),
     ("any updates", "TaskResult", {}),
@@ -145,13 +145,13 @@ def main():
     if g.is_busy():
         failures.append("expired assistant turn must not pin the session")
 
-    # An assistant turn is SILENT while it works: think ticks were built,
-    # lived a day, and were removed 2026-08-11 for nagging (ledger D1).
-    # The only sounds around an answer are the answer itself and, if it
-    # errors, the fail earcon. Nothing here should ever reassure again.
+    # An assistant turn is SILENT while it works: a repeating "thinking" cue
+    # was built, lived a day, and was removed for nagging. The only sounds
+    # around an answer are the answer itself and, if it errors, the fail
+    # earcon. Nothing here should ever reassure again.
     import earcons
     if "think" in earcons.SPECS:
-        failures.append("the think earcon is back - see ledger D1")
+        failures.append("the think earcon is back - it was removed on purpose")
 
     for f in failures:
         print("FAIL", f)

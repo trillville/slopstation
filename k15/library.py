@@ -1,9 +1,9 @@
-"""Game-library index builder (Project C).
+"""Game-library index builder.
 
 Layer 1: installed games - `ssh gamepc games` (the Dispatch verb) when run on
-the K15, or --local-steam (direct ACF scan) on the gaming PC itself
-(dev/testing). Layers 2-3 (owned/playtime via Steam Web API, metadata via
-appdetails + SteamSpy) merge into the same file.
+the K15, or --local-steam (direct ACF scan) on the gaming PC itself. Layers 2-3
+(owned/playtime via Steam Web API, metadata via appdetails + SteamSpy) merge
+into the same file.
 
 Output: state/library.json  {"refreshed": iso-utc, "installed": [rows]}
 written atomically (tmp + os.replace). Consumers: Flux keyterms, the grammar's
@@ -52,8 +52,8 @@ def parse_games_json(text):
 
 
 def fetch_installed_local():
-    """Dev path (running ON the gaming PC): same fields, no ssh. Mirrors the
-    Dispatch `games` verb so blind tests validate both against each other."""
+    """Running ON the gaming PC: same fields, no ssh. Mirrors the Dispatch
+    `games` verb so blind tests validate both against each other."""
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
         steam = winreg.QueryValueEx(k, "SteamPath")[0].replace("/", "\\")
@@ -286,7 +286,7 @@ def query_terms(limit=30):
     """The words people use to ASK about games: distinct tags/genres across
     the catalog, frequency-ranked. Fed to Flux as extra keyterms - titles
     alone don't teach the STT this vocabulary, which is how a spoken "mech
-    games" transcribed as "met games" (live mishear, 2026-08-10)."""
+    games" transcribed as "met games"."""
     counts = {}
     for m in load_meta().values():
         for term in (m.get("tags") or []) + (m.get("genres") or []):

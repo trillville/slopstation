@@ -1,113 +1,93 @@
-# Voice Control (Project C) — v2 design
+# Voice control — architecture
 
-**Status: BUILT AND SHIPPED (merged to `main` 2026-08-10).** C1–C3 are live on
-the K15 — wake word, command grammar, game launch, and the conversation lane —
-and this document stands as the as-designed record: the *why* behind the
-architecture, the alternatives weighed, the costs and risks. Where the build
-deviated, [voice-assumptions.md](voice-assumptions.md) is authoritative (it
-carries the live verdicts); drills live in
-[voice-testing.md](voice-testing.md). Still ahead: **C0**, the acoustic gate,
-which waits on the mic array (bring-up procedure is in the testing guide), and
-the C4 menu below — options, not commitments.
+Why the voice stack is built the way it is: the shape of the pipeline, the
+alternatives weighed at each stage, what it costs, and where the edges are.
+Bring-up drills are in [voice-testing.md](voice-testing.md); symptom → fix is
+in [troubleshooting.md](troubleshooting.md).
 
-v2 supersedes the v1 design (git `36d5fa5`) after the UX requirements were elevated:
-the assistant must support **multi-step conversational Q&A with a natural spoken
-voice** and **structured tool calls**, both at minimal latency. v1's "one-shot
-commands only, dialogue is a non-goal" stance is deliberately reversed. Product of
-a second research pass on 2026-08-10 (four deep-dives: Deepgram Voice Agent API +
-Flux, OpenAI Realtime 2.1, TTS landscape, orchestration frameworks); load-bearing
-claims verified against primary sources, cited inline. v1's research (wake word,
-mic array, Steam indexing, library/index design, dispatch fan-out, Ex-Link) is
-carried forward unchanged where still valid.
+The house rule the whole design serves: **voice is an overlay, never
+load-bearing.** The chord listener is a separate process on system python, and
+must survive anything the voice stack does.
 
-## What v2 changes
-
-| Area | v1 | v2 verdict |
-|---|---|---|
-| UX model | One-shot commands; dialogue non-goal | **Conversational sessions**: one wake word opens a session; multi-turn Q&A with mic re-opening after each answer; barge-in; deterministic commands still work at every point |
-| STT | Nova-3, warm socket held 24/7, `utterance_end_ms` endpointing | **[Deepgram Flux](https://developers.deepgram.com/docs/flux)** — turn detection fused into the ASR model (−200–600 ms vs VAD pipelines, ~30% fewer false barge-ins), `EagerEndOfTurn` for speculative LLM starts with `TurnResumed` cancel, keyterms carry over. Warm-socket pattern dies (Flux v2 has [no $0-idle KeepAlive](https://github.com/deepgram/deepgram-python-sdk/issues/649)) → **wake-gated sessions** |
-| TTS | Kokoro-82M local primary | **[Deepgram Aura-2](https://developers.deepgram.com/docs/tts-websocket-streaming) primary** (WebSocket streaming, 150–250 ms TTFA measured, beats ElevenLabs on *naturalness* in the assistant register — the dimension a 5 W speaker actually reproduces), **Kokoro demoted to offline fallback** |
-| Orchestration | Hand-rolled single process | **[Pipecat](https://github.com/pipecat-ai/pipecat)** (BSD-2, v1.7.x, weekly releases): first-party services for our exact stack — `DeepgramFluxSTTService`, `AnthropicLLMService` (tools + streaming + prompt caching), Aura/`KokoroTTSService`, Silero VAD, [smart-turn v3](https://www.daily.co/blog/announcing-smart-turn-v3-with-cpu-inference-in-just-12ms/) (12 ms CPU semantic end-of-turn) — plus the interruption/turn-taking plumbing that is the genuinely hard 20% |
-| Brain | Haiku 4.5, one-shot | Unchanged model + strict tools + inline catalog — but now a **conversation**: Pipecat context aggregation holds multi-turn history, and prompt caching finally pays (in-session follow-ups hit the 5-min TTL at 0.1×) |
-| Conversation memory | Last exchange kept 60 s | In-session history native; the 60 s cross-session carry stays |
-
-Everything else — XVF3800 fixed-beam capture, openWakeWord, the three-layer library
-index, Dispatch verbs (`games`/`launch`/`playing`), `couch.py start [appid]`,
-Ex-Link volume/mute frames, secrets posture, the house invariants — **carries over
-from v1 unchanged** (sections retained below).
-
-## Requirements (v2, made precise)
+## Requirements
 
 1. **Conversational Q&A** — multi-step exchanges about the library ("what mech
    games do I have?" → "which is shortest?" → "play it"), spoken answers in a
    natural voice, no wake word needed for follow-ups within a session.
-2. **Structured tool calls** — launches, session control, TV control invoked from
-   conversation with schema-guaranteed arguments (a hallucinated appid must be
-   structurally impossible).
-3. **Minimal latency** — targets: deterministic command ≤ 0.5 s end-of-speech →
-   action; conversational reply ≤ 1.5 s end-of-speech → first audio; barge-in
-   response < 150 ms.
-4. Unchanged from v1: voice is an overlay, never load-bearing; the one rule; the
-   lock is the arbiter; audio leaves the K15 only after wake.
+2. **Structured tool calls** — launches, session control, TV control invoked
+   from conversation with schema-guaranteed arguments (a hallucinated appid
+   must be structurally impossible).
+3. **Minimal latency** — deterministic command ≤ 0.5 s end-of-speech → action;
+   conversational reply ≤ 1.5 s end-of-speech → first audio.
+4. Voice is an overlay; the one rule holds; the session lock is the arbiter;
+   audio leaves the K15 only after wake.
 
 ## The architecture
 
-One Pipecat pipeline, one process (`voice_agent.py`), supervised by
-`Start-Voice.bat` exactly as v1 planned. Two custom frame processors carry the
-whole product logic; everything else is a first-party service.
+One Pipecat pipeline per session, one process (`voice_agent.py`), supervised by
+`Start-Voice.bat`. Two custom frame processors carry the whole product logic;
+everything else is a first-party service.
 
 ```mermaid
 flowchart LR
-  MIC["XVF3800 fixed beam<br/>(ASR channel, hardware AEC)"] --> T["LocalAudioTransport"]
-  T --> WW["OpenWakeWordGate<br/>(custom, ~100 lines)"]
-  WW -->|"session open"| STT["DeepgramFluxSTTService<br/>(turn detection + keyterms)"]
+  MIC["XVF3800 fixed beam<br/>(ASR channel, hardware AEC)"] --> WW["wake loop<br/>(raw PyAudio + openWakeWord)"]
+  WW -->|"session open"| T["LocalAudioTransport"]
+  T --> PR["PrerollFeeder<br/>(custom)"]
+  PR --> STT["DeepgramFluxSTTService<br/>(turn detection + keyterms)"]
   STT -->|transcript| GG["GrammarGate (custom)<br/>hassil + rapidfuzz"]
   GG -->|"command match:<br/>swallow frame"| ACT["earcon + dispatch<br/>(couch.py / ssh / Ex-Link)"]
   GG -->|"no match"| CTX["context aggregator<br/>(multi-turn history)"]
-  CTX --> LLM["AnthropicLLMService<br/>Haiku 4.5 + catalog + strict tools"]
-  LLM -->|"sentence chunks"| TTS["Aura-2 WebSocket<br/>(KokoroTTSService offline fallback)"]
+  CTX --> LLM["assistant lane<br/>catalog + strict tools"]
+  LLM -->|"sentence chunks"| TTS["Aura-2 WebSocket"]
   TTS --> SPK["array speaker"]
   LLM -->|"tool calls"| ACT
 ```
 
-- **`OpenWakeWordGate`** (we write): consumes raw audio frames, runs the oWW ONNX
-  model continuously, and gates the rest of the pipeline. Closed = nothing flows,
-  no cloud, no Flux socket. On wake: open the session and *arm* the chime — it
-  plays when you stop talking, never over your command (assumptions row 6).
-  (Pipecat has
-  [no first-party oWW audio plugin](https://github.com/pipecat-ai/pipecat/issues/1985);
-  its transcript-level `WakePhraseUserTurnStartStrategy` informs the session
-  semantics but the audio gate is ours.)
-- **`GrammarGate`** (we write): a [custom FrameProcessor](https://docs.pipecat.ai/guides/fundamentals/custom-frame-processor)
-  between STT and the context aggregator. On a Tier-1 match it **swallows the
-  transcription frame** — the LLM never runs — plays the earcon, and dispatches.
-  On no match, the frame flows through to the conversation lane. This runs on
-  *every* final transcript, so deterministic commands stay deterministic **inside**
-  conversations too ("volume up" mid-chat never touches the model).
-- Everything else is configuration: Flux with curated keyterms, Anthropic service
-  with the inline catalog + strict tools, Aura-2 over WebSocket with
-  sentence-chunked streaming, Silero VAD for barge-in detection (hardware AEC on
-  the array is the first line — it cancels our own speaker from the mic signal).
+- **The wake loop runs outside Pipecat** (`voice_agent.py`): raw PyAudio +
+  openWakeWord ONNX, zero cloud, no Flux socket. Each wake builds and runs one
+  `PipelineWorker`, torn down at session end — fresh sockets per session and $0
+  idle by construction. This is forced by Flux: it connects on `StartFrame`
+  with no app-facing connect/disconnect, its sockets die ~20–30 s after audio
+  stops, and its watchdog injects **billed** silence into stalled turns. Pipecat
+  has no first-party openWakeWord audio plugin, so the gate is ours.
+- **`PrerollFeeder` + `WakeCapture`** (`preroll.py`) close the wake→pipeline
+  gap. The wake stream is *not* closed at detection; a thread keeps reading it
+  (seeded with a 2 s pre-detection ring, wake phrase included) until the
+  transport reopens the mic, and the captured PCM is replayed into Flux during
+  `StartFrame` processing. Without this, "hey jarvis volume up" spoken as one
+  sentence lost the command to dead air. Correctness rides on frame ordering:
+  processors handle frames serially through one input queue, and Flux's
+  `StartFrame` handling awaits its websocket handshake, so Flux sees
+  `[StartFrame, pre-roll, live mic]` in order and drops nothing.
+- **`GrammarGate`** (`grammar_gate.py`) sits between STT and the context
+  aggregator. On a Tier-1 match it **swallows the transcription frame** — the
+  LLM never runs — plays the earcon, and dispatches. On no match, the frame
+  flows through to the assistant lane. This runs on *every* final transcript,
+  so deterministic commands stay deterministic **inside** conversations too
+  ("volume up" mid-chat never touches the model).
+- Everything else is configuration: Flux with curated keyterms, the assistant
+  service with the inline catalog + strict tools, Aura-2 over WebSocket with
+  sentence-chunked streaming.
 
 ## The interaction model
 
 ```
-DORMANT ──wake word──▶ SESSION OPEN (Flux connects, LED on; wake chime armed,
+DORMANT ──wake word──▶ SESSION OPEN (Flux connects; wake chime armed,
   ▲                        │            played when you stop talking)
   │                        ▼ per final transcript
   │                   GrammarGate
   │                   ├─ command match ──▶ dispatch + earcon (a success still
   │                   │                     inside the wake chime folds into
-  │                   │                     it) ──▶ LINGER (~5 s, chained) ──▶ DORMANT
-  │                   └─ no match ──▶ THINKING (Haiku, streaming)
-  │                                        │ first sentence boundary
-  │                                        ▼
-  │                                   SPEAKING (Aura-2; mic open, barge-in armed)
-  │                                        │ speech ends          │ user interrupts
-  │                                        ▼                      ▼
-  │                                   HOLDING (mic open, ~8 s) ◀──┘ (flush + truncate context)
-  │                                        │ user speaks → route through GrammarGate again
-  └──── timeout / exit phrase ─────────────┘
+  │                   │                     it) ──────────────────────────┐
+  │                   └─ no match ──▶ THINKING (streaming)                │
+  │                                        │ first sentence boundary      │
+  │                                        ▼                              │
+  │                                   SPEAKING (Aura-2)                   │
+  │                                        │ speech ends                  │
+  │                                        ▼                              │
+  │                                   HOLDING (mic open, holdWindowS) ◀───┘
+  │                                        │ user speaks → back through GrammarGate
+  └──── idle timeout / exit phrase ────────┘
               (sleep chime — the wake chime's fifth, descending)
 ```
 
@@ -115,145 +95,207 @@ Rules of the model:
 
 - **One wake word per session, not per utterance.** Follow-ups ("which is
   shortest?", "play it") need no wake word while HOLDING.
-- **Tier-1 always screens first.** Commands are deterministic at every state —
-  wake, mid-conversation, during LINGER. Exit phrases ("thanks", "that's all",
-  "never mind") are Tier-1 templates that end the session; the sleep chime that
-  follows is the same one the idle timeout plays, so every ending sounds alike.
-- **Barge-in**: user speech during SPEAKING → kill playback, flush the TTS socket,
-  cancel the LLM stream, truncate the assistant turn in context to what was
-  actually spoken (Pipecat's interruption frames do this), treat the new speech as
-  the next turn. Guards against TV speech: hardware AEC + beam first, then a
-  min-words ≥ 2 / ~250 ms sustained-speech strategy and an energy floor —
-  Pipecat's turn-start strategies implement exactly these.
-- **Eager end-of-turn speculation**: Flux `EagerEndOfTurn` (threshold ~0.5) fires
-  150–250 ms before confirmed end-of-turn → run GrammarGate immediately (free);
-  on no match, start the Haiku call speculatively; `TurnResumed` cancels it. Costs
-  [50–70% more LLM calls](https://deepgram.com/learn/introducing-flux-conversational-speech-recognition)
-  — pennies at Haiku prices with caching, bought back as user-facing latency.
-- **Tool calls end or continue sessions naturally**: `launch_game` speaks its
-  confirmation ("Launching Armored Core VI") and drops to DORMANT; a Q&A answer
-  holds the mic open for the next question.
-- **Feedback vocabulary unchanged**: earcons (count-coded, matching the haptic
-  thuds) for Tier-1 acks; the natural voice is reserved for the conversation lane.
-- **Session memory**: full history within a session (native); last exchange
-  carried 60 s across sessions so "hey console — play the second one" still works
-  after a session closed.
+- **Tier-1 always screens first.** Commands are deterministic at every state.
+  Exit phrases ("thanks", "that's all", "never mind") are Tier-1 templates that
+  end the session; the sleep chime that follows is the same one the idle
+  timeout plays, so every ending sounds alike.
+- **The wake chime is armed at detection, not played.** It fires when you stop
+  talking, from whichever side hears it first: the `WakeCapture` watcher while
+  the mic is still ours, else `GrammarGate` at end of turn. It therefore never
+  lands over "hey jarvis put on Elden Ring", and it fills the wait before the
+  answer instead of the silence before the command.
+- **Session end is deferred while anything is in flight.** The idle timeout is
+  `holdWindowS`, but `cancel_on_idle_timeout=False` plus an `on_idle_timeout`
+  handler that defers while the user is mid-turn, a dispatch is running, or an
+  assistant answer is in flight (capped at 30 s). Flux emits no frame mid-turn,
+  a blocking dispatch pushes nothing, and a reasoning model pushes nothing
+  either — a raw idle timeout fires mid-anything.
+- **There is no barge-in.** Speech does not cancel a TTS answer or an in-flight
+  turn: in pipecat 1.7 `InterruptionFrame` is constructed only on receipt of an
+  `InterruptionWorkerFrame`, nothing in the package ever constructs that frame,
+  and our transport has no `vad_analyzer`. Consequence: a Tier-1 command spoken
+  mid-answer dispatches immediately **and** the answer still arrives — they
+  queue rather than cancelling each other — but a long reply cannot be talked
+  over. Reviving barge-in means a VAD analyzer on the transport plus a small
+  processor that pushes `InterruptionWorkerFrame` upstream when the user starts
+  speaking during bot speech.
+- **Session memory**: full history within a session (native); the last several
+  context messages carried `followupCarryS` across sessions so "play the second
+  one" still works after a session closed.
 
-## Stage decisions (deltas from v1 only)
+## Stage decisions
+
+### Capture — XVF3800 fixed beam
+
+UA firmware, fixed beams aimed at the couch (`AEC_FIXEDBEAMSONOFF 1`, azimuth
+and elevation per seat, gating), `SAVE_CONFIGURATION` once with the brick-bug
+caution, `xvf_host REBOOT 1` at boot, ASR channel consumed, speaker out through
+the array — which is what makes open-mic work, since the AEC's reference is our
+own output.
+
+**Bluetooth headsets are a degraded test rig, not a target.** Windows exposes
+BT input on the Hands-Free device and output on the A2DP device, and the
+profiles are mutually exclusive, so a held mic plus playback flaps the profile.
+See [troubleshooting.md](troubleshooting.md) for the both-on-Headset workaround.
+
+### Wake word — openWakeWord
+
+Pretrained `hey jarvis` on onnxruntime; `hey_mycroft` / `hey_rhasspy` are
+one-line swaps, and a custom "hey console" model is possible later. Models live
+in the venv's package dir (`download_models`' default target) and are
+auto-fetched on first run per machine — `Model()` resolves feature models from
+package resources, so a custom directory would strand them.
+
+The wake loop self-heals. A WASAPI stream can outlive its endpoint and deliver
+literal zeros forever with no error to catch, so 30 s of exact zeros is treated
+as a dead stream; recovery rebuilds the whole PortAudio instance rather than
+reopening the stream, because PortAudio snapshots the device table at init and
+a reconnected device gets an index the old snapshot cannot see.
 
 ### STT — Deepgram Flux, wake-gated sessions
 
-`wss://api.deepgram.com/v2/listen?model=flux-general-en`, linear16/16 kHz, 80 ms
-chunks, `eot_threshold` ~0.7, `eager_eot_threshold` ~0.5, keyterms = the same
-curated ~40 titles from the index. $0.0065/min. The v1 warm-socket design is
-retired: Flux sockets die ~20–30 s after audio stops and idle streaming is billed,
-so the socket opens at wake and closes at DORMANT — which matches the session
-model anyway. Wake-to-connect adds ~200 ms once per session, masked by the tick
-earcon. Nova-3 remains configured as a fallback STT (Pipecat makes the swap one
-line) if Flux's model coverage disappoints; [smart-turn v3](https://huggingface.co/pipecat-ai/smart-turn-v3)
-(12 ms CPU, bundled with Pipecat) is the no-extra-vendor turn-detection fallback.
+`wss://api.deepgram.com/v2/listen?model=flux-general-en`, linear16/16 kHz,
+80 ms chunks, `eot_threshold` ~0.7, `eager_eot_threshold` ~0.5. Turn detection
+is fused into the ASR model, which buys 200–600 ms over VAD pipelines and about
+30% fewer false barge-ins. `mip_opt_out=True` always — privacy over the ~2×
+metered rate. $0.0065/min.
 
-### Brain — unchanged, now genuinely conversational
+Keyterms are the game titles **and** the words used to ask about them
+(tags/genres from the catalog): titles alone don't teach the STT that
+vocabulary, which is how a spoken "mech games" transcribed as "met games".
 
-Haiku 4.5 via `AnthropicLLMService`: inline compact catalog (~6–18K tokens),
-strict tools (`launch_game`, `get_game_details`, `get_now_playing`, `control`),
-client-side re-validation of appids against the index. What changes is the
-economics and shape: multi-turn history is native (Pipecat's context aggregators
-handle tool-call results in-history), and **prompt caching now pays** — follow-up
-turns inside a session land well inside the 5-min TTL, re-reading the catalog at
-0.1×. The cache breakpoint after the catalog block goes from "free but idle" to
-load-bearing. Cross-vendor model choice stays deferred to the C3 A/B (the
-Haiku-vs-Luna analysis, doc'd earlier, is unchanged by v2 — the harness still
-treats the model as a config string).
+Nova-3 remains a one-line fallback if Flux's coverage disappoints;
+[smart-turn v3](https://huggingface.co/pipecat-ai/smart-turn-v3) (12 ms CPU,
+bundled with Pipecat) is the no-extra-vendor turn-detection fallback.
+
+### Brain — catalog in context, strict tools
+
+The compact catalog (~6–18K tokens) is inlined in the system prompt with strict
+tools (`launch_game`, `get_game_details`, `get_now_playing`, `control`,
+`background_task`) and client-side re-validation of appids against the index.
+Multi-turn history is native to Pipecat's context aggregators, and prompt
+caching pays: follow-up turns inside a session land well inside the 5-minute
+TTL and re-read the catalog at 0.1×. Background job results are seeded into the
+session's *history* rather than the system prompt, precisely so the system
+block stays byte-identical and the cache read survives.
+
+The lane is **provider-switchable** (`assistantProvider`) in both harnesses —
+the production pipeline and the `--text` REPL — with tool schemas, impls, and
+system prompt shared. OpenAI runs through the Responses API, where reasoning and
+tool calls coexist cleanly; reasoning effort is a config knob that trades
+latency for depth.
+
+One asymmetry worth knowing: production web search is **openai-lane only**,
+because pipecat 1.7's `AdapterType` has no ANTHROPIC entry and native
+server-side tools can't ride the anthropic adapter. The REPL covers Anthropic
+search via the raw SDK. Startup logs the mismatch if the knob is on with the
+anthropic provider.
 
 ### TTS — Aura-2 streaming, Kokoro offline fallback
 
-Aura-2 over WebSocket (`aura-2-*-en` voices, audition at C3): measured
-[150–250 ms first-audio](https://futureagi.com/blog/best-tts-providers-voice-agents-2026/),
-$0.030/1K chars ≈ **$4/mo on the credit we already hold**, and blind tests rank
-its assistant-register voices above ElevenLabs on *naturalness* — while the
-premium engines' expressiveness edge lives exactly in the frequencies a 5 W
-speaker discards. Sentence-chunked streaming from the LLM (Pipecat aggregates to
-sentence boundaries natively). `KokoroTTSService` (first-party, local ONNX) wired
-as the automatic offline fallback: same PCM path, $0, clears the not-robotic bar
-(TTS Arena #2) at the cost of slower first-audio. ElevenLabs/Cartesia rejected on
-subscription gates + masked quality delta; OpenAI TTS on measured 350–600 ms TTFB.
+Aura-2 over WebSocket, 150–250 ms measured first-audio, $0.030/1K chars ≈ $4/mo
+on credit already held. Blind tests rank its assistant-register voices above
+ElevenLabs on *naturalness* — and the premium engines' expressiveness edge lives
+exactly in the frequencies a 5 W speaker discards. Sentence-chunked streaming
+from the LLM; Pipecat aggregates to sentence boundaries natively.
+
+`KokoroTTSService` (local ONNX) is wired behind `ttsLocal` as an offline
+fallback: same PCM path, $0, clears the not-robotic bar, at the cost of slower
+first-audio and a ~300 MB first-run download.
+
+### Earcons — count is the contract
+
+Seven bells, tuned as one family, mirroring the haptic thuds: 1 = accepted,
+2 = busy, 3 = failed, plus the two session bookends and the announcement cue.
+**The counts are the contract**; pitch, contour and level are taste. Level order
+follows how often and how unasked each arrives — the bookends quietest, the acks
+above them, the announcement cue on top, since it is the only one that has to
+carry across a dormant room. Synthesized at import from specs, so no binary
+assets live in the repo. Volume is one config knob (`earconGain`).
+
+A plain success earcon landing within `ACK_COALESCE_S` of the wake chime is
+swallowed: a local command dispatches ~100 ms after the chime, so the two ran
+together. Silence after the chime means it worked; `busy` and `fail` always
+play, and a slow action clears the window and acks when it lands.
 
 ### Latency budgets (end-of-speech →)
 
 | Path | Budget | Mechanism |
 |---|---|---|
 | Tier-1 command | **~0.3–0.5 s** to earcon + dispatch | Flux EOT ~260 ms + grammar <5 ms |
-| Conversational first audio | **~1.0–1.5 s** (eager speculation: ~0.8–1.2 s) | EOT → Haiku TTFT 0.6–0.9 s → first sentence → Aura TTFA 0.15–0.25 s, all pipelined |
+| Conversational first audio | **~1.0–1.5 s** | EOT → LLM TTFT 0.6–0.9 s → first sentence → Aura TTFA 0.15–0.25 s, pipelined |
 | Follow-up turns | same | session already warm; catalog cache-read |
-| Barge-in | **< 150 ms** | VAD during SPEAKING → flush frames |
 
-## What carries over from v1 (unchanged, normative)
+First-wake latency gets its own fix: pipecat's service modules and the provider
+SDK take several seconds to import on the K15's U-class CPU, which showed up as
+~6.5 s of wake-to-listening dead air on the first session only. They are
+imported at boot on a background thread.
 
-- **Capture**: XVF3800 UA firmware, fixed beams at the couch
-  (`AEC_FIXEDBEAMSONOFF 1`, azimuth/elevation values, gating), `SAVE_CONFIGURATION`
-  once with the brick-bug caution, `xvf_host REBOOT 1` at boot, ASR channel
-  consumed, speaker out through the array (which is what makes open-mic +
-  barge-in work: the AEC's reference is our own output).
-- **Wake word**: openWakeWord on onnxruntime, pretrained `hey jarvis` → custom
-  "hey console" later; double-gate on beam energy available if C0 demands it.
-- **Library index**: three layers (installed via `games` verb at session
-  boundaries; owned/playtime via Steam Web API daily; metadata via appdetails +
-  SteamSpy cached forever); feeds keyterms, grammar titles, and the catalog.
-- **Dispatch fan-out**: `games` / `launch <appid>` (READY-gated, BUSY-checked) /
-  `playing` verbs; `Launch-Game.ps1` + task; `couch.py start [appid]`; the
-  refusal-not-force-switch policy.
-- **Ex-Link additions**: vol_up/vol_down/mute_toggle/vol_set frames from the
-  official worksheet, frozen table, computed checksums, bench validation drill,
-  query-support probe, `volumeMax` clamp.
-- **Config & secrets**: `secrets.json` (gitignored) + template — `deepgramApiKey`,
-  `anthropicApiKey`, `steamApiKey`, `steamId64`; `config.json` `voice` section
-  grows turn-taking knobs (`eotThreshold`, `eagerEotThreshold`, `holdWindowS`,
-  `lingerS`, barge-in guards) alongside v1's.
-- **House rules**: the one rule; the session lock as arbiter; teardown wins;
-  voice adds no inbound network surface; the listener (haptic chord) remains a
-  separate process and failure domain — voice still cannot take the chord down.
-- **Doctor**: v1's voice checks plus a Pipecat pipeline smoke check (instantiate
-  the pipeline headless, verify each service authenticates).
+## The library index
 
-## Phases (revised)
+Three layers, merged into `state/library.json`:
 
-**C0 — Acoustic acceptance gate** *(unchanged; hardware $60.99)*
-Mount → Zadig → fixed-beam aim → wake trials at movie volume (≥18/20, ≤1 false
-accept per 2-hour movie) → `SAVE_CONFIGURATION`. Decides placement and go/no-go.
+1. **installed** — the `games` ssh verb (the gaming PC enumerates its own ACFs).
+   Needs the PC awake; fail-softs when it sleeps.
+2. **owned / playtime** — Steam Web API, key-gated, refreshed when stale >6 h.
+3. **metadata** — appdetails + SteamSpy, cached forever, topped up per new
+   appid at ~1 request/2 s.
 
-**C1 — Pipecat spike + command lane** *(K15 only; can start before the array ships, using any USB mic)*
-Day-1 gate: run Pipecat's foundational local-audio example on the K15 —
-`LocalAudioTransport` (PyAudio) on Windows is community-tier, and this spike is
-where we find out; the documented escape hatch is a thin `sounddevice` transport
-(~200 lines), everything above it survives. Then: `OpenWakeWordGate` +
-`DeepgramFluxSTTService` + `GrammarGate` + earcons; commands wired (session
-start/end, volume/mute/input after the Ex-Link drill); `Start-Voice.bat`; doctor
-rows; secrets scaffolding. **Deliverable: every v1 C1 command works by voice with
-sub-second response.** Test drills: command latency stopwatch, chained commands in
-LINGER, exit phrases, listener-coexistence (chord still works with voice running).
+Layers 2–3 come from the Steam cloud and need no PC at all, so the catalog stays
+current even while the rig sleeps. The voice agent syncs all three on a
+background thread at startup and after each session; the CLI verbs are for
+manual use. The index feeds Flux keyterms, the grammar's `{game}` slot, fuzzy
+launch resolution, and the assistant's catalog.
 
-**C2 — Game launch** *(unchanged from v1)*
-`games`/`launch`/`playing` verbs, `Launch-Game.ps1` + task, library layer 1,
-`couch.py [appid]`, "play {game}" in the grammar, keyterm curation. Same drills.
+**Title matching** lives entirely in the fuzzy resolver (`titles.py`), not the
+grammar — `{game}` is a hassil wildcard. Exact-variant match short-circuits;
+otherwise fuzzy scoring with an ambiguity refusal, because `token_set_ratio`
+scores subsets at 100 and "warhammer" ties every 40K title. Near-ties across
+different games return no match: **saying no beats launching wrong.**
 
-**C3 — The conversation lane**
-Index layers 2+3, catalog build, `AnthropicLLMService` with strict tools +
-client-side appid validation, Aura-2 (voice audition first), HOLDING window,
-barge-in guard tuning against real TV audio, eager-EOT speculation, exit-phrase
-polish, Kokoro fallback path, 60 s cross-session carry, the model A/B (Haiku vs
-current alternatives, measured end-of-speech → first-audio + answer quality).
-Drills: mech-games multi-turn ("what mech games…" → "which is shortest?" →
-"play it" — launch fires with a validated appid), barge-in mid-answer, "volume
-up" mid-conversation (must be Tier-1, verify no LLM call in the log), TV-noise
-false-turn soak during a movie.
+## The worker lane
 
-**C4 — Menu, not commitments**
-gpt-realtime-2.1 as a drop-in conversation-lane engine (the researched text-in →
-audio-out pattern — see Rejected alternatives for why it lost v2 and what would
-revive it) · voice-initiated install flow · HowLongToBeat enrichment ·
-controller-battery queries · custom "hey console" model · smart-turn v3 swap if
-Flux disappoints · Parakeet local STT fallback.
+"Work on this and get back to me" — latency-free background research, run as a
+headless vendor CLI subprocess (`claude -p` or `codex exec`) in
+`voice/worker_home/`, with `AGENTS.md` as the standing briefing and a JSON
+output contract. Provider-agnosticism is nearly free because both vendors ship
+their harness as a subscription-billed CLI whose native idiom is shell plus an
+instructions file.
+
+Workers act **through the same CLIs the human uses**, so every worker action
+passes the same locks, BUSY-truthful verbs, and Ex-Link ack validation. The
+gaming PC's surface remains the six forced-command ssh verbs, worker or no. No
+new secrets and no new inbound network surface: the CLIs authenticate
+on-machine, outside `secrets.json`.
+
+**Security posture, stated plainly.** A worker ingests open-web content and
+holds a shell. File tools are confined to `worker_home` by the harness itself
+(a headless run cannot grant an out-of-directory permission), with deny rules on
+`secrets.json` as belt-and-braces. **Shell reads are not bounded** — `Bash` is
+pre-approved and not path-scoped, so a shell read of `secrets.json` rests on
+model judgment, and a deny list of read commands would be unenumerable theater.
+This is an accepted risk, bounded by: jobs originate only from the user's own
+voice (never an inbound channel), and the gamepc key is forced-command-limited
+to six verbs, so theft buys six verbs rather than code execution. If it ever
+needs to be real, the fix is running workers as a separate low-privilege Windows
+user with a deny ACL on `secrets.json` — the only mechanism independent of model
+judgment.
+
+Results are announced proactively: a distinct earcon, then the summary spoken
+immediately, movies included. The only gate is an active session (the pipeline
+owns the speaker), which defers the announcement to session close. A bulletin
+heard in full opens the mic for a follow-up without a wake word
+(`followUpAfterAnnounce`) — only after a *full* playback, since an aborted or
+synth-failed bulletin means nobody heard anything to follow up on.
+
+## Still ahead — the acoustic gate
+
+Everything above works on any mic; the ReSpeaker array is what makes wake
+reliable from the couch at movie volume. That is the project's top remaining
+risk, and it is decided by data, not taste: ≥18/20 wake detections in every
+condition {movie volume, loud movie} × {couch-left, couch-right}, and ≤1 false
+accept per ~2 h movie. The bring-up procedure is in
+[voice-testing.md](voice-testing.md).
 
 ## Costs (monthly, at ~30 commands + ~15 conversational exchanges/day)
 
@@ -261,31 +303,34 @@ Flux disappoints · Parakeet local STT fallback.
 |---|---|
 | Flux STT (wake-gated sessions, ~5 min audio/day) | ~$1 |
 | Aura-2 TTS (~150 chars × 30 responses/day) | ~$4 |
-| Haiku 4.5 (conversation turns, cached catalog, incl. eager-EOT overhead) | ~$1–4 |
+| Assistant turns (cached catalog) | ~$1–4 |
+| In-lane web search | ~$0.01/search |
 | Wake word, grammar, earcons, index, Kokoro fallback | $0 (local) |
-| **Total** | **~$6–9 nominal — Deepgram items ride the $200 credit (years); net out-of-pocket ≈ $1–4 (Anthropic)** |
+| **Total** | **~$6–9 nominal — Deepgram items ride the $200 credit (years); net out-of-pocket ≈ $1–4** |
 
-## Risks & open questions (v2 additions)
+Background workers bill against the vendor subscriptions, not the API keys.
 
-| Risk | Mitigation | Phase |
-|---|---|---|
-| Pipecat on Windows is community-tier (PyAudio/WASAPI quirks, Linux-first examples) | Day-1 spike on the K15 before any feature work; pin versions; `sounddevice` transport escape hatch | C1 |
-| Flux idle billing + no $0 keepalive | Wake-gated sessions, aggressive close at DORMANT; tick earcon masks reconnect | C1 |
-| WebSocket-TTS keeps synthesizing briefly after barge-in ([known Pipecat wart](https://github.com/pipecat-ai/pipecat/issues/950)) | Sentence-chunked sends bound the overrun; flush + truncate on interrupt | C3 |
-| TV speech triggers false turns/barge-ins | Beam + AEC first line; min-words/sustained-speech/energy-floor turn-start strategies; C3 movie soak test | C3 |
-| Eager EOT cost multiplier (+50–70% LLM calls) | Pennies at Haiku prices; disable via config if it ever isn't | C3 |
-| Aura-2 voice disappoints in person | Audition all `aura-2-*` voices at C3 start; Cartesia/ElevenLabs are one-line Pipecat swaps if taste demands | C3 |
-| Pipecat interruption regressions (fast-moving codebase) | Pin the version; upgrade deliberately with the C3 drill suite as the regression test | C3+ |
+## Risks
 
-## Rejected alternatives (v2 round)
+| Risk | Mitigation |
+|---|---|
+| Pipecat on Windows is community-tier (PyAudio/WASAPI quirks) | Pin versions; a thin `sounddevice` transport (~200 lines) is the escape hatch, and everything above it survives |
+| Flux idle billing, no $0 keepalive | Wake-gated sessions, aggressive close at DORMANT |
+| TV speech triggers false turns | Beam + AEC first line; the false-accept soak is the measurement |
+| Pipecat interruption/turn-taking regressions (fast-moving codebase) | Pin the version; upgrade deliberately with the drill suite as the regression test |
+| Prompt injection into a worker holding a shell | See the worker lane's security posture above — bounded, documented, accepted |
+| `codex exec` flag/JSON churn; Codex-on-Windows is experimental | The adapter isolates it; ClaudeWorker is the default; a Codex failure is one FAILED job, never a crashed lane |
+
+## Rejected alternatives
 
 | Alternative | Why not |
 |---|---|
-| **Deepgram Voice Agent API** (managed STT→LLM→TTS) | The LLM answers every turn — no way to suppress the think stage, so our deterministic lane can only *race* it; managed prompt cap is 25K chars (the catalog doesn't fit); billed on wall-clock connection time including idle ($0.075–0.163/min) |
-| **OpenAI gpt-realtime-2.1/mini as the conversation engine** | Clean fit *only* as text-in → audio-out (never stream it mic audio: no AEC over WebSocket, its VAD fights the wake gate) — but no strict tool schemas (validate-after), a second LLM vendor, the catalog re-billed per session (~$10.5/mo mini, ~$45/mo full; mini has credible tool-calling regression reports), and its headline wins (fused voice, duplex feel) are what Flux + Aura + streaming already approximate at ~$6/mo with strict tools intact. **Documented as the C4 upgrade path**: if measured C3 latency or voice quality disappoints, it drops into the GrammarGate fallback branch without touching wake, STT, or Tier-1 |
-| **LiveKit Agents** | Room/WebRTC-server-centric; the local mode is explicitly a dev harness being deprecated into their CLI — wrong grain for a permanent single-box appliance |
-| **Hand-rolled asyncio loop** | 2–4 weeks of underestimated plumbing (interrupt-safe context truncation, cancellation races, sentence chunking, tool-call loops mid-stream) that Pipecat ships and maintains; revisit only if the Windows spike fails badly — then steal its frame-cancellation and turn-strategy designs |
-| **ElevenLabs / Cartesia TTS** | Subscription-gated at our volume ($22/mo tier / plan overrun); their quality edge is expressiveness, which the 5 W speaker masks — Aura-2 wins naturalness where it's audible, on a credit we already hold |
-| **Kokoro as primary voice** | Clears "not robotic" but can't hit ≤300 ms first-audio on this CPU without micro-chunking contortions; demoted to offline fallback, not deleted |
-| v1's one-shot-only UX | Superseded by requirements — this revision exists because of it |
-| (v1 rejections — Porcupine, Wyoming, local-STT-primary, RAG, SQLite, Agent SDK, force-switch, etc.) | All stand; see git history `36d5fa5` for the v1 table |
+| **Deepgram Voice Agent API** (managed STT→LLM→TTS) | The LLM answers every turn — no way to suppress the think stage, so the deterministic lane could only *race* it; managed prompt cap is 25K chars (the catalog doesn't fit); billed on wall-clock connection time including idle |
+| **OpenAI Realtime as the conversation engine** | Clean fit *only* as text-in → audio-out (never stream it mic audio: no AEC over WebSocket, its VAD fights the wake gate) — but no strict tool schemas, a second vendor, and the catalog re-billed per session. Its headline wins are what Flux + Aura + streaming already approximate at a fraction of the cost with strict tools intact. Kept as the documented upgrade path: it drops into the GrammarGate fallback branch without touching wake, STT, or Tier-1 |
+| **LiveKit Agents** | Room/WebRTC-server-centric; its local mode is explicitly a dev harness — wrong grain for a permanent single-box appliance |
+| **Hand-rolled asyncio loop** | Weeks of underestimated plumbing (interrupt-safe context truncation, cancellation races, sentence chunking, tool-call loops mid-stream) that Pipecat ships and maintains |
+| **ElevenLabs / Cartesia TTS** | Subscription-gated at this volume; their edge is expressiveness, which the 5 W speaker masks |
+| **Kokoro as primary voice** | Clears "not robotic" but can't hit ≤300 ms first-audio on this CPU; offline fallback, not deleted |
+| **An MCP server as the worker tool boundary** | Its three payoffs all evaporate here: there are no shell-less consumers, listing-as-enforcement is void once workers have a shell (a shell is a superset of any tool listing), and multi-client schema discovery collapses to `AGENTS.md` with two CLI clients. **What revives it:** any future non-shell consumer — then it is ~50 lines re-presenting `TOOL_DEFS`, and nothing in the current design blocks it |
+| **A thin unified CLI for workers** | The existing CLIs plus `library.json` already are the surface; a wrapper is a third copy of the verb list to keep honest |
+| **Think ticks during slow answers** | Built and removed the same day: a soft earcon every few seconds while an answer is in flight read as nagging, not reassurance. If 7–10 s of silence on searched turns ever becomes the complaint instead, the untried middle ground is a SINGLE cue at a threshold with no repeat |

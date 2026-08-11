@@ -1,4 +1,4 @@
-"""Blind test (C1 s1): earcon synthesis invariants - burst counts carry the
+"""Blind test: earcon synthesis invariants - burst counts carry the
 vocabulary, so segmentation must recover exactly the spec'd count however the
 tones are retuned; fades must kill clicks; amplitudes must be sane; the level
 order (sleep < wake < acks, nothing loud enough to startle) must hold; the

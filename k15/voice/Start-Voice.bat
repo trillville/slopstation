@@ -32,7 +32,7 @@ if not exist ".venv\deps-ok" (
   echo ok> .venv\deps-ok
 )
 
-rem Mic array reboot-hang workaround (C0 places xvf_host here; no-ops until then)
+rem Mic array reboot-hang workaround; no-ops until xvf_host is installed here
 if exist "xvf_host\xvf_host.exe" (
   echo [supervisor] rebooting mic array - reboot-hang workaround
   "xvf_host\xvf_host.exe" REBOOT 1

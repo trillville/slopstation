@@ -1,4 +1,4 @@
-"""Blind test (C1 s5): dispatch.py logic with every side effect mocked -
+"""Blind test: dispatch.py logic with every side effect mocked -
 lock arbiter, dry-run, volume stepping + clamp, mute, input map + the
 READY-gate on the gaming input, serial retry, ssh outcomes. Run:
     .venv\\Scripts\\python tests\\test_dispatch.py
@@ -97,7 +97,7 @@ def main():
     assert h.d.switch_input("Apple TV ").ok           # case/space tolerant
     assert sent == [cglib.EXLINK_FRAMES["hdmi1"]]
 
-    # No session: "switch to the pc" = "start a session" (user call) - it
+    # No session: "switch to the pc" = "start a session" - it
     # spawns the full couch launch, never refuses, never touches the TV
     # itself (couch.py flips the input at READY).
     with_temp_lock(None)

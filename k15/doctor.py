@@ -222,8 +222,8 @@ def check_voice(cfg):
     except Exception as e:
         report(WARN, "voice library", f"unreadable ({e})",
                "delete state\\library.json; the agent rebuilds it")
-    # Tier-3 worker lane (Project D2) - stdlib checks only, same WARN-only
-    # posture: background tasks off must never redden the chain doctor.
+    # Tier-3 worker lane - stdlib checks only, same WARN-only posture:
+    # background tasks off must never redden the chain doctor.
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
     if wp:

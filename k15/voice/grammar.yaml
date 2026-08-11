@@ -59,9 +59,9 @@ intents:
           - "nevermind"
           - "cancel"
           - "go back to sleep"
-  # Background-task surface (Project D). Deliberately narrow: "cancel" alone
-  # stays ExitSession, and conversational phrasings ("tell me more") must
-  # keep falling through to the assistant lane.
+  # Background-task surface. Deliberately narrow: "cancel" alone stays
+  # ExitSession, and conversational phrasings ("tell me more") must keep
+  # falling through to the assistant lane.
   TaskResult:
     data:
       - sentences:

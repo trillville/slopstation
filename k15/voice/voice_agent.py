@@ -1,11 +1,10 @@
 """K15 voice agent: wake word -> session pipeline -> dispatch.
 
-Architecture (see docs/voice-control-design.md + voice-assumptions.md #7):
-the wake loop runs OUTSIDE Pipecat (raw PyAudio + openWakeWord, zero cloud);
-each wake builds and runs ONE PipelineWorker (mic -> Flux STT -> GrammarGate
--> speaker) that lives for the session and is torn down at its end - fresh
-Flux socket per session, $0 idle by construction. Sessions end on an exit
-phrase or idle timeout (holdWindowS).
+Architecture (see docs/voice-control-design.md): the wake loop runs OUTSIDE
+Pipecat (raw PyAudio + openWakeWord, zero cloud); each wake builds and runs ONE
+PipelineWorker (mic -> Flux STT -> GrammarGate -> speaker) that lives for the
+session and is torn down at its end - fresh Flux socket per session, $0 idle by
+construction. Sessions end on an exit phrase or idle timeout (holdWindowS).
 
 Modes:
   (default)             run the agent
@@ -110,6 +109,42 @@ def resolve_device(pa, fragment, want_input):
     return None
 
 
+def list_devices():
+    """Raw PortAudio view for --devices: every endpoint with its channel
+    counts, and which two are the system defaults. Set config's
+    inputDeviceName/outputDeviceName to a unique fragment of the name you
+    want; leave them empty to take the defaults."""
+    import pyaudio
+    pa = pyaudio.PyAudio()
+    print("[devices] host APIs: "
+          + ", ".join(pa.get_host_api_info_by_index(i)["name"]
+                      for i in range(pa.get_host_api_count())))
+
+    def default_index(getter, what):
+        try:
+            return getter()["index"]
+        except OSError:
+            print(f"[devices] WARNING: no default {what} device")
+            return None
+
+    idx_in = default_index(pa.get_default_input_device_info, "input")
+    idx_out = default_index(pa.get_default_output_device_info, "output")
+    for i in range(pa.get_device_count()):
+        d = pa.get_device_info_by_index(i)
+        tags = []
+        if d["maxInputChannels"]:
+            tags.append(f"in:{d['maxInputChannels']}")
+        if d["maxOutputChannels"]:
+            tags.append(f"out:{d['maxOutputChannels']}")
+        mark = ""
+        if i == idx_in:
+            mark += " <= default input"
+        if i == idx_out:
+            mark += " <= default output"
+        print(f"[devices] {i:3d} {d['name']} ({', '.join(tags)}){mark}")
+    pa.terminate()
+
+
 def build_audio(voice):
     """One PortAudio world: a fresh instance plus both devices resolved by
     name. PortAudio snapshots the device table at init, so a fresh instance
@@ -127,8 +162,8 @@ def rebuild_audio(old_pa, voice, listener):
     down and rebuild against the current device table. Reopening on the old
     instance retries a stale index - a reconnected headset gets a NEW index
     the old snapshot can't see - so the reopen either fails forever or
-    'succeeds' onto a dead endpoint and goes deaf (live 2026-08-11: 240
-    blind reopens over 2.6 h, then a zombie stream, deaf until morning).
+    'succeeds' onto a dead endpoint and goes deaf - observed as 240 blind
+    reopens over 2.6 h, then a zombie stream, deaf until morning.
     Loops until an audio host answers: voice is not load-bearing, and
     dormant-but-alive beats crashed."""
     try:
@@ -175,7 +210,7 @@ def close_stream_quietly(stream):
     """Best-effort close for a possibly-dead stream: after a -9999 host error
     (BT profile flap, device yanked) the stream is already torn down and
     stop/close themselves raise 'Stream not open' - the original error is the
-    story, cleanup must never replace it (crashed the agent live 2026-08-10)."""
+    story, and cleanup replacing it is what crashed the agent."""
     for op in (stream.stop_stream, stream.close):
         try:
             op()
@@ -238,8 +273,8 @@ class WakeListener:
             chunk = self.np.frombuffer(data, self.np.int16)
             # Zombie watchdog: a WASAPI stream can outlive its endpoint (BT
             # profile flap) and keep delivering exact zeros forever - no error
-            # to catch, just deafness (live 2026-08-11: 8.5 h). A real mic
-            # always carries a noise floor, so a solid 30 s of literal zeros
+            # to catch, just deafness (observed for 8.5 h). A real mic always
+            # carries a noise floor, so a solid 30 s of literal zeros
             # means dead stream (or a hardware-muted mic, where a rebuild is
             # a harmless log line every 30 s). Raise into the same recovery
             # path as an honest stream death.
@@ -364,8 +399,8 @@ def _make_llm(voice, secrets, system_text):
             OpenAIResponsesHttpLLMService, OpenAIResponsesReasoningConfig)
         # reasoning must be the TYPED config, not a dict: pipecat's dataclass
         # settings accept anything at construction, then call .model_dump()
-        # at inference - a dict here died live with "'dict' object has no
-        # attribute 'model_dump'" (2026-08-11).
+        # at inference - a dict here dies with "'dict' object has no
+        # attribute 'model_dump'".
         return OpenAIResponsesHttpLLMService(
             api_key=secrets["openaiApiKey"],
             settings=OpenAIResponsesHttpLLMService.Settings(
@@ -410,7 +445,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     stt = DeepgramFluxSTTService(
         api_key=secrets["deepgramApiKey"],
         sample_rate=16000,
-        mip_opt_out=True,                       # assumption #11: privacy > rate
+        mip_opt_out=True,                       # privacy over the metered rate
         settings=DeepgramFluxSTTService.Settings(
             model="flux-general-en",
             eot_threshold=voice["eotThreshold"],
@@ -567,7 +602,6 @@ def main():
     args = ap.parse_args()
 
     if args.devices:
-        from spike import list_devices
         list_devices()
         return 0
 
@@ -650,9 +684,9 @@ def main():
                if ap == "openai" else "")     # anthropic has no effort knob
             + (" +websearch" if voice["assistantWebSearch"] else ""))
 
-    # Tier-3 worker lane (Project D2), fail-soft like every other lane: a
-    # missing CLI turns background tasks off with a clear message - wake,
-    # commands, and the assistant are untouched either way.
+    # Tier-3 worker lane, fail-soft like every other lane: a missing CLI turns
+    # background tasks off with a clear message - wake, commands, and the
+    # assistant are untouched either way.
     import announce
     import jobs as jobs_mod
     from workers import MODEL_KEY, WORKERS

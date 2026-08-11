@@ -1,7 +1,6 @@
-"""Proactive spoken announcements OUTSIDE any session (Project D decision 2):
-a finished background job plays a rising two-note earcon and speaks its
-summary immediately - movies included, per the user's call. The two gates
-that stay:
+"""Proactive spoken announcements OUTSIDE any session: a finished background
+job plays a rising two-note earcon and speaks its summary immediately - movies
+included, deliberately. The two gates:
 
 - session_active: the pipeline owns the speaker during a session, so an
   announcement arriving mid-session waits for session close (seconds, not
@@ -11,8 +10,8 @@ that stay:
 
 Synthesis is one Aura-2 REST call (stdlib urllib, no SDK, no socket held);
 playback opens its own short-lived PyAudio world, never touching the wake
-listener's. Synth failure fail-softs to earcon-only + unread (the offline
-answer is the pull path, not a local TTS stack - ledger row D11)."""
+listener's. Synth failure fail-softs to earcon-only + unread - the offline
+answer is the pull path, not a local TTS stack."""
 import json
 import queue
 import threading

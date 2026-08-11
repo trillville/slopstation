@@ -1,4 +1,4 @@
-"""Blind test: the wake pre-roll path (assumptions row 10).
+"""Blind test: the wake pre-roll path.
 
 Part 1 (pure): WakeCapture pump/stop semantics against a fake stream -
 seed ring + pumped chunks in order, idempotent stop, stream closed, device
@@ -83,7 +83,7 @@ def test_capture_runaway_cap():
 
 
 def test_dead_wake_stream_surfaces_original_error():
-    """Live crash 2026-08-10: a -9999 mid-listen made cleanup raise 'Stream
+    """Regression: a -9999 mid-listen made cleanup raise 'Stream
     not open', which replaced the real error AND escaped the handler, killing
     the agent. The listener must re-raise the ORIGINAL OSError."""
     import voice_agent
@@ -116,7 +116,7 @@ def test_dead_wake_stream_surfaces_original_error():
 
 
 def test_zombie_stream_trips_silence_watchdog():
-    """Live deafness 2026-08-11: after a device flap the reopened stream
+    """Regression: after a device flap the reopened stream
     'worked' but delivered only zeros - no error, no wake, all night. A solid
     run of zero chunks must raise into the same OSError recovery path as an
     honest stream death, and any real audio must reset the counter (a live

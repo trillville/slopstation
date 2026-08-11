@@ -1,21 +1,20 @@
-"""Earcon synthesis: the count vocabulary as audio, mirroring the haptic
-thuds - 1 = accepted/launching, 2 = busy, 3 = failed - plus the two session
+"""Earcon synthesis: the count vocabulary as audio, plus the two session
 bookends (a wake chime and its mirror at sleep) and the background lane's
 announcement cue. Synthesized at import from specs; no binary assets in the
 repo. All PCM is SAMPLE_RATE mono s16le, ready to wrap in an
 OutputAudioRawFrame.
+
+The counts are the contract, mirroring the haptic thuds: 1 = accepted,
+2 = busy, 3 = failed. Pitch, contour and level are taste, tuned so the six
+sound like one family - the bookends quietest, the acks just above them, and
+the announcement cue on top, since it is the only one that has to carry across
+the room unasked.
 
 Everything is a bell: overlapping or sequential notes, a few light partials,
 exponential decay. A decaying note is perceptually far softer than a flat one
 of the same peak - flat sines at tick level are exactly what made the old
 vocabulary jarring - so these read much quieter than their amplitudes suggest.
 The engine still does flat tones (decay=None) if a spec ever wants one.
-
-The counts are the contract: 1 = accepted, 2 = busy, 3 = failed, mirroring the
-haptic thuds. Pitch, contour and level are taste, tuned so the six sound like
-one family: the bookends quietest, the acks just above them, and the
-announcement cue on top - it is the only one that has to carry across the room
-unasked.
 
 Tier-1 acks must be instant: never synthesize speech for them, never wait on
 anything - pcm() is a dict lookup after first use.

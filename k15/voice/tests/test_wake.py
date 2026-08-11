@@ -1,4 +1,4 @@
-"""Blind test (C1 s2): the wake model detects SYNTHESIZED speech - no mic,
+"""Blind test: the wake model detects SYNTHESIZED speech - no mic,
 no human. Windows SAPI speaks "hey jarvis" in two different voices (oWW was
 trained on synthetic TTS, so this is a legitimate detection test), plus
 negative phrases that must NOT fire. Downloads the oWW models on first run.

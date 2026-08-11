@@ -1,4 +1,4 @@
-"""Blind test (Project D2): the worker lane minus real CLIs - reply parsing
+"""Blind test: the worker lane minus real CLIs - reply parsing
 (contract JSON, fences, prose fallback), adapter argv/extract shapes from
 canned fixtures, JobStore lifecycle on a temp state file (enqueue -> run ->
 DONE, cap, cancel, unread flow), the restart reconciler, and the announcer's

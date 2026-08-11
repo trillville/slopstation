@@ -16,11 +16,11 @@ try {
         $raw = Get-Content $marker -TotalCount 1
         # Best-effort delete: the marker is written by the ELEVATED sshd
         # forced-command context (owner BUILTIN\Administrators; Users get
-        # read-only), and this task runs with the limited token - the delete
-        # is DENIED, and with ErrorActionPreference=Stop it killed the script
-        # before -applaunch (live 2026-08-10). Dispatch now clears the marker
-        # before every write, so one surviving here is overwritten anyway;
-        # the only cost is that a MANUAL task run would replay the last appid.
+        # read-only), and this task runs with the limited token - so the delete
+        # is DENIED, and with ErrorActionPreference=Stop that killed the script
+        # before -applaunch. Dispatch clears the marker before every write, so
+        # one surviving here is overwritten anyway; the only cost is that a
+        # MANUAL task run would replay the last appid.
         try { Remove-Item $marker -Force } catch {
             Log 'marker not deletable from this token - Dispatch overwrites it next launch'
         }
