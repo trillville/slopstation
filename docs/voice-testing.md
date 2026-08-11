@@ -22,16 +22,29 @@ gitignored, never commit it).
 Steam + OpenAI can come later. Without a real Deepgram key, a wake gets a
 wake-tick then the fail earcon (sessions are disabled by design, not a bug).
 
-## 2. Code + venv on the K15
+## 2. Clone on the Desktop + venv
 
-Get the `k15/` folder onto the K15 from the `voice` branch — **exclude
-`.venv`** (a venv from the dev box is the wrong Python and isn't portable):
+The K15 **runs straight from a git clone** now — no copying. Put the repo on the
+Desktop and `git pull` to update:
 
-- `git clone`/`pull` the repo on the K15 and `git checkout voice`, then work in
-  its `k15/` dir; **or** copy the gaming PC's `C:\Users\tillm\projects\slopstation\k15\`
-  folder over, skipping `voice\.venv\`.
+```
+cd %USERPROFILE%\Desktop
+git clone <repo-url> slopstation      (or: git pull, if already cloned)
+cd slopstation
+git checkout voice                    (the testing branch; main after it merges)
+```
 
-Then, in the `k15\voice` folder:
+Per-machine files are gitignored — create them once from the committed examples
+(in the `k15` folder):
+
+```
+copy k15\config.example.json k15\config.json
+copy k15\secrets.template.json k15\secrets.json
+```
+
+Edit `k15\secrets.json` with your keys (§1). `k15\config.json`'s stable values
+(MAC/IP/COM/host) are already right; you'll set device names in §3. Then build
+the voice venv (in `k15\voice`):
 
 ```
 python --version            (want 3.11+; the K15 is 3.13)
@@ -39,9 +52,10 @@ python -m venv .venv        (if python isn't on PATH: py -3.13 -m venv .venv)
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-Create `..\secrets.json` from `..\secrets.template.json` and paste your keys.
-(The chord listener, if running, is a separate process — voice runs alongside
-it and can't disturb it. Fine to test with it up or down.)
+From now on, `git pull` updates the code; your `config.json`/`secrets.json` and
+the `.venv` are local and never touched by it. (The chord listener, if running,
+is a separate process — voice runs alongside it and can't disturb it. Point its
+Startup shortcut at this clone's `Start-Listener.bat` if you want it here too.)
 
 ## 3. Pre-flight — devices + the spike
 

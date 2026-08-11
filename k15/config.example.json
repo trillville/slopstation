@@ -1,4 +1,6 @@
 {
+  "_comment": "Copy to config.json (gitignored, per-machine) and set inputDeviceName/outputDeviceName + any tuning. The MAC/IP/COM/host below are this rig's real values - adjust if yours differ.",
+
   "gamingPcMac": "74-56-3C-45-92-DD",
   "gamingPcIp":  "192.168.68.67",
   "sshHost":     "gamepc",

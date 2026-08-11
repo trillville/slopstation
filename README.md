@@ -14,14 +14,20 @@ listings are no longer maintained in lockstep.
 
 ## Layout
 
-| Repo path | Deployed at | Machine |
-|---|---|---|
-| `gaming-pc/` | `C:\CouchGaming\` | `TILLMAN-DESKTOP` (gaming PC) |
-| `k15/` | `C:\Users\minipc\Desktop\` | `K15` (orchestrator mini PC) |
+| Repo path | Runs at | Machine | How |
+|---|---|---|---|
+| `gaming-pc/` | `C:\CouchGaming\` | `TILLMAN-DESKTOP` (gaming PC) | copy (needs gitignored `.lnk`/`.exe`) |
+| `k15/` | a clone on the Desktop | `K15` (orchestrator mini PC) | `git pull` in place |
 
-This repo is the **source of truth / archive** — scripts are deployed by copying
-to the paths above, not by cloning in place. (Both sides derive their sibling
-paths from their own location, so the folders are relocatable as units.)
+Every script derives its sibling paths from its own location, so a folder is a
+relocatable unit and runs fine straight from a checkout. The **K15 runs from a
+clone** (`git pull` to update — no copying). The **gaming PC deploys by copy**,
+because its runtime needs gitignored binaries/shortcuts (`vhui64.exe`,
+`OFFICE.lnk`, `TV-GAMING.lnk`) that can't live in the repo.
+
+Per-machine files are **gitignored, created once from committed examples** so a
+checkout runs without its local config/keys ever fighting `git pull`:
+`config.json` ← `config.example.json`, `secrets.json` ← `secrets.template.json`.
 
 ### Gaming PC (`gaming-pc/`)
 
@@ -79,8 +85,9 @@ paths from their own location, so the folders are relocatable as units.)
 - **VirtualHere binaries** (`vhui64.exe` client on the PC, `vhusbdwinw64.exe` server on the K15) — download from virtualhere.com.
 - **VirtualHere `config.ini`** — contains the EasyFind ID/PIN, which are remote-access credentials. Never commit.
 - **`OFFICE.lnk` / `TV-GAMING.lnk`** — machine-generated DisplayMagician profile shortcuts; recreate per guide Stage 6.
+- **`k15/config.json`, `k15/secrets.json`** — per-machine config and API keys; create once from `config.example.json` / `secrets.template.json`. Gitignored so a checkout runs without them fighting `git pull`.
 - **Scheduled task registrations, sshd setup, firewall rules** — one-time commands, all in the guide (Stages 6–8).
-- **Logs and runtime state** (`logs/`, `state/session.lock`, `couch.log`).
+- **Logs and runtime state** (`logs/`, `state/session.lock`, `couch.log`), and the voice `.venv` (created on-machine).
 
 ## Conventions
 
