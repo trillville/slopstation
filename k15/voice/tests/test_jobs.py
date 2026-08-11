@@ -81,6 +81,25 @@ def main():
     xw_bare = workers.CodexWorker()
     xw_bare.path = r"C:\x\codex.exe"
     assert not any("model_reasoning_effort" in a for a in xw_bare._argv())
+
+    # Auth failures need a human, so they say so from across the room; every
+    # other non-zero exit stays the generic line (with the tail in detail).
+    def canned(returncode, stderr):
+        w = workers.ClaudeWorker()
+        w.path = r"C:\x\claude.exe"
+        w._argv = lambda: ["cmd.exe", "/c", "exit", str(returncode)]
+        workers.subprocess.run = lambda *a, **k: types.SimpleNamespace(
+            returncode=returncode, stdout="", stderr=stderr)
+        return w.run("t", 5)
+    real_run = workers.subprocess.run
+    try:
+        r = canned(1, "Error: Not logged in. Run `claude login`.")
+        assert "needs a re-login" in r["summary"] and not r["ok"]
+        assert "Not logged in" in r["detail"]
+        r = canned(2, "Error: rate limit exceeded, try later")
+        assert r["summary"] == "the task failed"
+    finally:
+        workers.subprocess.run = real_run
     workers.WORKER_HOME.mkdir(exist_ok=True)
     xw.LAST.write_text('{"summary": "Codex says.", "detail": "Much."}',
                        encoding="utf-8")

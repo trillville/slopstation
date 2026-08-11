@@ -90,7 +90,18 @@ class _CliWorker:
                     "detail": f"{self.exe}: {e}"}
         if p.returncode != 0:
             tail = (p.stderr or p.stdout or "").strip()[-500:]
-            return {"ok": False, "summary": "the task failed",
+            # Auth is the one failure that needs a HUMAN, not a retry: tokens
+            # live in the profile of whoever ran `<cli> login` and survive
+            # reboots, but a password/subscription change or a revocation
+            # invalidates them silently - and "the task failed" from across
+            # the room says nothing about what to do next.
+            need_login = any(w in tail.lower() for w in (
+                "not logged in", "log in", "login", "unauthorized",
+                "authenticate", "authentication", "401", "expired"))
+            return {"ok": False,
+                    "summary": (f"the background worker needs a re-login - run "
+                                f"{self.exe} login on the console"
+                                if need_login else "the task failed"),
                     "detail": f"{self.exe} exit {p.returncode}: {tail}"}
         return {"ok": True, **self._extract(p)}
 

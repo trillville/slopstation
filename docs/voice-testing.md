@@ -335,7 +335,11 @@ with the knob on; the REPL searches on both).
 
 ## 10c. Background tasks (Project D2)
 
-One-time K15 setup (the CLIs auth on-machine, outside secrets.json):
+One-time K15 setup (the CLIs auth on-machine, outside secrets.json). **Run
+these in the K15's own logged-in desktop session** — credentials land in the
+profile of whoever runs them, so a login from an ssh or elevated shell leaves
+the agent (autologon user) unauthenticated while doctor still shows the CLI
+on PATH:
 
 ```
 npm i -g @anthropic-ai/claude-code && claude login
