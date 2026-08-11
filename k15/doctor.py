@@ -29,11 +29,11 @@ def check_config():
     try:
         cfg = cglib.load_config()
     except Exception as e:
-        report(FAIL, "config.json", f"unreadable ({e})", "restore from repo k15/config.json")
+        report(FAIL, "config.json", f"unreadable ({e})", "recreate from k15/config.example.json")
         return None
     missing = [k for k in required if k not in cfg]
     if missing:
-        report(FAIL, "config.json", f"missing keys: {missing}", "compare with repo copy")
+        report(FAIL, "config.json", f"missing keys: {missing}", "compare with k15/config.example.json")
     else:
         report(PASS, "config.json", f"{len(required)}/{len(required)} keys present")
     return cfg
