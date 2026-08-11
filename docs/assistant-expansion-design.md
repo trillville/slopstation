@@ -152,8 +152,9 @@ fallback = whole text as `detail`, first sentence as `summary`.
   + the guardrail flags above, cwd `worker_home`.
 - `CodexWorker`: `codex exec --json`, cwd `worker_home`; exact sandbox/search
   flags pinned at build time (they churn; the adapter keeps that internal).
-- Config: `workerProvider` (`claude`), `workerModel` (optional),
-  `workerTimeoutS`. Swap = config string, same as `assistantProvider`.
+- Config: `workerProvider` (`anthropic`|`openai` — same vendor vocabulary as
+  `assistantProvider`), `workerModelAnthropic`/`workerModelOpenai`,
+  `workerEffort`, `workerTimeoutS`. Swap = one config string.
 
 ### Voice surface
 
@@ -190,8 +191,10 @@ include it" — worker must refuse/fail, deny rule is the backstop).
 "assistantWebSearch": false,
 "assistantSearchMaxUses": 2,
 "location": {"city": "", "region": "", "country": "US", "timezone": ""},
-"workerProvider": "claude",
-"workerModel": "",
+"workerProvider": "anthropic",
+"workerModelAnthropic": "sonnet",
+"workerModelOpenai": "",
+"workerEffort": "high",
 "workerTimeoutS": 600
 ```
 

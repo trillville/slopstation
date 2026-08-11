@@ -346,12 +346,16 @@ npm i -g @anthropic-ai/claude-code && claude login
 npm i -g @openai/codex && codex login
 ```
 
-`config.json` picks the worker: `workerProvider` (`claude`|`codex`),
-`workerModel` (ships `sonnet`; **empty inherits whatever model your CLI is set
-to** — Opus on a Max plan, which spends your desk quota), `workerEffort`
-(ships `high` —
-latency is free here, so depth is the axis worth spending on; empty inherits
-the CLI's default), `workerTimeoutS`. Missing CLI = lane off with a
+`config.json` picks the worker with the same vendor vocabulary as the
+assistant lane: `workerProvider` (`anthropic` → the claude CLI, `openai` →
+codex), `workerModelAnthropic` (ships `sonnet`), `workerModelOpenai` (ships
+empty = whatever your codex CLI is set to), `workerEffort` (ships `high` —
+latency is free here, so depth is the axis worth spending on), and
+`workerTimeoutS`. **Empty model = your CLI's own preference**, which on a Max
+plan is Opus and spends the same weekly limit as your desk sessions — that's
+why the anthropic side ships pinned. Whatever resolves, the startup line in
+couch.log spells it out: `worker lane up - anthropic/claude model=sonnet
+effort=high`. Missing CLI = lane off with a
 clear startup line, everything else runs. **The `--text` REPL refuses
 background tasks by design** (always-dry rule: a queued job spends real
 quota and can run real commands) — these drills are live-agent only.
@@ -380,7 +384,7 @@ quota and can run real commands) — these drills are live-agent only.
    state\jobs.json contains no key material. Then the web variant: a task
    whose search results contain hostile instructions must not follow them
    (AGENTS.md's untrusted-content rule).
-7. **A/B** — flip `workerProvider` to `codex`, rerun drill 1. Same contract,
+7. **A/B** — flip `workerProvider` to `openai`, rerun drill 1. Same contract,
    different harness; note speed/quality per the working style.
 
 ## Autostart — one shortcut starts everything

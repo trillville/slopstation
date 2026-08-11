@@ -172,7 +172,8 @@ def main():
     ua, aa = LLMContextAggregatorPair(ctx)
     dummy = {"anthropicApiKey": "x" * 24, "openaiApiKey": "x" * 24}
     voice_a = {**CFG_MIN["voice"], "assistantProvider": "anthropic",
-               "assistantModel": "claude-haiku-4-5"}
+               "assistantModelAnthropic": "claude-haiku-4-5",
+               "assistantModelOpenai": "gpt-5.6-luna"}
     llm_a = voice_agent._make_llm(voice_a, dummy, si)
     voice_o = {**voice_a, "assistantProvider": "openai",
                "assistantModelOpenai": "gpt-5.6-luna",

@@ -2,7 +2,8 @@
 subscription-billed CLI subprocess. Contract: run(task, timeout) -> dict(ok,
 summary, detail). The adapters own every vendor-specific flag and output
 shape, so nothing above this file knows or cares which harness ran - swapping
-is config.workerProvider, exactly like assistantProvider.
+is config.workerProvider, exactly like assistantProvider (and keyed by the
+same vendor names: anthropic runs the claude CLI, openai runs codex).
 
 Fail-soft (rule 1's convention, new lane): a missing CLI disables the lane
 with a clear startup + doctor message, never a crash. run() never raises -
@@ -62,14 +63,13 @@ def parse_reply(text):
 
 class _CliWorker:
     exe = ""                                    # shim/binary name on PATH
-    DEFAULT_MODEL = ""                          # "" = whatever the CLI is set to
 
     def __init__(self, model="", effort=""):
-        # config.workerModel is ONE key across providers, so an explicit value
-        # only makes sense for the active one; empty means "this adapter's
-        # choice", which is where vendor knowledge belongs anyway.
-        self.model = model or self.DEFAULT_MODEL
-        self.effort = effort                    # "" = the CLI's own default
+        # Both come from config, per vendor and spelled out there - no hidden
+        # adapter defaults to hunt for. Empty means "whatever this CLI is set
+        # to", which is a choice config states, not one this file makes.
+        self.model = model
+        self.effort = effort
         self.path = shutil.which(self.exe)
 
     def available(self):
@@ -116,11 +116,6 @@ class ClaudeWorker(_CliWorker):
     worker_home/.claude/settings.json deny rules (secrets, out-of-scope
     writes) - the injection canary drill proves both."""
     exe = "claude"
-    # Pinned, NOT inherited: an unset model follows the operator's own CLI
-    # preference (Opus 5 on this Max plan, found live 2026-08-11), so every
-    # background job would spend desk quota at high effort. Reading the web
-    # and writing two sentences is not an Opus problem.
-    DEFAULT_MODEL = "sonnet"
 
     def _argv(self):
         argv = _argv_for(self.path) + [
@@ -178,4 +173,7 @@ class CodexWorker(_CliWorker):
         return parse_reply(text)
 
 
-WORKERS = {"claude": ClaudeWorker, "codex": CodexWorker}
+# Keyed by VENDOR, like assistantProvider - so one vocabulary spans both
+# lanes and workerProvider lines up with workerModel<Vendor>.
+WORKERS = {"anthropic": ClaudeWorker, "openai": CodexWorker}
+MODEL_KEY = {"anthropic": "workerModelAnthropic", "openai": "workerModelOpenai"}

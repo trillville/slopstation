@@ -48,10 +48,11 @@ log = cglib.make_log("voice")
 REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "eotThreshold", "eagerEotThreshold", "keytermCount",
                   "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
-                  "assistantProvider", "assistantModel", "inputs",
+                  "assistantProvider", "assistantModelAnthropic",
+                  "assistantModelOpenai", "assistantReasoningEffort", "inputs",
                   "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "workerProvider", "workerModel", "workerEffort",
-                  "workerTimeoutS")
+                  "workerProvider", "workerModelAnthropic", "workerModelOpenai",
+                  "workerEffort", "workerTimeoutS")
 
 
 def load_titles(count):
@@ -326,9 +327,9 @@ def _make_llm(voice, secrets, system_text):
     --text A/B picks a winner, production follows by flipping one config key.
     OpenAI uses the Responses API (reasoning + tools coexist there); effort is
     a config knob that trades latency for depth."""
-    provider = voice.get("assistantProvider", "anthropic")
+    from assistant import default_model
+    provider = voice["assistantProvider"]
     if provider == "openai":
-        from assistant import default_model
         from pipecat.services.openai.responses.llm import (
             OpenAIResponsesHttpLLMService, OpenAIResponsesReasoningConfig)
         # reasoning must be the TYPED config, not a dict: pipecat's dataclass
@@ -341,12 +342,13 @@ def _make_llm(voice, secrets, system_text):
                 model=default_model({"voice": voice}, "openai"),
                 system_instruction=system_text, max_completion_tokens=1500,
                 reasoning=OpenAIResponsesReasoningConfig(
-                    effort=voice.get("assistantReasoningEffort", "low"))))
+                    effort=voice["assistantReasoningEffort"])))
     from pipecat.services.anthropic.llm import AnthropicLLMService
     return AnthropicLLMService(
         api_key=secrets["anthropicApiKey"],
         settings=AnthropicLLMService.Settings(
-            model=voice["assistantModel"], system_instruction=system_text,
+            model=default_model({"voice": voice}, "anthropic"),
+            system_instruction=system_text,
             enable_prompt_caching=True, max_tokens=400))
 
 
@@ -570,23 +572,30 @@ def main():
     # first wake is as fast as every later one.
     matcher = GrammarMatcher(voice)
     refresh_library_bg()
-    prewarm_imports_bg(voice.get("assistantProvider", "anthropic"))
+    prewarm_imports_bg(voice["assistantProvider"])
+    if brain_live:
+        from assistant import default_model
+        ap = voice["assistantProvider"]
+        log(f"assistant lane - {ap}/{default_model(cfg, ap)}"
+            + (f" effort={voice['assistantReasoningEffort']}"
+               if ap == "openai" else "")     # anthropic has no effort knob
+            + (" +websearch" if voice["assistantWebSearch"] else ""))
 
     # Tier-3 worker lane (Project D2), fail-soft like every other lane: a
     # missing CLI turns background tasks off with a clear message - wake,
     # commands, and the assistant are untouched either way.
     import announce
     import jobs as jobs_mod
-    from workers import WORKERS
+    from workers import MODEL_KEY, WORKERS
     jobs = announcer = None
     wp = voice["workerProvider"]
-    adapter = (WORKERS[wp](voice["workerModel"], voice["workerEffort"])
+    adapter = (WORKERS[wp](voice[MODEL_KEY[wp]], voice["workerEffort"])
                if wp in WORKERS else None)
     if adapter is None:
         log(f"worker lane DISABLED - unknown workerProvider '{wp}' "
             f"(one of {list(WORKERS)})")
     elif not adapter.available():
-        log(f"worker lane DISABLED - '{wp}' CLI not on PATH "
+        log(f"worker lane DISABLED - '{adapter.exe}' CLI not on PATH "
             "(background tasks off; everything else runs)")
     elif not (stt_live and brain_live):
         # The lane rides the assistant (only its background_task tool can
@@ -600,7 +609,11 @@ def main():
         announcer.jobs = jobs
         orphans = jobs.reconcile()
         jobs.start()
-        log(f"worker lane up - {wp}"
+        # Spell the effective settings into the log: config says what to run,
+        # this line says what IS running (an empty model = the CLI's own).
+        log(f"worker lane up - {wp}/{adapter.exe} "
+            f"model={adapter.model or '(cli default)'} "
+            f"effort={adapter.effort or '(cli default)'}"
             + (f", {orphans} orphaned job(s) marked failed" if orphans else ""))
 
     listener = WakeListener(pa, voice, input_idx)

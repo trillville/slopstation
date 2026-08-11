@@ -352,9 +352,14 @@ class OpenAIBackend:
 BACKENDS = {"anthropic": AnthropicBackend, "openai": OpenAIBackend}
 
 
+# Model per vendor, spelled out in config - both stay populated so flipping
+# assistantProvider is the whole A/B, and neither lane hides behind a default.
+MODEL_KEY = {"anthropic": "assistantModelAnthropic",
+             "openai": "assistantModelOpenai"}
+
+
 def default_model(cfg, provider):
-    return (cfg["voice"].get("assistantModelOpenai", "gpt-5.6-luna")
-            if provider == "openai" else cfg["voice"]["assistantModel"])
+    return cfg["voice"][MODEL_KEY[provider]]
 
 
 def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
