@@ -31,14 +31,34 @@ RULES = (
     "near-sounding reading that best fits the catalog and the conversation "
     "and answer THAT, opening with your reading so a wrong guess is "
     "self-correcting ('Mech games? You have three...'). Ask one short "
-    "clarifying question only when no reading clearly wins. If something "
-    "fails, say so plainly.\n\n"
-    "CATALOG (appid|name|tags|genres|hours|lastPlayed|installed|controller):\n"
+    "clarifying question only when no reading clearly wins. If nothing in "
+    "the catalog is close, say the game isn't in the library - don't force "
+    "a match. If something fails, say so plainly."
 )
 
 
-def system_instruction():
-    return RULES + "\n".join(library.catalog_lines())
+def system_instruction(cfg):
+    """RULES + a dynamic tail (the facts only config knows: date, spoken
+    input names, volume ceiling, mute semantics) + the catalog. Each fact
+    lives here and nowhere else; built once per session, so none of it
+    moves under the prompt cache."""
+    voice = cfg["voice"]
+    inputs = voice.get("inputs", {})
+    tail = [f"Today is {time.strftime('%Y-%m-%d')}."]
+    if inputs:
+        gaming = next((k for k, v in inputs.items()
+                       if v == cfg.get("tvGamingCmd")), None)
+        tail.append(f"TV inputs: {', '.join(inputs)}"
+                    + (f"; '{gaming}' starts a session if none is running."
+                       if gaming else "."))
+    tail.append(
+        f"Volume runs 0-{voice['volumeMax']}, higher requests are clamped - "
+        "confirm the level the tool actually returns. Mute is a blind toggle "
+        "with no readable state - say you toggled it, never claim on or off.")
+    return (RULES + " " + " ".join(tail) + "\n\n"
+            "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM or "
+            "never|inst/notinst|controller full/partial/none/?):\n"
+            + "\n".join(library.catalog_lines()))
 
 
 def known_appids():
@@ -100,9 +120,14 @@ def tool_impls(dispatch, log):
         appid = int(args.get("appid", 0))
         meta = library.load_meta().get(str(appid))
         name = installed_name(appid)
+        installed = name is not None
+        if not installed:
+            o = library.load().get("owned", {}).get(str(appid))
+            name = o.get("name") if o else None
         if not (meta or name):
             return {"ok": False, "error": "unknown appid"}
-        return {"ok": True, "name": name, **(meta or {})}
+        return {"ok": True, "name": name, "installed": installed,
+                **(meta or {})}
 
     return {"launch_game": launch_game, "control": control,
             "get_now_playing": get_now_playing,
@@ -110,16 +135,22 @@ def tool_impls(dispatch, log):
 
 
 TOOL_DEFS = [
-    ("launch_game", "Launch a game from the catalog by appid.",
+    ("launch_game", "Launch a game from the catalog by appid. Starts a "
+     "session automatically if none is running - never call start_session "
+     "first.",
      {"appid": {"type": "integer", "description": "appid from the catalog"}},
      ["appid"]),
     ("control", "Control the system: end_session, start_session, volume_up, "
-     "volume_down, mute, set_volume (with level 0-100), switch_input "
+     "volume_down, mute, set_volume (with level), switch_input "
      "(with input name).",
      {"action": {"type": "string",
                  "enum": ["end_session", "start_session", "volume_up",
                           "volume_down", "mute", "set_volume", "switch_input"]},
-      "level": {"type": "integer"}, "input": {"type": "string"}},
+      "level": {"type": "integer",
+                "description": "volume level for set_volume"},
+      "input": {"type": "string",
+                "description": "spoken input name for switch_input; valid "
+                "names are in the system prompt"}},
      ["action"]),
     ("get_now_playing", "What game is currently running, if any.", {}, []),
     ("get_game_details", "Details (tags, description, score) for one appid.",
@@ -270,7 +301,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
     effort = effort or cfg["voice"].get("assistantReasoningEffort", "low")
     backend = BACKENDS[provider](secrets, model or default_model(cfg, provider),
                                  effort=effort)
-    system_text = system_instruction()
+    system_text = system_instruction(cfg)
     tag = f"{provider}/{backend.model}"
     if provider == "openai":
         tag += f" effort={effort}"

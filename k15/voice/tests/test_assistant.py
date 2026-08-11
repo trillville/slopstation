@@ -4,6 +4,7 @@ constructions with dummy keys, and a tolerant live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
 """
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,7 +16,7 @@ from dispatch import Dispatch
 
 CFG_MIN = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
            "voice": {"volumeStep": 2, "volumeMax": 40,
-                     "inputs": {"apple tv": "hdmi1"}}}
+                     "inputs": {"apple tv": "hdmi1", "gaming": "hdmi4"}}}
 
 
 def main():
@@ -27,11 +28,19 @@ def main():
     real_appid = rows[0]["appid"]
 
     # System prompt: rules + one line per game, sane token budget.
-    si = assistant.system_instruction()
+    si = assistant.system_instruction(CFG_MIN)
     assert "CATALOG" in si and str(real_appid) in si
     # The mishear-repair rule (live: "met games" confused the model until the
     # prompt said input is STT and taught it to read phonetically).
     assert "speech-to-text" in si and "mishears" in si
+    # Dynamic tail: the facts only config knows, each stated exactly once -
+    # date (so "lately" means something), spoken input names + the gaming
+    # input's start-a-session behavior, volume clamp, mute-is-blind.
+    assert time.strftime("%Y-%m-%d") in si
+    assert "apple tv" in si and "'gaming' starts a session" in si
+    assert "clamped" in si and "blind toggle" in si
+    # Out-of-catalog carve-out, so mishear-repair can't force a wrong match.
+    assert "isn't in the library" in si
     n_tokens = len(si) // 4
     assert 500 < n_tokens < 30000, n_tokens
     print(f"  system prompt: ~{n_tokens} tokens, {len(library.catalog_lines())} games")
@@ -52,7 +61,15 @@ def main():
     r = impls["get_now_playing"]({})
     assert r["ok"]                                # dry-run path
     r = impls["get_game_details"]({"appid": real_appid})
-    assert r["ok"] and r["name"] == rows[0]["name"]
+    assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
+    # Owned-but-not-installed must still come back named (review gap: the
+    # model got details for a game it couldn't name).
+    inst_ids = {row["appid"] for row in rows}
+    owned_only = [a for a, o in library.load().get("owned", {}).items()
+                  if int(a) not in inst_ids and o.get("name")]
+    if owned_only:
+        r = impls["get_game_details"]({"appid": int(owned_only[0])})
+        assert r["ok"] and r["name"] and not r["installed"], r
     print("  control/get_now_playing/get_game_details: routed and validated")
 
     # Both tool renderers cover every tool, in each provider's shape.
@@ -64,6 +81,10 @@ def main():
     assert all(t["type"] == "function" and "parameters" in t and "function" not in t
                for t in ot)
     assert all("input_schema" in t for t in at)
+    # Single-source-of-truth: the volume range lives in the prompt (clamped),
+    # not the tool def; session-start semantics live on launch_game.
+    assert "0-100" not in str(assistant.TOOL_DEFS)
+    assert "never call start_session" in str(assistant.TOOL_DEFS)
     assert set(assistant.BACKENDS) == {"anthropic", "openai"}
     assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"

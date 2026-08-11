@@ -345,7 +345,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
             messages=carry,
             tools=function_schemas(tool_impls(dispatcher, log)))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
-        stages += [user_agg, _make_llm(voice, secrets, system_instruction()),
+        stages += [user_agg, _make_llm(voice, secrets, system_instruction(cfg)),
                    _make_tts(voice, secrets), transport.output(), asst_agg]
     else:
         stages += [transport.output()]
