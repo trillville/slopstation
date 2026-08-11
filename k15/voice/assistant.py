@@ -172,8 +172,14 @@ class AnthropicBackend:
         self.client = anthropic.Anthropic(api_key=secrets[self.key])
         self.model = model
         self.messages = []
+        self.cache_note = ""
 
     def turn(self, system_text, user_text, impls):
+        # cache_control on the system block caches tools+system together
+        # (render order is tools -> system -> messages; a breakpoint covers
+        # everything before it). CAVEAT: Haiku 4.5's minimum cacheable prefix
+        # is 4096 tokens - below that the marker silently does nothing, which
+        # is why the REPL prints cache w/r per answer (w0/r0 = too small).
         system = [{"type": "text", "text": system_text,
                    "cache_control": {"type": "ephemeral"}}]
         self.messages.append({"role": "user", "content": user_text})
@@ -181,6 +187,10 @@ class AnthropicBackend:
             resp = self.client.messages.create(
                 model=self.model, max_tokens=400, system=system,
                 messages=self.messages, tools=anthropic_tools())
+            u = resp.usage
+            self.cache_note = (
+                f"cache w{getattr(u, 'cache_creation_input_tokens', 0) or 0}"
+                f"/r{getattr(u, 'cache_read_input_tokens', 0) or 0}")
             self.messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason != "tool_use":
                 return " ".join(b.text for b in resp.content if b.type == "text")
@@ -207,6 +217,7 @@ class OpenAIBackend:
         self.model = model
         self.effort = effort            # none|minimal|low|medium|high (model-dep)
         self.prev = None
+        self.cache_note = ""
 
     def turn(self, system_text, user_text, impls):
         pending = [{"role": "user", "content": user_text}]
@@ -216,6 +227,9 @@ class OpenAIBackend:
                 tools=openai_tools(), reasoning={"effort": self.effort},
                 max_output_tokens=1500, previous_response_id=self.prev)
             self.prev = resp.id
+            det = getattr(resp.usage, "input_tokens_details", None)
+            self.cache_note = (
+                f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
             calls = [o for o in resp.output if o.type == "function_call"]
             if not calls:
                 return resp.output_text
@@ -270,5 +284,6 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
             break
         t0 = time.time()
         text = backend.turn(system_text, q, impls)
-        print(f"assistant ({time.time() - t0:.1f}s)> {text}")
+        note = f", {backend.cache_note}" if backend.cache_note else ""
+        print(f"assistant ({time.time() - t0:.1f}s{note})> {text}")
     return 0
