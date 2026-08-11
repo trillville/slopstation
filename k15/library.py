@@ -189,22 +189,28 @@ def load_meta():
         return {}
 
 
+def _save_meta(cache):
+    STATE.mkdir(exist_ok=True)
+    tmp = META_CACHE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+    os.replace(tmp, META_CACHE)
+
+
 def refresh_meta(appids, limit=200):
-    """Top up NEW appids only, ~1 req/2s (appdetails' unofficial ceiling)."""
+    """Top up NEW appids only, ~1 req/2s (appdetails' unofficial ceiling).
+    Saves after each fetch (atomic replace): the crawl runs on a daemon thread
+    that dies when the agent is Ctrl+C'd, so a full-library first pass would
+    otherwise lose all progress and re-crawl from zero every restart."""
     cache = load_meta()
     todo = [a for a in appids if str(a) not in cache][:limit]
     for i, appid in enumerate(todo):
         try:
             cache[str(appid)] = fetch_meta_one(appid)
+            _save_meta(cache)
             log(f"meta {appid} fetched ({i + 1}/{len(todo)})")
         except Exception as e:
             log(f"meta {appid} failed ({e}) - will retry next refresh")
         time.sleep(2.1)
-    if todo:
-        STATE.mkdir(exist_ok=True)
-        tmp = META_CACHE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(cache, indent=1), encoding="utf-8")
-        os.replace(tmp, META_CACHE)
     return cache
 
 
