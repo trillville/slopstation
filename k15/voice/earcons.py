@@ -5,17 +5,17 @@ think tick and announcement cue. Synthesized at import from specs; no binary
 assets in the repo. All PCM is SAMPLE_RATE mono s16le, ready to wrap in an
 OutputAudioRawFrame.
 
-Two voices out of one engine:
+Everything is a bell: overlapping or sequential notes, a few light partials,
+exponential decay. A decaying note is perceptually far softer than a flat one
+of the same peak - flat sines at tick level are exactly what made the old
+vocabulary jarring - so these read much quieter than their amplitudes suggest.
+The engine still does flat tones (decay=None) if a spec ever wants one.
 
-  bells (wake, close) - overlapping notes, a few light partials, exponential
-    decay. Deliberately quiet: they fire on every single wake, and a flat sine
-    at tick level is exactly what made the old one jarring. A decaying note is
-    perceptually much softer than a flat one of the same peak, so these read
-    quieter than their amplitudes alone suggest.
-
-  flat tones (the rest) - pitches, counts and level unchanged. The counts are
-    the contract (they mirror the haptic thuds and the ear is trained on
-    them); only the release got marginally softer.
+The counts are the contract: 1 = accepted, 2 = busy, 3 = failed, mirroring the
+haptic thuds. Pitch, contour and level are taste, tuned so the seven sound like
+one family: the think tick is the quietest thing here (it repeats every few
+seconds), the bookends next, the acks just above them, and the announcement cue
+on top - it is the only one that has to carry across the room unasked.
 
 Tier-1 acks must be instant: never synthesize speech for them, never wait on
 anything - pcm() is a dict lookup after first use.
@@ -55,15 +55,23 @@ SPECS = {
     # learning; the wake chime keeps the old tick's 1175 Hz as its top note.
     "wake":  (3800, 0.32, [(784.0, 0, 200), (1174.7, 70, 310)]),
     "close": (2400, 0.32, [(1174.7, 0, 200), (784.0, 70, 340)]),
-    # The count vocabulary - the count IS the message.
-    "ok":    (9000, None, _seq([(660.0, 90)])),
-    "busy":  (9000, None, _seq([(520.0, 70), (520.0, 70)])),
-    "fail":  (9000, None, _seq([(330.0, 90), (330.0, 90), (330.0, 90)])),
-    # Soft "still working" tick, repeats while an assistant answer is in
-    # flight; and the rising pair = "news!" ahead of a background-task
-    # announcement.
-    "think":    (4500, None, _seq([(880.0, 40)])),
-    "announce": (5000, None, _seq([(988.0, 50), (1319.0, 70)])),
+    # The count vocabulary - the count IS the message (it mirrors the haptic
+    # thuds), so contour and timbre are free to make each one distinctive:
+    #   ok   - one bell on D6, the note the wake chime landed on: "yes, that"
+    #   busy - the same note struck twice, flat, like a knock at a shut door
+    #   fail - three falling, the shape every ear already reads as "no"
+    # Levels sit just above the wake chime, not 6x over it: ok fires on every
+    # single command, so it has to be an answer, not an alarm.
+    "ok":    (5200, 0.30, _seq([(1174.7, 260)])),
+    "busy":  (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
+    "fail":  (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
+    # The assistant lane's two. think repeats every few seconds through a long
+    # wait, so it is the quietest thing in the set - a tap, not a tone. The
+    # announcement cue is the loudest: it arrives unasked, across the room,
+    # ahead of spoken news, and a rising third is the one shape here that
+    # sounds like a question being opened rather than an answer closing.
+    "think":    (2200, 0.22, _seq([(880.0, 130)])),
+    "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
 
 _cache = {}

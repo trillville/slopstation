@@ -1,7 +1,7 @@
 """Blind test (C1 s1): earcon synthesis invariants - burst counts carry the
-vocabulary, so segmentation must recover exactly the spec'd count; fades must
-kill clicks; amplitudes must be sane; the wake/close bells must stay quieter
-than the count vocabulary (that is the whole point of the bell voice); the
+vocabulary, so segmentation must recover exactly the spec'd count however the
+tones are retuned; fades must kill clicks; amplitudes must be sane; the level
+order (sleep < wake < acks, nothing loud enough to startle) must hold; the
 gain knob must scale and never wrap int16. Run:
     .venv\\Scripts\\python tests\\test_earcons.py
 """
@@ -55,16 +55,20 @@ def test_specs():
     print(f"OK - {len(expected_counts)} earcons: counts, lengths, fades, amplitudes")
 
 
-def test_bookends_are_the_quiet_ones():
-    """The wake chime fires on every wake, so it must be audibly softer than
-    an action ack - and RMS, not peak, is what the ear reports. Sleep softer
-    still: it is information, not an answer."""
-    loudest_ack = max(rms(earcons.samples(n)) for n in ("ok", "busy", "fail"))
-    wake, close = rms(earcons.samples("wake")), rms(earcons.samples("close"))
-    assert wake < loudest_ack / 2, f"wake rms {wake:.0f} vs ack {loudest_ack:.0f}"
-    assert close < wake, f"close rms {close:.0f} not under wake {wake:.0f}"
-    print(f"OK - bookends quieter than the acks (wake {wake:.0f}, "
-          f"close {close:.0f}, loudest ack {loudest_ack:.0f} rms)")
+def test_nothing_shouts():
+    """The level order is the design, and it follows from how often and how
+    unasked each one arrives: think (every few seconds through a wait) <
+    sleep < wake < the acks < announce (unsolicited, across the room). RMS,
+    not peak, is what the ear reports - the old flat tones peaked at 9000 and
+    SUSTAINED it (rms 6001), which is what a ceiling here would have caught."""
+    r = {n: rms(earcons.samples(n)) for n in earcons.SPECS}
+    acks = min(r["ok"], r["busy"], r["fail"])
+    assert r["think"] < r["close"] < r["wake"] < acks < r["announce"], \
+        f"level order broken: {({k: round(v) for k, v in r.items()})}"
+    loudest = max(r.values())
+    assert loudest < 2000, f"something shouts: {loudest:.0f} rms"
+    print("OK - levels: think {think:.0f} < close {close:.0f} < wake {wake:.0f}"
+          " < acks < announce {announce:.0f} rms, none above 2000".format(**r))
 
 
 def test_gain_knob():
@@ -89,7 +93,7 @@ def test_gain_knob():
 
 def main():
     test_specs()
-    test_bookends_are_the_quiet_ones()
+    test_nothing_shouts()
     test_gain_knob()
 
 
