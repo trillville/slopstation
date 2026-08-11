@@ -70,7 +70,7 @@ def refresh_library_bg():
 def prewarm_imports_bg(provider):
     """First-wake latency fix: pipecat's service modules + the provider SDK
     take several seconds to import on the K15's U-class CPU, which showed up
-    as ~6.5 s of wake-tick-to-listening dead air on the first session. Import
+    as ~6.5 s of wake-to-listening dead air on the first session. Import
     them at boot on a background thread so the first session builds as fast
     as every later one (imports are idempotent and lock-protected)."""
     def warm():
@@ -144,10 +144,11 @@ def rebuild_audio(old_pa, voice, listener):
 
 
 def play_pcm(pa, pcm, device_index=None):
-    """Blocking playback for the wake tick (the pipeline isn't up yet).
-    One retry after a settle: Bluetooth outputs (AirPods) renegotiate
-    profiles around our stream churn and can transiently refuse to open
-    (-9999). A missed tick must never take the agent down either way."""
+    """Blocking playback for the earcons that fire outside a session: the
+    wake chime (the pipeline isn't up yet) and the sleep chime (it is already
+    torn down). One retry after a settle: Bluetooth outputs (AirPods)
+    renegotiate profiles around our stream churn and can transiently refuse
+    to open (-9999). A missed chime must never take the agent down either."""
     import pyaudio
     for attempt in (1, 2):
         try:

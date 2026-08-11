@@ -159,9 +159,13 @@ volume:
 .venv\Scripts\python voice_agent.py --earcons
 ```
 
-Order: wake, close, ok, busy, fail. **Too quiet or too loud is one config key,
-not a code change** — set `voice.earconGain` (1.0 = as designed; 0.6 softer,
-1.6 louder) and run it again. Then, in `--dry-run`, feel the timing:
+Order: wake, close, ok, busy, fail, think, announce. **Too quiet or too loud is
+one config key, not a code change** — set `voice.earconGain` (1.0 = as
+designed; 0.6 softer, 1.6 louder) and run it again. Judge them against how
+each one arrives: `ok` fires after every command, `think` repeats every 3 s
+through a long answer (so it's the quietest of the seven), and `announce`
+crosses a dormant room unasked (so it's the loudest). Then, in `--dry-run`,
+feel the timing:
 
 - "hey jarvis volume up" as ONE sentence → the chime must land **after** your
   last word, never over "volume up". This is the whole point of the change.
