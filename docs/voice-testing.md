@@ -325,7 +325,11 @@ Then live (knob on, `Start-K15.bat` or `voice_agent.py` directly):
    the PC asleep should tick through the ssh wait instead of dead air.
 5. **Tier-1 during a search** — ask a searched question, then say "volume
    up" while it thinks: the command must dispatch instantly (grammar runs on
-   every transcript, search or no search).
+   every transcript, search or no search) **and** the answer must still
+   arrive afterwards. Expect: tap at ~3 s, volume moves with an ok bell,
+   then the spoken answer. There is no barge-in (ledger D18), so the two
+   queue rather than cancelling each other — the same reason you can't talk
+   over a long answer to stop it. Note whether that grates.
 6. **Tick tone/cadence taste** — `think` earcon spec and `THINK_CUE_S` are
    placeholder-tunable (earcons.py / grammar_gate.py) like every other tone.
 
