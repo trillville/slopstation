@@ -210,14 +210,21 @@ def exlink_send_hex(frame_hex, port):
 
 
 def exlink_probe(frame_hex, port):
-    """Bench only: send a frame and read GENEROUSLY (16 bytes, 1 s timeout) so
-    a payload after the 3-byte ack can't hide - exlink_send_hex's read(3)
-    would report a bare 030cf1 even if the set appended a value byte. No ack
-    validation: the whole point is to see the raw answer."""
+    """Bench only: send a frame and read until the set goes quiet (64-byte
+    requests, 1 s timeout per read, 5-read cap) so a multi-frame answer
+    arrives whole - the first probe's read(16) filled exactly, proving
+    truncation was possible. No ack validation: the whole point is to see
+    the raw answer."""
     import serial
     with serial.Serial(port, 9600, timeout=1) as s:
         s.write(bytes.fromhex(frame_hex))
-        return s.read(16).hex()
+        out = b""
+        for _ in range(5):
+            chunk = s.read(64)
+            if not chunk:
+                break
+            out += chunk
+        return out.hex()
 
 
 def exlink_send(name, port):

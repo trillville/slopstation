@@ -155,10 +155,18 @@ named commands. TV on, from `k15`:
 
 (run from the `k15` folder, or `python exlink.py …` with its own interpreter).
 Each send should print `ack 030cf1` and move the TV — acks are now validated,
-so a `FAILED` line means the command really didn't land. **`probe_volume` is a
-real question:** it reads 16 bytes (a payload can't hide behind the ack) and
-prints its own verdict — bare ack = the set answers no data, blind mute stays;
-anything longer = paste it, real volume/mute state may be readable.
+so a `FAILED` line means the command really didn't land. **The set answers
+status queries** (proven 2026-08-10: the query returned frames beyond the
+ack), so the follow-up drill is:
+
+```
+..\voice\.venv\Scripts\python exlink.py decode_volume
+```
+
+Audible — it probes at volume 7, volume 23, mute on, mute off, and diffs the
+responses byte-by-byte so the volume/mute bytes identify themselves. Leaves
+the TV at volume 23. **Paste the whole output** — it decides whether mute
+becomes stateful and volume readable.
 
 ## 7. Live commands — real dispatch
 

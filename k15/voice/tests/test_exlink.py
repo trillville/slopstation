@@ -92,13 +92,35 @@ def main():
         except cglib.ExlinkNak:
             pass
 
-        # The probe reads generously (a payload stays visible) and validates
-        # nothing - its job is to show the raw answer.
-        FakePort.read = lambda self, n: bytes.fromhex("030cf114")
-        assert cglib.exlink_probe(cglib.EXLINK_VOLUME_QUERY, "COMX") == "030cf114"
+        # The probe drains until quiet (a multi-frame payload stays whole) and
+        # validates nothing - its job is to show the raw answer.
+        reads = {"n": 0}
+
+        def _read_then_quiet(self, n):
+            reads["n"] += 1
+            return bytes.fromhex("030cf114") if reads["n"] <= 2 else b""
+
+        FakePort.read = _read_then_quiet
+        assert (cglib.exlink_probe(cglib.EXLINK_VOLUME_QUERY, "COMX")
+                == "030cf114" * 2), "probe must keep reading until quiet"
     finally:
         time.sleep = _real_sleep
         del sys.modules["serial"]
+
+    # decode_volume's diff helper flags exactly the moved byte.
+    import contextlib
+    import io
+
+    import exlink
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        exlink._diff("a", "030cf107", "b", "030cf117")
+        exlink._diff("a", "030cf1", "b", "030cf1")
+        exlink._diff("a", "030cf1", "b", "030cf107")
+    text = out.getvalue()
+    assert "byte[3] 07->17" in text, text
+    assert "identical" in text, text
+    assert "lengths differ" in text, text
 
     # Every frame is 7 bytes and its own checksum verifies.
     for name, hexs in {**cglib.EXLINK_FRAMES,
