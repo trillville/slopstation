@@ -34,7 +34,7 @@
     "assistantSearchMaxUses": 2,
     "location": {"city": "", "region": "", "country": "US", "timezone": ""},
     "workerProvider": "claude",
-    "workerModel": "sonnet",
+    "workerModel": "",
     "workerEffort": "high",
     "workerTimeoutS": 600,
     "inputs": {

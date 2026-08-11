@@ -62,9 +62,13 @@ def parse_reply(text):
 
 class _CliWorker:
     exe = ""                                    # shim/binary name on PATH
+    DEFAULT_MODEL = ""                          # "" = whatever the CLI is set to
 
     def __init__(self, model="", effort=""):
-        self.model = model
+        # config.workerModel is ONE key across providers, so an explicit value
+        # only makes sense for the active one; empty means "this adapter's
+        # choice", which is where vendor knowledge belongs anyway.
+        self.model = model or self.DEFAULT_MODEL
         self.effort = effort                    # "" = the CLI's own default
         self.path = shutil.which(self.exe)
 
@@ -112,6 +116,11 @@ class ClaudeWorker(_CliWorker):
     worker_home/.claude/settings.json deny rules (secrets, out-of-scope
     writes) - the injection canary drill proves both."""
     exe = "claude"
+    # Pinned, NOT inherited: an unset model follows the operator's own CLI
+    # preference (Opus 5 on this Max plan, found live 2026-08-11), so every
+    # background job would spend desk quota at high effort. Reading the web
+    # and writing two sentences is not an Opus problem.
+    DEFAULT_MODEL = "sonnet"
 
     def _argv(self):
         argv = _argv_for(self.path) + [

@@ -53,6 +53,14 @@ def main():
     argv = cw._argv()
     assert argv[:3] == ["cmd.exe", "/c", r"C:\x\claude.cmd"]     # .cmd shim
     assert "-p" in argv and "--output-format" in argv and "json" in argv
+    # Empty config -> the ADAPTER's default, never the operator's CLI
+    # preference (which is Opus on a Max plan - desk quota, at high effort).
+    assert argv[argv.index("--model") + 1] == "sonnet"
+    # ...and a claude alias must never leak into the codex argv: one config
+    # key, two vendors, so an explicit value belongs to the active provider.
+    xw_shared = workers.CodexWorker(model="")
+    xw_shared.path = r"C:\x\codex.exe"
+    assert "--model" not in xw_shared._argv()
     assert not any(a.startswith("TASK") for a in argv)           # prompt=stdin
     assert cw._env() is None                     # no knob -> inherit the CLI's
     cw2 = workers.ClaudeWorker(model="claude-haiku-4-5", effort="high")
