@@ -49,6 +49,11 @@ class Announcer:
         self.jobs = None                        # attached by main()
         self.session_active = threading.Event()
         self.abort = threading.Event()
+        # Set after a bulletin the user actually heard in full: the wake loop
+        # takes it as "open a session now", so the obvious follow-up needs no
+        # wake word. Config voice.followUpAfterAnnounce.
+        self.follow_up = threading.Event()
+        self.follow_up_enabled = voice_cfg["followUpAfterAnnounce"]
         self._q = queue.Queue()
         threading.Thread(target=self._run, daemon=True,
                          name="announcer").start()
@@ -135,5 +140,9 @@ class Announcer:
             if done:
                 self.jobs.mark_read(job_id)
                 self.log(f"announced job {job_id}")
+                if self.follow_up_enabled:
+                    # Only after a bulletin heard in FULL - opening the mic
+                    # off an announcement nobody heard is just an open mic.
+                    self.follow_up.set()
             else:
                 self.log(f"announcement of {job_id} cut short - stays unread")

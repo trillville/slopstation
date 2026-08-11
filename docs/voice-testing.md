@@ -400,6 +400,14 @@ quota and can run real commands) — these drills are live-agent only.
    session closes normally. Minutes later, mid-movie: rising two-note earcon
    then the summary, spoken over whatever's playing (your call, decision 2).
    couch.log shows `job <id> queued/running/DONE` and `announced job <id>`.
+1b. **Follow-up window** — right after the announcement finishes, just talk:
+   no wake word needed (`followUpAfterAnnounce`). Ask something only the
+   findings answer ("which of those was cheapest?") — the assistant has the
+   result in context, so it should answer without you repeating anything.
+   Say nothing and the session sleeps normally with its chime. **Then the
+   movie check**: let a bulletin land during a film and stay quiet — nothing
+   from the TV should false-fire in that window. If it does, set
+   `followUpAfterAnnounce` false and tell me.
 2. **Pull** — "hey jarvis, what did you find" re-speaks the latest result;
    "give me the details" speaks the long version; both work before the
    announcement too (retrieval marks it read — the announcer then skips it).

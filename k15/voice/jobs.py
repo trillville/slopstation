@@ -21,6 +21,14 @@ QUEUED, RUNNING, DONE, FAILED = "QUEUED", "RUNNING", "DONE", "FAILED"
 KEEP = 10                       # finished jobs retained in the file
 QUEUE_CAP = 3                   # queued-or-running ceiling; beyond = busy
 
+# What a session's assistant is told about recent background work. Bounded on
+# all three axes because it rides in every LLM turn of that session: only
+# results fresh enough that "which one was cheapest?" plausibly means THEM,
+# only the last couple, and only the readable head of a long report.
+CONTEXT_AGE_S = 6 * 3600
+CONTEXT_JOBS = 2
+CONTEXT_DETAIL_CHARS = 1200
+
 
 class JobStore:
     """adapter = a workers.*Worker (never None - the caller gates the lane);
@@ -183,6 +191,19 @@ class JobStore:
 
     def mark_read(self, job_id):
         self._update(job_id, read=True)
+
+    def for_context(self):
+        """Recent finished jobs, oldest first - what the assistant should
+        already know when you follow up on an announcement. Read/unread is
+        irrelevant here: hearing a result is exactly when you're most likely
+        to ask about it."""
+        now = time.time()
+        with self._lock:
+            done = [j for j in self._load()
+                    if j["status"] in (DONE, FAILED)
+                    and now - j.get("finished", 0) < CONTEXT_AGE_S]
+        done.sort(key=lambda j: j.get("finished", 0))
+        return done[-CONTEXT_JOBS:]
 
     def status_line(self):
         """One spoken sentence about what's in flight."""

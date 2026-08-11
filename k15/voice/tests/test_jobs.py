@@ -180,7 +180,8 @@ def main():
     print("  reconciler: RUNNING orphan -> FAILED, surfaces as unread")
 
     # -- announcer gates (synth + playback stubbed) ---------------------------
-    voice = {"outputDeviceName": "", "ttsVoice": "aura-2-thalia-en"}
+    voice = {"outputDeviceName": "", "ttsVoice": "aura-2-thalia-en",
+             "followUpAfterAnnounce": True}
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 24}, log)
     ann.jobs = store
     played = []
@@ -208,6 +209,32 @@ def main():
     ann._play = lambda pcm: played.append(len(pcm)) or True
     played.clear()
     assert ann.speak("bench line") and played
+
+    # The follow-up window opens only after a bulletin heard in FULL - an
+    # aborted one must not leave the mic open on a room that heard nothing.
+    ann.follow_up.clear()
+    ann._play = lambda pcm: False               # cut short
+    rows = json.loads(jobs_mod.JOBS_FILE.read_text(encoding="utf-8"))
+    for j in rows:
+        j["read"] = False
+    jobs_mod.JOBS_FILE.write_text(json.dumps(rows), encoding="utf-8")
+    ann.submit(store.latest_result())
+    time.sleep(0.4)
+    assert not ann.follow_up.is_set(), "cut-short bulletin must not open a mic"
+    ann._play = lambda pcm: played.append(len(pcm)) or True
+    ann.submit(store.latest_result())
+    assert wait_for(ann.follow_up.is_set), "full bulletin should open the mic"
+    print("  announcer: follow-up window only after a bulletin played in full")
+
+    # Job results reach the assistant as prior conversation, so a follow-up
+    # ("which was cheapest?") lands on a model that already knows.
+    import voice_agent
+    msgs = voice_agent.job_messages(store)
+    assert msgs and msgs[0]["role"] == "user" and msgs[1]["role"] == "assistant"
+    assert "(background task)" in msgs[0]["content"]
+    assert len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
+    assert voice_agent.job_messages(None) == []          # worker lane off
+    print("  job_messages: results seeded into the assistant's history")
     print("  announcer: defers for sessions, marks read only after full playback")
 
     # latest_result orders by COMPLETION time, not file position: _save

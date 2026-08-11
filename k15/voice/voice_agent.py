@@ -53,7 +53,7 @@ REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "assistantModelOpenai", "assistantReasoningEffort", "inputs",
                   "assistantWebSearch", "assistantSearchMaxUses", "location",
                   "workerProvider", "workerModelAnthropic", "workerModelOpenai",
-                  "workerEffort", "workerTimeoutS")
+                  "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
 
 
 def load_titles(count):
@@ -226,10 +226,15 @@ class WakeListener:
                             input=True, frames_per_buffer=self.CHUNK,
                             input_device_index=self.device_index)
 
-    def _listen(self, stream, threshold, on_score, ring):
+    def _listen(self, stream, threshold, on_score, ring, interrupt=None):
         silent = 0
         while True:
             data = stream.read(self.CHUNK, exception_on_overflow=False)
+            # Something other than a wake word wants the session (today: an
+            # announcement just finished and the follow-up window opens).
+            # Checked per chunk, so it costs one 80 ms hop.
+            if interrupt is not None and interrupt():
+                return None
             chunk = self.np.frombuffer(data, self.np.int16)
             # Zombie watchdog: a WASAPI stream can outlive its endpoint (BT
             # profile flap) and keep delivering exact zeros forever - no error
@@ -260,7 +265,7 @@ class WakeListener:
         finally:
             close_stream_quietly(stream)
 
-    def wait_for_wake_capture(self, threshold, on_quiet=None):
+    def wait_for_wake_capture(self, threshold, on_quiet=None, interrupt=None):
         """Blocks until the wake word fires; returns (score, WakeCapture). The
         stream is handed to the capture - NOT closed - so speech overlapping or
         right after the wake phrase ("hey jarvis volume up", no pause) survives
@@ -268,20 +273,44 @@ class WakeListener:
         detection, wake phrase included; strip_wake removes it text-side.
         on_quiet is the wake chime, fired by the capture when the user stops
         talking. Caller must stop() the capture (idempotent) to release the
-        mic."""
+        mic. Returns (None, None) if `interrupt` asked for a session instead -
+        no wake phrase was spoken, so there is nothing to pre-roll."""
         stream = self._open_stream()
         ring = collections.deque(maxlen=self.PREROLL_CHUNKS)
         try:
-            score = self._listen(stream, threshold, None, ring)
+            score = self._listen(stream, threshold, None, ring, interrupt)
         except Exception:
             close_stream_quietly(stream)
             raise
+        if score is None:
+            close_stream_quietly(stream)
+            return None, None
         return score, WakeCapture(stream, ring, on_quiet)
 
 
 # --- the per-session pipeline -------------------------------------------------
 
 CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
+
+
+def job_messages(jobs):
+    """Recent background results as prior conversation - the worker's answer
+    in the assistant's mouth, so a follow-up needs no re-explaining. Task and
+    result both go in: "which one was cheapest?" needs the findings, "why did
+    you look that up?" needs the ask."""
+    if jobs is None:
+        return []
+    import jobs as jobs_mod
+    msgs = []
+    for j in jobs.for_context():
+        said = j["summary"]
+        detail = (j.get("detail") or "")[:jobs_mod.CONTEXT_DETAIL_CHARS]
+        if detail and detail != j["summary"]:
+            said += " " + detail
+        msgs += [{"role": "user",
+                  "content": f"(background task) {j['task']}"},
+                 {"role": "assistant", "content": said}]
+    return msgs
 
 
 def _trim_carry(messages):
@@ -412,6 +441,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     feeder = PrerollFeeder(log)
     stages = [transport.input(), feeder, stt, gate]
     context = None
+    seeded = []                                 # job results at the front
     if assistant_live:
         from assistant import (function_schemas, server_tools,
                                system_instruction, tool_impls)
@@ -423,6 +453,13 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
 
         carry = (list(CARRY["messages"])
                  if time.time() - CARRY["t"] < voice["followupCarryS"] else [])
+        # Background results lead the history, so "which one was cheapest?"
+        # after an announcement lands on an assistant that knows what it
+        # found. History, not system prompt: the system block stays
+        # byte-identical session to session, which is what the prompt cache
+        # keys on (a volatile tail would cost the catalog's cache read).
+        seeded = job_messages(jobs)
+        carry = seeded + carry
         # Native (provider-executed) tools ride custom_tools - the adapter
         # appends them verbatim after the function tools. Only the OpenAI
         # adapter has this passthrough in pipecat 1.7 (AdapterType has no
@@ -497,7 +534,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         # exactly what the model saw.
         traces.save("voice", msgs,
                     {"provider": provider, "dry_run": args.dry_run})
-        CARRY["messages"] = _trim_carry(msgs[-8:])
+        # Drop the seeded job results before carrying: the next session seeds
+        # them again from jobs.json, and carrying them too would double the
+        # findings in context on every session until they aged out.
+        CARRY["messages"] = _trim_carry(msgs[len(seeded):][-8:])
         CARRY["t"] = time.time()
 
 
@@ -685,7 +725,8 @@ def main():
 
         try:
             score, capture = listener.wait_for_wake_capture(
-                voice["wakeThreshold"], on_quiet=chime_when_quiet)
+                voice["wakeThreshold"], on_quiet=chime_when_quiet,
+                interrupt=(announcer.follow_up.is_set if announcer else None))
         except OSError as e:
             # Mic stream death mid-listen (BT profile flap, device yanked,
             # AirPods multipoint wandering off) must never kill the agent -
@@ -695,11 +736,21 @@ def main():
             log(f"wake stream died ({e}) - rebuilding audio in 5s")
             pa, input_idx, output_idx = rebuild_audio(pa, voice, listener)
             continue
-        log(f"wake (score {score:.2f})")
-        if announcer:
-            announcer.abort_current()           # user intent beats a bulletin
+        if score is None:
+            # A bulletin just finished playing: open the mic so the obvious
+            # follow-up ("which one was cheapest?") needs no wake word. No
+            # chime - the announcement WAS the cue, and the assistant already
+            # has the result in context (job_messages).
+            announcer.follow_up.clear()
+            ack.claim()
+            log("follow-up window - session open without a wake word")
+        else:
+            log(f"wake (score {score:.2f})")
+            if announcer:
+                announcer.abort_current()       # user intent beats a bulletin
         if not stt_live:
-            capture.stop()
+            if capture:
+                capture.stop()
             ack.claim()                         # no session: fail is the answer
             play_pcm(pa, earcons.pcm("fail"), output_idx)
             continue
@@ -715,7 +766,8 @@ def main():
             log(f"session crashed: {e!r} - back to dormant")
             ending = "fail"
         finally:
-            capture.stop()                      # idempotent; frees the mic if the build crashed
+            if capture:                         # None on a follow-up open
+                capture.stop()                  # idempotent; frees the mic if the build crashed
             if announcer:
                 announcer.session_active.clear()
         refresh_library_bg()                    # pick up installs between sessions
