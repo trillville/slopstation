@@ -330,8 +330,13 @@ Then live (knob on, `Start-K15.bat` or `voice_agent.py` directly):
    then the spoken answer. There is no barge-in (ledger D18), so the two
    queue rather than cancelling each other — the same reason you can't talk
    over a long answer to stop it. Note whether that grates.
-6. **Tick tone/cadence taste** — `think` earcon spec and `THINK_CUE_S` are
-   placeholder-tunable (earcons.py / grammar_gate.py) like every other tone.
+6. **Tick tone/cadence taste** — the `think` earcon spec is tunable in
+   earcons.py; the timing is `voice.thinkCueS` in config.json. Read it as a
+   **slow-answer threshold, not a cadence**: an answer that lands inside it
+   never ticks at all, which is what keeps trivial turns silent. Live
+   2026-08-11: at 1 s even "what's up?" ticked and it grated; 3 s leaves
+   quick turns quiet and covers searched turns. Raise it toward 4–5 s if
+   any tick still feels premature.
 
 Production searches only on the **openai lane** (pipecat's anthropic adapter
 has no native-tool passthrough — startup logs this if you're on anthropic

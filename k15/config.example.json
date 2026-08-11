@@ -16,6 +16,7 @@
     "wakeThreshold": 0.5,
     "earconGain": 1.0,
     "holdWindowS": 10,
+    "thinkCueS": 3,
     "followupCarryS": 60,
     "eotThreshold": 0.7,
     "eagerEotThreshold": 0.5,

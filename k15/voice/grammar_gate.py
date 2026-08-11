@@ -85,11 +85,13 @@ class GrammarGate(FrameProcessor):
     # turn can't pin the session open forever.
     ASSISTANT_WAIT_S = 30
 
-    # Soft "still working" tick cadence while an answer is in flight. Covers
-    # every silent stretch the same way - web search, a long reasoning pass,
-    # a 15s ssh tool call - on any provider, with zero knowledge of WHY the
-    # model is quiet. First tick doubles as the fast-turn guard: anything
-    # that answers inside the interval never cues at all.
+    # How long an answer may take before we start reassuring, AND the gap
+    # between reassurances. It is a threshold first and a rhythm second: an
+    # answer that lands inside it never cues at all, which is the whole
+    # mechanism for "only tick when something slow is happening". There is no
+    # event to key off instead - pipecat pushes nothing for a server-side
+    # web_search_call, the very case worth covering - so wall-clock is the
+    # honest detector. Config: voice.thinkCueS.
     THINK_CUE_S = 3.0
 
     # A success earcon arriving while the wake chime is still ringing is one
@@ -101,8 +103,9 @@ class GrammarGate(FrameProcessor):
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
                  assistant_enabled=False, wake_word=None, jobs=None,
-                 ack=None):
+                 ack=None, think_cue_s=None):
         super().__init__()
+        self.think_cue_s = think_cue_s or self.THINK_CUE_S
         self.matcher = matcher
         self.dispatch = dispatch
         self.log = log
@@ -140,7 +143,7 @@ class GrammarGate(FrameProcessor):
         cleanup - a cancelled session takes the loop down with it."""
         ticked = False
         while True:
-            await asyncio.sleep(self.THINK_CUE_S)
+            await asyncio.sleep(self.think_cue_s)
             started = self._assistant_pending
             if not started or time.time() - started >= self.ASSISTANT_WAIT_S:
                 return

@@ -49,8 +49,8 @@ async def run():
     # output transport.
     gate = GrammarGate(GrammarMatcher(cfg["voice"]),
                        Dispatch(cfg, log, dry_run=True), log,
-                       assistant_enabled=True, ack=WakeAck())
-    gate.THINK_CUE_S = 0.4             # a tick lands inside the script pacing
+                       assistant_enabled=True, ack=WakeAck(),
+                       think_cue_s=0.4)   # a tick lands inside the pacing
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
         audio_out_enabled=True, audio_out_sample_rate=16000,

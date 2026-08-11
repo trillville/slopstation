@@ -151,8 +151,7 @@ def main():
     import asyncio
 
     async def cue_run():
-        g2 = GrammarGate(m, None, lambda s: None)
-        g2.THINK_CUE_S = 0.05
+        g2 = GrammarGate(m, None, lambda s: None, think_cue_s=0.05)
         ticks = []
 
         async def note(name):
@@ -165,6 +164,18 @@ def main():
         await asyncio.wait_for(task, 1)         # loop must exit unaided
         if not (2 <= len(ticks) <= 6) or set(ticks) != {"think"}:
             failures.append(f"think cues while pending: got {ticks}")
+        # The interval IS the fast-answer guard: an answer that lands inside
+        # it must never cue (the "what's up?" complaint, live 2026-08-11).
+        g3 = GrammarGate(m, None, lambda s: None, think_cue_s=5)
+        quiet = []
+        g3._earcon = lambda name: quiet.append(name)
+        g3._assistant_pending = _t.time()
+        task3 = asyncio.create_task(g3._think_cues())
+        await asyncio.sleep(0.3)
+        g3._assistant_pending = 0.0             # answered well inside 5 s
+        await asyncio.wait_for(task3, 6)
+        if quiet:
+            failures.append(f"fast answer must not tick, got {quiet}")
         ticks.clear()
         g2._assistant_pending = _t.time() - (GrammarGate.ASSISTANT_WAIT_S + 1)
         await asyncio.wait_for(asyncio.create_task(g2._think_cues()), 1)
