@@ -122,6 +122,18 @@ def play_pcm(pa, pcm, device_index=None):
                 log(f"earcon playback failed ({e}) - continuing without it")
 
 
+def close_stream_quietly(stream):
+    """Best-effort close for a possibly-dead stream: after a -9999 host error
+    (BT profile flap, device yanked) the stream is already torn down and
+    stop/close themselves raise 'Stream not open' - the original error is the
+    story, cleanup must never replace it (crashed the agent live 2026-08-10)."""
+    for op in (stream.stop_stream, stream.close):
+        try:
+            op()
+        except OSError:
+            pass
+
+
 class WakeListener:
     """openWakeWord over a raw PyAudio stream. Owns the mic while DORMANT;
     releases it before a session pipeline opens it."""
@@ -177,8 +189,7 @@ class WakeListener:
         try:
             return self._listen(stream, threshold, on_score, None)
         finally:
-            stream.stop_stream()
-            stream.close()
+            close_stream_quietly(stream)
 
     def wait_for_wake_capture(self, threshold):
         """Blocks until the wake word fires; returns (score, WakeCapture). The
@@ -192,8 +203,7 @@ class WakeListener:
         try:
             score = self._listen(stream, threshold, None, ring)
         except Exception:
-            stream.stop_stream()
-            stream.close()
+            close_stream_quietly(stream)
             raise
         return score, WakeCapture(stream, ring)
 
@@ -466,7 +476,16 @@ def main():
             time.sleep(1.0)
 
     while True:
-        score, capture = listener.wait_for_wake_capture(voice["wakeThreshold"])
+        try:
+            score, capture = listener.wait_for_wake_capture(voice["wakeThreshold"])
+        except OSError as e:
+            # Mic stream death mid-listen (BT profile flap, device yanked,
+            # AirPods multipoint wandering off) must never kill the agent -
+            # voice is not load-bearing. Breathe, then reopen fresh: the next
+            # open binds whatever device is back.
+            log(f"wake stream died ({e}) - reopening in 5s")
+            time.sleep(5)
+            continue
         log(f"wake (score {score:.2f})")
         if not stt_live:
             capture.stop()

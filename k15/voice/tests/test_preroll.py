@@ -80,6 +80,39 @@ def test_capture_runaway_cap():
     print("OK - capture: runaway cap stops the pump at MAX_S")
 
 
+def test_dead_wake_stream_surfaces_original_error():
+    """Live crash 2026-08-10: a -9999 mid-listen made cleanup raise 'Stream
+    not open', which replaced the real error AND escaped the handler, killing
+    the agent. The listener must re-raise the ORIGINAL OSError."""
+    import voice_agent
+
+    class DeadStream:
+        def read(self, n, exception_on_overflow=True):
+            raise OSError(-9999, "Unanticipated host error")
+
+        def stop_stream(self):
+            raise OSError("Stream not open")
+
+        def close(self):
+            raise OSError("Stream not open")
+
+    class FakePA:
+        def open(self, **kw):
+            return DeadStream()
+
+    lst = voice_agent.WakeListener.__new__(voice_agent.WakeListener)
+    lst.pa = FakePA()
+    lst.device_index = None
+    try:
+        lst.wait_for_wake_capture(0.5)
+        assert False, "dead stream must raise"
+    except OSError as e:
+        assert "Unanticipated" in str(e), f"original error was replaced: {e}"
+
+    voice_agent.close_stream_quietly(DeadStream())   # must not raise
+    print("OK - dead wake stream: original error surfaces, quiet close swallows")
+
+
 def test_feeder_chunking():
     feeder = PrerollFeeder(lambda m: None)
     feeder.pcm = b"\xaa" * (CHUNK_BYTES * 2 + 100)
@@ -155,6 +188,7 @@ def main():
     test_capture_orders_and_stops()
     test_capture_survives_device_death()
     test_capture_runaway_cap()
+    test_dead_wake_stream_surfaces_original_error()
     test_feeder_chunking()
     asyncio.run(test_pipeline_ordering())
     print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")
