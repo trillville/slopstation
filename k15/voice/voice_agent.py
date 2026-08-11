@@ -311,7 +311,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
             eager_eot_threshold=(voice["eagerEotThreshold"]
                                  if voice.get("eagerEnabled", True) else None),
             numerals=True,
-            keyterm=[wake_phrase] + game_terms,
+            # Titles teach Flux the game names; query_terms teach it the
+            # words used to ask ABOUT them (tags/genres: "mech", "roguelike")
+            # - without them "mech games" transcribed as "met games".
+            keyterm=[wake_phrase] + game_terms + library.query_terms(),
         ),
     )
 

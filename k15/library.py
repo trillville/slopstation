@@ -272,6 +272,19 @@ def sync(meta_limit=200):
         _sync_lock.release()
 
 
+def query_terms(limit=30):
+    """The words people use to ASK about games: distinct tags/genres across
+    the catalog, frequency-ranked. Fed to Flux as extra keyterms - titles
+    alone don't teach the STT this vocabulary, which is how a spoken "mech
+    games" transcribed as "met games" (live mishear, 2026-08-10)."""
+    counts = {}
+    for m in load_meta().values():
+        for term in (m.get("tags") or []) + (m.get("genres") or []):
+            t = term.lower()
+            counts[t] = counts.get(t, 0) + 1
+    return sorted(counts, key=lambda t: -counts[t])[:limit]
+
+
 def catalog_lines():
     """Compact rows for the assistant's context - one line per game,
     installed first. appid|name|tags|genres|hours|lastPlayed|installed|ctrl"""

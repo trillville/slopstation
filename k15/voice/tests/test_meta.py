@@ -43,8 +43,21 @@ def main():
     assert fetched == [4, 5], f"re-fetched {fetched}, should only do the missing 2"
     assert len(library.load_meta()) == 5
 
+    # query_terms: the ask-about-games vocabulary - distinct tags/genres,
+    # frequency-ranked, lowercased, limit respected.
+    library._save_meta({
+        "1": {"tags": ["Mechs", "Action"], "genres": []},
+        "2": {"tags": ["Mechs"], "genres": ["RPG"]},
+        "3": {"tags": ["Roguelike", "Mechs"], "genres": []},
+    })
+    terms = library.query_terms()
+    assert terms[0] == "mechs", terms                 # 3 games carry it
+    assert {"action", "rpg", "roguelike"} <= set(terms), terms
+    assert library.query_terms(limit=1) == ["mechs"]
+
     time.sleep = real_sleep
-    print("OK - refresh_meta: saves after each fetch, resume does top-up only")
+    print("OK - refresh_meta: saves after each fetch, resume does top-up only; "
+          "query_terms ranks the tag/genre vocabulary")
 
 
 if __name__ == "__main__":

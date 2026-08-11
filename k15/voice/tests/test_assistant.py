@@ -29,6 +29,9 @@ def main():
     # System prompt: rules + one line per game, sane token budget.
     si = assistant.system_instruction()
     assert "CATALOG" in si and str(real_appid) in si
+    # The mishear-repair rule (live: "met games" confused the model until the
+    # prompt said input is STT and taught it to read phonetically).
+    assert "speech-to-text" in si and "mishears" in si
     n_tokens = len(si) // 4
     assert 500 < n_tokens < 30000, n_tokens
     print(f"  system prompt: ~{n_tokens} tokens, {len(library.catalog_lines())} games")
