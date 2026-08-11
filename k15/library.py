@@ -286,6 +286,8 @@ def catalog_lines():
             if r["appid"] not in NOT_GAMES}
     for appid, o in owned.items():
         rows.setdefault(int(appid), o.get("name") or f"app {appid}")
+    # Playtest/beta stubs have no metadata and pollute recommendations.
+    rows = {a: n for a, n in rows.items() if not n.endswith(" Playtest")}
     lines = []
     for appid, name in rows.items():
         o = owned.get(str(appid), {})

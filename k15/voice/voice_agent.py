@@ -60,6 +60,24 @@ def refresh_library_bg():
     threading.Thread(target=library.sync, daemon=True).start()
 
 
+def prewarm_imports_bg(provider):
+    """First-wake latency fix: pipecat's service modules + the provider SDK
+    take several seconds to import on the K15's U-class CPU, which showed up
+    as ~6.5 s of wake-tick-to-listening dead air on the first session. Import
+    them at boot on a background thread so the first session builds as fast
+    as every later one (imports are idempotent and lock-protected)."""
+    def warm():
+        import pipecat.processors.aggregators.llm_response_universal  # noqa: F401
+        import pipecat.services.deepgram.flux.stt   # noqa: F401
+        import pipecat.services.deepgram.tts        # noqa: F401
+        import pipecat.transports.local.audio       # noqa: F401
+        if provider == "openai":
+            import pipecat.services.openai.responses.llm  # noqa: F401
+        else:
+            import pipecat.services.anthropic.llm   # noqa: F401
+    threading.Thread(target=warm, daemon=True).start()
+
+
 # --- audio plumbing outside the pipeline --------------------------------------
 
 def resolve_device(pa, fragment, want_input):
@@ -363,10 +381,12 @@ def main():
         log("deepgramApiKey is a placeholder - wake word runs, but sessions "
             "are DISABLED until a real key lands in secrets.json")
 
-    # Build the grammar once (a YAML typo fails here, not per-wake), and warm
-    # the library index in the background so the first "play <title>" resolves.
+    # Build the grammar once (a YAML typo fails here, not per-wake); warm the
+    # library index and the heavy pipeline imports in the background so the
+    # first wake is as fast as every later one.
     matcher = GrammarMatcher(voice)
     refresh_library_bg()
+    prewarm_imports_bg(voice.get("assistantProvider", "anthropic"))
 
     listener = WakeListener(pa, voice, input_idx)
     log(f"voice agent up - wake model {listener.model_name}, "
