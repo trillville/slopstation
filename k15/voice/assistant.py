@@ -69,13 +69,6 @@ def known_appids():
     return ids
 
 
-def installed_name(appid):
-    for r in library.load().get("installed", []):
-        if r["appid"] == appid:
-            return r["name"]
-    return None
-
-
 def tool_impls(dispatch, log):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL."""
     def launch_game(args):
@@ -83,7 +76,7 @@ def tool_impls(dispatch, log):
         if appid not in known_appids():
             log(f"tool launch_game REFUSED unknown appid {appid}")
             return {"ok": False, "error": f"appid {appid} is not in the catalog"}
-        if installed_name(appid) is None:
+        if library.installed_name(appid) is None:
             return {"ok": False, "error": "that game is owned but not "
                     "installed - installing needs the controller"}
         r = dispatch.play_game(appid)
@@ -115,12 +108,12 @@ def tool_impls(dispatch, log):
             return {"ok": False, "error": r.detail}
         appid = int(r.detail) if str(r.detail).isdigit() else 0
         return {"ok": True, "appid": appid,
-                "name": installed_name(appid) if appid else None}
+                "name": library.installed_name(appid) if appid else None}
 
     def get_game_details(args):
         appid = int(args.get("appid", 0))
         meta = library.load_meta().get(str(appid))
-        name = installed_name(appid)
+        name = library.installed_name(appid)
         installed = name is not None
         if not installed:
             o = library.load().get("owned", {}).get(str(appid))

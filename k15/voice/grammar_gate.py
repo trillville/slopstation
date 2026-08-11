@@ -147,8 +147,7 @@ class GrammarGate(FrameProcessor):
             self.log(f"play '{spoken}' - no confident title match"
                      + ("" if self.resolve_game else " (no library index yet)"))
             from dispatch import Result
-            return Result(False, "fail", f"I couldn't find {spoken}.",
-                          f"no match for '{spoken}'")
+            return Result(False, "fail", f"no match for '{spoken}'")
         self.log(f"play '{spoken}' -> {title} ({appid})")
         return await asyncio.to_thread(self.dispatch.play_game, appid)
 

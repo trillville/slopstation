@@ -92,6 +92,16 @@ def load():
         return {}
 
 
+def installed_name(appid):
+    """Installed title for an appid, or None. The one home for the lookup:
+    the assistant's tools and dispatch's BUSY message both name games with
+    it, and load() already fail-softs to {} on a missing/corrupt index."""
+    for r in load().get("installed", []):
+        if r["appid"] == appid:
+            return r["name"]
+    return None
+
+
 def save(index):
     STATE.mkdir(exist_ok=True)
     tmp = LIBRARY.with_suffix(".json.tmp")

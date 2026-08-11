@@ -138,13 +138,22 @@ def main():
     assert h.d.play_game(1).ok
     dp.ssh = lambda cmd, **kw: "BUSY:42"
     r = h.d.play_game(1)
-    assert not r.ok and r.earcon == "busy"
+    # The blocker is named for the assistant lane (detail is all it sees);
+    # an index miss degrades to the bare id, never to a crash.
+    assert not r.ok and r.earcon == "busy" and "BUSY:42" in r.detail, r
+    dp.library.installed_name = lambda a: {42: "Baldur's Gate 3"}.get(a)
+    r = h.d.play_game(1)
+    assert "Baldur's Gate 3 is already running" in r.detail, r
+    assert "controller" in r.detail, r          # and what to do about it
+    dp.library.installed_name = lambda a: None
+    assert "app 42 is already running" in h.d.play_game(1).detail
     dp.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
     r = h.d.play_game(1)
     assert not r.ok and r.earcon == "busy"
     dp.ssh = lambda cmd, **kw: "NOTINSTALLED"         # PC-side install guard
     r = h.d.play_game(1)
-    assert not r.ok and r.earcon == "fail" and "installed" in r.say
+    assert not r.ok and r.earcon == "fail" and "not installed" in r.detail
+    assert "controller" in r.detail, r
     dp.ssh = ssh_down
     assert Harness().d.play_game(1).earcon == "fail"
     with_temp_lock(None)                              # cold: full couch launch
