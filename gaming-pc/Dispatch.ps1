@@ -81,6 +81,11 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
         if (Test-Path (Join-Path $root "steamapps\appmanifest_$id.acf")) { $installed = $true; break }
       }
       if (-not $installed) { 'NOTINSTALLED'; break }
+      # This context is ELEVATED (admin-key forced command), the LaunchGame
+      # task is not - so the task can't delete the marker we create. Clearing
+      # it here, where deletion always succeeds, keeps the protocol clean;
+      # Launch-Game's own delete is best-effort.
+      Remove-Item 'C:\ProgramData\CouchGaming\launch-app' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\launch-app' $id
       schtasks /Run /TN '\CouchGaming\LaunchGame' | Out-Null
       if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
