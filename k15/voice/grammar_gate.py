@@ -85,15 +85,6 @@ class GrammarGate(FrameProcessor):
     # turn can't pin the session open forever.
     ASSISTANT_WAIT_S = 30
 
-    # How long an answer may take before we start reassuring, AND the gap
-    # between reassurances. It is a threshold first and a rhythm second: an
-    # answer that lands inside it never cues at all, which is the whole
-    # mechanism for "only tick when something slow is happening". There is no
-    # event to key off instead - pipecat pushes nothing for a server-side
-    # web_search_call, the very case worth covering - so wall-clock is the
-    # honest detector. Config: voice.thinkCueS.
-    THINK_CUE_S = 3.0
-
     # A success earcon arriving while the wake chime is still ringing is one
     # sound too many - a local command dispatches in ~100 ms, so the two used
     # to run together. Fold it in: you just heard "got it", and nothing
@@ -103,9 +94,8 @@ class GrammarGate(FrameProcessor):
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
                  assistant_enabled=False, wake_word=None, jobs=None,
-                 ack=None, think_cue_s=None):
+                 ack=None):
         super().__init__()
-        self.think_cue_s = think_cue_s or self.THINK_CUE_S
         self.matcher = matcher
         self.dispatch = dispatch
         self.log = log
@@ -117,7 +107,6 @@ class GrammarGate(FrameProcessor):
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
-        self._cue_task = None                   # think-tick loop (one per answer)
 
     def is_busy(self):
         """True while the user is mid-turn, a dispatch is running, or an
@@ -134,23 +123,6 @@ class GrammarGate(FrameProcessor):
         await self.push_frame(OutputAudioRawFrame(
             audio=earcons.pcm(name), sample_rate=earcons.SAMPLE_RATE,
             num_channels=1))
-
-    async def _think_cues(self):
-        """Tick every THINK_CUE_S while the answer is still in flight. The
-        pending flag is re-checked right before each tick, so the loop dies
-        the moment the bot speaks (or an error clears it) and can never
-        outlive ASSISTANT_WAIT_S. Task lifecycle rides FrameProcessor
-        cleanup - a cancelled session takes the loop down with it."""
-        ticked = False
-        while True:
-            await asyncio.sleep(self.think_cue_s)
-            started = self._assistant_pending
-            if not started or time.time() - started >= self.ASSISTANT_WAIT_S:
-                return
-            if not ticked:                      # once per answer, not per tick
-                self.log("assistant still working - think ticks on")
-                ticked = True
-            await self._earcon("think")
 
     async def _ack_wake(self):
         """The wake chime, unless the capture watcher already played it while
@@ -275,9 +247,9 @@ class GrammarGate(FrameProcessor):
             # silent assistant is diagnosable from the one log that matters.
             self.log(f"pipeline error: {frame.error}")
             if self._assistant_pending:
-                # The answer isn't coming: stop the think ticks and say so
-                # with the honest earcon instead of trailing off into
-                # silence (and stop pinning the idle handler open).
+                # The answer isn't coming: say so with the honest earcon
+                # instead of trailing off into silence, and stop pinning the
+                # idle handler open.
                 self._assistant_pending = 0.0
                 await self._earcon("fail")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
@@ -313,6 +285,4 @@ class GrammarGate(FrameProcessor):
                     return
                 self.log(f'heard "{text}" - passing to assistant')
                 self._assistant_pending = time.time()
-                if self._cue_task is None or self._cue_task.done():
-                    self._cue_task = self.create_task(self._think_cues())
         await self.push_frame(frame, direction)

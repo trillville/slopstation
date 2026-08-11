@@ -1,8 +1,8 @@
 """Earcon synthesis: the count vocabulary as audio, mirroring the haptic
 thuds - 1 = accepted/launching, 2 = busy, 3 = failed - plus the two session
-bookends (a wake chime and its mirror at sleep) and the assistant lane's
-think tick and announcement cue. Synthesized at import from specs; no binary
-assets in the repo. All PCM is SAMPLE_RATE mono s16le, ready to wrap in an
+bookends (a wake chime and its mirror at sleep) and the background lane's
+announcement cue. Synthesized at import from specs; no binary assets in the
+repo. All PCM is SAMPLE_RATE mono s16le, ready to wrap in an
 OutputAudioRawFrame.
 
 Everything is a bell: overlapping or sequential notes, a few light partials,
@@ -12,10 +12,10 @@ vocabulary jarring - so these read much quieter than their amplitudes suggest.
 The engine still does flat tones (decay=None) if a spec ever wants one.
 
 The counts are the contract: 1 = accepted, 2 = busy, 3 = failed, mirroring the
-haptic thuds. Pitch, contour and level are taste, tuned so the seven sound like
-one family: the think tick is the quietest thing here (it repeats every few
-seconds), the bookends next, the acks just above them, and the announcement cue
-on top - it is the only one that has to carry across the room unasked.
+haptic thuds. Pitch, contour and level are taste, tuned so the six sound like
+one family: the bookends quietest, the acks just above them, and the
+announcement cue on top - it is the only one that has to carry across the room
+unasked.
 
 Tier-1 acks must be instant: never synthesize speech for them, never wait on
 anything - pcm() is a dict lookup after first use.
@@ -65,12 +65,9 @@ SPECS = {
     "ok":    (5200, 0.30, _seq([(1174.7, 260)])),
     "busy":  (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
     "fail":  (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
-    # The assistant lane's two. think repeats every few seconds through a long
-    # wait, so it is the quietest thing in the set - a tap, not a tone. The
-    # announcement cue is the loudest: it arrives unasked, across the room,
-    # ahead of spoken news, and a rising third is the one shape here that
-    # sounds like a question being opened rather than an answer closing.
-    "think":    (2200, 0.22, _seq([(880.0, 130)])),
+    # The announcement cue is the loudest: it arrives unasked, across the
+    # room, ahead of spoken news, and a rising third is the one shape here
+    # that sounds like a question being opened rather than an answer closing.
     "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
 

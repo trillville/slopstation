@@ -43,14 +43,12 @@ async def run():
 
     cfg = cglib.load_config()
     # assistant_enabled without an LLM stage: the no-match line exercises the
-    # REAL handoff (pending flag + think-cue task via FrameProcessor
-    # .create_task inside a live pipeline - the prod mechanism, which the
-    # test_grammar unit can't reach); the transcript just dead-ends at the
-    # output transport.
+    # REAL handoff (the in-flight flag that defers the idle timeout, set
+    # inside a live pipeline); the transcript just dead-ends at the output
+    # transport.
     gate = GrammarGate(GrammarMatcher(cfg["voice"]),
                        Dispatch(cfg, log, dry_run=True), log,
-                       assistant_enabled=True, ack=WakeAck(),
-                       think_cue_s=0.4)   # a tick lands inside the pacing
+                       assistant_enabled=True, ack=WakeAck())
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
         audio_out_enabled=True, audio_out_sample_rate=16000,
@@ -72,9 +70,9 @@ async def run():
             text=text, user_id="test", timestamp="t"))
         await asyncio.sleep(0.9)       # let earcons play
 
-    # The no-match handoff above left a real answer "in flight" (ticking).
-    # Error honesty: an ErrorFrame now must clear the flag (stops think
-    # ticks AND idle pinning) and play the fail earcon instead of silence.
+    # The no-match handoff above left a real answer "in flight". Error
+    # honesty: an ErrorFrame must clear the flag (which is what pins the
+    # idle handler open) and play the fail earcon instead of silence.
     from pipecat.frames.frames import ErrorFrame
     assert gate._assistant_pending, "handoff must mark an answer in flight"
     await worker.queue_frame(ErrorFrame(error="bench: synthetic LLM failure"))
@@ -91,8 +89,6 @@ async def run():
                if not any(want in l for l in lines)]
     assert not missing, f"missing log evidence: {missing}"
     assert any("pipeline error" in l for l in lines)
-    assert any("think ticks on" in l for l in lines), \
-        "cue task never ticked inside the live pipeline"
     # The lock arbiter ran for real (no lock on this machine = launchable).
     assert any("couch.py start" in l for l in lines)
     # The wake chime is claimed by the FIRST transcript, and only that first

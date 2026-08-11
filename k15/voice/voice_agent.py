@@ -52,7 +52,6 @@ REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "assistantProvider", "assistantModelAnthropic",
                   "assistantModelOpenai", "assistantReasoningEffort", "inputs",
                   "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "thinkCueS",
                   "workerProvider", "workerModelAnthropic", "workerModelOpenai",
                   "workerEffort", "workerTimeoutS")
 
@@ -408,7 +407,6 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         wake_word=wake_phrase.split()[-1],      # "jarvis" - the strip anchor
         jobs=jobs,
         ack=ack,                                # wake chime, if still unplayed
-        think_cue_s=voice["thinkCueS"],
     )
 
     feeder = PrerollFeeder(log)

@@ -30,7 +30,7 @@ def rms(x):
 
 def test_specs():
     expected_counts = {"wake": 1, "ok": 1, "busy": 2, "fail": 3, "close": 1,
-                       "think": 1, "announce": 2}
+                       "announce": 2}
     assert set(expected_counts) == set(earcons.SPECS)
 
     for name, want in expected_counts.items():
@@ -57,17 +57,17 @@ def test_specs():
 
 def test_nothing_shouts():
     """The level order is the design, and it follows from how often and how
-    unasked each one arrives: think (every few seconds through a wait) <
-    sleep < wake < the acks < announce (unsolicited, across the room). RMS,
-    not peak, is what the ear reports - the old flat tones peaked at 9000 and
-    SUSTAINED it (rms 6001), which is what a ceiling here would have caught."""
+    unasked each one arrives: sleep < wake < the acks < announce
+    (unsolicited, across the room). RMS, not peak, is what the ear reports -
+    the old flat tones peaked at 9000 and SUSTAINED it (rms 6001), which is
+    what a ceiling here would have caught."""
     r = {n: rms(earcons.samples(n)) for n in earcons.SPECS}
     acks = min(r["ok"], r["busy"], r["fail"])
-    assert r["think"] < r["close"] < r["wake"] < acks < r["announce"], \
+    assert r["close"] < r["wake"] < acks < r["announce"], \
         f"level order broken: {({k: round(v) for k, v in r.items()})}"
     loudest = max(r.values())
     assert loudest < 2000, f"something shouts: {loudest:.0f} rms"
-    print("OK - levels: think {think:.0f} < close {close:.0f} < wake {wake:.0f}"
+    print("OK - levels: close {close:.0f} < wake {wake:.0f}"
           " < acks < announce {announce:.0f} rms, none above 2000".format(**r))
 
 

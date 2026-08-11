@@ -318,25 +318,23 @@ The banner shows `+websearch`. Drills:
 
 Then live (knob on, `Start-K15.bat` or `voice_agent.py` directly):
 
-4. **Think ticks** — "hey jarvis, is the nightreign dlc out yet": one soft
-   tick ~3 s in, repeating until the answer speaks. couch.log shows
-   `assistant still working - think ticks on` once per slow answer. Ticks
-   also cover slow *tool* answers now — "hey jarvis, end the session" with
-   the PC asleep should tick through the ssh wait instead of dead air.
+4. **Slow answers are silent** — "hey jarvis, is the nightreign dlc out yet"
+   takes 5-10 s and makes no sound until it speaks. (Think ticks were built
+   and removed the same day for nagging — ledger D1c. If the silence bothers
+   you more than the ticks did, say so: a single non-repeating cue is the
+   untried middle.) A *failed* answer still earcons — see drill 5.
 5. **Tier-1 during a search** — ask a searched question, then say "volume
    up" while it thinks: the command must dispatch instantly (grammar runs on
    every transcript, search or no search) **and** the answer must still
-   arrive afterwards. Expect: tap at ~3 s, volume moves with an ok bell,
-   then the spoken answer. There is no barge-in (ledger D18), so the two
+   arrive afterwards. Expect: silence, volume moves with an ok bell, then
+   the spoken answer. There is no barge-in (ledger D18), so the two
    queue rather than cancelling each other — the same reason you can't talk
    over a long answer to stop it. Note whether that grates.
-6. **Tick tone/cadence taste** — the `think` earcon spec is tunable in
-   earcons.py; the timing is `voice.thinkCueS` in config.json. Read it as a
-   **slow-answer threshold, not a cadence**: an answer that lands inside it
-   never ticks at all, which is what keeps trivial turns silent. Live
-   2026-08-11: at 1 s even "what's up?" ticked and it grated; 3 s leaves
-   quick turns quiet and covers searched turns. Raise it toward 4–5 s if
-   any tick still feels premature.
+6. **Session length taste** — `voice.holdWindowS` (10) is how long a session
+   waits after an answer before sleeping. Live 2026-08-11 at 8 s: a
+   follow-up question needed a fresh wake word, and one session nearly died
+   three seconds before the user started speaking. Raise it if you're still
+   re-waking mid-conversation.
 
 Production searches only on the **openai lane** (pipecat's anthropic adapter
 has no native-tool passthrough — startup logs this if you're on anthropic
