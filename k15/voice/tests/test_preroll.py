@@ -2,7 +2,8 @@
 
 Part 1 (pure): WakeCapture pump/stop semantics against a fake stream -
 seed ring + pumped chunks in order, idempotent stop, stream closed, device
-death mid-pump keeps what we have, runaway cap.
+death mid-pump keeps what we have, runaway cap - plus the wake chime's
+end-of-speech timing and the single-winner ack it is claimed through.
 
 Part 2 (real devices, like test_session_pipeline): a running PipelineWorker
 with [transport.input(), PrerollFeeder, collector] proves the ordering
@@ -12,13 +13,14 @@ only then live mic audio - no interleave, no loss. Run:
 """
 import asyncio
 import sys
+import threading
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from preroll import CHUNK_BYTES, PrerollFeeder, WakeCapture
+from preroll import CHUNK_BYTES, CHUNK_SAMPLES, PrerollFeeder, WakeAck, WakeCapture
 
 
 class FakeStream:
@@ -159,6 +161,70 @@ def test_zombie_stream_trips_silence_watchdog():
           f"real audio resets the count")
 
 
+def test_wake_chime_waits_for_the_end_of_speech():
+    """The point of the whole watcher: a chime over "hey jarvis put on Elden
+    Ring" is what made the old tick jarring, so loud chunks must hold it back
+    and only a real gap may release it - once."""
+    import numpy as np
+
+    def chunk(level):
+        return np.full(CHUNK_SAMPLES, level, np.int16).tobytes()
+
+    def watcher():
+        """_watch's state without a thread or a stream - the logic under test."""
+        cap = WakeCapture.__new__(WakeCapture)
+        cap._t0, cap._quiet, cap._peak = time.monotonic(), 0, 0.0
+        return cap
+
+    fired = []
+    cap = watcher()
+    cap._on_quiet = lambda: fired.append(time.monotonic())
+    for _ in range(12):                 # ~1 s of talking
+        cap._watch(chunk(8000))
+    time.sleep(0.05)                    # the callback runs on its own thread
+    assert not fired, "chimed while the user was still talking"
+
+    for _ in range(6):                  # ~480 ms gap: past QUIET_MS
+        cap._watch(chunk(60))
+    time.sleep(0.05)
+    assert len(fired) == 1, f"want one chime at the gap, got {len(fired)}"
+    for _ in range(10):
+        cap._watch(chunk(60))
+    time.sleep(0.05)
+    assert len(fired) == 1, "chimed more than once"
+
+    # Room too loud to hear a gap (TV up): chime anyway rather than never.
+    late = watcher()
+    late._on_quiet = lambda: fired.append(time.monotonic())
+    late._t0 -= WakeCapture.CHIME_BY_S
+    late._watch(chunk(8000))
+    time.sleep(0.05)
+    assert len(fired) == 2, "noisy room never got its chime"
+    print("OK - wake chime: held through speech, fired once at the gap, "
+          "and forced after CHIME_BY_S when the room is too loud to tell")
+
+
+def test_wake_ack_is_claimed_exactly_once():
+    """Capture watcher and GrammarGate race for it from different threads;
+    two winners means two chimes."""
+    ack = WakeAck()
+    wins = []
+    ready = threading.Barrier(8)
+
+    def contend():
+        ready.wait()
+        wins.append(ack.claim())
+
+    threads = [threading.Thread(target=contend) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(wins) == 1, f"{sum(wins)} claimants won the wake chime"
+    assert not ack.claim(), "a later claim must still lose"
+    print("OK - wake ack: exactly one of 8 racing claimants wins")
+
+
 def test_feeder_chunking():
     feeder = PrerollFeeder(lambda m: None)
     feeder.pcm = b"\xaa" * (CHUNK_BYTES * 2 + 100)
@@ -236,6 +302,8 @@ def main():
     test_capture_runaway_cap()
     test_dead_wake_stream_surfaces_original_error()
     test_zombie_stream_trips_silence_watchdog()
+    test_wake_chime_waits_for_the_end_of_speech()
+    test_wake_ack_is_claimed_exactly_once()
     test_feeder_chunking()
     asyncio.run(test_pipeline_ordering())
     print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")

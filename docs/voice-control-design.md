@@ -72,7 +72,9 @@ flowchart LR
 
 - **`OpenWakeWordGate`** (we write): consumes raw audio frames, runs the oWW ONNX
   model continuously, and gates the rest of the pipeline. Closed = nothing flows,
-  no cloud, no Flux socket. On wake: tick earcon, open the session. (Pipecat has
+  no cloud, no Flux socket. On wake: open the session and *arm* the chime — it
+  plays when you stop talking, never over your command (assumptions row 6).
+  (Pipecat has
   [no first-party oWW audio plugin](https://github.com/pipecat-ai/pipecat/issues/1985);
   its transcript-level `WakePhraseUserTurnStartStrategy` informs the session
   semantics but the audio gate is ours.)
@@ -90,8 +92,8 @@ flowchart LR
 ## The interaction model
 
 ```
-DORMANT ──wake word──▶ SESSION OPEN (tick earcon, Flux connects, LED on)
-  ▲                        │
+DORMANT ──wake word──▶ SESSION OPEN (Flux connects, LED on; wake chime armed,
+  ▲                        │            played when you stop talking)
   │                        ▼ per final transcript
   │                   GrammarGate
   │                   ├─ command match ──▶ earcon + dispatch ──▶ LINGER (~5 s, chained commands) ──▶ DORMANT
@@ -104,6 +106,7 @@ DORMANT ──wake word──▶ SESSION OPEN (tick earcon, Flux connects, LED o
   │                                   HOLDING (mic open, ~8 s) ◀──┘ (flush + truncate context)
   │                                        │ user speaks → route through GrammarGate again
   └──── timeout / exit phrase ─────────────┘
+              (sleep chime — the wake chime's fifth, descending)
 ```
 
 Rules of the model:
@@ -112,7 +115,8 @@ Rules of the model:
   shortest?", "play it") need no wake word while HOLDING.
 - **Tier-1 always screens first.** Commands are deterministic at every state —
   wake, mid-conversation, during LINGER. Exit phrases ("thanks", "that's all",
-  "never mind") are Tier-1 templates that close the session with a soft earcon.
+  "never mind") are Tier-1 templates that end the session; the sleep chime that
+  follows is the same one the idle timeout plays, so every ending sounds alike.
 - **Barge-in**: user speech during SPEAKING → kill playback, flush the TTS socket,
   cancel the LLM stream, truncate the assistant turn in context to what was
   actually spoken (Pipecat's interruption frames do this), treat the new speech as

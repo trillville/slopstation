@@ -93,7 +93,8 @@ class GrammarGate(FrameProcessor):
     THINK_CUE_S = 3.0
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
-                 assistant_enabled=False, wake_word=None, jobs=None):
+                 assistant_enabled=False, wake_word=None, jobs=None,
+                 ack=None):
         super().__init__()
         self.matcher = matcher
         self.dispatch = dispatch
@@ -102,6 +103,7 @@ class GrammarGate(FrameProcessor):
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
         self.jobs = jobs                        # JobStore; None = worker lane off
+        self.ack = ack                          # preroll.WakeAck; None = no chime
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
@@ -140,6 +142,16 @@ class GrammarGate(FrameProcessor):
                 ticked = True
             await self._earcon("think")
 
+    async def _ack_wake(self):
+        """The wake chime, unless the capture watcher already played it while
+        the mic was still ours (it wins when you pause after "hey jarvis"; we
+        win on a one-breath command that outlasts the session build). Either
+        way it lands when your turn ENDS - on your last word, not over it, and
+        it fills the gap before the answer. Once per session: later turns get
+        action earcons only."""
+        if self.ack is not None and self.ack.claim():
+            await self._earcon("wake")
+
     async def _run_intent(self, intent, slots):
         """Returns True if the utterance was consumed here (the usual case);
         False = hand it to the assistant lane after all (unresolvable title).
@@ -148,7 +160,10 @@ class GrammarGate(FrameProcessor):
         d = self.dispatch
         if intent == "ExitSession":
             self.log("exit phrase - ending voice session")
-            await self._earcon("close")
+            # No earcon here: the sleep chime now plays from the wake loop
+            # after teardown, so every way a session can end - exit phrase,
+            # idle, crash - sounds the same and marks the actual moment the
+            # mic goes dormant.
             await self.push_frame(EndWorkerFrame(reason="exit phrase"))
             return True
         if intent in ("TaskResult", "TaskDetail", "TaskCancel"):
@@ -229,6 +244,7 @@ class GrammarGate(FrameProcessor):
             self._speaking = True
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._speaking = False
+            await self._ack_wake()              # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._assistant_pending = 0.0       # answer arrived; idle clock owns it now
         elif isinstance(frame, ErrorFrame):
@@ -244,6 +260,12 @@ class GrammarGate(FrameProcessor):
                 await self._earcon("fail")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
+            if text:
+                # Backstop: a final transcript proves the turn ended even if
+                # no UserStoppedSpeakingFrame arrived. Silence here would mean
+                # no feedback at all until the action completes (up to 15 s of
+                # ssh), so never leave the chime to a single frame type.
+                await self._ack_wake()
             if text and self.wake_word:
                 stripped = strip_wake(text, self.wake_word)
                 if not stripped:

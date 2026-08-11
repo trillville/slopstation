@@ -116,7 +116,9 @@ capture flowing + duplex tones + no errors.
 
 First run downloads ~5 openWakeWord model files (one-time, needs internet). Then
 say **"hey jarvis"** from where you'll actually sit. Each detection logs a score
-and plays the wake tick. **Pass: it fires reliably from your seat, ~9/10, and
+and plays the wake chime immediately — this mode measures detection, so it
+doesn't wait for end-of-speech the way a real session does (§5a).
+**Pass: it fires reliably from your seat, ~9/10, and
 doesn't fire on normal talking/TV.** If it's too eager or too deaf, we tune
 `wakeThreshold` (0.5 now) — paste the scores. Ctrl+C when done. (`hey_mycroft` /
 `hey_rhasspy` are one-line swaps if `hey jarvis` feels wrong; avoid `alexa` near
@@ -132,18 +134,45 @@ touches neither the TV nor the PC.
 .venv\Scripts\python voice_agent.py --dry-run
 ```
 
-Say "hey jarvis" (tick), then try:
-- "volume up" · "mute" · "switch to the apple tv" → one earcon + a
-  `DRY-RUN would: …` line
+Say "hey jarvis" (chime lands when you stop, not over you), then try:
+- "volume up" · "mute" · "switch to the apple tv" → chime, then one action
+  earcon + a `DRY-RUN would: …` line
 - "start a session" → `DRY-RUN would: couch.py start`
 - "what mech games do I have" → no command match (fail earcon unless the
   Anthropic key is in, in which case it goes to the assistant)
-- "thanks" → soft close earcon, session ends
+- "thanks" → session ends, sleep chime (the wake chime descending)
 
 Watch `..\couch.log` (or the console) for `[voice]` lines. **This proves STT +
 grammar + earcons end-to-end.** Paste a chunk of the log. This is where you'll
-feel the rhythm — wake-to-tick gap, how long after you stop talking it reacts,
-whether phrasings you'd naturally use actually match. Jot down any that don't.
+feel the rhythm — how long after you stop talking it reacts, whether phrasings
+you'd naturally use actually match. Jot down any that don't.
+
+## 5a. Sound UX — chime timing and volume
+
+Audition the vocabulary first, through the real speaker at your real listening
+volume:
+
+```
+.venv\Scripts\python voice_agent.py --earcons
+```
+
+Order: wake, close, ok, busy, fail. **Too quiet or too loud is one config key,
+not a code change** — set `voice.earconGain` (1.0 = as designed; 0.6 softer,
+1.6 louder) and run it again. Then, in `--dry-run`, feel the timing:
+
+- "hey jarvis volume up" as ONE sentence → the chime must land **after** your
+  last word, never over "volume up". This is the whole point of the change.
+- "hey jarvis" alone, pause → chime ~0.4 s after you stop, before you've
+  started the command. If it feels late, `WakeCapture.QUIET_MS` (350 ms) is
+  the knob; if a noisy room delays it to a flat ~1.5 s every time, that's
+  `CHIME_BY_S` firing because the TV masked the gap — say so and we'll swap
+  the level test for a real VAD.
+- With the TV loud, wake it and say nothing → chime, then the sleep chime at
+  the hold window. Two sounds per false accept is the cost of knowing.
+
+**Pass: the chime never steps on your own words, and you can tell asleep from
+awake without looking.** The sleep chime is the speculative one — if it turns
+out to be noise after a day of use, say so; it's one line to drop.
 
 ## 5b. Natural sentences — the pre-roll buffer
 

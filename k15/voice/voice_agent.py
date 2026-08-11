@@ -10,6 +10,7 @@ phrase or idle timeout (holdWindowS).
 Modes:
   (default)             run the agent
   --devices             list audio devices and exit
+  --earcons             play the earcon vocabulary and exit (volume audition)
   --dry-run             full pipeline; side effects logged, not executed
   --wake-trials         log wake detections + confidences; never start sessions
   --false-accept-soak   count spurious wakes over hours; never start sessions
@@ -37,8 +38,8 @@ import titles                                   # noqa: E402
 import traces                                   # noqa: E402
 from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarGate, GrammarMatcher   # noqa: E402
-from preroll import PrerollFeeder, WakeCapture  # noqa: E402  (pipecat frames
-# are already loaded via grammar_gate, so this adds no startup cost)
+from preroll import PrerollFeeder, WakeAck, WakeCapture  # noqa: E402  (pipecat
+# frames are already loaded via grammar_gate, so this adds no startup cost)
 
 log = cglib.make_log("voice")
 
@@ -255,13 +256,15 @@ class WakeListener:
         finally:
             close_stream_quietly(stream)
 
-    def wait_for_wake_capture(self, threshold):
+    def wait_for_wake_capture(self, threshold, on_quiet=None):
         """Blocks until the wake word fires; returns (score, WakeCapture). The
         stream is handed to the capture - NOT closed - so speech overlapping or
         right after the wake phrase ("hey jarvis volume up", no pause) survives
         the session build. The ring seeds the capture with the ~2 s before
         detection, wake phrase included; strip_wake removes it text-side.
-        Caller must stop() the capture (idempotent) to release the mic."""
+        on_quiet is the wake chime, fired by the capture when the user stops
+        talking. Caller must stop() the capture (idempotent) to release the
+        mic."""
         stream = self._open_stream()
         ring = collections.deque(maxlen=self.PREROLL_CHUNKS)
         try:
@@ -269,7 +272,7 @@ class WakeListener:
         except Exception:
             close_stream_quietly(stream)
             raise
-        return score, WakeCapture(stream, ring)
+        return score, WakeCapture(stream, ring, on_quiet)
 
 
 # --- the per-session pipeline -------------------------------------------------
@@ -346,7 +349,7 @@ def _make_llm(voice, secrets, system_text):
 
 
 async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
-                      capture=None, jobs=None):
+                      capture=None, jobs=None, ack=None):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
                                        TranscriptionFrame, TTSSpeakFrame,
@@ -398,6 +401,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         assistant_enabled=assistant_live,
         wake_word=wake_phrase.split()[-1],      # "jarvis" - the strip anchor
         jobs=jobs,
+        ack=ack,                                # wake chime, if still unplayed
     )
 
     feeder = PrerollFeeder(log)
@@ -497,6 +501,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--devices", action="store_true")
+    ap.add_argument("--earcons", action="store_true",
+                    help="play the earcon vocabulary through the configured "
+                         "output device and exit (tune voice.earconGain by ear)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--wake-trials", action="store_true")
     ap.add_argument("--false-accept-soak", action="store_true")
@@ -522,6 +529,18 @@ def main():
         log(f"config.json voice section missing keys: {missing} - fix and restart")
         return 1
     secrets = cglib.load_secrets()
+    # Earcon volume is taste, and taste needs a knob you can turn from the
+    # couch: optional (an already-deployed config must not fail to start).
+    earcons.set_gain(voice.get("earconGain", 1.0))
+
+    if args.earcons:
+        pa, _, output_idx = build_audio(voice)
+        log(f"earcon audition (gain {earcons.GAIN})")
+        for name in earcons.SPECS:
+            log(f"  {name}")
+            play_pcm(pa, earcons.pcm(name), output_idx)
+            time.sleep(0.7)
+        return 0
 
     if args.text:
         from assistant import repl
@@ -607,8 +626,20 @@ def main():
             time.sleep(1.0)
 
     while True:
+        # The wake chime is armed, not played: whoever first hears the user
+        # stop talking plays it - the capture watcher while the mic is still
+        # ours (you paused after "hey jarvis"), or GrammarGate at end of turn
+        # (one-breath command that outlasted the session build). Never over
+        # the command itself, and it lands on the wait before the answer.
+        ack = WakeAck()
+
+        def chime_when_quiet(_ack=ack):
+            if _ack.claim():
+                play_pcm(pa, earcons.pcm("wake"), output_idx)
+
         try:
-            score, capture = listener.wait_for_wake_capture(voice["wakeThreshold"])
+            score, capture = listener.wait_for_wake_capture(
+                voice["wakeThreshold"], on_quiet=chime_when_quiet)
         except OSError as e:
             # Mic stream death mid-listen (BT profile flap, device yanked,
             # AirPods multipoint wandering off) must never kill the agent -
@@ -623,22 +654,29 @@ def main():
             announcer.abort_current()           # user intent beats a bulletin
         if not stt_live:
             capture.stop()
+            ack.claim()                         # no session: fail is the answer
             play_pcm(pa, earcons.pcm("fail"), output_idx)
             continue
-        play_pcm(pa, earcons.pcm("wake"), output_idx)
         log("session open")
         if announcer:
             announcer.session_active.set()
+        ending = "close"
         try:
             asyncio.run(run_session(cfg, secrets, matcher, args,
-                                    input_idx, output_idx, capture, jobs=jobs))
+                                    input_idx, output_idx, capture,
+                                    jobs=jobs, ack=ack))
         except Exception as e:
             log(f"session crashed: {e!r} - back to dormant")
+            ending = "fail"
         finally:
             capture.stop()                      # idempotent; frees the mic if the build crashed
             if announcer:
                 announcer.session_active.clear()
         refresh_library_bg()                    # pick up installs between sessions
+        # Going-to-sleep chime, after teardown so it marks the moment the mic
+        # actually goes dormant - and every ending sounds the same, whether it
+        # was an exit phrase, the idle timeout or a crash (fail says which).
+        play_pcm(pa, earcons.pcm(ending), output_idx)
         log("session closed - dormant")
         if args.once:
             return 0

@@ -20,8 +20,14 @@ Two pieces close the gap:
 
 The transcript now starts with the wake phrase; grammar_gate.strip_wake owns
 removing it text-side (more reliable than trying to trim it out of the audio).
+
+The capture window is also where the wake chime is timed from (WakeAck): it
+is the only place that can hear you between the wake word and the pipeline.
 """
 import threading
+import time
+
+import numpy as np
 
 from pipecat.frames.frames import Frame, InputAudioRawFrame, StartFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -30,6 +36,31 @@ SAMPLE_RATE = 16000
 BYTES_PER_S = SAMPLE_RATE * 2                   # mono s16
 CHUNK_SAMPLES = 1280                            # the wake loop's 80 ms hop
 CHUNK_BYTES = CHUNK_SAMPLES * 2
+CHUNK_MS = CHUNK_SAMPLES * 1000 // SAMPLE_RATE  # 80
+
+
+def _rms(chunk):
+    x = np.frombuffer(chunk, np.int16).astype(np.float32)
+    return float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+
+
+class WakeAck:
+    """One wake chime per session, claimed by whichever side first sees the
+    user stop talking: the capture watcher below (mic still ours, chime played
+    straight to PyAudio) or GrammarGate once the pipeline owns the mic (chime
+    pushed as a frame). Those are different threads, hence the lock."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._claimed = False
+
+    def claim(self):
+        """True for exactly one caller - the winner plays the chime."""
+        with self._lock:
+            if self._claimed:
+                return False
+            self._claimed = True
+            return True
 
 
 class WakeCapture:
@@ -37,23 +68,57 @@ class WakeCapture:
     and returns all PCM captured (pre-detection ring + everything since)."""
 
     MAX_S = 30              # runaway guard: stop growing if a session build stalls
+    QUIET_MS = 350          # end-of-speech gap that earns the wake chime
+    QUIET_RATIO = 0.18      # of the loudest speech heard since the wake word
+    CHIME_BY_S = 1.5        # too noisy to tell -> chime anyway, never not at all
 
-    def __init__(self, stream, seed_chunks):
+    def __init__(self, stream, seed_chunks, on_quiet=None):
         self._stream = stream
         self._chunks = list(seed_chunks)
         self._pcm = None
+        self._on_quiet = on_quiet
+        self._t0 = time.monotonic()
+        self._quiet = 0
+        # The wake phrase is in the ring, so it sets the scale for "this is
+        # what speech sounds like here" - no absolute threshold to calibrate.
+        self._peak = max([_rms(c) for c in self._chunks] or [0.0]) if on_quiet else 0.0
         self._stopping = threading.Event()
         self._thread = threading.Thread(target=self._pump, daemon=True)
         self._thread.start()
+
+    def _watch(self, chunk):
+        """Fire the wake chime once you STOP talking rather than the instant
+        the wake word lands: a chime over the tail of "hey jarvis put on Elden
+        Ring" is the jarring part, and landing it at end-of-speech also masks
+        the wait before the answer. Levels are relative to the wake phrase
+        itself, so a loud TV doesn't read as talking and a quiet room doesn't
+        read as silence; if the room is too loud to call, chime at CHIME_BY_S
+        anyway. Whoever loses this race (usually the pipeline, on a one-breath
+        command that outlasts the session build) leaves the ack unclaimed for
+        GrammarGate to play at end of turn.
+
+        Playback goes on its own thread: stalling the pump for the length of a
+        chime would drop mic audio - the words this module exists to keep."""
+        if self._on_quiet is None:
+            return
+        level = _rms(chunk)
+        self._peak = max(self._peak, level)
+        self._quiet = 0 if level >= self._peak * self.QUIET_RATIO else self._quiet + 1
+        if (self._quiet * CHUNK_MS >= self.QUIET_MS
+                or time.monotonic() - self._t0 >= self.CHIME_BY_S):
+            fn, self._on_quiet = self._on_quiet, None
+            threading.Thread(target=fn, daemon=True).start()
 
     def _pump(self):
         limit = self.MAX_S * BYTES_PER_S // CHUNK_BYTES
         while not self._stopping.is_set() and len(self._chunks) < limit:
             try:
-                self._chunks.append(self._stream.read(
-                    CHUNK_SAMPLES, exception_on_overflow=False))
+                chunk = self._stream.read(
+                    CHUNK_SAMPLES, exception_on_overflow=False)
             except OSError:
                 break       # device vanished (BT flap) - keep what we already have
+            self._chunks.append(chunk)
+            self._watch(chunk)
 
     def stop(self):
         if self._pcm is not None:
