@@ -20,7 +20,10 @@ livedebugging { enabled = true }     // http://localhost:12345 while setting up
 
 local.file_match "events" {
 	path_targets = [{
-		// EDIT THIS if the clone does not live on the Desktop.
+		// EDIT THIS. Do not guess the path - print it on the K15 with:
+		//   cd %USERPROFILE%\Desktop\slopstation\k15
+		//   python -c "import events; print(events.LOG_DIR)"
+		// then write it here with FORWARD slashes.
 		__path__ = "C:/Users/minipc/Desktop/slopstation/k15/logs/k15-*.jsonl",
 	}]
 	// The file rolls over at midnight UTC and old ones are deleted by
@@ -81,9 +84,6 @@ loki.write "grafana_cloud" {
 			password = sys.env("GC_LOKI_TOKEN")
 		}
 	}
-
-	// A dead uplink must cost telemetry, never the couch: Alloy buffers to
-	// disk and retries on its own, and nothing in the voice or chord lane
-	// waits on it either way.
-	external_labels = {}
+	// A dead uplink costs telemetry and nothing else: Alloy retries on its
+	// own, and nothing in the voice or chord lane ever waits on it.
 }
