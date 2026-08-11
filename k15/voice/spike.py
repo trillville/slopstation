@@ -47,7 +47,7 @@ def list_devices():
     fails, the wheel/driver layer is the problem, not the framework."""
     import pyaudio
     pa = pyaudio.PyAudio()
-    print(f"[devices] host APIs: "
+    print("[devices] host APIs: "
           + ", ".join(pa.get_host_api_info_by_index(i)["name"]
                       for i in range(pa.get_host_api_count())))
     def default_index(getter, what):

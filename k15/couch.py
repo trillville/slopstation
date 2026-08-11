@@ -5,7 +5,7 @@ the TV exactly as the viewer had it."""
 import socket, subprocess, sys, time
 
 import cglib
-from cglib import BASE, LOCK, LOCK_STALE_S
+from cglib import LOCK, LOCK_STALE_S
 
 CFG  = cglib.load_config()
 

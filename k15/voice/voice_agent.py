@@ -32,6 +32,7 @@ sys.path.insert(0, str(HERE.parent))
 import cglib                                    # noqa: E402
 import earcons                                  # noqa: E402
 import library                                  # noqa: E402
+import titles                                   # noqa: E402
 from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarGate, GrammarMatcher   # noqa: E402
 
