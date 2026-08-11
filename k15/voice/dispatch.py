@@ -172,22 +172,32 @@ class Dispatch:
         return self._exlink("mute_toggle", cglib.EXLINK_FRAMES["mute_toggle"])
 
     def switch_input(self, spoken_name):
-        """Config owns the spoken-name -> input map. Switching to the GAMING
-        input is READY-gated: automation never shows a dead input (the one
-        rule); other inputs switch freely, like a remote would."""
+        """Config owns the spoken-name -> input map. The GAMING input means
+        "get me gaming": with no session it STARTS one (identical UX to
+        "start a session" - refusing with a hint was worse than doing the
+        thing, user call 2026-08-10); mid-launch it answers "still starting";
+        with a READY session it flips instantly. The one rule is untouched
+        either way - couch.py switches the input only at READY, so nothing
+        dead is ever shown. Other inputs switch freely, like a remote."""
         cmd = self.voice["inputs"].get(spoken_name.strip().lower())
         if cmd is None:
             return _fail(f"unknown input '{spoken_name}'",
                          say=f"I don't know the input {spoken_name}.")
         if cmd == self.cfg["tvGamingCmd"]:
+            age = cglib.lock_age()
+            if age is None or age >= cglib.LOCK_STALE_S:
+                # Local lock check first: a sleeping PC costs no ssh timeout
+                # before the launch kicks off.
+                self.log(f"input {cmd} with no session - starting one")
+                return self.start_session()
             if self.dry_run:
                 return self._would(f"check READY then exlink {cmd}")
             try:
                 if ssh("status") == "NOTREADY":
-                    self.log(f"input {cmd} refused - host not READY")
-                    return _fail("gaming input while not READY",
-                                 say="The PC isn't running a session - "
-                                     "say 'start a session' instead.")
+                    self.log(f"input {cmd} deferred - session still starting")
+                    return _busy("gaming input while launch in flight",
+                                 say="The session is still starting - the TV "
+                                     "will switch over when it's ready.")
             except Exception as e:
                 self.log(f"input {cmd} refused - status check failed ({e})")
                 return _fail(f"status check: {e}", say="I couldn't reach the PC.")

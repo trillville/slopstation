@@ -90,19 +90,31 @@ def main():
     r = h.d.mute_toggle()
     assert not r.ok and r.earcon == "fail"
 
-    # --- input map + READY gate ----------------------------------------------
+    # --- input map + gaming-input semantics ----------------------------------
     cglib.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
     h = Harness(); sent.clear()
     assert not h.d.switch_input("garage").ok          # unknown name
     assert h.d.switch_input("Apple TV ").ok           # case/space tolerant
     assert sent == [cglib.EXLINK_FRAMES["hdmi1"]]
 
-    sent.clear()
-    dp.ssh = lambda cmd, **kw: "NOTREADY"
+    # No session: "switch to the pc" = "start a session" (user call) - it
+    # spawns the full couch launch, never refuses, never touches the TV
+    # itself (couch.py flips the input at READY).
+    with_temp_lock(None)
+    sent.clear(); spawned.clear()
     r = h.d.switch_input("the pc")
-    assert not r.ok and not sent, "gaming input must be READY-gated"
+    assert r.ok and spawned and spawned[0][-1] == "start" and not sent, \
+        (r, spawned, sent)
+    # Mid-launch (fresh lock, host pre-READY): truthful busy, no switch.
+    with_temp_lock(10)
+    dp.ssh = lambda cmd, **kw: "NOTREADY"
+    sent.clear()
+    r = h.d.switch_input("the pc")
+    assert not r.ok and r.earcon == "busy" and not sent, r
+    # Live READY session: flips instantly.
     dp.ssh = lambda cmd, **kw: "2026-08-10T20:00:00"  # READY timestamp
     assert h.d.switch_input("the pc").ok and sent == [cglib.EXLINK_FRAMES["hdmi4"]]
+    # Fresh lock but host unreachable: honest fail, no switch.
     def ssh_down(cmd, **kw): raise RuntimeError("unreachable")
     dp.ssh = ssh_down
     sent.clear()
@@ -142,7 +154,8 @@ def main():
 
     time.sleep = real_sleep
     print("OK - dispatch: lock arbiter, dry-run, spawn args, volume step/clamp, "
-          "mute, retry, input map, READY gate, ssh outcomes, play_game paths")
+          "mute, retry, input map, gaming-input autostart/busy/READY, "
+          "ssh outcomes, play_game paths")
 
 
 if __name__ == "__main__":

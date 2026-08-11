@@ -171,8 +171,10 @@ Drop `--dry-run`. Now actions execute.
 ```
 
 - "volume up" / "mute" / "volume 15" → the TV moves
-- "switch to the playstation" → input changes; "switch to the pc" → refused
-  unless a session is live (the one rule)
+- "switch to the playstation" → input changes instantly
+- "switch to the pc" with no session → **starts one** (same as "start a
+  session" — it means "get me gaming"); mid-launch → "still starting"; with a
+  live session → flips instantly
 - "start a session" → the full couch launch fires (TV untouched until READY)
 - "end session" mid-game → teardown runs — **the exit-by-voice moment**
 
