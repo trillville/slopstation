@@ -161,6 +161,19 @@ def main():
     assert store.unread(), "an aborted announcement must stay unread"
     print("  announcer: defers for sessions, marks read only after full playback")
 
+    # latest_result orders by COMPLETION time, not file position: _save
+    # regroups live-then-done, so a queued-later job that finished last can
+    # sit earlier in the file (the audit bug: A then B queued, both done ->
+    # file [B, A] -> naive [-1] speaks the older A).
+    base = {"task": "t", "status": "DONE", "provider": "fake", "created": 0,
+            "detail": "d", "read": True}
+    jobs_mod.JOBS_FILE.write_text(json.dumps([
+        {**base, "id": "late", "finished": 200, "summary": "newer"},
+        {**base, "id": "early", "finished": 100, "summary": "older"},
+    ]), encoding="utf-8")
+    assert store.latest_result()["summary"] == "newer"
+    print("  latest_result: completion-time ordering beats file order")
+
     print("OK - jobs: parsing, adapters, store lifecycle, reconcile, announcer gates")
 
 

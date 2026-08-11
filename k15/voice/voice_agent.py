@@ -521,11 +521,6 @@ def main():
     if missing:
         log(f"config.json voice section missing keys: {missing} - fix and restart")
         return 1
-    if (voice["assistantWebSearch"]
-            and voice["assistantProvider"] != "openai"):
-        log("assistantWebSearch: production search runs on the openai lane "
-            "only (pipecat's anthropic adapter has no native-tool "
-            "passthrough); the --text REPL searches on both")
     secrets = cglib.load_secrets()
 
     if args.text:
@@ -540,6 +535,14 @@ def main():
     if not stt_live:
         log("deepgramApiKey is a placeholder - wake word runs, but sessions "
             "are DISABLED until a real key lands in secrets.json")
+    from assistant import BACKENDS
+    brain = BACKENDS.get(voice["assistantProvider"])
+    brain_live = bool(brain and cglib.real_key(secrets.get(brain.key)))
+    if (voice["assistantWebSearch"]
+            and voice["assistantProvider"] != "openai"):
+        log("assistantWebSearch: production search runs on the openai lane "
+            "only (pipecat's anthropic adapter has no native-tool "
+            "passthrough); the --text REPL searches on both")
 
     # Build the grammar once (a YAML typo fails here, not per-wake); warm the
     # library index and the heavy pipeline imports in the background so the
@@ -563,8 +566,11 @@ def main():
     elif not adapter.available():
         log(f"worker lane DISABLED - '{wp}' CLI not on PATH "
             "(background tasks off; everything else runs)")
-    elif not stt_live:
-        log("worker lane DISABLED - announcements need the Deepgram key")
+    elif not (stt_live and brain_live):
+        # The lane rides the assistant (only its background_task tool can
+        # queue work) and Deepgram (announcements + retrieval TTS) - without
+        # either it would be a store nothing fills and frames nothing speaks.
+        log("worker lane DISABLED - it needs live Deepgram AND assistant keys")
     else:
         announcer = announce.Announcer(voice, secrets, log)
         jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],

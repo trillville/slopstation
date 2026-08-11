@@ -66,7 +66,7 @@ class JobStore:
             jobs = self._load()
             orphans = [j for j in jobs if j["status"] == RUNNING]
             for j in orphans:
-                j.update(status=FAILED, read=False,
+                j.update(status=FAILED, read=False, finished=int(time.time()),
                          summary="a background task was lost to a restart",
                          detail="the voice agent restarted while this job ran; "
                                 "ask again to re-run it")
@@ -117,6 +117,7 @@ class JobStore:
                 r = self.adapter.run(job["task"], self.timeout_s)
                 status = DONE if r["ok"] else FAILED
                 self._update(job["id"], status=status, read=False,
+                             finished=int(time.time()),
                              summary=r["summary"], detail=r["detail"])
                 self.log(f"job {job['id']} {status} in {time.time() - t0:.0f}s")
                 if self.on_done:
@@ -140,6 +141,7 @@ class JobStore:
             for j in jobs:
                 if j["status"] == QUEUED:
                     j.update(status=FAILED, read=True,
+                             finished=int(time.time()),
                              summary="cancelled", detail="cancelled by voice")
                     cancelled += 1
                 elif j["status"] == RUNNING:
@@ -153,12 +155,15 @@ class JobStore:
                     if j["status"] in (DONE, FAILED) and not j.get("read")]
 
     def latest_result(self):
-        """Newest finished job, unread first - the 'what did you find'
-        answer. Does NOT mark read; the caller does once it was spoken."""
+        """Newest finished job BY COMPLETION TIME, unread first - the 'what
+        did you find' answer. File order won't do: _save regroups live-then-
+        done, so a queued-later job that finished last can sit earlier in the
+        file. Does NOT mark read; the caller does once it was spoken."""
         with self._lock:
             done = [j for j in self._load() if j["status"] in (DONE, FAILED)]
         if not done:
             return None
+        done.sort(key=lambda j: j.get("finished", 0))
         unread = [j for j in done if not j.get("read")]
         return (unread or done)[-1]
 

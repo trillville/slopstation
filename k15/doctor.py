@@ -10,7 +10,7 @@ so its problems must not turn the chain diagnosis red.
 
 Exit code = number of FAILs.
 """
-import subprocess, sys, time
+import json, subprocess, sys, time
 
 import cglib
 
@@ -212,7 +212,6 @@ def check_voice(cfg):
                "run voice\\Start-Voice.bat once (~2 min with network)")
     lib = cglib.BASE / "state" / "library.json"
     try:
-        import json
         data = json.loads(lib.read_text(encoding="utf-8"))
         age_h = (time.time() - lib.stat().st_mtime) / 3600
         report(PASS, "voice library", f"{len(data.get('installed', []))} installed / "
@@ -241,8 +240,7 @@ def check_voice(cfg):
     jobs_file = cglib.BASE / "state" / "jobs.json"
     if jobs_file.exists():
         try:
-            import json as _json
-            rows = _json.loads(jobs_file.read_text(encoding="utf-8"))
+            rows = json.loads(jobs_file.read_text(encoding="utf-8"))
             running_jobs = [j for j in rows if j.get("status") == "RUNNING"]
             unread = [j for j in rows if not j.get("read", True)]
             note = (f"{len(rows)} recorded, {len(running_jobs)} running, "
