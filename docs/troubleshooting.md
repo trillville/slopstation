@@ -12,7 +12,7 @@ diagnose their whole chain read-only.
 
 | Symptom | Diagnosis | Fix |
 |---|---|---|
-| Chord does nothing, no launch console | RDP to K15, tail `couch.log` | No `[listener]` lines → listener not running: run `Start-K15.bat` (safe to re-run — it starts only the lanes that are down). `already active/starting - ignoring` → lock is fresh: a session is live, or a crash happened <5 min ago — wait it out or `del state\session.lock` |
+| Chord does nothing, no launch console | RDP to K15, tail `couch.log` | No `[listener]` lines → listener not running: run `Start-K15.bat` (safe any time — it starts what's down and reloads what's up). `already active/starting - ignoring` → lock is fresh: a session is live, or a crash happened <5 min ago — wait it out or `del state\session.lock` |
 | Listener says `armed` but the chord never fires | Controller firmware update moved the report bytes | `python calibrate.py`, update `RID_INPUT`/`BTN_BYTE`/`CHORD` in `chord_listener.py` |
 | End TV Session tile does nothing | `schtasks /Run /TN \CouchGaming\Exit` says `currently running` — wedged instance | `schtasks /End /TN \CouchGaming\Exit`; the 5-min execution limit also self-clears it |
 | Launch aborts with `stale Puck claim would not release` | The old claim wouldn't die, so launching would give a dead controller | RDP to K15: reseat the Puck's USB or restart the VirtualHere service; at the desk check the vhui64 client |
