@@ -343,7 +343,9 @@ npm i -g @openai/codex && codex login
 ```
 
 `config.json` picks the worker: `workerProvider` (`claude`|`codex`),
-`workerModel` (optional), `workerTimeoutS`. Missing CLI = lane off with a
+`workerModel` (empty = the CLI's own default), `workerEffort` (ships `high` —
+latency is free here, so depth is the axis worth spending on; empty inherits
+the CLI's default), `workerTimeoutS`. Missing CLI = lane off with a
 clear startup line, everything else runs. **The `--text` REPL refuses
 background tasks by design** (always-dry rule: a queued job spends real
 quota and can run real commands) — these drills are live-agent only.

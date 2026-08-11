@@ -35,6 +35,7 @@
     "location": {"city": "", "region": "", "country": "US", "timezone": ""},
     "workerProvider": "claude",
     "workerModel": "",
+    "workerEffort": "high",
     "workerTimeoutS": 600,
     "inputs": {
       "apple tv": "hdmi1", "appletv": "hdmi1", "the apple tv": "hdmi1",

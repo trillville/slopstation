@@ -13,6 +13,7 @@ fed via STDIN (both CLIs accept it), which sidesteps cmd.exe quoting for the
 .cmd shims npm installs. Exact flag sets are pinned live at the K15 deploy
 drill (ledger rows D9/D10)."""
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -62,19 +63,25 @@ def parse_reply(text):
 class _CliWorker:
     exe = ""                                    # shim/binary name on PATH
 
-    def __init__(self, model=""):
+    def __init__(self, model="", effort=""):
         self.model = model
+        self.effort = effort                    # "" = the CLI's own default
         self.path = shutil.which(self.exe)
 
     def available(self):
         return self.path is not None
+
+    def _env(self):
+        """Adapters whose depth knob lives in the environment override this."""
+        return None
 
     def run(self, task, timeout):
         try:
             p = subprocess.run(
                 self._argv(), input=PROMPT.format(task=task),
                 cwd=str(WORKER_HOME), capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=timeout)
+                encoding="utf-8", errors="replace", timeout=timeout,
+                env=self._env())
         except subprocess.TimeoutExpired:
             return {"ok": False, "summary": "the task ran out of time",
                     "detail": f"{self.exe} exceeded {timeout}s and was killed"}
@@ -104,6 +111,14 @@ class ClaudeWorker(_CliWorker):
             argv += ["--model", self.model]
         return argv
 
+    def _env(self):
+        # Claude Code's depth knob is an env var, not a flag. Its own default
+        # is already high on the adaptive-reasoning models, so an empty
+        # workerEffort inherits that rather than fighting it.
+        if not self.effort:
+            return None
+        return {**os.environ, "CLAUDE_CODE_EFFORT_LEVEL": self.effort}
+
     def _extract(self, p):
         try:
             return parse_reply(json.loads(p.stdout)["result"])
@@ -128,6 +143,11 @@ class CodexWorker(_CliWorker):
         ]
         if self.model:
             argv += ["--model", self.model]
+        if self.effort:
+            # Codex defaults to medium - tuned for interactive work, which is
+            # the wrong trade in a lane where latency costs nothing. -c values
+            # are TOML, so the string needs its quotes.
+            argv += ["-c", f'model_reasoning_effort="{self.effort}"']
         return argv + ["-"]
 
     def _extract(self, p):

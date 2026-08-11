@@ -50,7 +50,8 @@ REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
                   "assistantProvider", "assistantModel", "inputs",
                   "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "workerProvider", "workerModel", "workerTimeoutS")
+                  "workerProvider", "workerModel", "workerEffort",
+                  "workerTimeoutS")
 
 
 def load_titles(count):
@@ -579,7 +580,8 @@ def main():
     from workers import WORKERS
     jobs = announcer = None
     wp = voice["workerProvider"]
-    adapter = WORKERS[wp](voice["workerModel"]) if wp in WORKERS else None
+    adapter = (WORKERS[wp](voice["workerModel"], voice["workerEffort"])
+               if wp in WORKERS else None)
     if adapter is None:
         log(f"worker lane DISABLED - unknown workerProvider '{wp}' "
             f"(one of {list(WORKERS)})")

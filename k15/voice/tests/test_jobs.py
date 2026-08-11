@@ -54,9 +54,14 @@ def main():
     assert argv[:3] == ["cmd.exe", "/c", r"C:\x\claude.cmd"]     # .cmd shim
     assert "-p" in argv and "--output-format" in argv and "json" in argv
     assert not any(a.startswith("TASK") for a in argv)           # prompt=stdin
-    cw2 = workers.ClaudeWorker(model="claude-haiku-4-5")
+    assert cw._env() is None                     # no knob -> inherit the CLI's
+    cw2 = workers.ClaudeWorker(model="claude-haiku-4-5", effort="high")
     cw2.path = r"C:\x\claude.exe"
     assert cw2._argv()[0].endswith(".exe") and "--model" in cw2._argv()
+    # Claude's depth knob is an env var, and the rest of the environment
+    # (PATH, the CLI's own credentials) must survive it.
+    env = cw2._env()
+    assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "high" and "PATH" in env
     out = json.dumps({"type": "result", "result":
                       '{"summary": "Found it.", "detail": "All of it."}'})
     r = cw._extract(types.SimpleNamespace(stdout=out))
@@ -64,11 +69,18 @@ def main():
     r = cw._extract(types.SimpleNamespace(stdout="not json at all"))
     assert r["summary"]                                          # fallback
 
-    xw = workers.CodexWorker()
+    xw = workers.CodexWorker(effort="high")
     xw.path = r"C:\x\codex.exe"
     argv = xw._argv()
     assert "exec" in argv and "--output-last-message" in argv
     assert argv[-1] == "-"                                       # prompt=stdin
+    # Codex carries effort as a TOML -c override (its own default is medium,
+    # tuned for interactive work - wrong trade for a latency-free lane).
+    assert 'model_reasoning_effort="high"' in argv
+    assert xw._env() is None                     # flag-carried, not env
+    xw_bare = workers.CodexWorker()
+    xw_bare.path = r"C:\x\codex.exe"
+    assert not any("model_reasoning_effort" in a for a in xw_bare._argv())
     workers.WORKER_HOME.mkdir(exist_ok=True)
     xw.LAST.write_text('{"summary": "Codex says.", "detail": "Much."}',
                        encoding="utf-8")
