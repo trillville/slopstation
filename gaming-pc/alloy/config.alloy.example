@@ -19,11 +19,15 @@
 //                       and converting it to JSON would only wrap prose in
 //                       punctuation. Its filename carries the turn id too.
 
-// Bring-up aid: it streams every processed line to the UI at
-// http://localhost:12345. Off by default because a debug feature should be,
-// NOT for performance - measured on the gaming PC, toggling it moved CPU
-// from 4.44% of one core to 4.53%, i.e. not at all. The earlier claim that
-// it "costs CPU continuously" was wrong. Flip it on while diagnosing.
+// OFF, and it should stay off. Two claims were made for it during bring-up
+// and both were wrong: it does not cost CPU (4.44% of one core before,
+// 4.53% after - no effect), and it did not help diagnose anything. The
+// component pages at http://localhost:12345 - Arguments, Exports, health -
+// work WITHOUT it; they are what showed file_match's resolved target. This
+// feature streams data through a component and is not even implemented for
+// the ones used here ("Live debugging is not yet available for this
+// component"). What actually solved the E2 outage was the Windows
+// Application event log, which carried the 401 all along.
 livedebugging { enabled = false }
 
 // ---------------------------------------------------------------- milestones

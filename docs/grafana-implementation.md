@@ -328,7 +328,9 @@ actually is.
 
 1. **`http://localhost:12345`** on the K15 → `local.file_match.events` →
    **Exports → targets**. Empty means the path or glob is wrong; nothing
-   downstream matters.
+   downstream matters. (These component pages work regardless of the
+   `livedebugging` setting - that is a different feature, and not implemented
+   for the components used here.)
 2. **Access Policies** → the token row → **`Last used at`**. `Never` means the
    token is not reaching Grafana at all, which separates "wrong value" from
    "not being sent" — a distinction no client-side symptom can make.
