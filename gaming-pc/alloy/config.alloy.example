@@ -19,7 +19,10 @@
 //                       and converting it to JSON would only wrap prose in
 //                       punctuation. Its filename carries the turn id too.
 
-livedebugging { enabled = true }
+// Bring-up aid only - it streams every processed line to the UI at
+// http://localhost:12345 and costs CPU continuously. Flip it on while
+// diagnosing, off again afterwards.
+livedebugging { enabled = false }
 
 // ---------------------------------------------------------------- milestones
 

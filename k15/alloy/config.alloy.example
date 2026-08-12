@@ -16,7 +16,10 @@
 // double the volume to say the same thing twice. Note the glob is k15-*.jsonl,
 // so blind-suite runs (which write test-*.jsonl) never leave the machine at all.
 
-livedebugging { enabled = true }     // http://localhost:12345 while setting up
+// Bring-up aid only - it streams every processed line to the UI at
+// http://localhost:12345 and costs CPU continuously. Flip it on while
+// diagnosing, off again afterwards.
+livedebugging { enabled = false }
 
 local.file_match "events" {
 	path_targets = [{
