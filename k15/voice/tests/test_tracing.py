@@ -115,6 +115,66 @@ def main():
     except ImportError:
         print("  exporter: SKIPPED - opentelemetry not installed in this venv")
 
+    # -- background jobs: same trace, minutes later, another thread -----------
+    # The point of the whole mechanism: a job queued during a conversation
+    # must report UNDER that conversation, not as an orphan trace. Asserted
+    # on trace ids from a real in-memory exporter, because "it looked right
+    # in the UI" is how the env=development bug survived a week.
+    tracing._on = False
+    assert tracing.carrier() is None            # off -> nothing to propagate
+    with tracing.job_span("j1", "task", None) as j:
+        j.step("WebSearch", "q", "r")           # must be silent no-ops
+        j.finish("s", "d", {"cost_usd": 1})
+    try:
+        with tracing.job_span("j1", "task", None):
+            raise ValueError("body")
+    except ValueError:
+        pass                                    # never SUPPRESSES the body
+    else:
+        raise AssertionError("job_span swallowed an exception from its body")
+    print("  jobs: tracing off -> null helper, and the body still raises")
+
+    try:
+        from opentelemetry import trace as otel
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter)
+    except ImportError:
+        print("  jobs: SKIPPED parenting - opentelemetry not installed")
+    else:
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel.set_tracer_provider(provider)
+        tracing._on = True
+        tracer = otel.get_tracer("test")
+        with tracer.start_as_current_span("conversation") as conv:
+            parent_trace = conv.get_span_context().trace_id
+            carrier = tracing.carrier()          # frozen while conv is active
+        assert carrier and "traceparent" in carrier, carrier
+        # The conversation span has now ENDED - this is the real situation.
+        with tracing.job_span("j2", "research couch co-op", carrier,
+                              session="36d22d", provider="claude") as j:
+            j.step("WebSearch", "couch co-op 2026", "ten results")
+            j.finish("Three picks.", "The long form.",
+                     {"cost_usd": 0.073, "turns": 4, "input_tokens": 2})
+        spans = {s.name: s for s in exporter.get_finished_spans()}
+        assert "background task" in spans and "tool: WebSearch" in spans
+        job, tool = spans["background task"], spans["tool: WebSearch"]
+        assert job.context.trace_id == parent_trace, \
+            "the job landed in its own trace - the whole mechanism is the join"
+        assert tool.context.trace_id == parent_trace
+        assert tool.parent.span_id == job.context.span_id   # nested, not flat
+        assert job.attributes["langfuse.session.id"] == "36d22d"
+        assert job.attributes["couch.job.cost_usd"] == 0.073
+        assert job.attributes["gen_ai.usage.input_tokens"] == 2
+        assert "Three picks." in job.attributes["langfuse.observation.output"]
+        assert tool.attributes["gen_ai.tool.name"] == "WebSearch"
+        tracing._on = False
+        print("  jobs: job + tool spans land in the CONVERSATION's trace, "
+              "nested, after it closed")
+
     print("OK - tracing: gate, auth, endpoint, attributes, types, fail-soft")
 
 

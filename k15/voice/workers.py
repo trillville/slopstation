@@ -109,21 +109,95 @@ class _CliWorker:
         return {"ok": True, **self._extract(p)}
 
 
+def _short(v, n=300):
+    """A tool's input rendered for a span attribute - the search query or the
+    URL, not the whole argument blob."""
+    if isinstance(v, dict):
+        for k in ("query", "url", "pattern", "command", "file_path", "prompt"):
+            if v.get(k):
+                return str(v[k])[:n]
+        return json.dumps(v, default=str)[:n]
+    return str(v or "")[:n]
+
+
+def result_meta(d):
+    """The fields `claude -p` returns alongside `result` and we used to drop.
+
+    Names verified against the CLI on 2026-08-12 rather than assumed - they
+    are not in the published reference. Anything absent is omitted rather
+    than guessed, so a CLI that renames one loses a span attribute and
+    nothing else."""
+    usage = d.get("usage") or {}
+    server = usage.get("server_tool_use") or {}
+    models = d.get("modelUsage") or {}
+    first = next(iter(models.values()), {}) if models else {}
+    meta = {
+        "cost_usd": d.get("total_cost_usd"),
+        "turns": d.get("num_turns"),
+        "api_ms": d.get("duration_api_ms"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+        "web_searches": server.get("web_search_requests"),
+        "web_fetches": server.get("web_fetch_requests"),
+        "denials": len(d.get("permission_denials") or []) or None,
+        "stop_reason": d.get("stop_reason"),
+        "model": first.get("canonicalModel") or (next(iter(models), None)),
+        "cli_session": d.get("session_id"),
+    }
+    return {k: v for k, v in meta.items() if v is not None}
+
+
 class ClaudeWorker(_CliWorker):
-    """claude -p: prompt on stdin, one JSON object on stdout, final text in
-    its 'result' field. Guardrails: the --allowedTools list here plus
+    """claude -p. Guardrails: the --allowedTools list here plus
     worker_home/.claude/settings.json deny rules (secrets, out-of-scope
-    writes) - the injection canary drill proves both."""
+    writes) - the injection canary drill proves both.
+
+    Output is stream-json so the TOOL CALLS are visible: with plain --output-
+    format json the only artefact of three minutes of research is the final
+    text, which is why "what did it actually look at" was unanswerable. The
+    stream is newline-delimited SDK messages (system / assistant / user /
+    result); we read tool_use blocks off the assistant messages and take the
+    final `type: result` object exactly as before.
+
+    Format churn is the known risk here - CodexWorker below avoids codex's
+    JSONL entirely for that reason. So the parse is defensive on both ends:
+    unrecognised lines are skipped, a stream with no result object falls back
+    to the old whole-stdout parse, and a CLI that rejects the flags at all
+    retries once in legacy mode (see run). Churn costs tool spans, never the
+    job."""
     exe = "claude"
+    TOOLS = "WebSearch,WebFetch,Read,Glob,Grep,Write,Bash"
+
+    def __init__(self, model="", effort=""):
+        super().__init__(model, effort)
+        self.stream = True          # flipped off permanently by a usage error
 
     def _argv(self):
-        argv = _argv_for(self.path) + [
-            "-p", "--output-format", "json",
-            "--allowedTools", "WebSearch,WebFetch,Read,Glob,Grep,Write,Bash",
-        ]
+        argv = _argv_for(self.path) + ["-p"]
+        argv += (["--output-format", "stream-json", "--verbose"] if self.stream
+                 else ["--output-format", "json"])
+        argv += ["--allowedTools", self.TOOLS]
         if self.model:
             argv += ["--model", self.model]
         return argv
+
+    def run(self, task, timeout):
+        r = super().run(task, timeout)
+        if r["ok"] or not self.stream:
+            return r
+        # A CLI that does not know these flags fails in milliseconds with a
+        # usage error. Distinguish that from a real task failure and retry
+        # once in the old format, so an older or newer claude degrades to
+        # "no tool spans" instead of "background tasks are broken".
+        blurb = f"{r.get('detail', '')}".lower()
+        if any(w in blurb for w in ("unknown option", "unrecognized",
+                                    "invalid option", "usage:",
+                                    "requires --verbose", "--verbose")):
+            self.stream = False
+            r = super().run(task, timeout)
+            r.setdefault("meta", {})["stream_fallback"] = True
+        return r
 
     def _env(self):
         # Claude Code's depth knob is an env var, not a flag. Its own default
@@ -134,10 +208,47 @@ class ClaudeWorker(_CliWorker):
         return {**os.environ, "CLAUDE_CODE_EFFORT_LEVEL": self.effort}
 
     def _extract(self, p):
-        try:
-            return parse_reply(json.loads(p.stdout)["result"])
-        except (ValueError, KeyError, TypeError):
+        steps, results, final = [], {}, None
+        for line in (p.stdout or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue                        # banners, blanks, whatever else
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue                        # a partial line is not a failure
+            kind = ev.get("type")
+            if kind == "result":
+                final = ev                      # last one wins
+                continue
+            for block in ((ev.get("message") or {}).get("content") or []):
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    steps.append({"tool": block.get("name") or "tool",
+                                  "input": _short(block.get("input")),
+                                  "id": block.get("id")})
+                elif block.get("type") == "tool_result":
+                    c = block.get("content")
+                    if isinstance(c, list):
+                        c = " ".join(str(x.get("text", "")) for x in c
+                                     if isinstance(x, dict))
+                    results[block.get("tool_use_id")] = str(c or "")[:2000]
+        if final is None:
+            # Not a stream: legacy --output-format json, or a shape we don't
+            # know. Old behaviour verbatim.
+            try:
+                final = json.loads(p.stdout)
+            except ValueError:
+                return parse_reply(p.stdout)
+        if not isinstance(final, dict):
             return parse_reply(p.stdout)
+        for s in steps:
+            s["result"] = results.get(s.pop("id"), "")
+        out = parse_reply(final.get("result", ""))
+        out["meta"] = result_meta(final)
+        out["steps"] = steps
+        return out
 
 
 class CodexWorker(_CliWorker):

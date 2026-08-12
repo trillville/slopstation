@@ -52,7 +52,14 @@ def main():
     cw.path = r"C:\x\claude.cmd"
     argv = cw._argv()
     assert argv[:3] == ["cmd.exe", "/c", r"C:\x\claude.cmd"]     # .cmd shim
-    assert "-p" in argv and "--output-format" in argv and "json" in argv
+    # stream-json, because the tool calls only exist in the stream - with
+    # plain json the only trace of three minutes of research is the final
+    # text. --verbose rides along because the CLI requires it in print mode.
+    assert "-p" in argv and "--output-format" in argv
+    assert "stream-json" in argv and "--verbose" in argv
+    cw.stream = False                            # the usage-error fallback
+    assert "json" in cw._argv() and "stream-json" not in cw._argv()
+    cw.stream = True
     assert "--model" not in argv                 # empty = the CLI's own
     # One vocabulary across both lanes, and a model key per vendor - so a
     # claude alias can never reach codex (invalid-model error) and neither
@@ -71,12 +78,61 @@ def main():
     # (PATH, the CLI's own credentials) must survive it.
     env = cw2._env()
     assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "high" and "PATH" in env
+    # Legacy single-object stdout still parses - this is the shape the
+    # fallback produces, and the shape any older CLI emits.
     out = json.dumps({"type": "result", "result":
                       '{"summary": "Found it.", "detail": "All of it."}'})
     r = cw._extract(types.SimpleNamespace(stdout=out))
-    assert r == {"summary": "Found it.", "detail": "All of it."}
+    assert r["summary"] == "Found it." and r["detail"] == "All of it."
     r = cw._extract(types.SimpleNamespace(stdout="not json at all"))
     assert r["summary"]                                          # fallback
+
+    # -- the stream: tool calls, their results, and the discarded metadata ----
+    # Field names verified against the real CLI (2026-08-12); they are not in
+    # the published reference, so this test is where they are pinned.
+    stream = "\n".join(json.dumps(e) for e in [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "looking"},
+            {"type": "tool_use", "id": "t1", "name": "WebSearch",
+             "input": {"query": "couch co-op 2026"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": [{"type": "text", "text": "ten results"}]}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t2", "name": "WebFetch",
+             "input": {"url": "https://example.com/a"}}]}},
+        {"type": "result", "subtype": "success", "is_error": False,
+         "result": '{"summary": "Three picks.", "detail": "The long form."}',
+         "total_cost_usd": 0.073279, "num_turns": 4, "stop_reason": "end_turn",
+         "session_id": "2c18b2b6", "duration_api_ms": 2514,
+         "usage": {"input_tokens": 2, "output_tokens": 12,
+                   "cache_read_input_tokens": 20938,
+                   "server_tool_use": {"web_search_requests": 3,
+                                       "web_fetch_requests": 1}},
+         "permission_denials": [{"tool": "Bash"}],
+         "modelUsage": {"claude-opus-5[1m]": {"canonicalModel": "claude-opus-5",
+                                              "costUSD": 0.073279}}},
+    ])
+    r = cw._extract(types.SimpleNamespace(stdout=stream))
+    assert r["summary"] == "Three picks." and r["detail"] == "The long form."
+    assert [s["tool"] for s in r["steps"]] == ["WebSearch", "WebFetch"]
+    assert r["steps"][0]["input"] == "couch co-op 2026"           # the query
+    assert r["steps"][0]["result"] == "ten results"               # joined back
+    assert r["steps"][1]["input"] == "https://example.com/a"      # the URL
+    m = r["meta"]
+    assert m["cost_usd"] == 0.073279 and m["turns"] == 4
+    assert m["web_searches"] == 3 and m["web_fetches"] == 1
+    assert m["denials"] == 1 and m["model"] == "claude-opus-5"
+    assert m["cache_read_tokens"] == 20938 and m["cli_session"] == "2c18b2b6"
+
+    # Churn resistance: junk lines, a half-written line, and an unknown event
+    # type must cost tool spans at most - never the answer.
+    messy = ("banner text\n" + stream.splitlines()[1] + "\n"
+             '{"type": "mystery", "whatever": 1}\n{"type": "assist\n'
+             + stream.splitlines()[-1])
+    r = cw._extract(types.SimpleNamespace(stdout=messy))
+    assert r["summary"] == "Three picks." and len(r["steps"]) == 1
 
     xw = workers.CodexWorker(effort="high")
     xw.path = r"C:\x\codex.exe"

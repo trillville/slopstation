@@ -14,6 +14,9 @@ import uuid
 
 from pathlib import Path
 
+import events
+import tracing
+
 HERE = Path(__file__).resolve().parent
 JOBS_FILE = HERE.parent / "state" / "jobs.json"
 
@@ -106,7 +109,15 @@ class JobStore:
                 return False, f"{len(active)} tasks are already in flight"
             job = {"id": uuid.uuid4().hex[:8], "task": task, "status": QUEUED,
                    "provider": self.adapter.exe, "created": int(time.time()),
-                   "summary": "", "detail": "", "read": True}
+                   "summary": "", "detail": "", "read": True,
+                   # The conversation span that asked for this, frozen as a
+                   # W3C traceparent. Captured HERE because this is the last
+                   # moment it is still the active span - the worker runs on
+                   # another thread minutes later. None when tracing is off,
+                   # and it rides in the state file so a job that outlives a
+                   # restart still reports under the turn that queued it.
+                   "trace": tracing.carrier(),
+                   "session": events.current().get("session")}
             self._save(jobs + [job])
         self.log("job_queued", job=job["id"], task=task[:200])
         self._kick.set()
@@ -136,14 +147,31 @@ class JobStore:
                 self.log("job_running", job=job["id"], provider=self.adapter.exe,
                          dry_run=self.dry_run or None)
                 t0 = time.time()
-                r = self.adapter.run(self._task_text(job), self.timeout_s)
+                with tracing.job_span(job["id"], job["task"],
+                                      job.get("trace"), job.get("session"),
+                                      self.adapter.exe) as jspan:
+                    r = self.adapter.run(self._task_text(job), self.timeout_s)
+                    meta = r.get("meta") or {}
+                    for s in r.get("steps") or []:
+                        jspan.step(s.get("tool"), s.get("input"),
+                                   s.get("result"))
+                    jspan.finish(r["summary"], r["detail"], meta)
                 status = DONE if r["ok"] else FAILED
                 self._update(job["id"], status=status, read=False,
                              finished=int(time.time()),
                              summary=r["summary"], detail=r["detail"])
                 emit = self.log if r["ok"] else self.log.error
+                # What it cost and what it touched, not just that it ended.
+                # job_done used to carry status=DONE alone, so "what came
+                # back" was unanswerable from the logs at all.
                 emit("job_done" if r["ok"] else "job_failed", job=job["id"],
-                     status=status, dur_ms=round((time.time() - t0) * 1000))
+                     status=status, dur_ms=round((time.time() - t0) * 1000),
+                     session=job.get("session"), summary=r["summary"][:200],
+                     tools=len(r.get("steps") or []) or None,
+                     **{k: meta[k] for k in
+                        ("cost_usd", "turns", "web_searches", "web_fetches",
+                         "denials", "model", "stop_reason")
+                        if k in meta})
                 if self.on_done:
                     job.update(status=status, summary=r["summary"],
                                detail=r["detail"])

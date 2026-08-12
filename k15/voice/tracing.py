@@ -32,6 +32,7 @@ these attributes are built by Pipecat. Acceptable because no secret is ever a
 span attribute: what flows is speech, model names, token counts and timings.
 """
 import base64
+import contextlib
 import logging
 import os
 
@@ -191,6 +192,133 @@ def conversation_id():
     Langfuse trace AND one `session` in the JSONL. That shared value is what
     lets you jump from a trace to the logs around it."""
     return events.current().get("session") or events.new_turn()
+
+
+# --- Tier-3 background jobs ---------------------------------------------------
+#
+# A background job is queued during a conversation and finishes minutes later,
+# on the job-worker thread, long after the conversation's spans have closed.
+# Left alone its work lands nowhere: Pipecat traces the pipeline, and the
+# worker is a subprocess outside it. So the question "what did the agent
+# actually DO for three minutes" had no answer in either system - the JSONL
+# said job_done and the trace said nothing at all.
+#
+# The fix is W3C trace context. carrier() freezes the span that was active
+# when the tool fired; job_span() re-parents the worker's spans onto it, so
+# the whole job hangs under the turn that asked for it. Same mechanism as
+# cross-service tracing, used across a thread and a few minutes instead.
+#
+# ONE CONSEQUENCE, deliberately accepted: the conversation's trace latency
+# becomes wall-clock to job completion - the 91s conversation that queued a
+# 3-minute job reads as ~3 minutes. That is the truer number (the user's
+# request was not finished until the announcement) but it is not the number
+# that was there before, so it is written down here rather than discovered.
+
+
+def carrier():
+    """Freeze the active span context into a W3C traceparent dict, or None.
+
+    Stored on the job record, so it also survives a restart mid-job - the
+    reconciler picks the job back up and its spans still find their parent."""
+    if not _on:
+        return None
+    try:
+        from opentelemetry.propagate import inject
+        out = {}
+        inject(out)
+        return out or None
+    except Exception:
+        return None
+
+
+class _NullJob:
+    """What every failure path yields: same shape, does nothing."""
+
+    def step(self, *a, **kw):
+        pass
+
+    def finish(self, *a, **kw):
+        pass
+
+
+class _Job:
+    def __init__(self, tracer, span):
+        self._tracer, self._span = tracer, span
+
+    def step(self, tool, arg="", result=""):
+        """One tool call the worker made. The CLI's stream carries no
+        per-tool timings, so these are point-in-time spans in call order -
+        WHAT it did and with what, not how long each took."""
+        try:
+            with self._tracer.start_as_current_span(f"tool: {tool}") as s:
+                s.set_attribute("langfuse.observation.type", "tool")
+                s.set_attribute("gen_ai.tool.name", str(tool))
+                if arg:
+                    s.set_attribute("langfuse.observation.input", str(arg)[:2000])
+                if result:
+                    s.set_attribute("langfuse.observation.output",
+                                    str(result)[:2000])
+        except Exception:
+            pass
+
+    def finish(self, summary="", detail="", meta=None):
+        try:
+            if summary or detail:
+                self._span.set_attribute(
+                    "langfuse.observation.output",
+                    (f"{summary}\n\n{detail}" if detail else summary)[:8000])
+            for k, v in (meta or {}).items():
+                self._span.set_attribute(f"couch.job.{k}", v)
+            # gen_ai.* as well, so the usage reads as usage rather than as
+            # opaque custom fields.
+            for src, dst in (("input_tokens", "gen_ai.usage.input_tokens"),
+                             ("output_tokens", "gen_ai.usage.output_tokens"),
+                             ("model", "gen_ai.request.model")):
+                if (meta or {}).get(src) is not None:
+                    self._span.set_attribute(dst, meta[src])
+        except Exception:
+            pass
+
+
+@contextlib.contextmanager
+def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
+    """Span for one background job, re-parented onto the conversation.
+
+    Never raises and never suppresses: a tracing failure yields _NullJob and
+    the job runs exactly as before, while an exception from the job body
+    propagates untouched."""
+    cm = helper = None
+    if _on:
+        try:
+            from opentelemetry import trace as _otel
+            from opentelemetry.propagate import extract
+            tracer = _otel.get_tracer("slopstation.jobs")
+            cm = tracer.start_as_current_span(
+                "background task", context=extract(trace_carrier or {}))
+            span = cm.__enter__()
+            span.set_attribute("langfuse.observation.type", "span")
+            span.set_attribute("langfuse.observation.input", str(task)[:8000])
+            span.set_attribute("couch.job.id", str(job_id))
+            if provider:
+                span.set_attribute("couch.job.provider", str(provider))
+            sess = session or events.current().get("session")
+            if sess:
+                # Repeated on the span on purpose: Langfuse filters sessions
+                # off whatever spans carry it, and a job that outlived its
+                # conversation must still land in the same session.
+                span.set_attribute("langfuse.session.id", sess)
+                span.set_attribute("session.id", sess)
+            helper = _Job(tracer, span)
+        except Exception:
+            cm = helper = None
+    try:
+        yield helper or _NullJob()
+    finally:
+        if cm is not None:
+            try:
+                cm.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 # TODO(E5b): dual-export the same spans to Grafana Tempo. The datasource and

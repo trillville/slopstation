@@ -34,6 +34,30 @@ child spans are system time. A 25 s turn with a 3.8 s `llm` and 2.0 s `tts`
 means ~19 s of user, not a slow agent — say so rather than reporting a slow
 turn.
 
+A queued background job hangs off the same trace, under the turn that asked
+for it, even though it finishes minutes after the conversation ends:
+
+```
+conversation
+├── turn                     "research couch co-op games I don't own"
+│   └── llm                  → called background_task
+└── background task   2m14s  couch.job.cost_usd, .turns, .web_searches, .model
+    ├── tool: WebSearch      input = the query, output = what came back
+    ├── tool: WebFetch       input = the URL
+    └── …
+```
+
+So **trace latency includes the job's wall-clock** — a 90-second conversation
+that queued a 3-minute job reads as ~3 minutes. That is the honest number
+(the request wasn't finished until the announcement), but don't report it as
+a slow conversation. The `turn` spans are the conversational latency.
+
+Tool spans are point-in-time: the CLI's stream carries no per-tool timings,
+so they show **what** the worker called and with what, not how long each
+took. `couch.job.denials` > 0 means it tried something the allowlist blocked
+— worth reading. A job with `stream_fallback` in its metadata ran on an older
+CLI output format and will have no tool spans at all.
+
 ## Commands
 
 | | |
@@ -87,9 +111,8 @@ Neither is the whole story.
   401 usually means the wrong region, not a wrong key.
 - **Traces flush on a batch timer**, so give a session ~30 s after it ends
   before concluding a trace is missing.
-- **Only the voice pipeline is traced.** The `--text` REPL, the chord lane
-  and Tier-3 background jobs are not — those live in the logs. If a question
-  is about a background job, use the `grafana-logs` skill.
+- **The `--text` REPL and the chord lane are not traced** — those live in
+  the logs. Background jobs ARE, see below.
 - **Free tier: 50k units/month**, where a unit is any trace, observation or
   score. A voice session is ~1 + 4×(turn + 3 services) ≈ 17. Not a constraint
   at this volume, but do not build polling loops.
