@@ -74,31 +74,38 @@ try {
     if (-not (Wait-For { Get-Process steam -ErrorAction SilentlyContinue } 20 'Steam running')) {
         throw 'Steam failed to start'
     }
+    # Read this BEFORE Big Picture takes the foreground: it is the game the
+    # last session left running, and 5b puts the user back into it.
     $running = Get-RunningAppId
-    if ($running) {
-        # A game outlived the last teardown, and it is what the couch is for.
-        # Leave it in front rather than yanking Big Picture on top of it -
-        # Big Picture was still opened above, so quitting the game lands in
-        # the TV shell instead of the desktop. Nothing here fights the game
-        # for the foreground; the library window simply can no longer be what
-        # ends up holding the controller.
-        $focused = $true
-        Log "game $running still running - leaving it in front"
-    } else {
-        $wsh = New-Object -ComObject WScript.Shell
-        $focused = Wait-For { $wsh.AppActivate($CG.BpmWindow) } 20 'Big Picture focused'
-        if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
-    }
+    $wsh = New-Object -ComObject WScript.Shell
+    $focused = Wait-For { $wsh.AppActivate($CG.BpmWindow) } 20 'Big Picture focused'
+    if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
+
+    # 5b. Resume the game the last session left running.
+    #
+    # There was briefly a branch here that SKIPPED the Big Picture focus when a
+    # game was up, on the theory that the game still held the foreground and
+    # should keep it. It doesn't: ending a session switches the display profile,
+    # and that minimizes the game on the way out. So "leave it in front" was a
+    # no-op over a minimized window - measured doing exactly nothing, logging
+    # "leaving it in front" while fg read 'K15 - Remote Desktop Connection'.
+    # The session only worked because Big Picture came up regardless.
+    #
+    # Bringing the game back is what was actually wanted: end a session
+    # mid-game, start another, land back in the game instead of at the shell.
+    if ($running) { Resume-Game $running }
 
     # 6. Ready marker - the K15 switches the TV input only after seeing this
     #
-    # First, MEASURE the foreground rather than trusting the branch above to
-    # have got it right. The game branch cannot verify what it did (there is no
-    # reliable appid -> window mapping), so without this it would assert
-    # focused=True the way the old code did - and an assertion is exactly what
-    # let this bug survive three sessions: `focused=True` sat in the ready
-    # event while the controller reached nothing. The desktop library window in
-    # front is the one state we KNOW is broken, so it can never read as success.
+    # First, MEASURE the foreground instead of trusting the steps above to have
+    # got it right. AppActivate returning true and Resume-Game returning
+    # quietly are both claims, not observations - and an unchecked claim is
+    # exactly what let this bug survive three sessions: `focused=True` sat in
+    # the ready event the whole time the controller was reaching nothing. The
+    # desktop library window in front is the one state we KNOW is broken, so it
+    # can never read as success. Sampled here, which is a second or so before
+    # the K15 flips the TV input, so run desk-side it may name whatever you
+    # were doing - it is conclusive when it says 'Steam', suggestive otherwise.
     $fg = Get-ForegroundTitle
     if ($fg -eq $CG.SteamWindow) {
         $focused = $false

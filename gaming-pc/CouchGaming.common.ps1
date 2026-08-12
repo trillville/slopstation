@@ -238,6 +238,34 @@ function Hide-DesktopSteam {
 # the first launch instead of the fourth.
 function Get-ForegroundTitle { [CG.Win]::ForegroundTitle() }
 
+# Steam's install path is the registry's business, not a hardcoded path.
+# Shared with Launch-Game, which needs the same exe for the same -applaunch.
+function Get-SteamExe {
+    $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath -replace '/', '\'
+    $exe = Join-Path $steam 'steam.exe'
+    if (-not (Test-Path $exe)) { throw "steam.exe not found at $exe" }
+    $exe
+}
+
+# Pull an ALREADY-RUNNING game back to the foreground. -applaunch on a running
+# appid makes Steam focus the existing instance rather than start a second one,
+# which is the only handle we have on the game's window: there is no reliable
+# appid -> HWND mapping to go and activate it directly.
+#
+# Best-effort by rule. Big Picture is already up and focused by the time this
+# runs, which is a working session on its own - a resume that fails must cost
+# the user nothing but the convenience.
+function Resume-Game([int]$AppId) {
+    try {
+        & (Get-SteamExe) -applaunch $AppId
+        Log "resumed game $AppId (-applaunch on the running instance)"
+        Write-CgEvent 'game_resumed' @{ appid = $AppId }
+    } catch {
+        Log "WARNING: could not resume game $AppId - Big Picture is up, resume it by hand ($_)"
+        Write-CgEvent 'game_resume_failed' @{ appid = $AppId; err = "$_" } 'warn'
+    }
+}
+
 # Apply a DisplayMagician profile shortcut, poll $Until to verify it took, and
 # kill DisplayMagician after every attempt - verified or not.
 function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$TimeoutSec = 20, [int]$Attempts = 1, [string]$What = 'profile applied') {

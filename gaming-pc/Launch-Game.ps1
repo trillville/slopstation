@@ -26,11 +26,8 @@ try {
         }
         $id = "$raw".Trim()
         if ($id -notmatch '^\d{1,10}$') { throw "invalid appid in marker: '$id'" }
-        $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam').SteamPath -replace '/', '\'
-        $exe = Join-Path $steam 'steam.exe'
-        if (-not (Test-Path $exe)) { throw "steam.exe not found at $exe" }
         Log "launching appid $id (-applaunch, into the running Big Picture session)"
-        & $exe -applaunch $id
+        & (Get-SteamExe) -applaunch $id
         Log 'launch handed to Steam'
         Write-CgEvent 'game_launched' @{ appid = [long]$id }
     }

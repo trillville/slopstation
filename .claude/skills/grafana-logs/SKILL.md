@@ -81,7 +81,7 @@ Time to READY, the number the whole system is judged on:
 - **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **jobs**: `job_queued` `job_running` `job_done` `job_failed` `job_announced`
-- **gamepc**: `enter_start` `profile_applied` `puck_claimed` `ready` `enter_failed` `exit_done` `game_launched`
+- **gamepc**: `enter_start` `profile_applied` `puck_claimed` `ready` (carries `focused` + `fg`, the window that actually held the foreground) `enter_failed` `exit_done` `game_launched` `game_resumed`
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.
