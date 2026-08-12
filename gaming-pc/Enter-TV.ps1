@@ -51,19 +51,43 @@ try {
     Start-Sleep -Milliseconds 500   # audio-device settle margin
     Stop-DisplayMagician
 
-    # 5. Big Picture, forced to the foreground
+    # 5. Big Picture, and the foreground policy that decides whether the
+    # session is usable at all. Steam delivers controller input to the FOCUSED
+    # window, so this step is not cosmetic.
+    #
+    # It used to try 'Steam Big Picture Mode' and then fall back to 'Steam'.
+    # That fallback matches the DESKTOP library window, which is present and
+    # visible the whole time Steam is running - Exit means to minimize it on
+    # teardown but that guard had never once fired (see Hide-DesktopSteam).
+    # Worse, the fallback succeeding on the first pass set $focused and broke
+    # out of the retry loop, so the wait for Big Picture never actually waited.
+    #
+    # Four launches, one transcript line apart: the one that logged
+    # focused 'Steam Big Picture Mode' worked; the three that logged 'Steam'
+    # gave a controller that chimed on every button and moved nothing on the
+    # TV. The discriminator was a game left running by the previous session
+    # (Exit closes Big Picture but never quits games): with a game up, Big
+    # Picture has no window ~1 s after the URL handoff, so the fallback won
+    # every time.
+    Hide-DesktopSteam
     Start-Process 'steam://open/bigpicture'
     if (-not (Wait-For { Get-Process steam -ErrorAction SilentlyContinue } 20 'Steam running')) {
         throw 'Steam failed to start'
     }
-    Start-Sleep 1
-    $wsh = New-Object -ComObject WScript.Shell
-    $focused = $false
-    for ($i = 0; -not $focused -and $i -lt 5; $i++) {
-        foreach ($t in 'Steam Big Picture Mode','Steam') {
-            if ($wsh.AppActivate($t)) { $focused = $true; Log "focused '$t'"; break }
-        }
-        if (-not $focused) { Start-Sleep 1 }
+    $running = Get-RunningAppId
+    if ($running) {
+        # A game outlived the last teardown, and it is what the couch is for.
+        # Leave it in front rather than yanking Big Picture on top of it -
+        # Big Picture was still opened above, so quitting the game lands in
+        # the TV shell instead of the desktop. Nothing here fights the game
+        # for the foreground; the library window simply can no longer be what
+        # ends up holding the controller.
+        $focused = $true
+        Log "game $running still running - leaving it in front"
+    } else {
+        $wsh = New-Object -ComObject WScript.Shell
+        $focused = Wait-For { $wsh.AppActivate('Steam Big Picture Mode') } 20 'Big Picture focused'
+        if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
     }
 
     # 6. Ready marker - the K15 switches the TV input only after seeing this
@@ -71,7 +95,11 @@ try {
     Log 'READY'
     # The milestone the whole system is gated on: dur_ms here IS time-to-READY,
     # which is the distribution the launch-health dashboard is built from.
-    Write-CgEvent 'ready' @{ focused = $focused }
+    # Warn-level when nothing took the foreground: the TV still switches (a
+    # session you can rescue with one click beats no session), but the failure
+    # this whole step exists to prevent looks EXACTLY like success from here,
+    # so it must not be logged as one. `ready focused=False` is the alert.
+    Write-CgEvent 'ready' @{ focused = $focused } $(if ($focused) { 'info' } else { 'warn' })
 }
 catch {
     # The failure path obeys the same rules as the success path: kill

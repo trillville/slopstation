@@ -41,11 +41,14 @@ else {
     Write-CgEvent 'puck_release_failed' @{} 'warn'
 }
 
-# Repaint guard: minimize desktop Steam so it re-lays-out fresh (at the ultrawide's
-# resolution) the next time it's opened - prevents the stale-4K garbled window
-Add-Type -Namespace P2 -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
-$sp = Get-Process steam -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if ($sp) { [void][P2.W]::ShowWindow($sp.MainWindowHandle, 6); Log 'Steam minimized' }   # 6 = SW_MINIMIZE
+# Repaint guard: minimize desktop Steam so it re-lays-out fresh (at the
+# ultrawide's resolution) the next time it's opened - prevents the stale-4K
+# garbled window. Shared with Enter, which minimizes it for the OTHER reason
+# (see the lib): the desktop library window must never be what holds the
+# controller. NOTE this starts actually working now - the version that lived
+# here targeted the steam process's MainWindowHandle, which is 0 whenever
+# Steam is closed to the tray, so it had never once fired in production.
+Hide-DesktopSteam
 
 Clear-ReadyMarker
 Log 'done'

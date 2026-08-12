@@ -156,6 +156,68 @@ function Stop-DisplayMagician {
     Get-Process DisplayMagician -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
+# Steam's own record of what is running; 0 = nothing. Same registry value the
+# Dispatch `playing` verb answers from, so the PC cannot disagree with itself
+# about whether a game is up.
+function Get-RunningAppId {
+    $id = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
+    if ($id) { [int]$id } else { 0 }
+}
+
+if (-not ('CG.Win' -as [type])) {
+    # WindowByTitle rather than the obvious FindWindow(null, title): verified on
+    # this hardware, FindWindow returns 0 for windows EnumWindows reports with
+    # exactly that title. Steam's UI is CEF, drawn by steamwebhelper.exe - which
+    # is also why the steam.exe MainWindowHandle the original guard used reads 0
+    # and why that guard never fired. Enumerating is the thing that works.
+    # Visible-only on purpose: closed to the tray there is nothing to put away.
+    Add-Type -Namespace CG -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder s, int n);
+[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+delegate bool EnumProc(IntPtr h, IntPtr p);
+public static IntPtr WindowByTitle(string want) {
+    IntPtr hit = IntPtr.Zero;
+    EnumWindows((h, p) => {
+        if (!IsWindowVisible(h)) return true;
+        var sb = new System.Text.StringBuilder(300);
+        GetWindowTextW(h, sb, 300);
+        if (sb.ToString() == want) { hit = h; return false; }
+        return true;
+    }, IntPtr.Zero);
+    return hit;
+}
+'@
+}
+
+# THE window a couch session must never hand the controller to. Steam delivers
+# input to the FOCUSED window, so a session holding the desktop library window
+# plays a navigation sound per button press and moves nothing on the TV - and
+# the Steam button still works, because Steam Input handles that one globally.
+# That combination is what makes the failure so baffling from the couch.
+#
+# Targeted by EXACT window title, NOT by the steam process's MainWindowHandle
+# the way the original repaint guard did. That is why the original never once
+# fired: Steam closed to the tray reports MainWindowHandle = 0, and across
+# every exit in the logs the 'desktop Steam minimized' line is simply absent.
+# An exact title match also cannot hit 'Steam Big Picture Mode', so unlike the
+# handle version this is safe to call at any point in a session.
+#
+# Deliberately the same window AppActivate('Steam') used to focus: the thing
+# that stole the controller is now the thing that gets put away.
+#
+# Minimizing rather than merely not-focusing also keeps Exit's original intent:
+# a library window laid out at 4K comes back garbled when reopened at the
+# ultrawide's resolution.
+function Hide-DesktopSteam {
+    $h = [CG.Win]::WindowByTitle('Steam')
+    if ($h -ne [IntPtr]::Zero) {
+        [void][CG.Win]::ShowWindow($h, 6)      # 6 = SW_MINIMIZE
+        Log 'desktop Steam minimized'
+    }
+}
+
 # Apply a DisplayMagician profile shortcut, poll $Until to verify it took, and
 # kill DisplayMagician after every attempt - verified or not.
 function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$TimeoutSec = 20, [int]$Attempts = 1, [string]$What = 'profile applied') {
