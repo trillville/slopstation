@@ -110,11 +110,16 @@ def setup(cfg, secrets, log):
     try:
         from pipecat.utils.tracing.setup import setup_tracing
 
-        # OTel's exporters log every failed export at ERROR through stdlib
-        # logging, which would put a stack trace on the console once a minute
-        # behind a dead uplink. The BatchSpanProcessor already drops and
-        # retries on its own; we do not need to hear about it.
-        logging.getLogger("opentelemetry").setLevel(logging.CRITICAL)
+        # Export failures stay VISIBLE. The first draft silenced this logger
+        # to CRITICAL to keep a dead uplink from putting a stack trace on the
+        # console every minute - which would also have hidden the only
+        # message that says "your keys are wrong" or "wrong region", forever.
+        # That is precisely the trap Alloy's loki.write set earlier the same
+        # day: a component reporting healthy while every push was rejected,
+        # and four rounds of guessing before someone read the log. Noise is
+        # recoverable; a silent misconfiguration is not. WARNING keeps the
+        # per-export chatter down without touching the errors that matter.
+        logging.getLogger("opentelemetry").setLevel(logging.WARNING)
 
         ok = setup_tracing(service_name="slopstation-voice",
                            exporter=_exporter(cfg, secrets),
