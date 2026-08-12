@@ -510,7 +510,20 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
                     tool_impls(dispatcher, log, jobs=jobs)),
                 custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
-        stages += [user_agg, _make_llm(voice, secrets, system_instruction(cfg)),
+        llm = _make_llm(voice, secrets, system_instruction(cfg))
+        if native:
+            # Pipecat 1.7 has no handling for provider-executed tools, so a
+            # web_search streams past unrecorded and never reaches the
+            # context - the model then cannot tell it searched. Only wire
+            # this where such tools are actually enabled.
+            import llm_audit
+            if llm_audit.install(llm, log, tracing=tracing, context=context):
+                log("lane_up", what="search_audit", tools=len(native))
+            else:
+                log.warn("lane_disabled", what="search_audit",
+                         reason="pipecat client shape moved - searches will "
+                                "be invisible again")
+        stages += [user_agg, llm,
                    _make_tts(voice, secrets), transport.output(), asst_agg]
     else:
         stages += [transport.output()]

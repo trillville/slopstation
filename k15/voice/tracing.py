@@ -280,6 +280,28 @@ class _Job:
             pass
 
 
+def tool_span(kind, query, status=None):
+    """A provider-executed tool call, recorded where it happened.
+
+    Point-in-time and parented to whatever span is open - inside the voice
+    pipeline that is Pipecat's llm span, so a search lands beside the turn
+    that ran it. Pipecat cannot do this itself: server-side tools are not in
+    its Responses handler at all (see llm_audit.py)."""
+    if not _on:
+        return
+    try:
+        from opentelemetry import trace as _otel
+        tracer = _otel.get_tracer("slopstation.llm")
+        with tracer.start_as_current_span(f"tool: {kind}") as s:
+            s.set_attribute("langfuse.observation.type", "tool")
+            s.set_attribute("gen_ai.tool.name", str(kind))
+            s.set_attribute("langfuse.observation.input", str(query)[:2000])
+            if status:
+                s.set_attribute("langfuse.observation.output", str(status))
+    except Exception:
+        pass
+
+
 @contextlib.contextmanager
 def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
     """Span for one background job, re-parented onto the conversation.
