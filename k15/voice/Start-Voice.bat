@@ -22,14 +22,9 @@ if not defined STARTED (
 exit /b
 
 :main
-rem Gate on a sentinel written only after pip succeeds - a half-built venv
-rem (network died mid-install) must re-install, not skip forever on "python.exe
-rem exists". Bail out loudly on bootstrap failure instead of crash-looping.
-if not exist ".venv\deps-ok" (
-  echo [supervisor] first run: creating venv + installing pinned deps...
+if not exist ".venv\Scripts\python.exe" (
+  echo [supervisor] first run: creating venv...
   python -m venv .venv || (echo [supervisor] venv create failed - is python on PATH? & pause & exit /b 1)
-  .venv\Scripts\python -m pip install -r requirements.txt || (echo [supervisor] pip install failed - fix network and rerun & pause & exit /b 1)
-  echo ok> .venv\deps-ok
 )
 
 rem Mic array reboot-hang workaround; no-ops until xvf_host is installed here
@@ -41,6 +36,27 @@ if exist "xvf_host\xvf_host.exe" (
 
 python ..\events.py emit supervisor start what=voice >nul 2>&1
 :agent
+rem Dependency gate, INSIDE the restart loop and content-addressed.
+rem
+rem The sentinel is a COPY of requirements.txt, not the word "ok", so the
+rem question it answers is "are the installed pins the ones on disk?" rather
+rem than "did an install ever succeed?". A git pull that changes pins
+rem therefore installs itself on the next agent launch, which is the whole
+rem promise of Start-K15.bat being the one thing to run after a pull.
+rem
+rem It lives here rather than at :main because Start-K15.bat reloads by
+rem killing the AGENT - the supervisor loops back to :agent and never
+rem revisits :main, so a gate up there is unreachable on every path except a
+rem cold start. That is exactly how the OTel pins shipped and did not install.
+fc /b requirements.txt ".venv\deps-ok" >nul 2>&1
+if errorlevel 1 (
+  echo [supervisor] pins changed - installing (this takes a couple of minutes)...
+  .venv\Scripts\python -m pip install -r requirements.txt || (echo [supervisor] pip install failed - fix network and rerun & pause & exit /b 1)
+  rem Sentinel written only AFTER pip succeeds: a half-built venv (network
+  rem died mid-install) must retry, not skip forever.
+  copy /y requirements.txt ".venv\deps-ok" >nul
+  python ..\events.py emit supervisor deps_installed what=voice >nul 2>&1
+)
 .venv\Scripts\python voice_agent.py %*
 rem Capture the exit code FIRST: every command after this resets %errorlevel%,
 rem so reading it twice is reading the echo's success the second time.
