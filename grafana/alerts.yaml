@@ -173,9 +173,16 @@ groups:
         execErrState: OK
         annotations:
           summary: >-
-            A lane has restarted more than 3 times in 10 minutes - its
+            ONE lane has restarted more than 3 times in 10 minutes - its
             supervisor is relaunching something that keeps dying. Check the
             `what` and `code` fields, then that lane's recent errors.
+        # `sum by (what)` is load-bearing, not tidiness. Start-K15.bat reloads
+        # BOTH lanes at once, so an ungrouped count sees 2 restarts per
+        # reload and two reloads inside ten minutes trips a >3 threshold -
+        # measured on real data: an ordinary git-pull-and-reload evening
+        # peaked at 4 and would have paged. Grouped, each lane peaked at 2.
+        # A genuine crash loop hammers ONE lane every 10s, so per-lane is
+        # both the correct shape and immune to routine reloads.
         labels:
           severity: critical
         data:
@@ -186,7 +193,7 @@ groups:
               refId: A
               queryType: instant
               expr: >-
-                sum(count_over_time({service="k15", lane="supervisor", env="prod"}
+                sum by (what) (count_over_time({service="k15", lane="supervisor", env="prod"}
                 | json | event="restart" [10m]))
           - refId: B
             datasourceUid: __expr__
