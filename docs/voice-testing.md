@@ -290,15 +290,34 @@ production to the winner.
 prompt that behaves on one model can act on a question under another, and
 that probe is the check — see below.
 
-## 10a. Asking about an action must not take it
+## 10a. Behaviour probes — `bench/`
 
 ```
-.venv\Scripts\python bench\probe_intent.py --provider openai
+.venv\Scripts\python bench\probe_intent.py     --provider openai
+.venv\Scripts\python bench\probe_task_brief.py --provider openai
 ```
 
-Costs a few cents and calls the real model, so it is not in the blind suite.
-Run it after any change to `RULES`, after a provider or model switch, and
-before trusting a new tool with a side effect.
+Each costs a few cents and calls the real model, so neither is in the blind
+suite. Run both after any change to `RULES` or a tool description, after a
+provider or model switch, and before trusting a new tool with a side effect.
+
+The blind suite can prove the tool boundary refuses a bad appid. Only these
+can prove the model doesn't reach for a destructive tool when asked a
+question, or write the background agent a brief that cannot be satisfied.
+
+**`probe_task_brief`** guards the second one. On 2026-08-11 the user asked
+for couch co-op games they do *not* own and the assistant queued: *"Research
+Steam couch co-op games the user does not currently own, using only games in
+the provided catalog."* The catalog **is** their library, so that asks for
+games they don't own drawn only from games they own — an empty set. The
+cause was a rule leak: `RULES` binds the assistant to the library, the
+background agent is deliberately not bound, and the tool asked for "every
+constraint the user said" so the model exported its own. Before the fix,
+*"what should I buy next"* produced an unusable brief **5 times out of 5**,
+three of which pasted the entire library in and said "only consider games in
+this catalog".
+
+**`probe_intent`** guards the first.
 
 This exists because on 2026-08-11 a live 25-minute session ended when the
 user asked *"what's the tool you would run to take me out of a gaming

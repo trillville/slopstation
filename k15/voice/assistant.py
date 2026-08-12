@@ -24,7 +24,14 @@ RULES = (
     "Answers are SPOKEN aloud: plain text only, no markdown, no emoji, at "
     "most two short sentences unless asked for detail. For list questions "
     "lead with the count, name at most three (installed first, then most "
-    "played), and offer the rest. Only discuss games from the catalog below. "
+    "played), and offer the rest. The catalog below is the user's own "
+    "library - what they ALREADY own. Questions about games they do not own "
+    "(what to buy, what's new, what's like this) are normal and legitimate; "
+    "queue a background task for anything that needs real digging. What you "
+    "must never do is name a game you have not seen in the catalog or in a "
+    "tool result - inventing plausible-sounding titles is the worst failure "
+    "available to you, and it has happened. If you cannot check, say you'd "
+    "have to look it up. "
     "Use tools for every action; appids come only from the catalog. "
     "Tell a QUESTION ABOUT an action apart from an INSTRUCTION to take it. "
     "'What's the command to end the session', 'what happens if I say that', "
@@ -72,7 +79,8 @@ def system_instruction(cfg):
     if voice["assistantWebSearch"]:
         tail.append(
             "You can search the web for current facts the catalog can't "
-            "answer (release dates, game news, prices). Search only when the "
+            "answer (release dates, game news, prices, and games the user "
+            "does not own). Search only when the "
             "catalog genuinely can't answer, and keep the reply to two short "
             "sentences. Never announce or offer to search - just search and "
             "state the result. Your reply is read aloud by TTS: state facts in "
@@ -187,14 +195,24 @@ TOOL_DEFS = [
     ("get_now_playing", "What game is currently running, if any.", {}, []),
     ("get_game_details", "Details (tags, description, score) for one appid.",
      {"appid": {"type": "integer"}}, ["appid"]),
-    ("background_task", "Queue a background agent for work that needs real "
-     "research or many steps (compare reviews, find deals, dig into "
-     "something) - minutes, not seconds. The result is announced aloud "
-     "later. After queueing, tell the user you'll get back to them. Never "
-     "use it for anything the catalog or a quick search answers.",
+    ("background_task", "Queue the background research agent for work that "
+     "needs real research or many steps (compare reviews, find deals, what "
+     "to buy next, what's coming out, dig into something) - minutes, not "
+     "seconds. It is a full agent with web access and its own copy of the "
+     "library, and it is NOT restricted to the library the way you are - "
+     "open-ended questions about games the user does not own are exactly "
+     "what it is for. The result is announced aloud later. After queueing, "
+     "tell the user you'll get back to them. Never use it for anything the "
+     "catalog or a quick search already answers.",
      {"task": {"type": "string",
-               "description": "self-contained task description for the "
-               "background agent - include every constraint the user said"}},
+               "description": "A self-contained brief: what the user "
+               "actually wants, plus any constraint THEY stated. Do not add "
+               "constraints of your own, and never tell it to stay inside "
+               "the library or list the library for it - the library is what "
+               "the user ALREADY owns, so 'recommend games I don't own, "
+               "using only my library' asks for an empty set. When they want "
+               "something new, write 'exclude games already in the library' "
+               "instead; the agent can read the library itself."}},
      ["task"]),
 ]
 
