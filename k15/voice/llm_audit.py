@@ -27,8 +27,6 @@ honest seam is to wrap the iterator: every event still reaches Pipecat
 untouched and in order, we only look. Nothing here reimplements Pipecat's
 handling, so its parsing can change freely without breaking this.
 """
-import events
-
 log = None                                      # set by install()
 
 
