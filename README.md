@@ -21,6 +21,7 @@ separate process and survives anything the voice stack does.
 | [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. |
 | [voice-control-design.md](docs/voice-control-design.md) | Why the voice stack is shaped the way it is — pipeline, alternatives weighed, costs, edges. |
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
+| [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops - launches, errors, liveness, both machines) and `langfuse-traces` (agent - what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 | [grafana-implementation.md](docs/grafana-implementation.md) | Setting up alerts, dashboards and the gaming PC shipper: this rig's values, the rules, the drills, and what to check when nothing arrives. |
 | [observability-design.md](docs/observability-design.md) | Why it is shaped this way — structured events, the `turn` id, what was weighed and what each phase's build actually found. Logs are live; Langfuse agent traces are still to wire. |
 
