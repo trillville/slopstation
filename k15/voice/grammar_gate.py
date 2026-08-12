@@ -302,5 +302,15 @@ class GrammarGate(FrameProcessor):
                     await self._earcon("fail")
                     return
                 self.log("gate_miss", text=text, fallback="assistant")
+                # What the user ACTUALLY said, handed over the same way the
+                # turn id is, and for the same reason: only this processor
+                # knows it, and the assistant's tool call happens in another
+                # task. Captured after stripping, so it is the command and
+                # not "hey jarvis, ...". A queued job records this alongside
+                # the brief the model writes, so replaying the job later can
+                # quote the user instead of attributing the model's own
+                # wording to them (voice_agent.job_messages).
+                if self.jobs is not None:
+                    self.jobs.asked = text
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

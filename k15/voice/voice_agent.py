@@ -344,9 +344,20 @@ def job_messages(jobs):
         detail = (j.get("detail") or "")[:jobs_mod.CONTEXT_DETAIL_CHARS]
         if detail and detail != j["summary"]:
             said += " " + detail
-        msgs += [{"role": "user",
-                  "content": f"(background task) {j['task']}"},
-                 {"role": "assistant", "content": said}]
+        asked = (j.get("asked") or "").strip()
+        if asked:
+            # A true exchange: what the user said, then what came back.
+            msgs += [{"role": "user", "content": asked},
+                     {"role": "assistant", "content": said}]
+        else:
+            # No transcript to quote (chord lane, REPL, or a job recorded
+            # before `asked` existed). State it as history rather than
+            # inventing a user turn - putting the model's own brief in the
+            # user's mouth is what made "using only games in the provided
+            # catalog" read as a standing instruction for six hours.
+            msgs += [{"role": "system",
+                      "content": f"(earlier background task: {j['task']}) "
+                                 f"You reported: {said}"}]
     return msgs
 
 

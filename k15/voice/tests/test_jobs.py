@@ -285,12 +285,46 @@ def main():
     # Job results reach the assistant as prior conversation, so a follow-up
     # ("which was cheapest?") lands on a model that already knows.
     import voice_agent
+    # The replay must never put the MODEL's words in the USER's mouth. It
+    # used to seed the generated brief as role=user, so a bad brief ("using
+    # only games in the provided catalog") became a standing instruction
+    # attributed to the user for the whole CONTEXT_AGE_S window - observed
+    # in a live session, trace 50452ed5.
     msgs = voice_agent.job_messages(store)
-    assert msgs and msgs[0]["role"] == "user" and msgs[1]["role"] == "assistant"
-    assert "(background task)" in msgs[0]["content"]
-    assert len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
+    assert msgs and len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
+    brief = store.for_context()[0]["task"]
+    for m in msgs:
+        if m["role"] == "user":
+            assert brief not in m["content"], \
+                "the model's own brief is being replayed as the user's words"
     assert voice_agent.job_messages(None) == []          # worker lane off
-    print("  job_messages: results seeded into the assistant's history")
+
+    # With a transcript: a true exchange, quoting the person.
+    store.asked = "find me some couch co-op games"
+    store.enqueue("Research couch co-op titles, excluding owned games.")
+    job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
+    store._update(job["id"], status=jobs_mod.DONE, read=True,
+                  finished=int(time.time()), summary="Found three.",
+                  detail="The long form.")
+    msgs = voice_agent.job_messages(store)
+    pair = [m for m in msgs if m["role"] in ("user", "assistant")][-2:]
+    assert pair[0] == {"role": "user",
+                       "content": "find me some couch co-op games"}, pair
+    assert "Found three." in pair[1]["content"]
+
+    # Without one (chord lane, REPL, or a record predating `asked`): stated
+    # as history, not as something the user said.
+    store.asked = None
+    store.enqueue("Some brief nobody spoke aloud.")
+    job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
+    store._update(job["id"], status=jobs_mod.DONE, read=True,
+                  finished=int(time.time()), summary="Done.", detail="")
+    msgs = voice_agent.job_messages(store)
+    assert not any("Some brief nobody spoke aloud." in m["content"]
+                   for m in msgs if m["role"] == "user")
+    assert any(m["role"] == "system" and "Some brief nobody spoke aloud."
+               in m["content"] for m in msgs), msgs
+    print("  job_messages: the user is quoted, the model's brief never is")
     print("  announcer: defers for sessions, marks read only after full playback")
 
     # latest_result orders by COMPLETION time, not file position: _save

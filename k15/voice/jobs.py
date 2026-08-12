@@ -54,6 +54,11 @@ class JobStore:
         self.dry_run = dry_run
         self._lock = threading.Lock()
         self._kick = threading.Event()
+        # The user's last utterance, written by GrammarGate. A job stores it
+        # so the replay can quote the person instead of the model - see
+        # enqueue and voice_agent.job_messages. None on the chord lane and
+        # the REPL, which have no transcript to quote.
+        self.asked = None
 
     # -- the state file (all access under the lock) ---------------------------
 
@@ -117,7 +122,14 @@ class JobStore:
                    # and it rides in the state file so a job that outlives a
                    # restart still reports under the turn that queued it.
                    "trace": tracing.carrier(),
-                   "session": events.current().get("session")}
+                   "session": events.current().get("session"),
+                   # What the USER said, next to the brief the MODEL wrote.
+                   # Keeping both is the point: the replay needs a true user
+                   # turn, and the brief is the model's own words - presenting
+                   # it as the user's put a bad instruction ("using only games
+                   # in the provided catalog") into six hours of context as
+                   # though it had been asked for.
+                   "asked": self.asked}
             self._save(jobs + [job])
         self.log("job_queued", job=job["id"], task=task[:200])
         self._kick.set()
