@@ -50,7 +50,10 @@ rem revisits :main, so a gate up there is unreachable on every path except a
 rem cold start. That is exactly how the OTel pins shipped and did not install.
 fc /b requirements.txt ".venv\deps-ok" >nul 2>&1
 if errorlevel 1 (
-  echo [supervisor] pins changed - installing (this takes a couple of minutes)...
+  rem NO PARENTHESES in echo text inside a parenthesised block: an unescaped
+  rem ')' closes the block early and cmd dies with "... was unexpected at this
+  rem time", taking the whole supervisor with it before it starts.
+  echo [supervisor] pins changed - installing pinned deps, takes a minute or two...
   .venv\Scripts\python -m pip install -r requirements.txt || (echo [supervisor] pip install failed - fix network and rerun & pause & exit /b 1)
   rem Sentinel written only AFTER pip succeeds: a half-built venv (network
   rem died mid-install) must retry, not skip forever.
