@@ -2,7 +2,11 @@
 # Upgrades are deliberate, never casual: Pipecat moves weekly, so re-read the
 # new version's docs for every service used and re-run tests/ before bumping.
 # The chord listener stays on system python; this venv is voice's alone.
-pipecat-ai[local,silero,deepgram,anthropic,openai]==1.7.0
+pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.7.0
+# Langfuse's OTLP endpoint is HTTP-only - it does not accept gRPC, and
+# pipecat's own tracing example imports the gRPC exporter. Pinning the
+# http one explicitly so the wrong import cannot be resolved by accident.
+opentelemetry-exporter-otlp-proto-http==1.44.0
 openwakeword==0.6.0
 hassil==3.11.0
 rapidfuzz==3.14.5
@@ -10,4 +14,5 @@ pyserial==3.5
 pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
 # Transitively pinned by the above (recorded for the as-built):
 #   pyaudio 0.2.14 (cp313 win_amd64 wheel exists), onnxruntime 1.24.4,
-#   deepgram-sdk 7.6.0, anthropic 0.121.0, openai 2.53.0, numpy 2.4.6
+#   deepgram-sdk 7.6.0, anthropic 0.121.0, openai 2.53.0, numpy 2.4.6,
+#   opentelemetry-{api,sdk,proto,semantic-conventions} 1.44.0

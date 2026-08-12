@@ -216,7 +216,13 @@ def emit(lane, event, level=INFO, /, **fields):
     global _last_day
     try:
         now = datetime.now(timezone.utc)
-        day = now.strftime("%Y%m%d")
+        # Filename uses the LOCAL date; every ts inside stays UTC. Mixed on
+        # purpose: the line timestamps are for machines and must be
+        # unambiguous, but the filename is for a human opening the folder,
+        # and "today's log is named tomorrow" from 5pm onwards (UTC-7) is a
+        # genuinely confusing thing to hand someone at 9pm. Retention prunes
+        # by mtime, so naming never affects correctness.
+        day = time.strftime("%Y%m%d")
         ctx = _ctx.get()
         rec = {
             "ts": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",

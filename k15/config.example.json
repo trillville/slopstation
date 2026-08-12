@@ -38,6 +38,7 @@
     "workerModelOpenai": "gpt-5.6-terra",
     "workerEffort": "high",
     "workerTimeoutS": 600,
+    "langfuseHost": "https://us.cloud.langfuse.com",
     "followUpAfterAnnounce": true,
     "inputs": {
       "apple tv": "hdmi1", "appletv": "hdmi1", "the apple tv": "hdmi1",

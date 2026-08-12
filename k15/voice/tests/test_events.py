@@ -139,7 +139,7 @@ def main():
     events._last_day = None
     events.start_heartbeat("listener", interval_s=0.05, source="unit")
     time.sleep(0.3)
-    beats = [r for r in read(tmp / f"test-{time.strftime('%Y%m%d')}.jsonl")
+    beats = [r for r in read(sorted(tmp.glob("test-*.jsonl"))[-1])
              if r["event"] == "heartbeat"]
     assert len(beats) >= 3, f"only {len(beats)} beats in 0.3s at 50ms"
     assert beats[0]["lane"] == "listener" and beats[0]["source"] == "unit"
@@ -152,7 +152,7 @@ def main():
     events._last_day = None
     assert events._cli(["emit", "supervisor", "restart",
                         "what=listener", "code=3", "--level", "warn"]) == 0
-    rec = read(tmp / f"test-{time.strftime('%Y%m%d')}.jsonl")[-1]
+    rec = read(sorted(tmp.glob("test-*.jsonl"))[-1])[-1]
     assert rec["event"] == "restart" and rec["level"] == "warn"
     assert rec["code"] == 3, f"cmd.exe text must land as a number, got {rec['code']!r}"
     assert events._cli(["nonsense"]) == 2, "a bad CLI call must not pretend to work"

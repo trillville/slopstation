@@ -285,7 +285,7 @@ def check_telemetry():
     from the couch, never the ability to launch. But it has to be VISIBLE -
     a silent shipper is the failure that makes every later dashboard a lie."""
     import events
-    today = events._path(time.strftime("%Y%m%d", time.gmtime()))
+    today = events._path(time.strftime("%Y%m%d"))   # local date, like events
     try:
         age = time.time() - today.stat().st_mtime
         size_kb = today.stat().st_size / 1024

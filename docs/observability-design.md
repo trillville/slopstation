@@ -1,7 +1,8 @@
 # Observability (Project E) — design
 
-**Status: E0, E1, E2 BUILT (2026-08-11), blind suite green at 17/17. Logs are
-live in Grafana Cloud. E3–E6 planned.** This is the as-designed record for making the couch system legible
+**Status: E0, E1, E2, E5 BUILT and E3's code done (2026-08-11), blind suite
+green at 18/18. Logs are live in Grafana Cloud; agent traces go to Langfuse.
+Outstanding: importing the alert rules, and the E6 clock-skew check.** This is the as-designed record for making the couch system legible
 from a phone: what it emits, where that goes, what it costs, and the order to
 build it in. Written 2026-08-11 after a survey of the free-tier landscape;
 load-bearing claims cited inline. Verdicts live in
@@ -460,6 +461,40 @@ maintenance. If it ever tightens, the lever is to send only turns that reached
 the LLM lane to Langfuse (grammar-matched commands are ops, not agent
 behaviour) — a filter on the Langfuse processor only, Grafana keeps everything.
 
+### As built (2026-08-11)
+
+Much smaller than this plan assumed, because **Pipecat 1.7 already emits the
+whole span tree** — `conversation → turn → stt/llm/tts`, carrying
+`gen_ai.usage.*_tokens`, per-service TTFB, transcripts and TTS character
+counts. Hand-instrumenting the pipeline would have duplicated it worse and
+then drifted from it. So [`voice/tracing.py`](../k15/voice/tracing.py) is
+plumbing only: build an exporter, hand it to `setup_tracing`, fail soft.
+
+That also unblocked **cost**, which this doc listed as blocked on
+`assistant.py` discarding token counts. The pipeline's LLM spans carry them
+natively; only the `--text` REPL lane still throws them away, and that is not
+where real usage happens.
+
+Four things the docs get wrong or bury, all of which fail silently:
+
+- **HTTP only.** Langfuse does not accept OTLP over gRPC — and Pipecat's own
+  tracing example imports the gRPC exporter. `requirements.txt` pins
+  `opentelemetry-exporter-otlp-proto-http` explicitly so the wrong import
+  cannot be resolved by accident.
+- **`enable_tracing` lives on `PipelineWorker`**, not `PipelineTask`.
+  Langfuse's integration page shows the older API; the installed 1.7.0 was
+  the authority.
+- **`Basic%20` is an env-var escape, not part of the header.** It belongs to
+  `OTEL_EXPORTER_OTLP_HEADERS`, where a literal space would split the list.
+  We pass a dict to the exporter, so the value is used verbatim and the
+  escape would corrupt it.
+- **Traces are named `conversation` or a UUID by default**, and Pipecat's
+  model is one trace per *conversation*, not per turn. Without
+  `langfuse.trace.name` and `langfuse.session.id` pushed through
+  `additional_span_attributes`, the Langfuse list is rows of identical
+  nameless traces. `conversation_id` is set to our `session` id so a trace
+  and the JSONL lines around it share one value to join on.
+
 ### Setup notes
 
 - **Cost display needs model prices.** Langfuse maps model name → price from
@@ -509,7 +544,7 @@ are what makes it done.
 | **E2** ✅ | Grafana Cloud stack (US West, `logs-prod-021`), Alloy on the K15, `slopstation-write` access policy. | **Done 2026-08-11.** Events reach Loki and are queryable in Explore. Traps hit and recorded in [What E2 found](#what-e2-found); the config itself needed one edit and worked first time |
 | **E3** ◐ | Heartbeats + the six alerts + notification channel. | **Code done 2026-08-11**: both lanes tick every 60 s to the JSONL only (never couch.log - 1440 lines/day would drown the file humans read). Rules, one dashboard and the runbook are written in [`grafana/`](../grafana/) and [grafana-implementation.md](grafana-implementation.md); importing them and proving drill 1 is the remaining work |
 | **E4** | Alloy on the gaming PC (JSONL + transcripts). | The E1 correlation query works from Grafana, not from a merged local file |
-| **E5** | `voice/tracing.py`: OTel SDK, span tree, GenAI + `langfuse.*` attributes, dual export. Pins added to `requirements.txt`. Blind test `test_tracing.py` (no-op fallback, scrubbing, attribute mapping). | A conversation renders as a tree in Langfuse with non-zero cost, and the same trace is in Tempo |
+| **E5** ✅ | `voice/tracing.py`, Langfuse exporter, pins, blind test. | **Done 2026-08-11**, and far smaller than planned: Pipecat 1.7 emits the whole tree itself (conversation → turn → stt/llm/tts, with tokens and TTFB), so this is plumbing rather than instrumentation. Tempo dual-export deferred - see the TODO in `tracing.py` |
 | **E6** ◐ | `doctor.py` telemetry section, README + docs updates. | **Partly done 2026-08-11**: doctor now reports the event stream's freshness and size, files past TTL, and the Alloy service state (WARN-only, like voice — losing telemetry must never turn the chain diagnosis red). Clock skew still to add at E4 |
 | **later** | Langfuse datasets + scored evals for grammar-gate regressions and title resolution; span metrics if LogQL dashboards get slow. | — |
 

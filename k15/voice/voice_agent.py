@@ -37,6 +37,7 @@ import events                                   # noqa: E402
 import library                                  # noqa: E402
 import titles                                   # noqa: E402
 import traces                                   # noqa: E402
+import tracing                                  # noqa: E402
 from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarGate, GrammarMatcher   # noqa: E402
 from preroll import PrerollFeeder, WakeAck, WakeCapture  # noqa: E402  (pipecat
@@ -514,11 +515,22 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     else:
         stages += [transport.output()]
 
+    # Tracing is opt-in per session and costs nothing when off. enable_metrics
+    # is what populates the token counts and TTFB that make the spans worth
+    # having - without it the tree arrives with timings but no numbers.
+    tracing_on = tracing.is_on()
     worker = PipelineWorker(
         Pipeline(stages),
         params=PipelineParams(audio_in_sample_rate=16000,
-                              audio_out_sample_rate=16000),
+                              audio_out_sample_rate=16000,
+                              enable_metrics=tracing_on),
         enable_rtvi=False,
+        enable_tracing=tracing_on,
+        enable_turn_tracking=tracing_on,
+        # Pipecat's conversation id IS our session id, so a Langfuse trace and
+        # the JSONL lines around it share one value to join on.
+        conversation_id=tracing.conversation_id() if tracing_on else None,
+        additional_span_attributes=tracing.span_attributes() if tracing_on else None,
         idle_timeout_secs=voice["holdWindowS"],
         idle_timeout_frames=(TranscriptionFrame, InterimTranscriptionFrame,
                              UserStartedSpeakingFrame, BotSpeakingFrame),
@@ -721,6 +733,11 @@ def main():
         log("lane_up", what="worker", provider=wp, exe=adapter.exe,
             model=adapter.model or "(cli default)",
             effort=adapter.effort or "(cli default)", orphans=orphans or None)
+
+    # Agent traces. Before the wake loop so the first session is traced like
+    # every later one, and fail-soft: no keys, or a venv that predates the
+    # OTel pins, disables the lane with a message and changes nothing else.
+    tracing.setup(cfg, secrets, log)
 
     listener = WakeListener(pa, voice, input_idx)
     log("agent_up", wake_model=listener.model_name,
