@@ -26,12 +26,16 @@ RULES = (
     "lead with the count, name at most three (installed first, then most "
     "played), and offer the rest. The catalog below is the user's own "
     "library - what they ALREADY own. Questions about games they do not own "
-    "(what to buy, what's new, what's like this) are normal and legitimate; "
-    "queue a background task for anything that needs real digging. What you "
-    "must never do is name a game you have not seen in the catalog or in a "
-    "tool result - inventing plausible-sounding titles is the worst failure "
-    "available to you, and it has happened. If you cannot check, say you'd "
-    "have to look it up. "
+    "(what to buy, what's new, what's like this one) are normal and among "
+    "the most useful things you do: look them up and answer NOW, in the "
+    "same breath - that is a normal answer, not a research project. Name "
+    "titles from the catalog or from a tool result rather than from memory, "
+    "and when the ask is for something NEW, never offer a game that is "
+    "already in the catalog. And if you are asked "
+    "later where an answer came from, do not reconstruct your own process "
+    "from guesswork: you cannot reliably tell afterwards whether you looked "
+    "something up, so say that plainly rather than inventing a source or "
+    "disowning a good one. "
     "Use tools for every action; appids come only from the catalog. "
     "Tell a QUESTION ABOUT an action apart from an INSTRUCTION to take it. "
     "'What's the command to end the session', 'what happens if I say that', "
@@ -195,10 +199,12 @@ TOOL_DEFS = [
     ("get_now_playing", "What game is currently running, if any.", {}, []),
     ("get_game_details", "Details (tags, description, score) for one appid.",
      {"appid": {"type": "integer"}}, ["appid"]),
-    ("background_task", "Queue the background research agent for work that "
-     "needs real research or many steps (compare reviews, find deals, what "
-     "to buy next, what's coming out, dig into something) - minutes, not "
-     "seconds. It is a full agent with web access and its own copy of the "
+    ("background_task", "Queue the background research agent ONLY when the "
+     "user asks you to go away and report back later, or when the work "
+     "truly takes many steps (compare reviews across sources, dig into "
+     "something) - minutes, not seconds. A recommendation or a what's-new "
+     "question is NOT this: look it up and answer in the same breath "
+     "instead. It is a full agent with web access and its own copy of the "
      "library, and it is NOT restricted to the library the way you are - "
      "open-ended questions about games the user does not own are exactly "
      "what it is for. The result is announced aloud later. After queueing, "
@@ -365,6 +371,22 @@ class OpenAIBackend:
             det = getattr(resp.usage, "input_tokens_details", None)
             self.cache_note = (
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
+            # Server-side searches are ITEMS in resp.output, not function
+            # calls, and filtering to function_call dropped them entirely -
+            # which is why the openai trace dumps carried no evidence of a
+            # lookup while the anthropic ones carry web_search_tool_result
+            # blocks. That asymmetry cost real time: five correct, searched
+            # recommendations were written off as invented (2026-08-11)
+            # because nothing recorded that the search had happened, and the
+            # model's own account of itself is not evidence - it cannot tell
+            # afterwards whether a server-side tool ran.
+            for o in resp.output:
+                if "search" in (getattr(o, "type", "") or ""):
+                    action = getattr(o, "action", None)
+                    self.messages.append({
+                        "role": "tool", "name": getattr(o, "type", "search"),
+                        "query": getattr(action, "query", None) or str(action or "")[:200],
+                        "status": getattr(o, "status", None)})
             calls = [o for o in resp.output if o.type == "function_call"]
             if not calls:
                 self.messages.append({"role": "assistant",
