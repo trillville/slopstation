@@ -219,9 +219,22 @@ function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | O
 # Transcript retention: one file per enter/exit/wake/logon adds up forever.
 # Called from Office-Safety (every logon) and Wake-Safety (every desk wake -
 # the real cadence, since sleep-centric use makes logons rare).
-function Clear-OldLogs([int]$Days = 30) {
-    # Both streams age out together: transcripts (the narrative) and the
-    # daily .jsonl (the milestones Alloy ships).
+function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
+    # Transcripts move to archive\ after a couple of days, and are deleted
+    # from there at $Days. The move exists for the SHIPPER, not for tidiness:
+    # Alloy tails every file its glob matches, and a finished transcript can
+    # never be appended to again - only a currently-running script's can grow.
+    # Keeping 100+ closed files in the glob meant 100+ pointless tailers
+    # (measured: ~0.04% of a core each). Archiving keeps the live set to the
+    # handful that could actually change, and the files stay on disk.
+    $archive = Join-Path $CG.LogDir 'archive'
+    New-Item -ItemType Directory -Force -Path $archive -ErrorAction SilentlyContinue | Out-Null
+    # No -Recurse: archive\ is not re-scanned, so nothing moves twice.
+    Get-ChildItem $CG.LogDir -Filter *.log -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$ArchiveAfterDays) } |
+        Move-Item -Destination $archive -Force -ErrorAction SilentlyContinue
+
+    # Then retention over both folders and both streams.
     Get-ChildItem $CG.LogDir -Include *.log, *.jsonl -File -Recurse `
             -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$Days) } |

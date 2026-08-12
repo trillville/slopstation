@@ -30,13 +30,13 @@
 // Application event log, which carried the 401 all along.
 livedebugging { enabled = false }
 
-// COST, measured 2026-08-11 so nobody has to re-investigate: this machine
-// runs Alloy at ~4.5% of one core tailing ~110 files; the K15, tailing 2,
-// runs at 0.51%. That is ~0.04% of a core per tailed file, and the ~110 here
-// are the transcripts below. Deliberately left alone: 4.5% of one core is
-// 0.28% of this 16-core box, Clear-OldLogs caps transcripts at 30 days, and
-// the alternative is deleting the narrative you read after a failure. Worth
-// revisiting only past ~500 files.
+// COST, measured 2026-08-11 so nobody has to re-investigate: Alloy costs
+// ~0.04% of one core per tailed file. This machine was at 4.5% tailing ~110
+// transcripts; the K15, tailing 2, sits at 0.51%. Clear-OldLogs now archives
+// transcripts out of this glob after two days, so the live set is only the
+// files that could still be written to - a handful in steady use. Nothing is
+// deleted early; archived files stay on disk under logsrchive\ until the
+// usual 30-day retention.
 
 // ---------------------------------------------------------------- milestones
 
@@ -97,12 +97,17 @@ loki.source.file "pc_transcripts" {
 	targets    = local.file_match.pc_transcripts.targets
 	forward_to = [loki.write.grafana_cloud.receiver]
 
-	// Only NEW transcript content. There are 100+ historical transcripts in
-	// that folder, and unlike the JSONL stream they carry no parseable
-	// timestamp - so a first run would ship months of old sessions all
-	// stamped "now", burying today's launch under history that looks live.
-	// The old files stay on disk; they were never the queryable surface.
-	tail_from_end = true
+	// NO tail_from_end here, and that is the whole point. It was set to stop a
+	// first run backfilling 100+ historical transcripts stamped "now" - but a
+	// transcript is written and CLOSED in about ten seconds, while sync_period
+	// is 30s. So Alloy would discover each new file already complete, seek to
+	// its end, and ship nothing. Ever. The setting that prevented shipping old
+	// transcripts also prevented shipping new ones.
+	//
+	// Fixed at the source instead: Clear-OldLogs moves transcripts older than
+	// two days into logs\archive\, which this glob does not match. The live
+	// set is now the handful that could still be written to, so reading from
+	// the beginning is both correct and cheap.
 }
 
 // -------------------------------------------------------------------- output
