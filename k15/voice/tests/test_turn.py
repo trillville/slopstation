@@ -109,9 +109,56 @@ def main():
         # No turn at all is simply an untagged command.
         couch.ssh_intent("exit")
         assert sent[-1] == "exit", sent[-1]
+
+        # -- THE TASK BOUNDARY -------------------------------------------------
+        # This is the regression that shipped. A ContextVar is copied into a
+        # task when that task is CREATED, so a turn minted inside a running
+        # frame processor cannot reach the assistant's tool-dispatch task,
+        # which is a sibling holding an older snapshot. Result on 2026-08-11:
+        # every voice-driven exit arrived at the gaming PC with no turn, and
+        # the launch ran under an id couch.py minted for itself instead of the
+        # one the user's sentence created. Ambient absent, explicit present,
+        # must still tag the wire - that asymmetry IS the bug.
+        couch.ssh_intent("exit", turn="4c1d0e")
+        assert sent[-1] == "exit --turn 4c1d0e", \
+            f"explicit turn lost when ambient is empty: {sent[-1]!r}"
+
+        # Explicit beats a stale ambient value rather than losing to it.
+        tok = events.context(turn="9f2c1a")
+        couch.ssh_intent("exit", turn="4c1d0e")
+        assert sent[-1] == "exit --turn 4c1d0e", sent[-1]
+        events.reset(tok)
+
+        # A hostile explicit id is still dropped at the wire - the new
+        # parameter must not become a way around the validation above.
+        couch.ssh_intent("exit", turn="../../evil")
+        assert sent[-1] == "exit", \
+            f"explicit turn bypassed validation: {sent[-1]!r}"
     finally:
         couch.ssh = real_ssh
     print("  wire: valid turn tagged, malformed dropped, launch never blocked")
+    print("  wire: explicit turn survives an empty/stale ambient, still validated")
+
+    # -- Dispatch hands the id over without the ContextVar ----------------------
+    # Same bug one layer up, asserted end to end: with NO ambient turn at all,
+    # a Dispatch that was told the turn must still tag both machine-crossing
+    # verbs. This is what GrammarGate does when it mints the id.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import cglib
+    import dispatch as dp
+
+    sent.clear()
+    couch.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
+    try:
+        d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, cglib.CapturingLog("d"))
+        assert d.turn is None, "a fresh Dispatch must not carry a stale id"
+        d.turn = "4c1d0e"                       # what GrammarGate now writes
+        d.end_session()
+        assert sent[-1] == "exit --turn 4c1d0e", \
+            f"voice-driven exit reached the PC uncorrelated: {sent[-1]!r}"
+    finally:
+        couch.ssh = real_ssh
+    print("  dispatch: the exit verb carries the utterance's id, no ContextVar")
 
     # -- couch.py CLI ----------------------------------------------------------
     argv = ["start", "12345", "--turn", "9f2c1a"]

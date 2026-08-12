@@ -259,7 +259,20 @@ class GrammarGate(FrameProcessor):
                 # turn id is born. Everything it causes - the gate decision,
                 # the dispatch, couch.py, the gaming PC's Enter task - carries
                 # it from here. The session id set at wake survives the merge.
-                events.context(turn=events.new_turn())
+                turn = events.new_turn()
+                events.context(turn=turn)
+                # ...but ONLY into this task, and that is the whole trap. A
+                # ContextVar is copied into a task when the task is created;
+                # setting one now cannot reach a task that is already running.
+                # The session id works because it is minted before
+                # asyncio.run() (voice_agent.py) so every task inherits it -
+                # a turn is per-utterance and cannot be hoisted that early.
+                # So the assistant's tool dispatch, a sibling task with an
+                # older snapshot, saw no turn at all: voice-driven exits
+                # reached the gaming PC uncorrelated and launches ran under an
+                # id couch.py minted for itself. Hand it over explicitly.
+                if self.dispatch is not None:
+                    self.dispatch.turn = turn
                 # Backstop: a final transcript proves the turn ended even if
                 # no UserStoppedSpeakingFrame arrived. Silence here would mean
                 # no feedback at all until the action completes (up to 15 s of

@@ -61,6 +61,13 @@ class Dispatch:
         self.voice = cfg["voice"]
         self.log = log
         self.dry_run = dry_run
+        # The utterance currently being acted on. GrammarGate writes this the
+        # moment it mints the id, and BOTH tiers read it from here rather than
+        # from events.current() - the ambient copy does not survive the hop
+        # from the frame processor's task to whichever task calls us. One
+        # Dispatch per session (run_session builds it), so an attribute is
+        # exactly as isolated as the ContextVar it stands in for.
+        self.turn = None
 
     # -- internals -------------------------------------------------------------
 
@@ -95,12 +102,16 @@ class Dispatch:
             return self._would(what)
         args = [sys.executable, str(COUCH), "start"] + ([str(appid)] if appid else [])
         # couch.py runs in its own console, so the id has to travel as an
-        # argument - a ContextVar does not survive a process boundary.
-        turn = events.current().get("turn")
+        # argument - a ContextVar does not survive a process boundary. It does
+        # not survive a TASK boundary either, which is why self.turn leads and
+        # the ambient value is only the fallback (see __init__). Without it
+        # couch.py mints its own id and the user's sentence is joined to the
+        # launch it caused by nothing but a clock reading.
+        turn = self.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
         subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        self.log("session_dispatched", appid=appid)
+        self.log("session_dispatched", appid=appid, turn=turn)
         return _ok(f"starting a session ({what})")
 
     def end_session(self):
@@ -109,14 +120,14 @@ class Dispatch:
         if self.dry_run:
             return self._would("ssh exit")
         try:
-            out = couch.ssh_intent("exit")
+            out = couch.ssh_intent("exit", turn=self.turn)
         except Exception as e:
-            self.log.error("end_session_failed", err=str(e))
+            self.log.error("end_session_failed", err=str(e), turn=self.turn)
             return _fail(f"couldn't reach the PC (ssh exit: {e})")
         if out == "OK":
-            self.log("end_session_dispatched")
+            self.log("end_session_dispatched", turn=self.turn)
             return _ok("ending the session")
-        self.log.warn("end_session_refused", answer=out)
+        self.log.warn("end_session_refused", answer=out, turn=self.turn)
         return _fail(f"the PC refused the exit (ssh exit: {out})")
 
     def now_playing(self):

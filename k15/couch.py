@@ -60,12 +60,22 @@ def ssh(cmd, timeout=15):
     return r.stdout.strip()
 
 
-def ssh_intent(cmd, **kw):
+def ssh_intent(cmd, turn=None, **kw):
     """A MUTATING verb, tagged with this launch's turn id so the gaming PC's
     transcript and events join the same story as ours. Read-only polls
     (status/games/playing) deliberately go through plain ssh(): they are not
-    intents, and tagging them would just multiply the id across noise."""
-    turn = events.current().get("turn")
+    intents, and tagging them would just multiply the id across noise.
+
+    `turn` is EXPLICIT for callers that cannot rely on the ambient one, and
+    that is not a hypothetical convenience - it shipped broken. A ContextVar
+    reaches only tasks created after it is set. The voice agent mints its turn
+    inside an already-running frame processor, so the task that later calls
+    dispatch holds an older snapshot and sees nothing: on 2026-08-11 every
+    voice-driven exit reached the gaming PC uncorrelated, and the launch ran
+    under an id couch.py minted for itself rather than the one the user's
+    sentence created. Ambient remains the default for couch.py's own
+    in-process calls, where it does propagate."""
+    turn = turn or events.current().get("turn")
     # Re-validate at the wire, not just at mint: Dispatch fails CLOSED on a
     # malformed id (it would match no verb and answer DENIED), so a telemetry
     # bug must not be able to take launches down with it. Uncorrelated beats
