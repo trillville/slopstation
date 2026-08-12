@@ -24,7 +24,7 @@ allowed in `{...}`:
 | Label | Values |
 |---|---|
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
-| `lane` | `voice`, `launch`, `listener`, `library`, `jobs`, `supervisor`, `traces`, `enter`, `exit`, `launchgame`, `pc-transcript` |
+| `lane` | k15: `voice`, `launch`, `listener`, `library`, `jobs`, `supervisor`, `traces` — gamepc: `enter`, `exit`, `launchgame`, `wake-safety`, `office-safety`, `pc-transcript` |
 | `level` | `debug`, `info`, `warn`, `error` |
 | `env` | `prod`, `test` — **always filter `env="prod"`** unless investigating the blind suite |
 
@@ -58,6 +58,7 @@ exact problem this system was built to remove.
 {service="k15", lane="voice", env="prod"} | json | event="gate_miss"  # grammar misses
 {service="k15", lane="supervisor"} | json | event="restart"         # crash loops
 {service="gamepc", lane="pc-transcript"}                            # the PC's raw narrative
+{service="gamepc", lane=~"wake-safety|office-safety"}               # the failsafes - the PC's most frequent lanes
 {service="k15"} | json | session="c32ec7"                           # one voice conversation
 ```
 
