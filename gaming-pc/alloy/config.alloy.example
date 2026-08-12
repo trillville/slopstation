@@ -30,6 +30,14 @@
 // Application event log, which carried the 401 all along.
 livedebugging { enabled = false }
 
+// COST, measured 2026-08-11 so nobody has to re-investigate: this machine
+// runs Alloy at ~4.5% of one core tailing ~110 files; the K15, tailing 2,
+// runs at 0.51%. That is ~0.04% of a core per tailed file, and the ~110 here
+// are the transcripts below. Deliberately left alone: 4.5% of one core is
+// 0.28% of this 16-core box, Clear-OldLogs caps transcripts at 30 days, and
+// the alternative is deleting the narrative you read after a failure. Worth
+// revisiting only past ~500 files.
+
 // ---------------------------------------------------------------- milestones
 
 local.file_match "pc_events" {
