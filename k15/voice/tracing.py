@@ -33,6 +33,7 @@ span attribute: what flows is speech, model names, token counts and timings.
 """
 import base64
 import logging
+import os
 
 import cglib
 import events
@@ -109,6 +110,15 @@ def setup(cfg, secrets, log):
         return False
     try:
         from pipecat.utils.tracing.setup import setup_tracing
+
+        # Langfuse's "Env" badge comes from the deployment.environment RESOURCE
+        # attribute, which pipecat builds from os.getenv("ENVIRONMENT",
+        # "development") - so without this every real session is filed under
+        # "development" and the environment filter is worse than useless.
+        # Reusing events.ENV keeps ONE vocabulary across Loki and Langfuse, and
+        # means a blind-suite run tags its traces "test" for free.
+        # setdefault, so an explicit ENVIRONMENT in the shell still wins.
+        os.environ.setdefault("ENVIRONMENT", events.ENV)
 
         # Export failures stay VISIBLE. The first draft silenced this logger
         # to CRITICAL to keep a dead uplink from putting a stack trace on the
