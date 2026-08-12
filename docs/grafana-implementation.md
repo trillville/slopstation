@@ -273,6 +273,34 @@ Must print `LEAKS: 0`.
 revert. This is the failure that crash-looped the voice agent on 2026-08-11
 with no signal but a console.
 
+## A readable log view in the UI
+
+Grafana's default renders each event as nine lines of pretty-printed JSON,
+which is unusable at any real volume. **Bookmark this** - it encodes the whole
+setup in the URL:
+
+<https://narrownuthatch2355.grafana.net/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22grafanacloud-logs%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D~%5C%22k15%7Cgamepc%5C%22%2C%20env%3D%5C%22prod%5C%22%7D%20%7C%20json%20%7C%20event%20%21%3D%20%5C%22heartbeat%5C%22%22%2C%22queryType%22%3A%22range%22%2C%22editorMode%22%3A%22code%22%2C%22datasource%22%3A%7B%22type%22%3A%22loki%22%2C%22uid%22%3A%22grafanacloud-logs%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-3h%22%2C%22to%22%3A%22now%22%7D%2C%22panelsState%22%3A%7B%22logs%22%3A%7B%22sortOrder%22%3A%22Descending%22%2C%22visualisationType%22%3A%22table%22%2C%22displayedFields%22%3A%5B%22Time%22%2C%22detected_level%22%2C%22event%22%2C%22lane%22%5D%7D%7D%7D%7D>
+
+Both machines, last 3 hours, heartbeats filtered out (otherwise they are ~90%
+of the rows), newest first. Edit the query text and everything else sticks.
+
+Three things make it readable, and none are obvious:
+
+1. **`| json` in the query.** Without it Loki knows only the four labels -
+   `event`, `turn` and `session` do not exist as fields yet, which is why the
+   Fields sidebar looks empty of anything useful.
+2. **Table view**, not Logs view (the toggle top-right of the Logs panel). One
+   row per event. The Logs view's field checkboxes also reset on re-render;
+   Table is the stable surface.
+3. **Selected fields** - tick `event` and `lane`, untick `Line`. That drops the
+   raw JSON column. Add `turn` when chasing one launch.
+
+Collapse **Logs volume** and the query row (the carets beside each) to roughly
+double the table height.
+
+Note `| json` creates `lane_extracted` / `level_extracted` duplicates wherever
+a JSON field collides with an existing label. Ignore those; use the plain ones.
+
 ## Query cookbook
 
 ```logql
