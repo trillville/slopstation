@@ -153,35 +153,46 @@ string.
 email. Otherwise the two alerts that mean "the house is broken" arrive in the
 same stream as "a metadata fetch failed."
 
-## Part D — dashboards
+## Part D — the dashboard
 
-Two, in [`grafana/dashboards/`](../grafana/dashboards/). Import via
-**Dashboards → New → Import → Upload JSON file**.
+One: [`grafana/dashboards/couch.json`](../grafana/dashboards/couch.json).
+Import via **Dashboards → New → Import → Upload JSON file**.
 
-- **`house-status.json`** — the one to open first. Both lanes' liveness,
-  errors in 24h, launches in 24h, an error/warning bar chart, and a log panel
-  of everything at `warn` or above. Answers "is it up, and did anything break
-  while I was away?" and nothing else.
-- **`launch-health.json`** — launches and failures over 7 days, median and p95
-  time-to-READY, per-launch scatter, and a milestone breakdown (`ssh_up` →
-  `enter_dispatched` → `host_ready`) so a slowdown can be attributed to a
-  stage rather than guessed at.
+Deliberately one page rather than a set. Two dashboards means neither gets
+opened — and the question this answers ("is the house up, and is it working
+well?") does not split cleanly in two anyway.
 
-Both hardcode `"uid": "grafanacloud-logs"`. If you ever rebuild the stack and
-the uid changes, find-and-replace it in both files.
+Twelve panels, top to bottom:
 
-The p95 panel is worth watching over time: the build guide measured warm
-enters at 6–8 s and wake-from-sleep at 8–13 s, **once, by hand**. This turns
-that into something that can be seen drifting.
+| Row | Panels | Answers |
+|---|---|---|
+| 1 | Chord lane · Voice lane · Errors 24h · Launches 24h | **Is it up, did anything break?** The only row that matters at a glance |
+| 2 | Time-to-READY median + p95 · Wakes 24h · Grammar hit rate | **Is it working well?** |
+| 3 | Launch milestones · Voice activity | **What changed, and where?** |
+| 4 | Errors and warnings over time | Discrete failure or something retrying |
+| 5 | Everything that went wrong (logs) | The panel you actually read |
 
-Not built yet, deliberately:
+Three worth understanding:
 
-- **Voice health** (wake→gate→LLM ratios, turn latency) — buildable now, but
-  worth waiting until there is a week of real usage to shape the panels
-  around.
-- **Spend** — blocked. Token counts are computed in `assistant.py` and thrown
-  away; they become fields at E5. A dashboard now would show empty panels that
-  look broken.
+- **Time to READY** is `dur_ms` on `host_ready`, measured from the chord or
+  wake word — not from when Enter started. That is what the couch actually
+  experiences. The build guide measured 6–8 s warm and 8–13 s from sleep
+  **once, by hand**; p95 turns that into something you can watch drift.
+- **Launch milestones** plots `ssh_up` → `enter_dispatched` → `host_ready` as
+  points. Which line moved says *which stage* got slower, instead of leaving
+  you to guess.
+- **Grammar hit rate** is `gate_match / (gate_match + gate_miss)` — how often
+  a spoken command was handled deterministically instead of costing an LLM
+  round trip. Falling means the grammar is drifting from how you actually
+  talk, and the Voice activity panel shows the same thing over time.
+
+The file hardcodes `"uid": "grafanacloud-logs"`. If you rebuild the stack and
+the uid changes, find-and-replace it.
+
+**Not on it, deliberately:** voice *latency* (nothing times a turn yet — it
+arrives with the spans at E5) and **spend** (token counts are computed in
+`assistant.py` and thrown away; also E5). Panels that render empty look broken
+and teach you to distrust the dashboard.
 
 ## Part E — the gaming PC (E4)
 
