@@ -641,7 +641,10 @@ In the style of [voice-testing.md](voice-testing.md) — each says what it prove
 3. **Trace tree.** Ask the assistant a two-turn question. *Proves*: Langfuse
    shows one session, two turns, a tree per turn, non-zero tokens and cost.
 4. **Liveness.** Kill `voice_agent.py` and leave the supervisor stopped.
-   *Proves*: the alert fires within 6 min; restarting clears it.
+   *Proves*: the alert fires - at ~10 min for voice, ~7 min for the chord
+   lane. The 5-minute count window must empty before the rule sees zero, and
+   `for:` runs after that; detection is deliberately slower than the numbers
+   in the rule suggest.
 5. **Crash loop.** Make `chord_listener.py` exit immediately (bad import), let
    `Start-Listener.bat` restart it four times. *Proves*: four `supervisor` /
    `restart` events with exit codes, and the crash-loop alert fires — the

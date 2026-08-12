@@ -243,8 +243,10 @@ If it is under a second, close the question and move on.
 Run these in order. Each proves one thing.
 
 **1. The absence alerts actually fire.** *(The important one.)* On the K15,
-stop the voice supervisor window and kill the agent. Within ~6 minutes you
-should get a notification. Restart with `.\Start-K15.bat` and confirm it
+stop the voice supervisor window and kill the agent. Expect the page at
+**~10 minutes**, not sooner - the 5-minute count window has to empty before
+the rule sees zero, and `for: 5m` runs after that. The chord lane is ~7 min
+(`for: 2m`). Do not conclude it is broken at minute six. Restart with `.\Start-K15.bat` and confirm it
 resolves. **An alert that never fires looks identical to one that is
 working** — this is the only way to tell them apart.
 
