@@ -286,6 +286,37 @@ Reasoning happens *before* the first spoken word, so effort trades latency for
 depth — that's the tradeoff to feel. Flip `config.assistantProvider` to move
 production to the winner.
 
+**Run `bench/probe_intent.py` against the winner before you ship it.** A
+prompt that behaves on one model can act on a question under another, and
+that probe is the check — see below.
+
+## 10a. Asking about an action must not take it
+
+```
+.venv\Scripts\python bench\probe_intent.py --provider openai
+```
+
+Costs a few cents and calls the real model, so it is not in the blind suite.
+Run it after any change to `RULES`, after a provider or model switch, and
+before trusting a new tool with a side effect.
+
+This exists because on 2026-08-11 a live 25-minute session ended when the
+user asked *"what's the tool you would run to take me out of a gaming
+session?"* — the assistant explained the command and ran it. Probing the
+prompt afterwards found two more of the same shape that nobody had noticed:
+*"how do I get back to my office setup?"* switched input to the pc (which
+**starts** a session — the opposite of the question), and *"I'm done playing,
+put it back to the office"* switched the TV to Apple TV, because nothing in
+the prompt said the office is the desk rather than an input.
+
+The number that matters: the original bug reproduced at **1 in 3**. A bug
+that only fires a third of the time passes any hand test you have patience
+for, which is why the probe defaults to 8 trials and why "I tried it and it
+was fine" is not evidence here.
+
+Two of the five probes assert the assistant *does* act — a prompt that makes
+the agent timid is a regression too, just a quieter one.
+
 ## 10b. Web search
 
 Ships dark: set `"assistantWebSearch": true` in config.json's `voice` section
