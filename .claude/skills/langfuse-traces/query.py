@@ -118,13 +118,18 @@ def cmd_conversations(a):
     if not rows:
         print(f"(no conversations in the last {a.since})")
         return
-    print(f"{'when':15} {'trace id':34} {'session':10} {'lat':>7} {'cost':>10}  name")
+    print(f"{'when':15} {'trace id':34} {'session':9} {'env':6} {'lat':>7}  name")
     for o in rows:
         print(f"{local(_f(o,'startTime','timestamp')):15} "
               f"{str(_f(o,'traceId','id','')):34} "
-              f"{str(_f(o,'sessionId',default='-'))[:10]:10} "
-              f"{_fmt_lat(o):>7} {_fmt_cost(o):>10}  {_f(o,'name',default='')}")
-    print(f"\n{len(rows)} conversation(s). Drill in with:  trace <trace id>")
+              f"{str(_f(o,'sessionId',default='-'))[:9]:9} "
+              f"{str(_f(o,'environment',default='-'))[:6]:6} "
+              f"{_fmt_lat(o):>7}  {_f(o,'name',default='')}")
+    # No cost column, deliberately: a ROOT observation's cost fields are null.
+    # Cost lives on the GENERATION spans and the UI aggregates them, so showing
+    # it here would cost one extra API call per row. `trace` sums it instead,
+    # from spans it has already fetched.
+    print(f"\n{len(rows)} conversation(s). Cost and tokens: trace <trace id>")
 
 
 def _fmt_lat(o):
@@ -133,12 +138,16 @@ def _fmt_lat(o):
 
 
 def _fmt_cost(o):
-    v = _f(o, "totalCost", "calculatedTotalCost")
-    return f"${v:.6f}" if isinstance(v, (int, float)) else "-"
+    v = _f(o, "calculatedTotalCost", "totalPrice", "totalCost")
+    # Blank, not $0.000000, for the spans that genuinely have no cost (stt,
+    # tts, turn, conversation). A column of zeros reads as "cost tracking is
+    # broken" when it actually means "this span is not a model call".
+    return f"${v:.6f}" if isinstance(v, (int, float)) and v else ""
 
 
 def cmd_trace(a):
-    rows = _f(get("observations", traceId=a.trace_id, limit=200),
+    # 100 is Langfuse's hard maximum; asking for more is a 400, not a clamp.
+    rows = _f(get("observations", traceId=a.trace_id, limit=100),
               "data", default=[])
     if not rows:
         sys.exit(f"no observations for trace {a.trace_id}")
@@ -168,9 +177,33 @@ def cmd_trace(a):
             walk(_f(o, "id"), depth + 1)
 
     root = by_parent.get(None, [{}])[0]
-    print(f"trace {a.trace_id}   session={_f(root,'sessionId',default='-')}   "
-          f"started {local(_f(root,'startTime','timestamp'))}\n")
+    # sessionId is a v2-only field, and it is the join key back to the Loki
+    # logs - worth one extra call rather than printing a dash for the most
+    # useful identifier on the page.
+    session = _f(root, "sessionId", default=None)
+    if not session:
+        peek = _f(get("v2/observations", traceId=a.trace_id,
+                      isRootObservation="true", limit=1), "data", default=[])
+        session = _f(peek[0], "sessionId", default="-") if peek else "-"
+    root = dict(root, sessionId=session)
+    cost = sum(o.get("calculatedTotalCost") or 0 for o in rows)
+    tin = sum((o.get("usage") or {}).get("input") or 0 for o in rows)
+    tout = sum((o.get("usage") or {}).get("output") or 0 for o in rows)
+    cached = sum((o.get("usageDetails") or {}).get("input_cached_tokens") or 0
+                 for o in rows)
+    print(f"trace {a.trace_id}\n"
+          f"  session={_f(root,'sessionId',default='-')}  "
+          f"env={_f(root,'environment',default='-')}  "
+          f"started {local(_f(root,'startTime','timestamp'))}  "
+          f"{_fmt_lat(root)}")
+    # Cached share is the number that explains the cost: the catalog sits in
+    # every prompt, and caching is the only reason that is affordable.
+    share = f" ({cached / tin:.0%} cached)" if tin else ""
+    print(f"  ${cost:.6f}   {tin:,} in{share} -> {tout:,} out   {len(rows)} spans\n")
     walk(None, 0)
+    if len(rows) == 100:
+        print("\n! 100 spans returned - Langfuse's page maximum, so this trace "
+              "may be truncated")
     print("\n(pass --io to print prompts and completions)")
 
 

@@ -1,8 +1,13 @@
 """Query the couch system's logs in Grafana Cloud Loki, from the terminal.
 
-    python query.py '{service="k15", level="error"}' --since 24h
-    python query.py '{service=~"k15|gamepc"} | json | turn="9f2c1a"'
-    python query.py 'sum(count_over_time({service="k15", lane="voice"} | json | event="wake" [1h]))' --since 7d
+    python query.py --level error --since 24h
+    python query.py --turn 9f2c1a --since 24h          # both machines, one intent
+    python query.py --lane voice --event gate_miss
+    python query.py 'sum(count_over_time({service="k15"} | json | event="wake" [1h]))' --since 7d
+
+Prefer the flags. PowerShell strips double quotes when passing a raw LogQL
+string to a native process, which Loki reports as an error about a query you
+never typed; the flags compose it here instead.
 
 Stdlib only, so it runs from any checkout without a venv.
 
@@ -103,16 +108,73 @@ def render_line(stream, ts_ns, line):
     return f"{when}  {where:20} {mark}{' '.join(parts)}"
 
 
+def build(a):
+    """Compose LogQL from flags, so the common questions need no quoting at
+    all. PowerShell strips the double quotes out of a raw '{service="k15"}'
+    when handing it to a native process, and Loki answers with
+    'unexpected IDENTIFIER, expecting STRING' - a confusing error about a
+    query the user never actually typed. Flags sidestep it entirely."""
+    labels = {}
+    if a.service:
+        labels["service"] = a.service
+    if a.lane:
+        labels["lane"] = a.lane
+    if a.level:
+        labels["level"] = a.level
+    labels["env"] = a.env
+    # A turn or session spans both machines by definition, so widen unless
+    # the caller pinned a service.
+    if (a.turn or a.session) and "service" not in labels:
+        labels["service"] = "k15|gamepc"
+
+    sel = ", ".join(
+        f'{k}=~"{v}"' if "|" in v else f'{k}="{v}"' for k, v in labels.items())
+    q = "{" + sel + "}"
+    fields = [(k, getattr(a, k)) for k in ("event", "turn", "session")
+              if getattr(a, k)]
+    if fields:
+        q += " | json | " + " | ".join(f'{k}="{v}"' for k, v in fields)
+    if a.contains:
+        q += f' |= "{a.contains}"'
+    return q
+
+
+def looks_mangled(q):
+    """A label value that lost its quotes - the PowerShell footgun."""
+    return bool(re.search(r'[{,]\s*\w+\s*=~?\s*[A-Za-z0-9_]', q))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("logql")
+    ap.add_argument("logql", nargs="?", help="raw LogQL (or use the flags below)")
+    ap.add_argument("--service", help="k15 | gamepc")
+    ap.add_argument("--lane", help="voice | launch | listener | supervisor | ...")
+    ap.add_argument("--level", help="error | warn | info")
+    ap.add_argument("--event", help="host_ready, launch_failed, gate_miss, ...")
+    ap.add_argument("--turn", help="follow one intent across BOTH machines")
+    ap.add_argument("--session", help="one voice conversation")
+    ap.add_argument("--contains", help="plain substring match")
+    ap.add_argument("--env", default="prod", help="prod (default) | test")
     ap.add_argument("--since", default="6h", help="30m, 6h, 7d (default 6h)")
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--json", action="store_true", help="raw Loki response")
     a = ap.parse_args()
 
-    data = fetch(a.logql, seconds(a.since), a.limit)
+    if a.logql:
+        if looks_mangled(a.logql):
+            sys.exit(
+                f"That query has an unquoted label value:\n  {a.logql}\n\n"
+                "PowerShell strips double quotes when passing to a native\n"
+                "process. Either use the flags (no quoting needed):\n"
+                "  --service k15 --level error --since 24h\n"
+                "or escape them:  '{service=\\\"k15\\\"}'")
+        logql = a.logql
+    else:
+        logql = build(a)
+        print(f"# {logql}\n")
+
+    data = fetch(logql, seconds(a.since), a.limit)
     if a.json:
         print(json.dumps(data, indent=1))
         return
