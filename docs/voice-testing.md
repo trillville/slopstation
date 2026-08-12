@@ -310,7 +310,7 @@ The banner shows `+websearch`. Drills:
    anthropic lane is REPL-only for search anyway. The two models may disagree
    on freshness; that's A/B material, note it.
 
-Then live (knob on, `Start-K15.bat` or `voice_agent.py` directly):
+Then live (knob on, `.\Start-K15.bat` or `voice_agent.py` directly):
 
 4. **Slow answers are silent** — "hey jarvis, is the nightreign dlc out yet"
    takes 5–10 s and makes no sound until it speaks. A repeating "thinking"

@@ -244,7 +244,7 @@ Run these in order. Each proves one thing.
 
 **1. The absence alerts actually fire.** *(The important one.)* On the K15,
 stop the voice supervisor window and kill the agent. Within ~6 minutes you
-should get a notification. Restart with `Start-K15.bat` and confirm it
+should get a notification. Restart with `.\Start-K15.bat` and confirm it
 resolves. **An alert that never fires looks identical to one that is
 working** — this is the only way to tell them apart.
 

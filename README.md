@@ -44,6 +44,10 @@ clone** (`git pull` to update — no copying). The **gaming PC deploys by copy**
 because its runtime needs gitignored binaries/shortcuts (`vhui64.exe`,
 `OFFICE.lnk`, `TV-GAMING.lnk`) that can't live in the repo.
 
+Run the `.bat` files by double-clicking them, or from PowerShell with a
+leading `.\` (`.\Start-K15.bat`) — PowerShell will not run anything from the
+current directory without an explicit path, unlike cmd.exe.
+
 Per-machine files are **gitignored, created once from committed examples** so a
 checkout runs without its local config/keys ever fighting `git pull`:
 `config.json` ← `config.example.json`, `secrets.json` ← `secrets.template.json`.
