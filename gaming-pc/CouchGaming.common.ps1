@@ -247,24 +247,13 @@ function Get-SteamExe {
     $exe
 }
 
-# Pull an ALREADY-RUNNING game back to the foreground. -applaunch on a running
-# appid makes Steam focus the existing instance rather than start a second one,
-# which is the only handle we have on the game's window: there is no reliable
-# appid -> HWND mapping to go and activate it directly.
-#
-# Best-effort by rule. Big Picture is already up and focused by the time this
-# runs, which is a working session on its own - a resume that fails must cost
-# the user nothing but the convenience.
-function Resume-Game([int]$AppId) {
-    try {
-        & (Get-SteamExe) -applaunch $AppId
-        Log "resumed game $AppId (-applaunch on the running instance)"
-        Write-CgEvent 'game_resumed' @{ appid = $AppId }
-    } catch {
-        Log "WARNING: could not resume game $AppId - Big Picture is up, resume it by hand ($_)"
-        Write-CgEvent 'game_resume_failed' @{ appid = $AppId; err = "$_" } 'warn'
-    }
-}
+# NOTE: there is deliberately no Resume-Game here. One existed briefly and was
+# reverted - see docs/troubleshooting.md and the plan in the same commit. It
+# ran `-applaunch` on the already-running game just before the ready marker,
+# which put the game's 2160p re-init inside the exact window where the K15 is
+# still flipping the TV input: black screen, dead controller, ~40 s. Enter is
+# structurally the wrong place for it, because Enter cannot observe when the TV
+# actually goes live - only the K15 can.
 
 # Apply a DisplayMagician profile shortcut, poll $Until to verify it took, and
 # kill DisplayMagician after every attempt - verified or not.

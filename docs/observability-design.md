@@ -193,7 +193,7 @@ vocabulary:
 | `library` | `sync_start`, `sync_done`, `meta_fetched`, `meta_failed` |
 | `jobs` | `job_queued`, `job_running`, `job_done`, `job_failed`, `job_announced` |
 | `supervisor` | `start`, `restart` (with exit code), `bounce` — emitted by the `.bat` supervisors via the `events.py` CLI |
-| `pc` | `enter_start`, `profile_applied`, `puck_claimed`, `ready` (with `focused` + `fg`), `enter_failed`, `exit_start`, `exit_done`, `game_launched`, `game_resumed`, `game_resume_failed` |
+| `pc` | `enter_start`, `profile_applied`, `puck_claimed`, `ready` (with `focused`, `fg`, `running_appid`), `enter_failed`, `exit_start`, `exit_done`, `game_launched` |
 | `doctor` | `doctor_result` (with pass/warn/fail counts) |
 
 ### The API

@@ -74,32 +74,28 @@ try {
     if (-not (Wait-For { Get-Process steam -ErrorAction SilentlyContinue } 20 'Steam running')) {
         throw 'Steam failed to start'
     }
-    # Read this BEFORE Big Picture takes the foreground: it is the game the
-    # last session left running, and 5b puts the user back into it.
+    # Recorded, NOT acted on. A branch here once skipped the Big Picture focus
+    # when a game was up, on the theory that the game still held the foreground
+    # - it doesn't, ending a session switches the display profile and that
+    # minimizes the game on the way out. Then a resume replaced it and was
+    # worse: `-applaunch` a few hundred ms before the ready marker put the
+    # game's 2160p re-init inside the window where the K15 is still flipping
+    # the TV input. Black screen, dead controller.
+    #
+    # So Enter now does exactly one thing about the foreground - Big Picture -
+    # and merely REPORTS whether a game was up, because how often that state
+    # occurs is the thing any future resume has to be designed against.
     $running = Get-RunningAppId
     $wsh = New-Object -ComObject WScript.Shell
     $focused = Wait-For { $wsh.AppActivate($CG.BpmWindow) } 20 'Big Picture focused'
     if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
-
-    # 5b. Resume the game the last session left running.
-    #
-    # There was briefly a branch here that SKIPPED the Big Picture focus when a
-    # game was up, on the theory that the game still held the foreground and
-    # should keep it. It doesn't: ending a session switches the display profile,
-    # and that minimizes the game on the way out. So "leave it in front" was a
-    # no-op over a minimized window - measured doing exactly nothing, logging
-    # "leaving it in front" while fg read 'K15 - Remote Desktop Connection'.
-    # The session only worked because Big Picture came up regardless.
-    #
-    # Bringing the game back is what was actually wanted: end a session
-    # mid-game, start another, land back in the game instead of at the shell.
-    if ($running) { Resume-Game $running }
+    if ($running) { Log "note: game $running was already running at Enter" }
 
     # 6. Ready marker - the K15 switches the TV input only after seeing this
     #
     # First, MEASURE the foreground instead of trusting the steps above to have
-    # got it right. AppActivate returning true and Resume-Game returning
-    # quietly are both claims, not observations - and an unchecked claim is
+    # got it right. AppActivate returning true is a claim, not an observation -
+    # and an unchecked claim is
     # exactly what let this bug survive three sessions: `focused=True` sat in
     # the ready event the whole time the controller was reaching nothing. The
     # desktop library window in front is the one state we KNOW is broken, so it
@@ -120,7 +116,7 @@ try {
     # this whole step exists to prevent looks EXACTLY like success from here,
     # so it must not be logged as one. `ready focused=False` is the alert, and
     # `fg` is the field that says what to go look at.
-    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg } $(if ($focused) { 'info' } else { 'warn' })
+    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused) { 'info' } else { 'warn' })
 }
 catch {
     # The failure path obeys the same rules as the success path: kill
