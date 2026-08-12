@@ -94,7 +94,7 @@ class Dispatch:
         """Same arbiter as the chord: a fresh lock means busy, never a double
         launch. couch.py owns the whole sequence (and the one rule)."""
         age = cglib.lock_age()
-        if age is not None and age < cglib.LOCK_STALE_S:
+        if cglib.session_active(age):
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))
             return _busy("a session is already active or starting")
         what = f"couch.py start{f' {appid}' if appid else ''}"
@@ -145,8 +145,7 @@ class Dispatch:
         """Session live -> direct host launch (Dispatch verb answers
         truthfully: OK/ALREADY/BUSY/NOTREADY). No session -> full couch
         launch with the game queued for after READY."""
-        age = cglib.lock_age()
-        if age is None or age >= cglib.LOCK_STALE_S:
+        if not cglib.session_active():
             return self.start_session(appid)
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
@@ -223,8 +222,7 @@ class Dispatch:
         if cmd is None:
             return _fail(f"there is no input called '{spoken_name}'")
         if cmd == self.cfg["tvGamingCmd"]:
-            age = cglib.lock_age()
-            if age is None or age >= cglib.LOCK_STALE_S:
+            if not cglib.session_active():
                 # Local lock check first: a sleeping PC costs no ssh timeout
                 # before the launch kicks off.
                 self.log("input_starts_session", input=cmd)

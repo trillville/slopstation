@@ -124,11 +124,17 @@ def main():
         # The chord path always had this for free - it closes before it
         # dispatches. A VOICE launch dispatches from a different process
         # entirely and had no way to ask, so the listener read straight through
-        # the handoff and had its handles torn away mid-read. That asymmetry is
-        # the whole bug: on turn eaa8bc the K15 was still reading at 22:57:32
-        # while the PC finished claiming at 22:57:37 (puck_vanished
-        # reason=claimed is that tear-away, and it appears on every voice
-        # launch and no chord launch).
+        # the handoff and had its handles torn away mid-read: on turn eaa8bc
+        # the K15 was still reading at 22:57:32 while the PC finished claiming
+        # at 22:57:37 (puck_vanished reason=claimed IS that tear-away, and it
+        # appears on every voice launch and no chord launch).
+        #
+        # Whether that contention was the CAUSE of the dead controllers is not
+        # proven - the evidence was two launches and a mechanism, and the other
+        # live candidate is Steam-side binding. A dead controller on a launch
+        # that logged no puck_vanished would falsify it. Standing off is right
+        # regardless: reading a device through its own handoff is not something
+        # to do on purpose.
         #
         # The session lock is the signal both paths already share, so this
         # needs no new IPC: couch.py touches it before its first side effect,
@@ -166,7 +172,7 @@ def main():
                     # This still covers a launch that started inside that
                     # window - couch.py would refuse anyway, so say "busy"
                     # rather than promise a launch that won't happen.
-                    if age is not None and age < cglib.LOCK_STALE_S:
+                    if cglib.session_active(age):
                         if time.time() - last_busy >= BUSY_COOLDOWN_S:
                             log("chord_busy", lock_age_s=round(age))
                             buzz(puck.active, cglib.PATTERN_BUSY, "busy")

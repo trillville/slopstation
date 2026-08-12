@@ -6,7 +6,7 @@ import socket, subprocess, sys, time
 
 import cglib
 import events
-from cglib import LOCK, LOCK_STALE_S
+from cglib import LOCK
 
 CFG  = cglib.load_config()
 
@@ -101,7 +101,7 @@ def start(appid=None, turn=None):
     # its own, so nothing is ever uncorrelated.
     events.context(turn=turn if events.valid_turn(turn) else events.new_turn())
     age = cglib.lock_age()
-    if age is not None and age < LOCK_STALE_S:
+    if cglib.session_active(age):
         log("launch_busy", lock_age_s=round(age)); return 1
     if age is not None:
         log.warn("lock_recycled", lock_age_s=round(age))

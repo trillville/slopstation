@@ -153,17 +153,14 @@ def check_ssh():
 
 
 def check_session_state():
-    lock = cglib.BASE / "state" / "session.lock"
-    try:
-        age = time.time() - lock.stat().st_mtime
-        import couch
-        if age < couch.LOCK_STALE_S:
-            report(PASS, "session lock", f"fresh ({age:.0f}s) - a session/launch is active")
-        else:
-            report(WARN, "session lock", f"stale ({age:.0f}s)",
-                   "harmless - next launch or reconcile recycles it")
-    except OSError:
+    age = cglib.lock_age()
+    if age is None:
         report(PASS, "session lock", "none (idle)")
+    elif cglib.session_active(age):
+        report(PASS, "session lock", f"fresh ({age:.0f}s) - a session/launch is active")
+    else:
+        report(WARN, "session lock", f"stale ({age:.0f}s)",
+               "harmless - next launch or reconcile recycles it")
     err = cglib.BASE / "state" / "last_error"
     try:
         report(WARN, "last_error", err.read_text().strip() or "(empty)",
