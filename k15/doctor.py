@@ -295,10 +295,15 @@ def check_telemetry():
         report(WARN, "event stream", f"{today.name} not written yet",
                "normal on a quiet boot; suspicious if the lanes are up")
 
-    # Retention is delete-on-rollover, so a pile of old files means the prune
-    # never ran - i.e. nothing has emitted since midnight on some past day.
+    # Retention runs on the first emit of a process and at rollover, so a pile
+    # of old files means the prune never ran - i.e. nothing has emitted since
+    # midnight on some past day. Scan archive/ too: expired files are moved
+    # there at ARCHIVE_DAYS and deleted from there at TTL_DAYS, so checking
+    # only the top level would make this probe silently always pass.
     try:
-        stale = [f.name for f in events.LOG_DIR.glob("*.jsonl")
+        stale = [f.name for f in
+                 list(events.LOG_DIR.glob("*.jsonl")) +
+                 list((events.LOG_DIR / events.ARCHIVE_NAME).glob("*.jsonl"))
                  if time.time() - f.stat().st_mtime > events.TTL_DAYS * 86400]
         if stale:
             report(WARN, "event retention", f"{len(stale)} file(s) past TTL",

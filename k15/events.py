@@ -38,6 +38,11 @@ from datetime import datetime, timezone
 BASE = pathlib.Path(__file__).resolve().parent
 LOG_DIR = BASE / "logs"
 TTL_DAYS = 14
+# Subdirectory NAME, not a path: LOG_DIR is monkeypatched to a tmpdir by the
+# blind suite, and a module-level LOG_DIR / "archive" would freeze the real
+# path at import time and let a test write into the live log directory.
+ARCHIVE_NAME = "archive"
+ARCHIVE_DAYS = 2        # out of Alloy's glob; see _prune
 
 DEBUG, INFO, WARN, ERROR = "debug", "info", "warn", "error"
 
@@ -186,16 +191,43 @@ def _path(day):
 
 
 def _prune():
-    """Delete expired daily files. Called only when the date rolls over, not
-    per line - a glob per event would be a real cost for no benefit."""
-    cutoff = time.time() - TTL_DAYS * 86400
+    """Archive closed daily files out of the shipper's glob, then delete the
+    expired ones. Called on the first emit of a process and again whenever the
+    date rolls over - not per line, because a glob per event would be a real
+    cost for no benefit.
+
+    The MOVE is what keeps Alloy cheap, and it is not tidiness. Alloy's glob
+    is k15-*.jsonl in this directory, and a tailed file costs ~0.04% of a core
+    whether or not it can still change - measured by A/B on one live process,
+    see gaming-pc/alloy/config.alloy.example. Only today's file is ever
+    appended to, so at TTL_DAYS=14 this directory grew to 13 tailers polling
+    files that were finished forever. archive/ is outside the glob.
+
+    Nothing is deleted early: archived files sit on disk until TTL_DAYS, and
+    the delete pass below scans both folders so they still expire on time.
+    Alloy holding a handle on a file being moved is safe - Windows lets the
+    rename through and the handle follows the file, so a partially-read
+    transcript still gets read to EOF."""
+    now = time.time()
+    archive = LOG_DIR / ARCHIVE_NAME
     try:
+        archive.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        # No rglob: archive/ is not re-scanned, so nothing moves twice.
         for f in LOG_DIR.glob("*.jsonl"):
             try:
-                if f.stat().st_mtime < cutoff:
-                    f.unlink()
+                if f.stat().st_mtime < now - ARCHIVE_DAYS * 86400:
+                    f.replace(archive / f.name)
             except OSError:
                 pass                # locked or vanished: next rollover
+        for f in list(LOG_DIR.glob("*.jsonl")) + list(archive.glob("*.jsonl")):
+            try:
+                if f.stat().st_mtime < now - TTL_DAYS * 86400:
+                    f.unlink()
+            except OSError:
+                pass
     except OSError:
         pass
 

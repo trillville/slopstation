@@ -35,9 +35,19 @@ local.file_match "events" {
 		// then write it here with FORWARD slashes.
 		__path__ = "C:/Users/minipc/Desktop/slopstation/k15/logs/k15-*.jsonl",
 	}]
-	// The file rolls over at midnight UTC and old ones are deleted by
-	// events.py, never renamed - so discovery just needs to notice the new
-	// name, and no open handle is ever moved out from under us.
+	// The file rolls over at midnight (local date in the NAME, UTC inside)
+	// and events.py moves anything older than two days into logs/archive/,
+	// which this glob does not match. That move is a cost control, not
+	// tidiness: a tailed file costs ~0.04% of a core whether or not it can
+	// still change, and only today's file is ever appended to - so without it
+	// this glob grew to 14 tailers, 13 of them watching finished files. See
+	// the cost note in gaming-pc/alloy/config.alloy.example for the
+	// measurement, and for why the obvious way to measure it reads zero.
+	//
+	// A move CAN pull a file out from under an open handle now. That is safe:
+	// Windows allows the rename and the handle follows the file, so anything
+	// half-read still gets read to EOF. Two days is the margin for Alloy
+	// having been down.
 	sync_period = "30s"
 }
 

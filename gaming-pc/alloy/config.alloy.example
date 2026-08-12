@@ -1,125 +1,171 @@
-// Grafana Alloy - gaming PC log shipper. (docs/observability-design.md, E4)
-//
-// Same install and same two environment variables as the K15 copy
-// (k15/alloy/config.alloy.example has the full setup notes); only the paths
-// and the second source differ.
-//
-// This machine ships TWO streams, deliberately, because they answer different
-// questions:
-//
-//   pc-YYYYMMDD.jsonl   the MILESTONES - enter_start, profile_applied,
-//                       puck_claimed, ready, enter_failed, exit_done. Structured,
-//                       carries the turn id, and is what dashboards count and
-//                       alerts fire on.
-//
-//   enter-*.log etc.    the NARRATIVE - Start-Transcript's full capture of the
-//                       run, including every line nobody thought to instrument.
-//                       Shipped as free text under lane="pc-transcript". This is
-//                       what you actually read when an enter fails in a NEW way,
-//                       and converting it to JSON would only wrap prose in
-//                       punctuation. Its filename carries the turn id too.
-
-// OFF, and it should stay off. Two claims were made for it during bring-up
-// and both were wrong: it does not cost CPU (4.44% of one core before,
-// 4.53% after - no effect), and it did not help diagnose anything. The
-// component pages at http://localhost:12345 - Arguments, Exports, health -
-// work WITHOUT it; they are what showed file_match's resolved target. This
-// feature streams data through a component and is not even implemented for
-// the ones used here ("Live debugging is not yet available for this
-// component"). What actually solved the E2 outage was the Windows
-// Application event log, which carried the 401 all along.
-livedebugging { enabled = false }
-
-// COST, measured 2026-08-11 so nobody has to re-investigate: Alloy costs
-// ~0.04% of one core per tailed file. This machine was at 4.5% tailing ~110
-// transcripts; the K15, tailing 2, sits at 0.51%. Clear-OldLogs now archives
-// transcripts out of this glob after two days, so the live set is only the
-// files that could still be written to - a handful in steady use. Nothing is
-// deleted early; archived files stay on disk under logs/archive/ until the
-// usual 30-day retention.
-
-// ---------------------------------------------------------------- milestones
-
-local.file_match "pc_events" {
-	path_targets = [{
-		__path__ = "C:/CouchGaming/logs/pc-*.jsonl",
-	}]
-	sync_period = "30s"
-}
-
-loki.source.file "pc_events" {
-	targets    = local.file_match.pc_events.targets
-	forward_to = [loki.process.pc_events.receiver]
-}
-
-loki.process "pc_events" {
-	stage.json {
-		expressions = {
-			level   = "level",
-			lane    = "lane",
-			env     = "env",
-			service = "service",
-			ts      = "ts",
-		}
-	}
-
-	stage.labels {
-		values = {
-			level   = "",
-			lane    = "",
-			env     = "",
-			service = "",
-		}
-	}
-
-	stage.timestamp {
-		source = "ts"
-		format = "RFC3339"
-	}
-
-	forward_to = [loki.write.grafana_cloud.receiver]
-}
-
-// ---------------------------------------------------------------- transcripts
-
-local.file_match "pc_transcripts" {
-	path_targets = [{
-		__path__ = "C:/CouchGaming/logs/*.log",
-		service  = "gamepc",
-		lane     = "pc-transcript",
-		env      = "prod",
-		level    = "info",
-	}]
-	sync_period = "30s"
-}
-
-loki.source.file "pc_transcripts" {
-	targets    = local.file_match.pc_transcripts.targets
-	forward_to = [loki.write.grafana_cloud.receiver]
-
-	// NO tail_from_end here, and that is the whole point. It was set to stop a
-	// first run backfilling 100+ historical transcripts stamped "now" - but a
-	// transcript is written and CLOSED in about ten seconds, while sync_period
-	// is 30s. So Alloy would discover each new file already complete, seek to
-	// its end, and ship nothing. Ever. The setting that prevented shipping old
-	// transcripts also prevented shipping new ones.
-	//
-	// Fixed at the source instead: Clear-OldLogs moves transcripts older than
-	// two days into logs\archive\, which this glob does not match. The live
-	// set is now the handful that could still be written to, so reading from
-	// the beginning is both correct and cheap.
-}
-
-// -------------------------------------------------------------------- output
-
-loki.write "grafana_cloud" {
-	endpoint {
-		// This rig's real value - the same endpoint the K15 uses.
-		url = "https://logs-prod-021.grafana.net/loki/api/v1/push"
-
-		basic_auth {
-			username = sys.env("GC_LOKI_USER")   // instance id: 1730320
-			password = sys.env("GC_LOKI_TOKEN")
-		}
-	}
-}
+// Grafana Alloy - gaming PC log shipper. (docs/observability-design.md, E4)
+//
+// Same install and same two environment variables as the K15 copy
+// (k15/alloy/config.alloy.example has the full setup notes); only the paths
+// and the second source differ.
+//
+// This machine ships TWO streams, deliberately, because they answer different
+// questions:
+//
+//   pc-YYYYMMDD.jsonl   the MILESTONES - enter_start, profile_applied,
+//                       puck_claimed, ready, enter_failed, exit_done. Structured,
+//                       carries the turn id, and is what dashboards count and
+//                       alerts fire on.
+//
+//   enter-*.log etc.    the NARRATIVE - Start-Transcript's full capture of the
+//                       run, including every line nobody thought to instrument.
+//                       Shipped as free text under lane="pc-transcript". This is
+//                       what you actually read when an enter fails in a NEW way,
+//                       and converting it to JSON would only wrap prose in
+//                       punctuation. Its filename carries the turn id too.
+
+// OFF, and it should stay off. Two claims were made for it during bring-up
+// and both were wrong: it does not cost CPU (4.44% of one core before,
+// 4.53% after - no effect), and it did not help diagnose anything. The
+// component pages at http://localhost:12345 - Arguments, Exports, health -
+// work WITHOUT it; they are what showed file_match's resolved target. This
+// feature streams data through a component and is not even implemented for
+// the ones used here ("Live debugging is not yet available for this
+// component"). What actually solved the E2 outage was the Windows
+// Application event log, which carried the 401 all along.
+livedebugging { enabled = false }
+
+// COST: ~0.04% of one core per TAILED FILE, whether or not that file ever
+// changes. Established 2026-08-11 by A/B on a single live process rather than
+// by comparing two moments:
+//
+//    53 files   2.11 / 2.96 / 1.72 %   mean 2.26
+//   103 files   4.29 / 5.46 / 3.28 %   mean 4.34     (+50 empty .log files)
+//    53 files   back to ~2-3 %          (files removed again)
+//
+// +50 files = +2.08% of a core = 0.042%/file, on an otherwise idle machine
+// shipping nothing. This cost is POLLING, not throughput: the added files
+// were empty. So the file count in these globs is the number that matters,
+// and it is why Clear-OldLogs archives.
+//
+// MEASUREMENT TRAP, because it produced two wrong answers before this one:
+// Get-Process / .TotalProcessorTime / .CPU return ZERO for Alloy, silently.
+// It runs as a service under an account a non-elevated shell cannot read
+// processor time from, and the API reports 0.00% rather than raising. Use
+// Win32_Process (UserModeTime + KernelModeTime, 100ns units) and sample it
+// twice - that path works unelevated:
+//
+//   $q="SELECT UserModeTime,KernelModeTime FROM Win32_Process WHERE Name='alloy-windows-amd64.exe'"
+//   $a=Get-CimInstance -Query $q; sleep 60; $b=Get-CimInstance -Query $q
+//   (($b.UserModeTime+$b.KernelModeTime-$a.UserModeTime-$a.KernelModeTime)/1e7)/60*100
+//
+// Also do not use lifetime CPU divided by uptime: it averages in the startup
+// file walk and reads high for the first half hour after a restart.
+//
+// Clear-OldLogs moves transcripts out of this glob after two days. Nothing is
+// deleted early; archived files stay on disk under logs/archive/ until the
+// usual 30-day retention.
+//
+// TWO DAYS is not sized for appendability - it could not be. Every producer
+// is a Task Scheduler singleton (MultipleInstances=IgnoreNew on all five), so
+// at most ONE file per tag is ever open, and cross-tag overlap happens in
+// exactly two designed places: Enter waiting out a running Exit (its
+// transcript opens before that check) and Wake-Safety firing Exit without
+// waiting. Live set: 1 normally, 2 during a handoff. Sixty seconds would
+// cover that.
+//
+// The window is sized for THE SHIPPER BEING DOWN. Archive-on-close would move
+// a file out of this glob before Alloy read it whenever the service is
+// stopped or the uplink is rejecting writes - which is not hypothetical, the
+// E2 401 went unnoticed for hours. Those lines would vanish from Loki with
+// nothing to show they ever existed. Two days is how long Alloy may be broken
+// before this rig starts losing narrative. Shorten it only alongside an alert
+// that catches a dead shipper faster than the new window.
+//
+// KNOWN GAP: pc-*.jsonl below is NOT archived, only deleted at 30 days, so
+// that glob grows by one file per day to ~30 while only today's can ever be
+// appended to. At 0.04%/file that is ~1.2% of a core to poll 29 files that
+// can never change again - more than the transcripts cost after archiving.
+// The fix is the same move Clear-OldLogs already makes for *.log; it just has
+// not been applied to *.jsonl yet.
+
+// ---------------------------------------------------------------- milestones
+
+local.file_match "pc_events" {
+	path_targets = [{
+		__path__ = "C:/CouchGaming/logs/pc-*.jsonl",
+	}]
+	sync_period = "30s"
+}
+
+loki.source.file "pc_events" {
+	targets    = local.file_match.pc_events.targets
+	forward_to = [loki.process.pc_events.receiver]
+}
+
+loki.process "pc_events" {
+	stage.json {
+		expressions = {
+			level   = "level",
+			lane    = "lane",
+			env     = "env",
+			service = "service",
+			ts      = "ts",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level   = "",
+			lane    = "",
+			env     = "",
+			service = "",
+		}
+	}
+
+	stage.timestamp {
+		source = "ts"
+		format = "RFC3339"
+	}
+
+	forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+// ---------------------------------------------------------------- transcripts
+
+local.file_match "pc_transcripts" {
+	path_targets = [{
+		__path__ = "C:/CouchGaming/logs/*.log",
+		service  = "gamepc",
+		lane     = "pc-transcript",
+		env      = "prod",
+		level    = "info",
+	}]
+	sync_period = "30s"
+}
+
+loki.source.file "pc_transcripts" {
+	targets    = local.file_match.pc_transcripts.targets
+	forward_to = [loki.write.grafana_cloud.receiver]
+
+	// NO tail_from_end here, and that is the whole point. It was set to stop a
+	// first run backfilling 100+ historical transcripts stamped "now" - but a
+	// transcript is written and CLOSED in about ten seconds, while sync_period
+	// is 30s. So Alloy would discover each new file already complete, seek to
+	// its end, and ship nothing. Ever. The setting that prevented shipping old
+	// transcripts also prevented shipping new ones.
+	//
+	// Fixed at the source instead: Clear-OldLogs moves transcripts older than
+	// two days into logs\archive\, which this glob does not match. The live
+	// set is now the handful that could still be written to, so reading from
+	// the beginning is both correct and cheap.
+}
+
+// -------------------------------------------------------------------- output
+
+loki.write "grafana_cloud" {
+	endpoint {
+		// This rig's real value - the same endpoint the K15 uses.
+		url = "https://logs-prod-021.grafana.net/loki/api/v1/push"
+
+		basic_auth {
+			username = sys.env("GC_LOKI_USER")   // instance id: 1730320
+			password = sys.env("GC_LOKI_TOKEN")
+		}
+	}
+}

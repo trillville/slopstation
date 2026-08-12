@@ -224,13 +224,24 @@ function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
     # from there at $Days. The move exists for the SHIPPER, not for tidiness:
     # Alloy tails every file its glob matches, and a finished transcript can
     # never be appended to again - only a currently-running script's can grow.
-    # Keeping 100+ closed files in the glob meant 100+ pointless tailers
-    # (measured: ~0.04% of a core each). Archiving keeps the live set to the
-    # handful that could actually change, and the files stay on disk.
+    # Keeping 100+ closed files in the glob meant 100+ pointless tailers, and
+    # a tailer costs ~0.04% of a core whether or not its file ever changes -
+    # measured by A/B on one live process, see the cost note in
+    # alloy\config.alloy.example (which also records why the obvious way to
+    # measure this returns a silent zero). 110 files was ~4.5% of a core to
+    # watch files that were finished. Archiving keeps the live set to the
+    # handful that can actually still be written to, and the files stay on
+    # disk.
+    # Both streams archive, for the same reason: pc-*.jsonl is one file per day
+    # and only TODAY's can be appended to, so at 30-day retention it was 29
+    # tailers (~1.2% of a core) polling files that are finished forever.
     $archive = Join-Path $CG.LogDir 'archive'
     New-Item -ItemType Directory -Force -Path $archive -ErrorAction SilentlyContinue | Out-Null
-    # No -Recurse: archive\ is not re-scanned, so nothing moves twice.
-    Get-ChildItem $CG.LogDir -Filter *.log -File -ErrorAction SilentlyContinue |
+    # Wildcard path + -Include and NO -Recurse: enumerates this directory's
+    # files only, so archive\ is never re-scanned and nothing moves twice.
+    # (-Filter takes one pattern, which is why this is not -Filter.)
+    Get-ChildItem (Join-Path $CG.LogDir '*') -Include *.log, *.jsonl -File `
+            -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$ArchiveAfterDays) } |
         Move-Item -Destination $archive -Force -ErrorAction SilentlyContinue
 
