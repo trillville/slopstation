@@ -295,11 +295,18 @@ that probe is the check — see below.
 ```
 .venv\Scripts\python bench\probe_intent.py     --provider openai
 .venv\Scripts\python bench\probe_task_brief.py --provider openai
+.venv\Scripts\python bench\probe_grounding.py  --provider openai
 ```
 
-Each costs a few cents and calls the real model, so neither is in the blind
-suite. Run both after any change to `RULES` or a tool description, after a
-provider or model switch, and before trusting a new tool with a side effect.
+Each calls the real model, so none is in the blind suite. Run all three after
+any change to `RULES` or a tool description, after a provider or model
+switch, and before trusting a new tool with a side effect.
+
+**They are also the model A/B.** Section 10 above compares models by ear;
+these score them. Pass `--model` to pin one and run the same probes against
+each candidate — that is how `gpt-5.6-luna` was chosen over `gpt-5.6-terra`
+on 2026-08-12 (identical on intent and briefs, terra leaked an owned game in
+1 of 8, and cost ~40x more per conversation for no measured gain).
 
 The blind suite can prove the tool boundary refuses a bad appid. Only these
 can prove the model doesn't reach for a destructive tool when asked a
