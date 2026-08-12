@@ -11,6 +11,10 @@ $CG = @{
     Puck        = 'K15.5'                  # VirtualHere address; `vhui64 -t LIST` is the source of truth
     PuckHwId    = 'VID_28DE&PID_1304'      # Valve Steam Controller Puck
     TvEdid      = 'QCQ90S'                 # S90C's EDID name as Windows reports it
+    SteamWindow = 'Steam'                  # EXACT title of the desktop library
+                                           # window - the one window a session
+                                           # must never leave in the foreground
+    BpmWindow   = 'Steam Big Picture Mode' # ...and the one it should
     TvHeight    = 2160                     # see Test-TvIsPrimary
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
@@ -176,7 +180,15 @@ if (-not ('CG.Win' -as [type])) {
 [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder s, int n);
 [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
 delegate bool EnumProc(IntPtr h, IntPtr p);
+public static string ForegroundTitle() {
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return "";
+    var sb = new System.Text.StringBuilder(300);
+    GetWindowTextW(h, sb, 300);
+    return sb.ToString();
+}
 public static IntPtr WindowByTitle(string want) {
     IntPtr hit = IntPtr.Zero;
     EnumWindows((h, p) => {
@@ -211,12 +223,20 @@ public static IntPtr WindowByTitle(string want) {
 # a library window laid out at 4K comes back garbled when reopened at the
 # ultrawide's resolution.
 function Hide-DesktopSteam {
-    $h = [CG.Win]::WindowByTitle('Steam')
+    $h = [CG.Win]::WindowByTitle($CG.SteamWindow)
     if ($h -ne [IntPtr]::Zero) {
         [void][CG.Win]::ShowWindow($h, 6)      # 6 = SW_MINIMIZE
         Log 'desktop Steam minimized'
     }
 }
+
+# What is ACTUALLY in front, as a string, for the ready event to carry.
+# Recorded rather than reasoned about: the dead-controller bug survived three
+# sessions because every signal we had said success - `focused=True` was in
+# the ready event while the controller was reaching nothing. One field naming
+# the window that really has the foreground makes that failure self-evident in
+# the first launch instead of the fourth.
+function Get-ForegroundTitle { [CG.Win]::ForegroundTitle() }
 
 # Apply a DisplayMagician profile shortcut, poll $Until to verify it took, and
 # kill DisplayMagician after every attempt - verified or not.

@@ -86,20 +86,34 @@ try {
         Log "game $running still running - leaving it in front"
     } else {
         $wsh = New-Object -ComObject WScript.Shell
-        $focused = Wait-For { $wsh.AppActivate('Steam Big Picture Mode') } 20 'Big Picture focused'
+        $focused = Wait-For { $wsh.AppActivate($CG.BpmWindow) } 20 'Big Picture focused'
         if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
     }
 
     # 6. Ready marker - the K15 switches the TV input only after seeing this
+    #
+    # First, MEASURE the foreground rather than trusting the branch above to
+    # have got it right. The game branch cannot verify what it did (there is no
+    # reliable appid -> window mapping), so without this it would assert
+    # focused=True the way the old code did - and an assertion is exactly what
+    # let this bug survive three sessions: `focused=True` sat in the ready
+    # event while the controller reached nothing. The desktop library window in
+    # front is the one state we KNOW is broken, so it can never read as success.
+    $fg = Get-ForegroundTitle
+    if ($fg -eq $CG.SteamWindow) {
+        $focused = $false
+        Log "WARNING: desktop Steam is in the foreground - the controller will not reach the TV"
+    }
     Set-ReadyMarker
-    Log 'READY'
+    Log "READY (foreground: '$fg')"
     # The milestone the whole system is gated on: dur_ms here IS time-to-READY,
     # which is the distribution the launch-health dashboard is built from.
     # Warn-level when nothing took the foreground: the TV still switches (a
     # session you can rescue with one click beats no session), but the failure
     # this whole step exists to prevent looks EXACTLY like success from here,
-    # so it must not be logged as one. `ready focused=False` is the alert.
-    Write-CgEvent 'ready' @{ focused = $focused } $(if ($focused) { 'info' } else { 'warn' })
+    # so it must not be logged as one. `ready focused=False` is the alert, and
+    # `fg` is the field that says what to go look at.
+    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg } $(if ($focused) { 'info' } else { 'warn' })
 }
 catch {
     # The failure path obeys the same rules as the success path: kill
