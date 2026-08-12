@@ -16,9 +16,11 @@
 // double the volume to say the same thing twice. Note the glob is k15-*.jsonl,
 // so blind-suite runs (which write test-*.jsonl) never leave the machine at all.
 
-// Bring-up aid only - it streams every processed line to the UI at
-// http://localhost:12345 and costs CPU continuously. Flip it on while
-// diagnosing, off again afterwards.
+// Bring-up aid: it streams every processed line to the UI at
+// http://localhost:12345. Off by default because a debug feature should be,
+// NOT for performance - measured on the gaming PC, toggling it moved CPU
+// from 4.44% of one core to 4.53%, i.e. not at all. The earlier claim that
+// it "costs CPU continuously" was wrong. Flip it on while diagnosing.
 livedebugging { enabled = false }
 
 local.file_match "events" {
