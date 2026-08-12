@@ -79,6 +79,13 @@ local.file_match "pc_transcripts" {
 loki.source.file "pc_transcripts" {
 	targets    = local.file_match.pc_transcripts.targets
 	forward_to = [loki.write.grafana_cloud.receiver]
+
+	// Only NEW transcript content. There are 100+ historical transcripts in
+	// that folder, and unlike the JSONL stream they carry no parseable
+	// timestamp - so a first run would ship months of old sessions all
+	// stamped "now", burying today's launch under history that looks live.
+	// The old files stay on disk; they were never the queryable surface.
+	tail_from_end = true
 }
 
 // -------------------------------------------------------------------- output
