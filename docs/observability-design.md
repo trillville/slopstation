@@ -189,7 +189,7 @@ vocabulary:
 |---|---|
 | `voice` | `wake`, `wake_false`, `stt_final`, `gate_match`, `gate_miss`, `llm_reply`, `tool_call`, `tts_first_audio`, `session_open`, `session_close`, `heartbeat` |
 | `launch` | `launch_start`, `wol_sent`, `ssh_up`, `enter_dispatched`, `host_ready`, `launch_failed`, `session_end`, `exlink_send`, `exlink_nak` |
-| `listener` | `chord`, `chord_busy`, `launch_signal_fail`, `heartbeat` |
+| `listener` | `chord`, `chord_busy`, `armed`, `puck_present`, `puck_vanished`, `puck_standoff`, `buzz_sent`, `buzz_failed`, `launch_failure_signaled`, `stale_error_discarded`, `heartbeat` |
 | `library` | `sync_start`, `sync_done`, `meta_fetched`, `meta_failed` |
 | `jobs` | `job_queued`, `job_running`, `job_done`, `job_failed`, `job_announced` |
 | `supervisor` | `start`, `restart` (with exit code), `bounce` — emitted by the `.bat` supervisors via the `events.py` CLI |

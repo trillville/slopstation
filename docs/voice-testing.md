@@ -519,7 +519,8 @@ kills the agents (never the supervisor windows) and each supervisor relaunches
 its own on the new code after its 10 s backoff. A live session is undisturbed:
 `couch.py reconcile` runs outside that loop, so bouncing the listener agent
 can't re-trigger it against a session already being watched, and the
-relaunched listener just finds the Puck claimed and stands by at 1 Hz. The
+relaunched listener sees the fresh session lock and stands off the Puck
+without ever opening it (`puck_standoff`), polling at 2 Hz until it clears. The
 window pauses when it reloaded something, so a double-click is readable; at
 boot nothing is reloaded, so nothing pauses. Remove `Start-K15.lnk` to undo
 autostart.

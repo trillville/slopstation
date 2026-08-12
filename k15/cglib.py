@@ -111,6 +111,23 @@ def lock_age():
         return None
 
 
+def session_active():
+    """True while a launch or a live session owns the Puck.
+
+    THE arbiter every trigger path already consults: couch.py refuses a second
+    launch on it, voice dispatch answers "busy" from it, and the chord listener
+    stands off the device on it. couch.py touches the lock before its first
+    side effect and every few seconds thereafter, so one predicate covers the
+    whole window from dispatch through teardown.
+
+    A STALE lock deliberately reads as free, and that bound is load-bearing now
+    that the listener stands off on this: it is the only thing between a lock
+    nobody cleaned up and a permanently deaf chord lane. Worst case is
+    LOCK_STALE_S of deafness - exactly the bound launch_busy has always had."""
+    age = lock_age()
+    return age is not None and age < LOCK_STALE_S
+
+
 # --- Haptic vocabulary: one base note, count is the message -------------------
 #   1 thud = launch dispatched   2 = busy (launch already active)   3 = launch failed
 _THUD     = (220, 60, 90, 0, 0)

@@ -78,7 +78,7 @@ Time to READY, the number the whole system is judged on:
 
 - **launch**: `launch_start` `wol_sent` `ssh_up` `enter_dispatched` `host_ready` `launch_failed` `session_ended` `session_idle` `exlink_send` `exlink_nak`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_close` `session_crashed` `pipeline_error` `heartbeat`
-- **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `armed` `heartbeat`
+- **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **jobs**: `job_queued` `job_running` `job_done` `job_failed` `job_announced`
 - **gamepc**: `enter_start` `profile_applied` `puck_claimed` `ready` `enter_failed` `exit_done` `game_launched`
