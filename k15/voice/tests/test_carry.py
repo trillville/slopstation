@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from voice_agent import _trim_carry
+from session_runtime import _trim_carry
 
 U = {"role": "user", "content": "what racing games do i have"}
 A = {"role": "assistant", "content": "Three."}

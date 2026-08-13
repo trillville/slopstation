@@ -294,7 +294,7 @@ class GrammarGate(FrameProcessor):
                 # jarvis, ..." - a queued job stores it beside the brief the
                 # model writes, so a later replay quotes the user rather than
                 # attributing the model's wording to them
-                # (voice_agent.job_messages).
+                # (session_runtime.job_messages).
                 if self.dispatch is not None:
                     self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)

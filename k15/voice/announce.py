@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.request
 
+import audio
 import earcons
 
 CHUNK = 3200                    # 100 ms per write; abort latency bound
@@ -78,16 +79,12 @@ class Announcer:
     def _output_index(self, pa):
         """Config name-fragment -> output device index on a FRESH pa (the
         device table moves; resolving on an old snapshot is the deafness bug
-        voice_agent already fought). Mirror of resolve_device, minus the
-        input half - kept tiny and local to avoid a circular import."""
-        frag = (self.voice.get("outputDeviceName") or "").lower()
-        if not frag:
-            return None
-        for i in range(pa.get_device_count()):
-            d = pa.get_device_info_by_index(i)
-            if d["maxOutputChannels"] and frag in d["name"].lower():
-                return i
-        return None
+        audio.rebuild_audio exists for). audio.resolve_device silenced: a log
+        line per announcement would be noise. This used to be a documented
+        local mirror of the resolver, kept to avoid a circular import - the
+        cycle died when device resolution moved out of the composition root."""
+        return audio.resolve_device(pa, self.voice.get("outputDeviceName"),
+                                    want_input=False, log=None)
 
     def _play(self, pcm):
         """Own PyAudio world per announcement; chunked writes so abort and a

@@ -284,20 +284,20 @@ def main():
 
     # Job results reach the assistant as prior conversation, so a follow-up
     # ("which was cheapest?") lands on a model that already knows.
-    import voice_agent
+    import session_runtime
     # The replay must never put the MODEL's words in the USER's mouth. It
     # used to seed the generated brief as role=user, so a bad brief ("using
     # only games in the provided catalog") became a standing instruction
     # attributed to the user for the whole CONTEXT_AGE_S window - observed
     # in a live session, trace 50452ed5.
-    msgs = voice_agent.job_messages(store)
+    msgs = session_runtime.job_messages(store)
     assert msgs and len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
     brief = store.for_context()[0]["task"]
     for m in msgs:
         if m["role"] == "user":
             assert brief not in m["content"], \
                 "the model's own brief is being replayed as the user's words"
-    assert voice_agent.job_messages(None) == []          # worker lane off
+    assert session_runtime.job_messages(None) == []          # worker lane off
 
     # With a transcript: a true exchange, quoting the person. `asked` is an
     # ARGUMENT now (from dispatch's utterance snapshot), not store state.
@@ -307,7 +307,7 @@ def main():
     store._update(job["id"], status=jobs_mod.DONE, read=True,
                   finished=int(time.time()), summary="Found three.",
                   detail="The long form.")
-    msgs = voice_agent.job_messages(store)
+    msgs = session_runtime.job_messages(store)
     pair = [m for m in msgs if m["role"] in ("user", "assistant")][-2:]
     assert pair[0] == {"role": "user",
                        "content": "find me some couch co-op games"}, pair
@@ -319,7 +319,7 @@ def main():
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
     store._update(job["id"], status=jobs_mod.DONE, read=True,
                   finished=int(time.time()), summary="Done.", detail="")
-    msgs = voice_agent.job_messages(store)
+    msgs = session_runtime.job_messages(store)
     assert not any("Some brief nobody spoke aloud." in m["content"]
                    for m in msgs if m["role"] == "user")
     assert any(m["role"] == "system" and "Some brief nobody spoke aloud."

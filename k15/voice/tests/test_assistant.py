@@ -170,7 +170,7 @@ def main():
     # inference ("'dict' object has no attribute 'model_dump'").
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 5
-    import voice_agent
+    import session_runtime
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMContextAggregatorPair)
@@ -181,11 +181,11 @@ def main():
     voice_a = {**CFG_MIN["voice"], "assistantProvider": "anthropic",
                "assistantModelAnthropic": "claude-haiku-4-5",
                "assistantModelOpenai": "gpt-5.6-luna"}
-    llm_a = voice_agent._make_llm(voice_a, dummy, si)
+    llm_a = session_runtime._make_llm(voice_a, dummy, si)
     voice_o = {**voice_a, "assistantProvider": "openai",
                "assistantModelOpenai": "gpt-5.6-luna",
                "assistantReasoningEffort": "low"}
-    llm_o = voice_agent._make_llm(voice_o, dummy, si)
+    llm_o = session_runtime._make_llm(voice_o, dummy, si)
     # Prove the inference path's model_dump() call survives - exactly the
     # line that died live when reasoning was a plain dict.
     assert llm_o._settings.reasoning.model_dump(exclude_none=True) == {

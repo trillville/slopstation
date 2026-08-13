@@ -87,7 +87,7 @@ def test_dead_wake_stream_surfaces_original_error():
     """Regression: a -9999 mid-listen made cleanup raise 'Stream
     not open', which replaced the real error AND escaped the handler, killing
     the agent. The listener must re-raise the ORIGINAL OSError."""
-    import voice_agent
+    import audio
 
     class DeadStream:
         def read(self, n, exception_on_overflow=True):
@@ -103,7 +103,7 @@ def test_dead_wake_stream_surfaces_original_error():
         def open(self, **kw):
             return DeadStream()
 
-    lst = voice_agent.WakeListener.__new__(voice_agent.WakeListener)
+    lst = audio.WakeListener.__new__(audio.WakeListener)
     lst.pa = FakePA()
     lst.device_index = None
     try:
@@ -112,7 +112,7 @@ def test_dead_wake_stream_surfaces_original_error():
     except OSError as e:
         assert "Unanticipated" in str(e), f"original error was replaced: {e}"
 
-    voice_agent.close_stream_quietly(DeadStream())   # must not raise
+    audio.close_stream_quietly(DeadStream())   # must not raise
     print("OK - dead wake stream: original error surfaces, quiet close swallows")
 
 
@@ -123,7 +123,7 @@ def test_zombie_stream_trips_silence_watchdog():
     honest stream death, and any real audio must reset the counter (a live
     mic always carries a noise floor)."""
     import numpy as np
-    import voice_agent
+    import audio
 
     NOISY_AT = 10                       # one real chunk mid-run resets the count
 
@@ -147,7 +147,7 @@ def test_zombie_stream_trips_silence_watchdog():
         def predict(self, chunk):
             return {"hey_jarvis": 0.0}
 
-    lst = voice_agent.WakeListener.__new__(voice_agent.WakeListener)
+    lst = audio.WakeListener.__new__(audio.WakeListener)
     lst.np = np
     lst.model = FakeModel()
     stream = ZombieStream()
@@ -156,7 +156,7 @@ def test_zombie_stream_trips_silence_watchdog():
         assert False, "zombie stream must raise"
     except OSError as e:
         assert "zeros" in str(e), f"wrong error: {e}"
-    want = NOISY_AT + voice_agent.WakeListener.SILENT_CHUNKS
+    want = NOISY_AT + audio.WakeListener.SILENT_CHUNKS
     assert stream.n == want, f"tripped after {stream.n} chunks, want {want}"
     print(f"OK - zombie stream: watchdog trips after {want} chunks, "
           f"real audio resets the count")

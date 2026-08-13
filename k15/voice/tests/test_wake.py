@@ -14,7 +14,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from voice_agent import WakeListener
+from audio import WakeListener
 
 VOICE_CFG = {"wakeModel": "hey_jarvis_v0.1"}
 CHUNK = WakeListener.CHUNK
