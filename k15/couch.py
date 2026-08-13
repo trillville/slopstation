@@ -12,9 +12,12 @@ CFG  = cglib.load_config()
 PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
-WAKE_RETRY_S   = 10    # this far into the READY wait, re-send power_on once
+WAKE_RETRY_S   = 30    # this far into the READY wait, re-send power_on once
                        # (see the send in start()) - the TV-asleep rescue the
-                       # gaming PC structurally cannot perform.
+                       # gaming PC structurally cannot perform. Past the healthy
+                       # envelope on purpose: launches reach READY in ~9-20 s, so
+                       # at 10 s the frame fired on most of them and `again` gave
+                       # a count of slow launches instead of stuck ones.
 WATCH_POLL_S   = 5
 WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
                        # dead. Deliberately low: a true sleep restores the TV in
@@ -139,8 +142,12 @@ def start(appid=None, turn=None):
             # at launch_start. Enter's profile retry re-applies TV-GAMING but
             # cannot ask the set to wake - the gaming PC has no Ex-Link, this
             # process does - so a sleeping TV used to cost the whole 120 s READY
-            # wait and the launch with it (2026-08-13 10:20). Timed to land
-            # while Enter is still on its retry, so both halves get one more go.
+            # wait and the launch with it (2026-08-13 10:20). WAKE_RETRY_S puts
+            # the frame after Enter's first profile check has failed and before
+            # its retry apply, which is the only window where a set that wakes
+            # now still rescues this launch: Enter runs to ~66 s (20 s check,
+            # then an OFFICE restore and a retry at up to 20 s each), and once
+            # it dies nothing re-runs it, so a later wake buys nothing.
             #
             # Safe to repeat: EXLINK_FRAMES holds DISCRETE power_on/power_off
             # values, so this is a no-op on a set already on - mute is the only
