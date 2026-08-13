@@ -1,18 +1,15 @@
 # Deploy.ps1 - ship the gaming-pc script set from this checkout to the runtime
 # folder (default C:\CouchGaming) as ONE CHECKED SET, and stamp `build-id` so
 # the K15 can ask what is actually running (`ssh gamepc version`, compared by
-# doctor.py). Before this existed the PC deployed by hand-copying files, which
-# made protocol skew a normal operational state that nothing could detect -
-# test_turn.py drills the REPO's Dispatch.ps1, so a drifted deployed copy
-# passed every test while running different code.
+# doctor.py). Hand-copying made skew undetectable: test_turn.py drills the
+# REPO's Dispatch.ps1, so a drifted deployed copy passed every test.
 #
 # Run from a checkout, on the PC:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Deploy.ps1
 #
 # The gitignored runtime pieces (vhui64.exe, OFFICE.lnk, TV-GAMING.lnk) are
-# never touched: this script copies scripts, warns when those are missing, and
-# stamps what it shipped. It deliberately does NOT copy itself - it runs from
-# the checkout, where git can vouch for what it is copying.
+# warned about, never touched. It does not copy itself: it runs from the
+# checkout, where git can vouch for what it ships.
 param([string]$Dest = 'C:\CouchGaming')
 
 $scripts = @(
@@ -35,9 +32,9 @@ foreach ($f in $scripts) {
     Write-Host "  $f"
 }
 
-# Build id: the checkout's short rev, '-dirty' when the tree has local edits
-# (a rev alone cannot vouch for content it did not commit - doctor warns on
-# it). No git on this box degrades to a dated 'nogit' stamp, never a failure.
+# The checkout's short rev, '-dirty' when the tree has uncommitted edits (a
+# rev cannot vouch for those - doctor warns). No git degrades to a dated
+# 'nogit' stamp, never a failure.
 $rev = ''
 if (Get-Command git -ErrorAction SilentlyContinue) {
     $out = git -C $PSScriptRoot rev-parse --short HEAD

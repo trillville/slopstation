@@ -31,17 +31,20 @@ COUCH = cglib.BASE / "couch.py"
 
 Result = namedtuple("Result", "ok earcon detail")
 
-# One utterance = one immutable snapshot: the correlation id minted for it,
-# and the user's words (post wake-strip; None on lanes with no transcript -
-# the chord, the REPL). GrammarGate writes it ONCE per final transcript via
-# begin_utterance, and every action the utterance causes reads it from here -
-# a namedtuple on purpose, so the pair swaps atomically and a reader can
-# never see one utterance's turn with another's words. THE CONTRACT it rides
-# on: one utterance is acted on at a time per session (transcripts reach the
-# gate serially). A second utterance landing while a slow dispatch is still
-# in flight re-points the attribute - which is why every consumer snapshots
-# it at operation START and works from the copy (test_turn drills exactly
-# that interleave).
+# THE per-utterance context, and the one home for this story. One utterance
+# = one immutable snapshot: its correlation id, and the user's words (post
+# wake-strip; None on lanes with no transcript - the chord, the REPL).
+#
+# Handed over EXPLICITLY because a ContextVar cannot do it: one is copied
+# into a task at task creation, so the gate setting it never reaches the
+# assistant's tool dispatch - a sibling task already running. When this rode
+# the ambient copy, voice-driven exits reached the gaming PC uncorrelated.
+#
+# A namedtuple so the pair swaps atomically: no reader can see one
+# utterance's turn beside another's words. The contract it rides on is that
+# one utterance is acted on at a time (transcripts reach the gate serially);
+# a second one landing mid-dispatch re-points the attribute, so consumers
+# snapshot at operation START (test_turn drills that interleave).
 Utterance = namedtuple("Utterance", "turn asked")
 
 
@@ -74,17 +77,14 @@ class Dispatch:
         self.voice = cfg["voice"]
         self.log = log
         self.dry_run = dry_run
-        # The utterance currently being acted on (see Utterance above).
-        # BOTH tiers read it from here rather than from events.current() -
-        # the ambient copy does not survive the hop from the frame
-        # processor's task to whichever task calls us. One Dispatch per
-        # session (run_session builds it), so an attribute is exactly as
-        # isolated as the ContextVar it stands in for.
+        # The utterance being acted on (see Utterance above). One Dispatch
+        # per session, so this attribute is exactly as isolated as the
+        # ContextVar it stands in for.
         self.utterance = Utterance(None, None)
 
     def begin_utterance(self, turn, asked=None):
-        """GrammarGate's one write per final transcript. A method so the gate
-        never constructs the type itself - the snapshot's shape has one home."""
+        """GrammarGate's one write per final transcript. A method so the
+        snapshot's shape has one home."""
         self.utterance = Utterance(turn, asked)
 
     # -- internals -------------------------------------------------------------
@@ -109,11 +109,9 @@ class Dispatch:
     # -- session ---------------------------------------------------------------
 
     def start_session(self, appid=None):
-        """Advisory busy check - same predicate as the chord, answered fast
-        and without spawning a console. The REAL arbiter is couch.py's atomic
-        acquire_lock: two launches racing through this check still produce
-        exactly one session. couch.py owns the whole sequence (and the one
-        rule)."""
+        """Advisory busy check - same predicate as the chord, answered
+        without spawning a console. The REAL arbiter is couch.py's atomic
+        acquire_lock, which owns the whole sequence (and the one rule)."""
         age = cglib.lock_age()
         if cglib.session_active(age):
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))
@@ -122,13 +120,10 @@ class Dispatch:
         if self.dry_run:
             return self._would(what)
         args = [sys.executable, str(COUCH), "start"] + ([str(appid)] if appid else [])
-        # couch.py runs in its own console, so the id has to travel as an
-        # argument - a ContextVar does not survive a process boundary. It does
-        # not survive a TASK boundary either, which is why the utterance
-        # snapshot leads and the ambient value is only the fallback (see
-        # __init__). Without it couch.py mints its own id and the user's
-        # sentence is joined to the launch it caused by nothing but a clock
-        # reading.
+        # couch.py runs in its own console, so the id travels as an argument
+        # (a ContextVar survives neither a process nor a task boundary - see
+        # Utterance). Without it couch.py mints its own and the user's
+        # sentence joins the launch it caused by nothing but a clock reading.
         turn = self.utterance.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
@@ -173,11 +168,9 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            # Explicit turn, same reason as end_session: the assistant's tool
-            # call runs in a task whose ambient context predates this
-            # utterance, so leaning on it shipped Tier-2 launches to the PC
-            # uncorrelated while the Tier-1 path (same task as the gate)
-            # quietly worked.
+            # Explicit turn (see Utterance): leaning on the ambient one
+            # shipped Tier-2 launches uncorrelated, while the Tier-1 path -
+            # same task as the gate - quietly worked.
             out = couch.ssh_intent(f"launch {appid}", turn=self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))

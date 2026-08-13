@@ -279,21 +279,11 @@ class GrammarGate(FrameProcessor):
                     frame.text = stripped       # both lanes see the command only
                     text = stripped
             if text:
-                # THE utterance snapshot: the id minted above plus what the
-                # user actually said, written to Dispatch as one immutable
-                # pair. Explicit hand-over because a ContextVar cannot do it:
-                # one is copied into a task at task CREATION, so setting it
-                # here never reaches the assistant's tool dispatch - a
-                # sibling task already running on an older snapshot. (The
-                # session id works ambiently only because it is minted before
-                # asyncio.run(); a per-utterance turn cannot be hoisted that
-                # early.) When this relied on the ambient copy, voice-driven
-                # exits reached the gaming PC uncorrelated and launches ran
-                # under an id couch.py minted for itself. `asked` is captured
-                # after wake-stripping, so it is the command and not "hey
-                # jarvis, ..." - a queued job stores it beside the brief the
-                # model writes, so a later replay quotes the user rather than
-                # attributing the model's wording to them
+                # THE utterance snapshot, handed to Dispatch explicitly -
+                # dispatch.Utterance is the one home for why a ContextVar
+                # cannot carry it. `asked` is post-strip, so it is the
+                # command and not "hey jarvis, ...": a queued job stores it
+                # beside the model's brief so a replay quotes the person
                 # (session_runtime.job_messages).
                 if self.dispatch is not None:
                     self.dispatch.begin_utterance(turn, text)

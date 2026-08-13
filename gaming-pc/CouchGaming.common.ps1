@@ -354,14 +354,11 @@ function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
 # The ready marker is the cross-machine session API: Enter writes it last, the
 # K15 switches the TV input only after seeing it, Exit/safeties remove it.
 #
-# CONTENT is the launch's turn id when one rode in with the enter verb - that
-# is generation identity. The K15 treats a READY as verified only when it
-# echoes the turn it sent, so a stale marker from an earlier life can no
-# longer satisfy a NEW launch's poll early (it used to: any non-NOTREADY read
-# as ready, so a leftover marker meant the TV switched to a host still
-# mid-Enter). No turn (manual task run, marker aged out) falls back to the
-# timestamp, which the K15 accepts as a legacy READY - so either side can
-# deploy this change first.
+# CONTENT is the launch's turn id when one rode in with the enter verb: the
+# K15 treats a READY as verified only when it echoes the turn it sent, so a
+# stale marker can no longer satisfy a NEW launch's poll (which used to
+# switch the TV to a host still mid-Enter). No turn falls back to the
+# timestamp, accepted as a legacy READY, so either side may deploy first.
 function Set-ReadyMarker {
     New-Item -ItemType Directory -Force (Split-Path $CG.ReadyMarker) | Out-Null
     $stamp = if ($script:CgTurn) { $script:CgTurn } else { (Get-Date).ToString('o') }

@@ -168,9 +168,7 @@ def tool_impls(dispatch, log, jobs=None):
         if jobs is None:
             return {"ok": False, "error": "background tasks aren't available "
                     "right now - answer from what you know instead"}
-        # The user's words ride from the utterance snapshot the gate wrote -
-        # this tool call runs in a task whose ambient context predates the
-        # utterance, so dispatch carries it (see dispatch.Utterance).
+        # The user's words ride the gate's snapshot (see dispatch.Utterance).
         ok, detail = jobs.enqueue(task, asked=dispatch.utterance.asked)
         log("tool_call", tool="background_task", ok=ok, task=task[:200])
         return {"ok": ok, "detail" if ok else "error": detail}

@@ -95,10 +95,8 @@ def start(appid=None, turn=None):
     # its own, so nothing is ever uncorrelated.
     turn = turn if events.valid_turn(turn) else events.new_turn()
     events.context(turn=turn)
-    # The pre-read only shapes the log lines; acquire_lock's exclusive create
-    # is the arbiter. Losing it means another launch won inside the last few
-    # milliseconds - the window that used to let a chord and a voice start
-    # both dispatch (and the second Enter recycle the Puck under the first).
+    # The pre-read only shapes the log lines - acquire_lock is the arbiter,
+    # and losing it means another launch won in the last few milliseconds.
     age = cglib.lock_age()
     if cglib.session_active(age):
         log("launch_busy", lock_age_s=round(age)); return 1
@@ -136,32 +134,27 @@ def start(appid=None, turn=None):
             cglib.touch_lock()
             try:
                 st = ssh("status")
+                # Generation identity: the marker echoes the turn Enter was
+                # given, so a READY can be matched to the launch that caused
+                # it. Our turn = this launch's ready.
                 if st == turn:
-                    # Generation identity: this READY echoes OUR turn, so it
-                    # answers THIS launch. Enter writes the id that rode in
-                    # with the enter verb, so verified is the normal case.
                     log("host_ready", status=st, dur_ms=ms(), verified=True)
                     ready = True; break
                 if st != "NOTREADY":
                     if events.valid_turn(st):
-                        # Turn-shaped but not ours: a stale marker from a
-                        # session nothing cleaned up. Keep waiting - our
-                        # Enter overwrites it on completion, so this
-                        # converges instead of switching the TV to a host
-                        # still mid-Enter (which is what "any non-NOTREADY
-                        # is ready" used to do here). One rare corner also
-                        # lands here failing CLOSED: another mutating verb
-                        # overwriting the turn file inside the ~1 s before
-                        # Enter reads it makes a REAL ready look foreign -
-                        # the launch times out clean and a retry works,
-                        # which beats the old fail-open every time.
+                        # Someone else's turn: a stale marker. Keep waiting -
+                        # our Enter overwrites it, so this converges, where
+                        # "any non-NOTREADY is ready" used to switch the TV
+                        # to a host still mid-Enter. The rare inverse (the
+                        # turn file overwritten before Enter read it) also
+                        # lands here, failing closed into a clean retry.
                         if st != foreign_seen:
                             log.warn("ready_foreign", status=st)
                             foreign_seen = st
                     else:
-                        # Legacy shape (ISO timestamp): a PC deployed before
-                        # turn-stamping, or an Enter with no turn to echo.
-                        # Accept - either side may deploy first - but say so.
+                        # ISO timestamp: a PC deployed before turn-stamping,
+                        # or a turnless Enter. Accept (either side may deploy
+                        # first) but record that it was unverified.
                         log("host_ready", status=st, dur_ms=ms(),
                             verified=False)
                         ready = True; break
@@ -194,10 +187,8 @@ def start(appid=None, turn=None):
 
 def watch(expected=None):
     """Poll the session until it ends, then restore the TV and release the
-    lock. `expected` is the turn the READY marker should keep echoing; a
-    marker that changes to a DIFFERENT turn means a successor session owns
-    the rig (this watcher must have stalled past staleness for its launch to
-    acquire), so leave everything - TV and lock alike - to the owner. None
+    lock. `expected` is the turn the marker should keep echoing: a different
+    one means a successor owns the rig, so leave the TV and lock to it. None
     disables the check (a reconcile that adopted a legacy marker)."""
     fails = 0
     died_by_fails = False
@@ -229,10 +220,8 @@ def watch(expected=None):
         except Exception:
             pass
     exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
-    # Ownership-checked: if this watcher stalled past staleness and a new
-    # launch recycled the lock meanwhile, the file is the successor's now and
-    # stays. (The stall itself is the anomaly; refusing the unlink just keeps
-    # a live session's arbiter intact.)
+    # Ownership-checked: a lock recycled while we stalled belongs to the
+    # successor, and unlinking it would free a live session.
     if not cglib.release_lock():
         log.warn("lock_kept", reason="owned_by_successor")
     log("session_idle")
@@ -262,9 +251,7 @@ def reconcile():
                 # Adopt, don't just touch: the owner note still names the dead
                 # process, and release_lock at session end checks the pid.
                 cglib.adopt_lock(f"{events.current().get('turn')} {os.getpid()}")
-                # The marker's CURRENT value is the session's identity from
-                # here on - if it changes to another turn, a successor owns
-                # the rig and this watcher stands down.
+                # Whatever the marker says now IS this session's identity.
                 watch(expected=st if events.valid_turn(st) else None)
                 return 0
             break                       # definitive NOTREADY - session is dead

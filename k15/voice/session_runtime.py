@@ -1,16 +1,13 @@
 """Construction and lifecycle of ONE voice session: the per-wake Pipecat
 pipeline (mic -> Flux STT -> GrammarGate -> speaker, with the optional LLM
-assistant lane), plus the cross-session carry policy that lets a follow-up
-land seconds after a session closed. Split from voice_agent.py so the
-composition root composes and this file owns the one lifecycle.
+assistant lane), plus the cross-session carry that lets a follow-up land
+seconds after a session closed.
 
 Named session_runtime, not session: on the K15 "session" already means the
-lock in state/ - the couch session - and this is a different thing.
+couch session - the lock in state/ - and this is a different thing.
 
-Heavy imports (pipecat, the provider SDKs) stay INSIDE run_session, exactly
-as they were in voice_agent: a session build pays them, importing this module
-does not (voice_agent.prewarm_imports_bg warms them at boot so the first
-wake is as fast as every later one).
+Heavy imports (pipecat, the provider SDKs) stay INSIDE run_session: a session
+build pays them, importing this module does not.
 """
 import time
 

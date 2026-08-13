@@ -1,12 +1,11 @@
 """One PortAudio world: device resolution, recovery, out-of-session playback,
-and the wake listener. Split from voice_agent.py because this concept owns its
-own failure domain - every deafness incident (the 240 blind reopens, the
-zombie zero-stream, the BT profile flaps) lives here - and its one invariant
-is worth a module boundary: NEVER resolve a device against a PyAudio instance
-that predates a device change; PortAudio snapshots the device table at init.
+and the wake listener. Its own module because every deafness incident lives
+here, and so does the invariant they all taught: NEVER resolve a device
+against a PyAudio instance that predates a device change - PortAudio
+snapshots the device table at init.
 
 voice_agent.py composes these; announce.py resolves its per-announcement
-output here (which is what ended its documented duplicate of resolve_device).
+output here rather than keeping its own copy of the resolver.
 """
 import collections
 import time
@@ -21,11 +20,10 @@ log = cglib.make_log("voice")
 
 def resolve_device(pa, fragment, want_input, log=log):
     """Config name-fragment -> PyAudio device index; None = system default.
-    Logs the bound NAME: after an audio rebuild the index alone says nothing
-    about which physical mic/speaker is live, and the name is the only way
-    to spot from couch.log that voice bound the wrong endpoint. Pass log=None
-    for a silent resolve - the announcer re-resolves per announcement, and a
-    line per bulletin would be noise."""
+    Logs the bound NAME: after a rebuild the index alone says nothing about
+    which physical mic/speaker is live, and the name is the only way to spot
+    a wrong endpoint from couch.log. log=None resolves silently (the
+    announcer re-resolves per bulletin - a line each would be noise)."""
     kind = "input" if want_input else "output"
     if not fragment:
         if log:

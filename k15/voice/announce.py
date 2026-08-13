@@ -77,12 +77,8 @@ class Announcer:
     # -- internals ------------------------------------------------------------
 
     def _output_index(self, pa):
-        """Config name-fragment -> output device index on a FRESH pa (the
-        device table moves; resolving on an old snapshot is the deafness bug
-        audio.rebuild_audio exists for). audio.resolve_device silenced: a log
-        line per announcement would be noise. This used to be a documented
-        local mirror of the resolver, kept to avoid a circular import - the
-        cycle died when device resolution moved out of the composition root."""
+        """Output device index on a FRESH pa - resolving against an old
+        snapshot is the deafness bug audio.py exists for."""
         return audio.resolve_device(pa, self.voice.get("outputDeviceName"),
                                     want_input=False, log=None)
 

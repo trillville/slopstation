@@ -1,21 +1,19 @@
 """Blind test: couch.py's orchestration state machine, with every side effect
 stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
 
-  * the lock is taken ATOMICALLY - two racers, exactly one winner, on both
-    the empty path and the stale-recycle path (the guard makes stale-recycle
-    airtight, so this can be asserted in a loop rather than hoped about);
-  * the one rule - the TV input switch happens only after READY, and never
-    on any failure path;
-  * failures release the lock and leave state/last_error for the listener;
-  * ownership - release_lock refuses to unlink a successor's lock;
-  * watch() rides out transient ssh blips, dies honestly on a run of them
-    (dispatching a best-effort exit first), and restores the TV;
-  * reconcile resumes a live session, clears a dead one (TV untouched),
-    and survives boot-time network errors.
+  * the lock is taken ATOMICALLY - two racers, exactly one winner - and
+    release refuses a successor's lock;
+  * READY identity: our turn verifies, a foreign one is waited out, a
+    timestamp is legacy-accepted, and a changed one supersedes the watcher;
+  * the one rule - the TV input switch happens only after READY, never on a
+    failure path, which also leaves last_error for the listener;
+  * watch() rides out ssh blips and dies honestly on a run of them;
+  * reconcile resumes a live session and clears a dead one, TV untouched.
 
 Run:
     .venv\\Scripts\\python tests\\test_couch.py
 """
+import os
 import sys
 import tempfile
 import threading
@@ -48,7 +46,6 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     if lock_age_s is not None:
         cglib.LOCK.write_text(lock_content)
         old = time.time() - lock_age_s
-        import os
         os.utime(cglib.LOCK, (old, old))
     return tmp
 
@@ -113,7 +110,6 @@ def main():
     print("  acquire: 50 two-way races (empty + stale recycle), one winner each")
 
     # --- ownership: release refuses a successor's lock ------------------------
-    import os
     fresh_state()
     assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
     assert cglib.release_lock() and not cglib.LOCK.exists()
@@ -181,7 +177,6 @@ def main():
     print("  ready: a FOREIGN marker is waited out, never switched to")
 
     # --- watch: a successor's turn in the marker means stand down -------------
-    import os
     fresh_state()
     assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
     log, sent = wire([("status", "eeeeee")])     # marker changed identity
@@ -222,7 +217,6 @@ def main():
 
     # --- watch: blips forgiven, a run of failures dies honestly ---------------
     fresh_state()
-    import os
     assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
     log, sent = wire([
         ("status", RuntimeError("blip")),

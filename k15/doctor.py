@@ -162,10 +162,8 @@ def check_ssh():
     except Exception as e:
         report(WARN, "ssh dispatch", str(e), "transient? status check above is the primary signal")
 
-    # Deploy skew. The PC runs whatever Deploy.ps1 last copied; the K15 runs
-    # this clone - two different update mechanisms, so drift is a normal
-    # operational state unless something measures it. The version verb
-    # answers the stamped build-id; comparing it here is the measurement.
+    # Deploy skew. Two update mechanisms (Deploy.ps1 there, git pull here),
+    # so drift is normal unless something measures it - this is that.
     try:
         pcbuild = ssh("version")
     except subprocess.CalledProcessError as e:
@@ -294,10 +292,8 @@ def check_voice(cfg):
                        f"npm i -g the {exe} CLI and log in once, "
                        "as the autologon user")
         if wp == "openai":
-            # Workers ingest untrusted web content; the anthropic lane is
-            # research-only by construction (no Bash granted). Codex cannot
-            # make that promise - its sandbox confines writes, not reads or
-            # shell - so on this lane the boundary is AGENTS.md policy.
+            # Codex keeps a shell, so on this lane the boundary is AGENTS.md
+            # policy rather than the harness (see workers.py).
             report(WARN, "worker isolation",
                    "codex keeps a shell (sandbox confines writes, not reads)",
                    "structural research-only isolation is the anthropic lane")

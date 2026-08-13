@@ -150,17 +150,13 @@ def result_meta(d):
 
 class ClaudeWorker(_CliWorker):
     """claude -p. Research-only BY CONSTRUCTION: no Bash in --allowedTools,
-    so the boundary is structural, not a prompt rule. A worker ingests
-    untrusted web content while running as the account that holds the gaming
-    PC's ssh key and the VirtualHere PIN - and a shell reads files the Read
-    deny rules cannot see, so "AGENTS.md says don't" was the only thing
-    between an injected page and exfiltration. Now the harness is: file tools
-    confined to worker_home, deny rules as the secrets backstop, and no shell
-    at all. Actions stay where they always belonged - Tier 2's dispatch,
-    after the user asks. (CodexWorker below CANNOT make this promise: its
-    sandbox confines writes, not reads or shell - doctor warns when that lane
-    is selected.) The injection canary drill (voice-testing 10c) proves all
-    of it on this machine.
+    so the boundary is the harness rather than a prompt rule - a shell reads
+    what the Read deny rules cannot, and this process ingests untrusted web
+    content on the account holding the gamepc key. Actions belong to Tier 2,
+    after the user asks. CodexWorker below cannot promise the same (its
+    sandbox confines writes, not reads or shell), so doctor warns on that
+    lane; voice-control-design.md § worker lane has the full posture, and the
+    injection canary drill (voice-testing 10c) proves it on this machine.
 
     Output is stream-json so the TOOL CALLS are visible: with plain --output-
     format json the only artefact of three minutes of research is the final

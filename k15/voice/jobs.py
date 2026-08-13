@@ -37,11 +37,10 @@ class JobStore:
     """adapter = a workers.*Worker (never None - the caller gates the lane);
     on_done = fn(job dict), called off-thread when a job finishes."""
 
-    # The claude lane has no shell (research-only by construction), but the
-    # codex lane's sandbox keeps one, so --dry-run can't gate a worker the
-    # way Dispatch gates Tier 1/2. The honest thing is to tell it: advisory,
-    # not enforcement (AGENTS.md says workers act on nothing regardless), so
-    # a dry-run drill doesn't start sessions on a TV someone is watching.
+    # The codex lane keeps a shell (the claude lane has none), so --dry-run
+    # can't gate a worker the way Dispatch gates Tier 1/2. Telling it is the
+    # honest option: advisory, not enforcement, so a dry-run drill doesn't
+    # start sessions on a TV someone is watching.
     DRY_NOTE = ("[The couch system is in DRY-RUN: research and report only. "
                 "Do not run couch.py, exlink.py, or any other command that "
                 "changes system state.] ")
@@ -102,9 +101,9 @@ class JobStore:
 
     def enqueue(self, task, asked=None):
         """-> (ok, spoken detail). Truthful busy beyond the cap. `asked` is
-        the user's own words from the utterance snapshot (dispatch.Utterance)
-        - an argument, not stored state, so this store holds no mutable
-        side channel; None on lanes with no transcript (chord, REPL)."""
+        the user's own words (dispatch.Utterance) - an ARGUMENT, so this
+        store holds no mutable side channel; None on the chord lane and the
+        REPL, which have no transcript to quote."""
         with self._lock:
             jobs = self._load()
             active = [j for j in jobs if j["status"] in (QUEUED, RUNNING)]
