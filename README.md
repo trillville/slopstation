@@ -24,6 +24,7 @@ separate process and survives anything the voice stack does.
 | [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops - launches, errors, liveness, both machines) and `langfuse-traces` (agent - what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 | [grafana-implementation.md](docs/grafana-implementation.md) | Setting up alerts, dashboards and the gaming PC shipper: this rig's values, the rules, the drills, and what to check when nothing arrives. |
 | [observability-design.md](docs/observability-design.md) | Why it is shaped this way — structured events, the `turn` id, what was weighed and what each phase's build actually found. Logs are live; Langfuse agent traces are still to wire. |
+| [architecture-review-2026-08.md](docs/architecture-review-2026-08.md) | The 2026-08 architecture review: verdict (keep it), the six findings and their fixes, what was deliberately declined and why, and the standing risks. Read before re-litigating the session protocol, the worker boundary, or the module layout. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
 run `python doctor.py` on the K15, or on the PC
@@ -114,6 +115,17 @@ checkout runs without its local config/keys ever fighting `git pull`:
   the probe, and DisplayMagician is killed after every apply.
 - **The one rule**: nothing switches the TV to the gaming input before the host
   writes `READY` — every pre-READY failure leaves the TV as the viewer had it.
+- **When to extract a module** (and when not): cut a new file only when one of
+  these is true — (a) the concept has accumulated its own incident history and
+  failure domain (how `voice/audio.py` earned its name), (b) a duplication
+  exists only to break an import cycle, or (c) the file no longer fits in one
+  sitting. Never to satisfy a diagram, and never speculatively. `cglib.py`'s
+  section headers are the pre-drawn fault lines: split along them when size
+  actually hurts, not before.
+- **Moves are pure**: a commit that relocates code changes zero behavior, and
+  every incident-history comment travels with its code — the comments are this
+  repo's institutional memory. Land behavior changes first, moves second,
+  never both in one commit.
 
 ## Deliberately not in the repo
 
