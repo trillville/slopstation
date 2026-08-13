@@ -1,11 +1,13 @@
 # The entire remote attack surface: forced command for the K15's SSH key
-# (administrators_authorized_keys). Six verbs; everything else is DENIED.
+# (administrators_authorized_keys). Seven verbs; everything else is DENIED.
 # Deliberately dependency-free - no dot-sourcing in the sshd context.
 # The ready path mirrors $CG.ReadyMarker in CouchGaming.common.ps1.
 #
 # Verbs: enter/exit/status (session), games (installed-library JSON), playing
 # (RunningAppID), launch <appid> (READY-gated, BUSY/ALREADY-truthful; the appid
-# travels via marker file because schtasks /Run cannot pass arguments).
+# travels via marker file because schtasks /Run cannot pass arguments),
+# version (the build-id Deploy.ps1 stamped - doctor.py compares it against
+# the K15's checkout, so deploy skew is measured instead of assumed).
 # The three mutating verbs also take an optional ` --turn <hex>` correlation id
 # (see Set-Turn below); the read-only polls deliberately do not.
 $ready = 'C:\ProgramData\CouchGaming\ready'
@@ -57,6 +59,10 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
                break }
   '^status\z' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
                break }
+  '^version\z' {
+      $bid = Join-Path $PSScriptRoot 'build-id'
+      if (Test-Path $bid) { Get-Content $bid -TotalCount 1 } else { 'UNKNOWN' }
+      break }
   '^playing\z' {
       $v = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
       if ($null -eq $v) { '0' } else { "$v" }

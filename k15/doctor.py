@@ -125,6 +125,17 @@ def check_haptics():
         dev.close()
 
 
+def _local_rev():
+    """This checkout's short rev - the value Deploy.ps1 stamps on the PC."""
+    try:
+        r = subprocess.run(["git", "-C", str(cglib.BASE), "rev-parse",
+                            "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def check_ssh():
     try:
         from couch import ssh
@@ -150,6 +161,44 @@ def check_ssh():
             report(WARN, "ssh dispatch", f"unexpected reply {e.stdout!r}", "check Dispatch.ps1")
     except Exception as e:
         report(WARN, "ssh dispatch", str(e), "transient? status check above is the primary signal")
+
+    # Deploy skew. The PC runs whatever Deploy.ps1 last copied; the K15 runs
+    # this clone - two different update mechanisms, so drift is a normal
+    # operational state unless something measures it. The version verb
+    # answers the stamped build-id; comparing it here is the measurement.
+    try:
+        pcbuild = ssh("version")
+    except subprocess.CalledProcessError as e:
+        if "DENIED" in (e.stdout or ""):
+            report(WARN, "deploy skew", "PC's Dispatch predates the version verb",
+                   "run gaming-pc\\Deploy.ps1 on the PC to ship the current set")
+        else:
+            report(WARN, "deploy skew", f"version answered {e.stdout!r}",
+                   "check Dispatch.ps1 on the PC")
+        return
+    except Exception as e:
+        report(WARN, "deploy skew", f"could not query ({e})", "")
+        return
+    local = _local_rev()
+    tok = (pcbuild.split() or [""])[0]
+    dirty = tok.endswith("-dirty")
+    tok = tok.removesuffix("-dirty")
+    if pcbuild == "UNKNOWN":
+        report(WARN, "deploy skew", "PC has no build-id stamped",
+               "run gaming-pc\\Deploy.ps1 - it stamps what it ships")
+    elif not local:
+        report(WARN, "deploy skew",
+               f"PC build '{pcbuild}', local rev unreadable (no git?)", "")
+    elif tok and (tok.startswith(local) or local.startswith(tok)):
+        if dirty:
+            report(WARN, "deploy skew",
+                   f"PC build '{pcbuild}' matches HEAD but shipped from a dirty tree",
+                   "redeploy from a clean checkout so the rev vouches for the content")
+        else:
+            report(PASS, "deploy skew", f"PC build '{pcbuild}' matches this checkout")
+    else:
+        report(WARN, "deploy skew", f"PC build '{pcbuild}' vs local {local}",
+               "git pull here and/or Deploy.ps1 there until they agree")
 
 
 def check_session_state():

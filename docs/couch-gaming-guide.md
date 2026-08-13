@@ -507,10 +507,12 @@ no-op-fail until 8.4 — fine), `ssh gamepc status` prints `NOTREADY`,
 
 ### 8.3 Host session scripts
 
-Copy all of `gaming-pc\` to `C:\CouchGaming\`:
+Deploy the script set to `C:\CouchGaming\` — from the repo checkout, on the
+PC (this is also how every later update ships; it stamps a `build-id` the
+K15's doctor compares against its own checkout):
 
 ```powershell
-Copy-Item <repo>\gaming-pc\*.ps1 -Destination C:\CouchGaming\
+powershell -NoProfile -ExecutionPolicy Bypass -File <repo>\gaming-pc\Deploy.ps1
 ```
 
 [`Enter-TV.ps1`](../gaming-pc/Enter-TV.ps1),

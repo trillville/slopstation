@@ -12,7 +12,9 @@ hassil==3.11.0
 rapidfuzz==3.14.5
 pyserial==3.5
 pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
-# Transitively pinned by the above (recorded for the as-built):
-#   pyaudio 0.2.14 (cp313 win_amd64 wheel exists), onnxruntime 1.24.4,
-#   deepgram-sdk 7.6.0, anthropic 0.121.0, openai 2.53.0, numpy 2.4.6,
-#   opentelemetry-{api,sdk,proto,semantic-conventions} 1.44.0
+# Transitive versions are ENFORCED via constraints.txt (the supervisor
+# installs with `-c constraints.txt`) - see its header for the regeneration
+# rule. The as-built, for the record: pyaudio 0.2.14 (cp313 win_amd64 wheel
+# exists), onnxruntime 1.24.4, deepgram-sdk 7.6.0, anthropic 0.121.0,
+# openai 2.53.0, numpy 2.4.6, opentelemetry-{api,sdk,proto} 1.44.0
+# (+ semantic-conventions 0.65b0, their lockstep partner).

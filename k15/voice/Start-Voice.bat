@@ -44,6 +44,12 @@ rem than "did an install ever succeed?". A git pull that changes pins
 rem therefore installs itself on the next agent launch, which is the whole
 rem promise of Start-K15.bat being the one thing to run after a pull.
 rem
+rem constraints.txt rides along as pip's -c: it freezes the TRANSITIVE
+rem versions at the as-built, so a rebuild is a restore rather than a fresh
+rem resolve. The gate still compares requirements.txt alone - which is why
+rem constraints.txt's header says a constraints change must ride a
+rem requirements touch to install itself.
+rem
 rem It lives here rather than at :main because Start-K15.bat reloads by
 rem killing the AGENT - the supervisor loops back to :agent and never
 rem revisits :main, so a gate up there is unreachable on every path except a
@@ -54,7 +60,7 @@ if errorlevel 1 (
   rem ')' closes the block early and cmd dies with "... was unexpected at this
   rem time", taking the whole supervisor with it before it starts.
   echo [supervisor] pins changed - installing pinned deps, takes a minute or two...
-  .venv\Scripts\python -m pip install -r requirements.txt || (echo [supervisor] pip install failed - fix network and rerun & pause & exit /b 1)
+  .venv\Scripts\python -m pip install -r requirements.txt -c constraints.txt || (echo [supervisor] pip install failed - fix network and rerun & pause & exit /b 1)
   rem Sentinel written only AFTER pip succeeds: a half-built venv (network
   rem died mid-install) must retry, not skip forever.
   copy /y requirements.txt ".venv\deps-ok" >nul

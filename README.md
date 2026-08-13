@@ -36,14 +36,18 @@ exits with the FAIL count.
 
 | Repo path | Runs at | Machine | How |
 |---|---|---|---|
-| `gaming-pc/` | `C:\CouchGaming\` | `TILLMAN-DESKTOP` (gaming PC) | copy (needs gitignored `.lnk`/`.exe`) |
+| `gaming-pc/` | `C:\CouchGaming\` | `TILLMAN-DESKTOP` (gaming PC) | `Deploy.ps1` (copies the script set, stamps `build-id`) |
 | `k15/` | a clone on the Desktop | `K15` (orchestrator mini PC) | `git pull` in place |
 
 Every script derives its sibling paths from its own location, so a folder is a
 relocatable unit and runs fine straight from a checkout. The **K15 runs from a
 clone** (`git pull` to update — no copying). The **gaming PC deploys by copy**,
 because its runtime needs gitignored binaries/shortcuts (`vhui64.exe`,
-`OFFICE.lnk`, `TV-GAMING.lnk`) that can't live in the repo.
+`OFFICE.lnk`, `TV-GAMING.lnk`) that can't live in the repo — but the copy is
+`Deploy.ps1`'s job, not a hand operation: it ships the scripts as one checked
+set, stamps a `build-id`, and never touches the gitignored pieces. The K15's
+`doctor.py` compares that stamp against its own checkout (`ssh gamepc
+version`), so the two machines drifting apart is a WARN instead of a surprise.
 
 Run the `.bat` files by double-clicking them, or from PowerShell with a
 leading `.\` (`.\Start-K15.bat`) — PowerShell will not run anything from the
@@ -62,8 +66,9 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `Exit-TV.ps1` | Teardown: close Big Picture, restore OFFICE, release Puck. Task `\CouchGaming\Exit`. Stops a mid-flight Enter first (teardown wins). |
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
 | `Wake-Safety.ps1` | Cleans up sessions abandoned before sleep; stands down for network wakes. Task `\CouchGaming\WakeSafety`. |
-| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `games` / `playing` / `launch <appid>`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
+| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `games` / `playing` / `launch <appid>` / `version`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
 | `Launch-Game.ps1` | Task `\CouchGaming\LaunchGame`, fired by the `launch` verb: reads the appid marker, re-validates, `steam -applaunch` into the running Big Picture session. |
+| `Deploy.ps1` | The deploy: copies the script set from a checkout to `C:\CouchGaming\` and stamps `build-id` (what the `version` verb answers). Refuses a partial set; never touches the gitignored runtime pieces. |
 | `Doctor.ps1` | On-demand chain diagnosis: files, tasks, sshd/firewall/key ACL, VirtualHere, display probe, session state. Read-only; exit code = FAIL count. |
 
 ### K15 (`k15/`)
@@ -129,5 +134,5 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | Ex-Link serial | `COM3` on the K15 · 9600 8N1 |
 | TV inputs | HDMI1 Apple TV · HDMI2 PS5 · HDMI3 eARC · HDMI4 PC |
 | TV EDID name | `QCQ90S` |
-| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>` — nothing else exists |
+| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>\|version` — nothing else exists |
 | The one rule | Nothing switches the TV to HDMI 4 before the host writes `READY` |

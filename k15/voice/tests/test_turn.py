@@ -61,7 +61,7 @@ def main():
 
     # -- Dispatch.ps1 is the real boundary -------------------------------------
     allpats = dispatch_patterns()
-    assert len(allpats) == 6, f"expected 6 verbs, got {allpats}"
+    assert len(allpats) == 7, f"expected 7 verbs, got {allpats}"
     for p in allpats:
         # \z, not $: '$' also matches before a trailing newline in .NET, and
         # this file is the whole remote attack surface. Applies to the
