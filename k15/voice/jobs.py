@@ -54,11 +54,6 @@ class JobStore:
         self.dry_run = dry_run
         self._lock = threading.Lock()
         self._kick = threading.Event()
-        # The user's last utterance, written by GrammarGate. A job stores it
-        # so the replay can quote the person instead of the model - see
-        # enqueue and voice_agent.job_messages. None on the chord lane and
-        # the REPL, which have no transcript to quote.
-        self.asked = None
 
     # -- the state file (all access under the lock) ---------------------------
 
@@ -105,8 +100,11 @@ class JobStore:
         threading.Thread(target=self._run_loop, daemon=True,
                          name="job-worker").start()
 
-    def enqueue(self, task):
-        """-> (ok, spoken detail). Truthful busy beyond the cap."""
+    def enqueue(self, task, asked=None):
+        """-> (ok, spoken detail). Truthful busy beyond the cap. `asked` is
+        the user's own words from the utterance snapshot (dispatch.Utterance)
+        - an argument, not stored state, so this store holds no mutable
+        side channel; None on lanes with no transcript (chord, REPL)."""
         with self._lock:
             jobs = self._load()
             active = [j for j in jobs if j["status"] in (QUEUED, RUNNING)]
@@ -129,7 +127,7 @@ class JobStore:
                    # it as the user's put a bad instruction ("using only games
                    # in the provided catalog") into six hours of context as
                    # though it had been asked for.
-                   "asked": self.asked}
+                   "asked": asked}
             self._save(jobs + [job])
         self.log("job_queued", job=job["id"], task=task[:200])
         self._kick.set()

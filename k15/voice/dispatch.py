@@ -31,6 +31,19 @@ COUCH = cglib.BASE / "couch.py"
 
 Result = namedtuple("Result", "ok earcon detail")
 
+# One utterance = one immutable snapshot: the correlation id minted for it,
+# and the user's words (post wake-strip; None on lanes with no transcript -
+# the chord, the REPL). GrammarGate writes it ONCE per final transcript via
+# begin_utterance, and every action the utterance causes reads it from here -
+# a namedtuple on purpose, so the pair swaps atomically and a reader can
+# never see one utterance's turn with another's words. THE CONTRACT it rides
+# on: one utterance is acted on at a time per session (transcripts reach the
+# gate serially). A second utterance landing while a slow dispatch is still
+# in flight re-points the attribute - which is why every consumer snapshots
+# it at operation START and works from the copy (test_turn drills exactly
+# that interleave).
+Utterance = namedtuple("Utterance", "turn asked")
+
 
 def _ok(detail, earcon="ok"):
     return Result(True, earcon, detail)
@@ -61,13 +74,18 @@ class Dispatch:
         self.voice = cfg["voice"]
         self.log = log
         self.dry_run = dry_run
-        # The utterance currently being acted on. GrammarGate writes this the
-        # moment it mints the id, and BOTH tiers read it from here rather than
-        # from events.current() - the ambient copy does not survive the hop
-        # from the frame processor's task to whichever task calls us. One
-        # Dispatch per session (run_session builds it), so an attribute is
-        # exactly as isolated as the ContextVar it stands in for.
-        self.turn = None
+        # The utterance currently being acted on (see Utterance above).
+        # BOTH tiers read it from here rather than from events.current() -
+        # the ambient copy does not survive the hop from the frame
+        # processor's task to whichever task calls us. One Dispatch per
+        # session (run_session builds it), so an attribute is exactly as
+        # isolated as the ContextVar it stands in for.
+        self.utterance = Utterance(None, None)
+
+    def begin_utterance(self, turn, asked=None):
+        """GrammarGate's one write per final transcript. A method so the gate
+        never constructs the type itself - the snapshot's shape has one home."""
+        self.utterance = Utterance(turn, asked)
 
     # -- internals -------------------------------------------------------------
 
@@ -106,11 +124,12 @@ class Dispatch:
         args = [sys.executable, str(COUCH), "start"] + ([str(appid)] if appid else [])
         # couch.py runs in its own console, so the id has to travel as an
         # argument - a ContextVar does not survive a process boundary. It does
-        # not survive a TASK boundary either, which is why self.turn leads and
-        # the ambient value is only the fallback (see __init__). Without it
-        # couch.py mints its own id and the user's sentence is joined to the
-        # launch it caused by nothing but a clock reading.
-        turn = self.turn or events.current().get("turn")
+        # not survive a TASK boundary either, which is why the utterance
+        # snapshot leads and the ambient value is only the fallback (see
+        # __init__). Without it couch.py mints its own id and the user's
+        # sentence is joined to the launch it caused by nothing but a clock
+        # reading.
+        turn = self.utterance.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
         subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -120,17 +139,18 @@ class Dispatch:
     def end_session(self):
         """Works mid-game and mid-launch alike (teardown wins - Exit stops a
         running Enter on the host)."""
+        turn = self.utterance.turn            # snapshot at operation start
         if self.dry_run:
             return self._would("ssh exit")
         try:
-            out = couch.ssh_intent("exit", turn=self.turn)
+            out = couch.ssh_intent("exit", turn=turn)
         except Exception as e:
-            self.log.error("end_session_failed", err=str(e), turn=self.turn)
+            self.log.error("end_session_failed", err=str(e), turn=turn)
             return _fail(f"couldn't reach the PC (ssh exit: {e})")
         if out == "OK":
-            self.log("end_session_dispatched", turn=self.turn)
+            self.log("end_session_dispatched", turn=turn)
             return _ok("ending the session")
-        self.log.warn("end_session_refused", answer=out, turn=self.turn)
+        self.log.warn("end_session_refused", answer=out, turn=turn)
         return _fail(f"the PC refused the exit (ssh exit: {out})")
 
     def now_playing(self):
@@ -153,7 +173,12 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            out = couch.ssh_intent(f"launch {appid}")
+            # Explicit turn, same reason as end_session: the assistant's tool
+            # call runs in a task whose ambient context predates this
+            # utterance, so leaning on it shipped Tier-2 launches to the PC
+            # uncorrelated while the Tier-1 path (same task as the gate)
+            # quietly worked.
+            out = couch.ssh_intent(f"launch {appid}", turn=self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh launch: {e})")

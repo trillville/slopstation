@@ -299,9 +299,10 @@ def main():
                 "the model's own brief is being replayed as the user's words"
     assert voice_agent.job_messages(None) == []          # worker lane off
 
-    # With a transcript: a true exchange, quoting the person.
-    store.asked = "find me some couch co-op games"
-    store.enqueue("Research couch co-op titles, excluding owned games.")
+    # With a transcript: a true exchange, quoting the person. `asked` is an
+    # ARGUMENT now (from dispatch's utterance snapshot), not store state.
+    store.enqueue("Research couch co-op titles, excluding owned games.",
+                  asked="find me some couch co-op games")
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
     store._update(job["id"], status=jobs_mod.DONE, read=True,
                   finished=int(time.time()), summary="Found three.",
@@ -314,7 +315,6 @@ def main():
 
     # Without one (chord lane, REPL, or a record predating `asked`): stated
     # as history, not as something the user said.
-    store.asked = None
     store.enqueue("Some brief nobody spoke aloud.")
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
     store._update(job["id"], status=jobs_mod.DONE, read=True,

@@ -72,11 +72,17 @@ def main():
     assert not r["ok"] and "aren't available" in r["error"]
 
     class FakeJobs:
-        def enqueue(self, task):
+        def enqueue(self, task, asked=None):
+            self.asked = asked
             return True, "queued - the result will be announced"
-    jimpls = assistant.tool_impls(d, log, jobs=FakeJobs())
+    fake = FakeJobs()
+    jimpls = assistant.tool_impls(d, log, jobs=fake)
+    d.begin_utterance("4c1d0e", "find me co-op deals")   # what the gate writes
     r = jimpls["background_task"]({"task": "find coop deals"})
     assert r["ok"] and "queued" in r["detail"]
+    # The user's words ride the utterance snapshot into the job record - the
+    # tool call runs in a task whose ambient context predates the utterance.
+    assert fake.asked == "find me co-op deals", fake.asked
     assert not jimpls["background_task"]({"task": "  "})["ok"]
     # Owned-but-not-installed must still come back named (review gap: the
     # model got details for a game it couldn't name).

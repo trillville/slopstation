@@ -261,18 +261,6 @@ class GrammarGate(FrameProcessor):
                 # it from here. The session id set at wake survives the merge.
                 turn = events.new_turn()
                 events.context(turn=turn)
-                # ...but ONLY into this task, and that is the whole trap. A
-                # ContextVar is copied into a task when the task is created;
-                # setting one now cannot reach a task that is already running.
-                # The session id works because it is minted before
-                # asyncio.run() (voice_agent.py) so every task inherits it -
-                # a turn is per-utterance and cannot be hoisted that early.
-                # So the assistant's tool dispatch, a sibling task with an
-                # older snapshot, saw no turn at all: voice-driven exits
-                # reached the gaming PC uncorrelated and launches ran under an
-                # id couch.py minted for itself. Hand it over explicitly.
-                if self.dispatch is not None:
-                    self.dispatch.turn = turn
                 # Backstop: a final transcript proves the turn ended even if
                 # no UserStoppedSpeakingFrame arrived. Silence here would mean
                 # no feedback at all until the action completes (up to 15 s of
@@ -291,6 +279,24 @@ class GrammarGate(FrameProcessor):
                     frame.text = stripped       # both lanes see the command only
                     text = stripped
             if text:
+                # THE utterance snapshot: the id minted above plus what the
+                # user actually said, written to Dispatch as one immutable
+                # pair. Explicit hand-over because a ContextVar cannot do it:
+                # one is copied into a task at task CREATION, so setting it
+                # here never reaches the assistant's tool dispatch - a
+                # sibling task already running on an older snapshot. (The
+                # session id works ambiently only because it is minted before
+                # asyncio.run(); a per-utterance turn cannot be hoisted that
+                # early.) When this relied on the ambient copy, voice-driven
+                # exits reached the gaming PC uncorrelated and launches ran
+                # under an id couch.py minted for itself. `asked` is captured
+                # after wake-stripping, so it is the command and not "hey
+                # jarvis, ..." - a queued job stores it beside the brief the
+                # model writes, so a later replay quotes the user rather than
+                # attributing the model's wording to them
+                # (voice_agent.job_messages).
+                if self.dispatch is not None:
+                    self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
                 if m is not None:
                     self.log("gate_match", text=text, intent=m[0])
@@ -302,15 +308,5 @@ class GrammarGate(FrameProcessor):
                     await self._earcon("fail")
                     return
                 self.log("gate_miss", text=text, fallback="assistant")
-                # What the user ACTUALLY said, handed over the same way the
-                # turn id is, and for the same reason: only this processor
-                # knows it, and the assistant's tool call happens in another
-                # task. Captured after stripping, so it is the command and
-                # not "hey jarvis, ...". A queued job records this alongside
-                # the brief the model writes, so replaying the job later can
-                # quote the user instead of attributing the model's own
-                # wording to them (voice_agent.job_messages).
-                if self.jobs is not None:
-                    self.jobs.asked = text
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

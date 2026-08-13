@@ -151,14 +151,30 @@ def main():
     couch.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
     try:
         d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, cglib.CapturingLog("d"))
-        assert d.turn is None, "a fresh Dispatch must not carry a stale id"
-        d.turn = "4c1d0e"                       # what GrammarGate now writes
+        assert d.utterance == dp.Utterance(None, None), \
+            "a fresh Dispatch must not carry a stale utterance"
+        d.begin_utterance("4c1d0e", "end the session")  # the gate's one write
         d.end_session()
         assert sent[-1] == "exit --turn 4c1d0e", \
             f"voice-driven exit reached the PC uncorrelated: {sent[-1]!r}"
+
+        # The interleave the snapshot contract exists for: a SECOND utterance
+        # lands while the first's dispatch is still on the wire. The
+        # in-flight action must keep the id it started with - consumers
+        # snapshot at operation start, so the re-point cannot reach them.
+        def ssh_mid_flight(cmd, **kw):
+            sent.append(cmd)
+            d.begin_utterance("bbbbbb", "never mind")   # barge-in mid-ssh
+            return "OK"
+        d.begin_utterance("aaaaaa", "end the session")
+        couch.ssh = ssh_mid_flight
+        d.end_session()
+        assert sent[-1] == "exit --turn aaaaaa", \
+            f"a mid-flight utterance re-labeled an in-flight action: {sent[-1]!r}"
     finally:
         couch.ssh = real_ssh
     print("  dispatch: the exit verb carries the utterance's id, no ContextVar")
+    print("  dispatch: an in-flight action keeps its snapshot through a barge-in")
 
     # -- couch.py CLI ----------------------------------------------------------
     argv = ["start", "12345", "--turn", "9f2c1a"]
