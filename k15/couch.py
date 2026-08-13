@@ -131,12 +131,40 @@ def start(appid=None, turn=None):
         else: raise RuntimeError("could not trigger Enter task")
         end = time.time() + READY_WAIT_S
         ready = False
+        foreign_seen = None
         while time.time() < end:
             cglib.touch_lock()
             try:
                 st = ssh("status")
+                if st == turn:
+                    # Generation identity: this READY echoes OUR turn, so it
+                    # answers THIS launch. Enter writes the id that rode in
+                    # with the enter verb, so verified is the normal case.
+                    log("host_ready", status=st, dur_ms=ms(), verified=True)
+                    ready = True; break
                 if st != "NOTREADY":
-                    log("host_ready", status=st, dur_ms=ms()); ready = True; break
+                    if events.valid_turn(st):
+                        # Turn-shaped but not ours: a stale marker from a
+                        # session nothing cleaned up. Keep waiting - our
+                        # Enter overwrites it on completion, so this
+                        # converges instead of switching the TV to a host
+                        # still mid-Enter (which is what "any non-NOTREADY
+                        # is ready" used to do here). One rare corner also
+                        # lands here failing CLOSED: another mutating verb
+                        # overwriting the turn file inside the ~1 s before
+                        # Enter reads it makes a REAL ready look foreign -
+                        # the launch times out clean and a retry works,
+                        # which beats the old fail-open every time.
+                        if st != foreign_seen:
+                            log.warn("ready_foreign", status=st)
+                            foreign_seen = st
+                    else:
+                        # Legacy shape (ISO timestamp): a PC deployed before
+                        # turn-stamping, or an Enter with no turn to echo.
+                        # Accept - either side may deploy first - but say so.
+                        log("host_ready", status=st, dur_ms=ms(),
+                            verified=False)
+                        ready = True; break
             except Exception as e:
                 log.warn("status_poll_failed", err=str(e))
             time.sleep(1)
@@ -152,7 +180,7 @@ def start(appid=None, turn=None):
                     result=ssh_intent(f"launch {appid}"))
             except Exception as e:
                 log.warn("game_launch_failed", appid=appid, err=str(e))
-        log("session_gaming", dur_ms=ms()); watch()
+        log("session_gaming", dur_ms=ms()); watch(expected=turn)
     except Exception as e:
         log.error("launch_failed", err=str(e), dur_ms=ms())
         try:
@@ -164,7 +192,13 @@ def start(appid=None, turn=None):
     return 0
 
 
-def watch():
+def watch(expected=None):
+    """Poll the session until it ends, then restore the TV and release the
+    lock. `expected` is the turn the READY marker should keep echoing; a
+    marker that changes to a DIFFERENT turn means a successor session owns
+    the rig (this watcher must have stalled past staleness for its launch to
+    acquire), so leave everything - TV and lock alike - to the owner. None
+    disables the check (a reconcile that adopted a legacy marker)."""
     fails = 0
     died_by_fails = False
     while True:
@@ -174,6 +208,9 @@ def watch():
             st = ssh("status"); fails = 0
             if st == "NOTREADY":
                 log("session_ended", reason="host"); break
+            if expected and events.valid_turn(st) and st != expected:
+                log.warn("session_ended", reason="superseded", status=st)
+                return
         except Exception:
             fails += 1
             if fails >= WATCH_FAILS:
@@ -219,12 +256,16 @@ def reconcile():
     log("reconcile_found")
     for _ in range(3):                  # boot-time network may need a moment
         try:
-            if ssh("status") != "NOTREADY":
+            st = ssh("status")
+            if st != "NOTREADY":
                 log("reconcile_resumed")
                 # Adopt, don't just touch: the owner note still names the dead
                 # process, and release_lock at session end checks the pid.
                 cglib.adopt_lock(f"{events.current().get('turn')} {os.getpid()}")
-                watch()
+                # The marker's CURRENT value is the session's identity from
+                # here on - if it changes to another turn, a successor owns
+                # the rig and this watcher stands down.
+                watch(expected=st if events.valid_turn(st) else None)
                 return 0
             break                       # definitive NOTREADY - session is dead
         except Exception:

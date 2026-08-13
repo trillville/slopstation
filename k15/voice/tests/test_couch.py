@@ -146,9 +146,52 @@ def main():
     assert switches and all(i > ready_at for i in switches), (ev, switches)
     assert sent == ["power_on", "hdmi4", "power_off"], sent
     assert "game_launch" in ev and "session_ended" in ev and "session_idle" in ev
+    # A timestamp marker is the LEGACY shape (pre-turn-stamping PC): accepted
+    # so either machine can deploy first, but flagged as unverified.
+    assert log.find("host_ready")[0]["verified"] is False
     assert not cglib.LOCK.exists(), "session end must release the lock"
     assert not cglib.LAST_ERROR.exists(), "success must clear last_error"
     print("  start: input switch strictly after READY, appid queued, lock released")
+
+    # --- READY generation identity: verified / foreign / converge -------------
+    fresh_state()
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "ab12cd"),                    # echoes OUR turn
+        ("status", "NOTREADY"),
+    ])
+    assert couch.start(turn="ab12cd") == 0
+    assert log.find("host_ready")[0]["verified"] is True
+    print("  ready: a marker echoing our turn is verified")
+
+    fresh_state()
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "ffffff"),                    # stale marker, another life
+        ("status", "ffffff"),                    # (warned once, not per poll)
+        ("status", "ab12cd"),                    # our Enter overwrote it
+        ("status", "NOTREADY"),
+    ])
+    assert couch.start(turn="ab12cd") == 0
+    assert len(log.find("ready_foreign")) == 1, log.records
+    ready = log.find("host_ready")
+    assert ready and ready[0]["verified"] is True
+    switches = [r for r in log.find("exlink_send") if r["cmd"] == "hdmi4"]
+    assert switches, "the launch must still complete once the marker is ours"
+    print("  ready: a FOREIGN marker is waited out, never switched to")
+
+    # --- watch: a successor's turn in the marker means stand down -------------
+    import os
+    fresh_state()
+    assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
+    log, sent = wire([("status", "eeeeee")])     # marker changed identity
+    couch.watch(expected="ab12cd")
+    ended = log.find("session_ended")
+    assert ended and ended[0]["reason"] == "superseded", ended
+    assert not sent, "a superseded watcher must not drive the TV"
+    assert cglib.LOCK.exists(), "the lock is the successor's to release"
+    cglib.LOCK.unlink()
+    print("  watch: superseded by a successor -> hands off TV and lock")
 
     # --- busy: fresh lock refuses before any side effect -----------------------
     fresh_state(10)
