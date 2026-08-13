@@ -54,6 +54,7 @@ def signal_last_error(dev):
         cglib.LAST_ERROR.unlink(missing_ok=True)
         log("launch_failure_signaled", reason=reason)
 
+
 class Puck:
     def __init__(self): self.handles, self.active = [], None
     def open_all(self):
@@ -99,6 +100,7 @@ class Puck:
         if not self.handles:
             raise OSError("all interfaces gone")
         return None
+
 
 def main():
     cglib.rotate_log()

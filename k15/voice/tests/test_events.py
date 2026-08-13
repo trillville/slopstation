@@ -16,9 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import events
 
+
 def read(path):
     return [json.loads(l) for l in
             path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
 
 def main():
     tmp = Path(tempfile.mkdtemp())
@@ -161,6 +163,7 @@ def main():
     print("  double: CapturingLog answers to the same calls as the real logger")
 
     print("OK - events: shape, levels, context, scrub, fail-soft, rollover, CLI")
+
 
 if __name__ == "__main__":
     main()

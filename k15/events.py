@@ -322,6 +322,7 @@ def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
 
 # --- the human line -----------------------------------------------------------
 
+
 def human(event, level=INFO, /, **fields):
     """Render an event the way couch.log has always read: the event, then its
     fields as k=v. Values are elided at 80 chars so a transcript does not
@@ -345,6 +346,7 @@ def human(event, level=INFO, /, **fields):
 
 
 # --- CLI (for the cmd.exe supervisors) ----------------------------------------
+
 
 def _cli(argv):
     """events.py emit <lane> <event> [--level warn] [k=v ...]

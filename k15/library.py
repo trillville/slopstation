@@ -38,6 +38,7 @@ log = cglib.make_log("library")
 
 # --- layer 1 sources ----------------------------------------------------------
 
+
 def fetch_installed_ssh():
     """The production path (K15): the gaming PC enumerates its own ACFs."""
     from couch import ssh
@@ -84,6 +85,7 @@ def fetch_installed_local():
 
 
 # --- index file ---------------------------------------------------------------
+
 
 def load():
     try:

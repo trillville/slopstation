@@ -36,6 +36,7 @@ CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4", "tvIdleCmd": "hdmi1",
 
 READY_TS = "2026-08-12T20:00:00"                 # what a legacy marker answers
 
+
 def fresh_state(lock_age_s=None, lock_content="x"):
     """Point cglib's lock + last_error into a new tmpdir. lock_age_s seeds a
     lock of that age (None = absent)."""
@@ -47,6 +48,7 @@ def fresh_state(lock_age_s=None, lock_content="x"):
         old = time.time() - lock_age_s
         os.utime(cglib.LOCK, (old, old))
     return tmp
+
 
 def wire(script, default=None):
     """Replace couch's seams. script = [(verb_prefix, reply-or-exception)],
@@ -78,6 +80,7 @@ def wire(script, default=None):
     couch.wol = lambda: log("wol_sent")
     couch.wait_port = lambda *a, **kw: True
     return log, sent
+
 
 def main():
     real_sleep = time.sleep
@@ -260,6 +263,7 @@ def main():
     time.sleep = real_sleep
     print("OK - couch: atomic acquire, ownership, one-rule ordering, failure "
           "release, watch death, reconcile paths")
+
 
 if __name__ == "__main__":
     main()

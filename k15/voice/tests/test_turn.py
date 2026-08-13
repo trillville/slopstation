@@ -28,17 +28,20 @@ HOSTILE = [
     "9f2c1a1234", "", "zzzz", "9f2c-1a", "9f2c1a\n", "9f2c1a\r\nenter",
 ]
 
+
 def dispatch_patterns():
     """Every verb pattern from the switch -Regex in Dispatch.ps1, read from
     the file so this can never test a stale copy."""
     text = DISPATCH.read_text(encoding="utf-8")
     return re.findall(r"^\s*'(\^[^']+)'", text, re.MULTILINE)
 
+
 def compile_ps(pattern):
     """.NET spells absolute-end-of-string \\z; Python spells it \\Z (and has no
     \\z at all). Same meaning, different dialect - translate rather than weaken
     the shipping pattern to something both engines happen to accept."""
     return re.compile(pattern.replace(r"\z", r"\Z"))
+
 
 def main():
 
@@ -178,6 +181,7 @@ def main():
     print("  cli: --turn parsed in any position, and a bare --turn is harmless")
 
     print("OK - turn: minting, validation, the Dispatch boundary, wire, CLI")
+
 
 if __name__ == "__main__":
     main()

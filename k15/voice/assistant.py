@@ -289,6 +289,7 @@ def server_tools(voice, provider):
 # System prompt, tool schemas, and tool impls are provider-neutral; only the
 # request/response shape differs. Each backend holds its own conversation state.
 
+
 class AnthropicBackend:
     key = "anthropicApiKey"
 

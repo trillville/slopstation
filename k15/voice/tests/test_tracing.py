@@ -21,6 +21,7 @@ import tracing
 REAL = {"langfusePublicKey": "pk-lf-" + "a" * 20,
         "langfuseSecretKey": "sk-lf-" + "b" * 20}
 
+
 def main():
 
     # -- the key gate ----------------------------------------------------------
@@ -171,6 +172,7 @@ def main():
               "nested, after it closed")
 
     print("OK - tracing: gate, auth, endpoint, attributes, types, fail-soft")
+
 
 if __name__ == "__main__":
     main()

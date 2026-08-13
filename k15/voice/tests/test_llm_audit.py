@@ -18,13 +18,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import llm_audit
 
+
 def ev(kind, item=None):
     return types.SimpleNamespace(type=kind, item=item)
+
 
 def search_item(query, kind="web_search_call", status="completed"):
     return types.SimpleNamespace(
         type=kind, status=status,
         action=types.SimpleNamespace(type="search", query=query))
+
 
 class FakeStream:
     def __init__(self, evs):
@@ -39,6 +42,7 @@ class FakeStream:
 
     async def close(self):
         self.closed = True
+
 
 class FakeService:
     def __init__(self, stream):
@@ -56,12 +60,14 @@ class FakeService:
         self.contexts.append(list(ctx.messages))
         return "ok"
 
+
 class FakeContext:
     def __init__(self):
         self.messages = []
 
     def add_message(self, m):
         self.messages.append(m)
+
 
 class FakeTracing:
     def __init__(self):
@@ -70,8 +76,10 @@ class FakeTracing:
     def tool_span(self, kind, query, status=None):
         self.spans.append((kind, query, status))
 
+
 async def drain(stream):
     return [e async for e in stream.__aiter__()]
+
 
 def main():
     log = cglib.CapturingLog("audit")
@@ -188,6 +196,7 @@ def main():
 
     print("OK - llm_audit: transparent tee, search recorded, context fed, "
           "fail-soft")
+
 
 if __name__ == "__main__":
     main()

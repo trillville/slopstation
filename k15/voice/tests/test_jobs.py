@@ -20,6 +20,7 @@ import cglib
 import jobs as jobs_mod
 import workers
 
+
 def wait_for(pred, timeout=5.0):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -27,6 +28,7 @@ def wait_for(pred, timeout=5.0):
             return True
         time.sleep(0.02)
     return False
+
 
 def main():
     log = cglib.CapturingLog("jobs")
@@ -324,6 +326,7 @@ def main():
     print("  latest_result: completion-time ordering beats file order")
 
     print("OK - jobs: parsing, adapters, store lifecycle, reconcile, announcer gates")
+
 
 if __name__ == "__main__":
     main()

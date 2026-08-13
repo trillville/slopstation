@@ -38,6 +38,7 @@ _real_poll = cl.STANDOFF_POLL_S
 cglib.rotate_log = lambda *a, **k: None
 events.start_heartbeat = lambda *a, **k: None
 
+
 def with_temp_lock(age_s):
     """Point cglib.LOCK at a temp file with the given age; None = absent."""
     tmp = Path(tempfile.mkdtemp()) / "session.lock"
@@ -47,6 +48,7 @@ def with_temp_lock(age_s):
         os.utime(tmp, (old, old))
     cglib.LOCK = tmp
 
+
 class FakeHandle:
     def __init__(self):
         self.closed = False
@@ -54,11 +56,13 @@ class FakeHandle:
     def close(self):
         self.closed = True
 
+
 def held_puck():
     p = cl.Puck()
     h = FakeHandle()
     p.handles, p.active = [h], h
     return p, h
+
 
 # --- driving the real loop ----------------------------------------------------
 # The units above can all pass while main() wires them together wrongly, so the
@@ -66,6 +70,7 @@ def held_puck():
 # iterations, starts a session part-way through, and finally breaks out.
 class Stop(Exception):
     """Not OSError/ValueError - the loop's own handler must not swallow it."""
+
 
 class FakeHid:
     """Stands in for the hid module. Records every enumerate() so a test can
@@ -87,6 +92,7 @@ class FakeHid:
         h.read = lambda n: []            # never any input reports
         self.opened.append(h)
         return h
+
 
 def drive(lock_age_s, stop_after, session_starts_at=None):
     """Run main()'s loop, counting sleeps. Returns (captured log, fake hid).
@@ -116,6 +122,7 @@ def drive(lock_age_s, stop_after, session_starts_at=None):
     finally:
         cl.time.sleep, cl.STANDOFF_POLL_S = _real_sleep, _real_poll
     return cap, fake
+
 
 def main():
 
@@ -184,6 +191,7 @@ def main():
     print("OK - standoff: fresh lock lets go of the Puck, stale lock recovers, "
           "stand_off reports only the transition; driving main() confirms a live "
           "session never enumerates HID and a mid-loop launch closes every handle")
+
 
 if __name__ == "__main__":
     main()
