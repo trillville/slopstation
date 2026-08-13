@@ -2,11 +2,10 @@
 switch TV input -> watch loop. The one rule: nothing switches the TV to the
 gaming input before the host writes READY, so every pre-READY failure leaves
 the TV exactly as the viewer had it."""
-import socket, subprocess, sys, time
+import os, socket, subprocess, sys, time
 
 import cglib
 import events
-from cglib import LOCK
 
 CFG  = cglib.load_config()
 
@@ -21,11 +20,6 @@ WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
                        # chord can't hear).
 
 log = cglib.make_log("launch")
-
-
-def touch_lock():
-    try: LOCK.write_text(str(time.time()))
-    except OSError: pass
 
 
 def exlink(name):
@@ -99,13 +93,19 @@ def start(appid=None, turn=None):
     # whole chain - wake, dispatch, this launch, the PC's Enter task - shares
     # one story. A direct run (Start-TV-Gaming.bat, a bench invocation) mints
     # its own, so nothing is ever uncorrelated.
-    events.context(turn=turn if events.valid_turn(turn) else events.new_turn())
+    turn = turn if events.valid_turn(turn) else events.new_turn()
+    events.context(turn=turn)
+    # The pre-read only shapes the log lines; acquire_lock's exclusive create
+    # is the arbiter. Losing it means another launch won inside the last few
+    # milliseconds - the window that used to let a chord and a voice start
+    # both dispatch (and the second Enter recycle the Puck under the first).
     age = cglib.lock_age()
     if cglib.session_active(age):
         log("launch_busy", lock_age_s=round(age)); return 1
     if age is not None:
         log.warn("lock_recycled", lock_age_s=round(age))
-    LOCK.parent.mkdir(exist_ok=True); touch_lock()
+    if not cglib.acquire_lock(f"{turn} {os.getpid()}"):
+        log("launch_busy", reason="lost_acquire_race"); return 1
     t0 = time.time()
 
     def ms():
@@ -121,7 +121,7 @@ def start(appid=None, turn=None):
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
         for _ in range(ENTER_ATTEMPTS):
-            touch_lock()
+            cglib.touch_lock()
             try:
                 if ssh_intent("enter") == "OK":
                     log("enter_dispatched", dur_ms=ms()); break
@@ -132,7 +132,7 @@ def start(appid=None, turn=None):
         end = time.time() + READY_WAIT_S
         ready = False
         while time.time() < end:
-            touch_lock()
+            cglib.touch_lock()
             try:
                 st = ssh("status")
                 if st != "NOTREADY":
@@ -160,7 +160,7 @@ def start(appid=None, turn=None):
             cglib.LAST_ERROR.write_text(str(e))
         except OSError:
             pass
-        LOCK.unlink(missing_ok=True); return 1
+        cglib.release_lock(); return 1
     return 0
 
 
@@ -169,7 +169,7 @@ def watch():
     died_by_fails = False
     while True:
         time.sleep(WATCH_POLL_S)
-        touch_lock()
+        cglib.touch_lock()
         try:
             st = ssh("status"); fails = 0
             if st == "NOTREADY":
@@ -192,7 +192,12 @@ def watch():
         except Exception:
             pass
     exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
-    LOCK.unlink(missing_ok=True)
+    # Ownership-checked: if this watcher stalled past staleness and a new
+    # launch recycled the lock meanwhile, the file is the successor's now and
+    # stays. (The stall itself is the anomaly; refusing the unlink just keeps
+    # a live session's arbiter intact.)
+    if not cglib.release_lock():
+        log.warn("lock_kept", reason="owned_by_successor")
     log("session_idle")
 
 
@@ -206,7 +211,7 @@ def reconcile():
     unknowable after arbitrary downtime, and only a live session's end may
     drive it."""
     cglib.rotate_log()
-    if not LOCK.exists():
+    if cglib.lock_age() is None:
         return 0
     # A reconcile is its own intent (nobody asked for it; a restart caused
     # it), so it gets its own id rather than inheriting a dead session's.
@@ -216,14 +221,18 @@ def reconcile():
         try:
             if ssh("status") != "NOTREADY":
                 log("reconcile_resumed")
-                touch_lock()
+                # Adopt, don't just touch: the owner note still names the dead
+                # process, and release_lock at session end checks the pid.
+                cglib.adopt_lock(f"{events.current().get('turn')} {os.getpid()}")
                 watch()
                 return 0
             break                       # definitive NOTREADY - session is dead
         except Exception:
             time.sleep(2)
     log.warn("reconcile_cleared", reason="dead_session")
-    LOCK.unlink(missing_ok=True)
+    # Force-clear, not release_lock: the reconciler KNOWS the owner is dead
+    # (that is the whole finding), and its pid would never match ours.
+    cglib.LOCK.unlink(missing_ok=True)
     return 0
 
 

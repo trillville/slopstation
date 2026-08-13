@@ -91,8 +91,11 @@ class Dispatch:
     # -- session ---------------------------------------------------------------
 
     def start_session(self, appid=None):
-        """Same arbiter as the chord: a fresh lock means busy, never a double
-        launch. couch.py owns the whole sequence (and the one rule)."""
+        """Advisory busy check - same predicate as the chord, answered fast
+        and without spawning a console. The REAL arbiter is couch.py's atomic
+        acquire_lock: two launches racing through this check still produce
+        exactly one session. couch.py owns the whole sequence (and the one
+        rule)."""
         age = cglib.lock_age()
         if cglib.session_active(age):
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))

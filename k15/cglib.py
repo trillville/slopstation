@@ -133,6 +133,119 @@ def session_active(age=None):
     return age is not None and age < LOCK_STALE_S
 
 
+def _recycle_stale_lock():
+    """Clear a stale lock so acquire_lock can retry - at most one racer at a
+    time. The guard file's exclusive create serializes recyclers, and the
+    staleness re-check happens INSIDE the guard: while the (stale) lock file
+    exists no fresh lock can be created over it (acquire is O_EXCL), so what
+    gets unlinked here is provably the stale file and never a racer's fresh
+    one. A guard orphaned by a crash (a process dying inside these few lines)
+    is itself recycled at 10 s - that window needs a crash in a microsecond
+    section plus a simultaneous launch, which is negligible where the lock's
+    own window was not."""
+    guard = LOCK.with_name(LOCK.name + ".recycle")
+    try:
+        if time.time() - guard.stat().st_mtime > 10:
+            guard.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        fd = os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        return                      # someone else is recycling right now
+    try:
+        if not session_active():
+            try:
+                LOCK.unlink(missing_ok=True)
+            except OSError:
+                pass                # a racer holds a handle; next attempt
+    finally:
+        os.close(fd)
+        try:
+            guard.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def acquire_lock(content=""):
+    """Take the session lock, or answer no. True only if THIS call created
+    the file - the exclusive create is the arbiter, so two launches racing
+    through "looks free" still produce exactly one winner. Check-then-write
+    could not say that: a chord completing inside the few hundred ms between
+    a voice dispatch's check and couch.py touching the lock made BOTH
+    proceed, and the second launch's Enter then recycles the Puck claim
+    under the live session - the inputs-dead controller, manufactured by the
+    launch path itself.
+
+    A stale lock is recycled first (see _recycle_stale_lock for why that
+    path cannot eat a racer's fresh lock). `content` is the owner note -
+    couch.py writes "<turn> <pid>" - read back by release_lock; the mtime
+    stays the only datum session_active and the listener key on."""
+    LOCK.parent.mkdir(exist_ok=True)
+    denied = None
+    for attempt in (1, 2, 3):
+        try:
+            with open(LOCK, "x", encoding="utf-8") as f:
+                f.write(content)
+            return True
+        except FileExistsError:
+            denied = None
+        except PermissionError as e:
+            # Windows answers a RACING exclusive create with a sharing
+            # violation - errno 13, not FileExistsError - when it lands while
+            # the winner's create (or a recycle's delete-pending window) is
+            # in flight. Same meaning: contested. Found by the two-thread
+            # race in test_couch.py, where the loser crashed instead of
+            # answering busy. A state dir with a real ACL problem lands here
+            # too - told apart below by no lock existing once the dust
+            # settles, and THAT one deserves its crash.
+            denied = e
+        if session_active() or attempt == 3:
+            break
+        _recycle_stale_lock()
+    if denied is not None and not LOCK.exists():
+        raise denied
+    return False
+
+
+def touch_lock():
+    """Heartbeat: freshen the lock's mtime (the datum session_active reads)
+    without rewriting its content - the owner note acquire_lock stored has to
+    survive the whole session for release_lock's ownership check."""
+    try:
+        os.utime(LOCK)
+    except OSError:
+        pass
+
+
+def adopt_lock(content):
+    """Take over an existing lock (reconcile's resume path): rewrite the
+    owner note so release_lock recognizes the adopting watcher as the owner.
+    Also freshens mtime, so adoption doubles as the first heartbeat."""
+    try:
+        LOCK.write_text(content, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def release_lock():
+    """Unlink the session lock IF this process still owns it; True if it
+    did. The pid in the owner note is the check: a lock recycled out from
+    under us (this process stalled past LOCK_STALE_S and a new launch took
+    over) belongs to the successor now, and unlinking it would free a
+    session that is very much alive. A note with no readable pid (a
+    pre-owner-note lock, a hand-made file) releases anyway - refusing on a
+    formatting quirk would strand a lock forever."""
+    try:
+        parts = LOCK.read_text(encoding="utf-8").split()
+    except OSError:
+        return False                # already gone: nothing to release
+    if len(parts) >= 2 and parts[1] != str(os.getpid()):
+        return False
+    LOCK.unlink(missing_ok=True)
+    return True
+
+
 # --- Haptic vocabulary: one base note, count is the message -------------------
 #   1 thud = launch dispatched   2 = busy (launch already active)   3 = launch failed
 _THUD     = (220, 60, 90, 0, 0)
