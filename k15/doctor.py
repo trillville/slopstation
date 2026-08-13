@@ -244,6 +244,14 @@ def check_voice(cfg):
                        "tasks disabled (everything else runs)",
                        f"npm i -g the {exe} CLI and log in once, "
                        "as the autologon user")
+        if wp == "openai":
+            # Workers ingest untrusted web content; the anthropic lane is
+            # research-only by construction (no Bash granted). Codex cannot
+            # make that promise - its sandbox confines writes, not reads or
+            # shell - so on this lane the boundary is AGENTS.md policy.
+            report(WARN, "worker isolation",
+                   "codex keeps a shell (sandbox confines writes, not reads)",
+                   "structural research-only isolation is the anthropic lane")
         if not (voice_dir / "worker_home" / "AGENTS.md").exists():
             report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
                    "git pull should restore it - workers act unbriefed without it")

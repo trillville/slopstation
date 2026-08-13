@@ -37,11 +37,11 @@ class JobStore:
     """adapter = a workers.*Worker (never None - the caller gates the lane);
     on_done = fn(job dict), called off-thread when a job finishes."""
 
-    # A worker holds a shell and reaches the CLIs directly, so --dry-run
-    # can't gate its side effects the way Dispatch gates Tier 1/2. The honest
-    # thing is to tell it: advisory, not enforcement (AGENTS.md already says
-    # side effects need an explicit ask), so a dry-run drill doesn't start
-    # sessions on a TV someone is watching.
+    # The claude lane has no shell (research-only by construction), but the
+    # codex lane's sandbox keeps one, so --dry-run can't gate a worker the
+    # way Dispatch gates Tier 1/2. The honest thing is to tell it: advisory,
+    # not enforcement (AGENTS.md says workers act on nothing regardless), so
+    # a dry-run drill doesn't start sessions on a TV someone is watching.
     DRY_NOTE = ("[The couch system is in DRY-RUN: research and report only. "
                 "Do not run couch.py, exlink.py, or any other command that "
                 "changes system state.] ")

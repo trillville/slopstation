@@ -262,24 +262,28 @@ output contract. Provider-agnosticism is nearly free because both vendors ship
 their harness as a subscription-billed CLI whose native idiom is shell plus an
 instructions file.
 
-Workers act **through the same CLIs the human uses**, so every worker action
-passes the same locks, BUSY-truthful verbs, and Ex-Link ack validation. The
-gaming PC's surface remains the six forced-command ssh verbs, worker or no. No
-new secrets and no new inbound network surface: the CLIs authenticate
-on-machine, outside `secrets.json`.
+Workers **research and report; they take no actions**. Anything a task wants
+done to the couch — a launch, TV control, a session — comes back as a proposal
+in the findings, and the assistant lane executes it through the same dispatch
+as everything else (locks, BUSY-truthful verbs, Ex-Link ack validation) if and
+when the user asks. The gaming PC's surface remains the forced-command ssh
+verbs, worker or no. No new secrets and no new inbound network surface: the
+CLIs authenticate on-machine, outside `secrets.json`.
 
-**Security posture, stated plainly.** A worker ingests open-web content and
-holds a shell. File tools are confined to `worker_home` by the harness itself
-(a headless run cannot grant an out-of-directory permission), with deny rules on
-`secrets.json` as belt-and-braces. **Shell reads are not bounded** — `Bash` is
-pre-approved and not path-scoped, so a shell read of `secrets.json` rests on
-model judgment, and a deny list of read commands would be unenumerable theater.
-This is an accepted risk, bounded by: jobs originate only from the user's own
-voice (never an inbound channel), and the gamepc key is forced-command-limited
-to six verbs, so theft buys six verbs rather than code execution. If it ever
-needs to be real, the fix is running workers as a separate low-privilege Windows
-user with a deny ACL on `secrets.json` — the only mechanism independent of model
-judgment.
+**Security posture, stated plainly.** A worker ingests open-web content, so
+prompt rules must not be the boundary. On the claude lane they are not: since
+2026-08-12 workers get **no `Bash` at all** (workers.py's `--allowedTools`),
+file tools are confined to `worker_home` by the harness itself (a headless run
+cannot grant an out-of-directory permission), and the deny rules on
+`secrets.json` stay as belt-and-braces — research-only by construction. The
+codex lane cannot make that structural promise (its sandbox confines writes,
+not reads or shell), so the old posture still applies there and doctor warns
+whenever that lane is selected: shell reads rest on model judgment, bounded by
+jobs originating only from the user's own voice (never an inbound channel) and
+the gamepc key being forced-command-limited to a handful of verbs. If the
+codex lane ever needs to be real, the fix remains running workers as a
+separate low-privilege Windows user with a deny ACL on `secrets.json` — the
+only mechanism independent of model judgment.
 
 Results are announced proactively: a distinct earcon, then the summary spoken
 immediately, movies included. The only gate is an active session (the pipeline
