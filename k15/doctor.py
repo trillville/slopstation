@@ -372,7 +372,7 @@ def check_telemetry():
                    "Start-Service Alloy - nothing reaches Grafana meanwhile")
         else:
             report(WARN, "log shipper", "Alloy not installed",
-                   "events are local-only; see docs/observability-design.md E2")
+                   "events are local-only; see docs/grafana-implementation.md")
     except Exception as e:
         report(WARN, "log shipper", f"could not query ({e})", "")
 

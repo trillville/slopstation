@@ -150,10 +150,15 @@ class ClaudeWorker(_CliWorker):
     so the boundary is the harness rather than a prompt rule - a shell reads
     what the Read deny rules cannot, and this process ingests untrusted web
     content on the account holding the gamepc key. Actions belong to Tier 2,
-    after the user asks. CodexWorker below cannot promise the same (its
-    sandbox confines writes, not reads or shell), so doctor warns on that
-    lane; voice-control-design.md § worker lane has the full posture, and the
-    injection canary drill (voice-testing 10c) proves it on this machine.
+    after the user asks. The injection canary drill (voice-testing 10c) proves
+    it on this machine.
+
+    CodexWorker below cannot promise the same - its sandbox confines writes,
+    not reads or shell - so doctor warns whenever that lane is selected. If
+    that lane ever has to be real, the fix is NOT more prompt rules: run
+    workers as a separate low-privilege Windows account with a deny ACL on
+    secrets.json. That is the only mechanism here independent of model
+    judgment.
 
     Output is stream-json so the TOOL CALLS are visible - with plain json the
     only artefact of three minutes of research is the final text. The stream

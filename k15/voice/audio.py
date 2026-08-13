@@ -171,6 +171,10 @@ class WakeListener:
         self.model = Model(wakeword_models=[self.key], inference_framework="onnx")
 
     def _ensure_model(self):
+        # Models must land in openwakeword's OWN package dir: it resolves the
+        # bundled feature extractors (melspectrogram, embedding) relative to
+        # that path, so pointing downloads at a custom directory strands them
+        # and the model loads against nothing.
         import openwakeword
         from openwakeword.utils import download_models
         res = Path(openwakeword.__file__).parent / "resources" / "models"

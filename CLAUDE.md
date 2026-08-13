@@ -48,8 +48,8 @@ devices) only run on the K15.
 
 ## Design notes
 
-Decisions with evidence live in `docs/` (`resume-game-design.md` is the
-genre: what was tried, what the logs showed, what gates the next attempt).
-`docs/architecture-review-2026-08.md` records the 2026-08 architecture
-review — read it before re-litigating the session protocol, the worker
-boundary, or the module layout.
+A design doc is written for work that is NOT yet built and is deleted once it
+is — the code and its comments become the record. `docs/resume-game-design.md`
+is the surviving example and the genre: what was tried, what the logs showed,
+what gates the next attempt. README § Deliberately not doing carries the
+standing "don't re-litigate this" list.

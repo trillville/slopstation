@@ -15,16 +15,19 @@ separate process and survives anything the voice stack does.
 
 ## Docs
 
+Four, and each is a thing you *do* — how to build it, how to bring voice up,
+how to fix it, and the one feature that isn't built. **Why** the code is
+shaped as it is lives in the code: the comments carry the incidents and
+constraints, so there is no design doc to drift away from them.
+
 | | |
 |---|---|
 | [couch-gaming-guide.md](docs/couch-gaming-guide.md) | **Start here to build one.** Physical install → TV settings → VirtualHere gate → display profiles → sshd + tasks → orchestrator → the chord. One-time commands, failure drills, acceptance checklist. |
-| [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. |
-| [voice-control-design.md](docs/voice-control-design.md) | Why the voice stack is shaped the way it is — pipeline, alternatives weighed, costs, edges. |
+| [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. Also the ReSpeaker mic-array bring-up and its accept/reject bar. |
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
-| [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops - launches, errors, liveness, both machines) and `langfuse-traces` (agent - what the assistant heard, said, cost). Each carries a stdlib-only query script. |
-| [grafana-implementation.md](docs/grafana-implementation.md) | Setting up alerts, dashboards and the gaming PC shipper: this rig's values, the rules, the drills, and what to check when nothing arrives. |
-| [observability-design.md](docs/observability-design.md) | Why it is shaped this way — structured events, the `turn` id, what was weighed and what each phase's build actually found. Logs and Langfuse agent traces are both live; the per-phase table there is the current status. |
-| [architecture-review-2026-08.md](docs/architecture-review-2026-08.md) | The 2026-08 architecture review: verdict (keep it), the six findings and their fixes, what was deliberately declined and why, and the standing risks. Read before re-litigating the session protocol, the worker boundary, or the module layout. |
+| [grafana-implementation.md](docs/grafana-implementation.md) | The vendor side: this rig's stack identity, the console click-paths, alert rules, the dashboard, the drills, and what to check when nothing arrives. |
+| [resume-game-design.md](docs/resume-game-design.md) | The one unbuilt feature — landing back *in* a game across sessions. Two attempts, why both failed, and the two-minute experiment that gates a third. |
+| [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops — launches, errors, liveness, both machines) and `langfuse-traces` (agent — what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
 run `python doctor.py` on the K15, or on the PC
@@ -126,6 +129,33 @@ checkout runs without its local config/keys ever fighting `git pull`:
   every incident-history comment travels with its code — the comments are this
   repo's institutional memory. Land behavior changes first, moves second,
   never both in one commit.
+- **Design docs are for unbuilt work.** One exists while a thing is being
+  decided and is deleted when it ships — the code and its comments become the
+  record, and a doc that outlives its feature only drifts.
+
+## Deliberately not doing
+
+Closed questions, kept so they are not re-opened for free. Each was decided
+with the reasoning; if the premise changes, reopen it deliberately.
+
+| | |
+|---|---|
+| **Services, a database, or merging the voice and chord lanes** | The process split *is* the failure isolation. File-backed state a human can inspect and delete at 2am is the feature. |
+| **Session phases/snapshots on disk** | Optimistic software state. The probes — display, PnP, Steam registry, ready marker — already answer every phase question truthfully. The lock got atomicity and identity, not a state machine. |
+| **A typed config layer, a `pc_client`/`tv` extraction, splitting `cglib.py`** | The verb responses mean different things per call site; presence-checks plus `config_suspect` warnings catch the failure that actually occurs. Revisit only when size hurts. |
+| **JSON envelopes for the PC marker files** | Six verbs. The launch path re-validates downstream and a lost turn costs a log label. |
+| **Self-hosting telemetry on the K15** | It is the thing being observed, and it runs a latency-sensitive audio pipeline. A dashboard that dies with its subject is not a dashboard. |
+| **Sentry, a metrics SDK, span sampling, session replay, audio upload** | This code catches almost everything by design, so Sentry would receive very little; the rest do not earn their complexity at one household's volume. Revisit Sentry if unhandled `voice_agent` crashes become a theme. |
+| **Tracing library sync and metadata crawls** | Those are logs. Nobody is waiting on them. |
+| **A custom status page** | Grafana and Langfuse are the web app. If one is ever wanted it reads their query APIs and stores nothing. |
+| **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. The `sys.path` inserts are the price and it is already paid. |
+
+Still genuinely open: **clock skew** between the two machines (correlation is
+by `turn`, not timestamp, so skew only misorders a merged view — the
+measurement command is in grafana-implementation.md), **Tempo dual-export**
+(`TODO(E5b)` in `voice/tracing.py`), and **barge-in**, which pipecat 1.7 does
+not give us for free — the mechanism and the revival recipe are in
+`voice/session_runtime.py`.
 
 ## Deliberately not in the repo
 

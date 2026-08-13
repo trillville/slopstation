@@ -16,8 +16,9 @@
 #   `< 1` threshold never evaluates. These fire through noDataState: Alerting.
 #   The threshold is only a backstop for a lane that is ticking but starved.
 #   Set these to OK and the two most valuable alerts in the system are
-#   permanently inert - and they LOOK fine in the UI, which is why drill 4
-#   (kill the agent, confirm it pages) is not optional.
+#   permanently inert - and they LOOK fine in the UI, which is why drill 1 in
+#   grafana-implementation.md (kill the agent, confirm it pages) is the one
+#   drill that is not optional.
 #
 # Every rule filters env="prod". The blind suite writes env=test to a separate
 # file the shipper does not even read, so this is belt-and-braces.

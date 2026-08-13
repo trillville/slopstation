@@ -242,9 +242,19 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     else:
         stages += [transport.output()]
 
+    # NO BARGE-IN, by construction rather than by choice: pipecat 1.7 builds
+    # an InterruptionFrame only in response to an InterruptionWorkerFrame,
+    # nothing constructs that on its own, and this transport has no
+    # vad_analyzer. So speaking over an answer neither stops it nor is
+    # ignored - a Tier-1 command mid-answer DISPATCHES and the answer still
+    # arrives on top of it. To revive it: add a VAD analyzer to the transport
+    # and a processor that pushes InterruptionWorkerFrame upstream on speech.
+    #
     # Tracing is opt-in per session and costs nothing when off. enable_metrics
     # is what populates the token counts and TTFB that make the spans worth
     # having - without it the tree arrives with timings but no numbers.
+    # enable_tracing belongs on PipelineWorker, not PipelineTask (Langfuse's
+    # own page shows the older API).
     tracing_on = tracing.is_on()
     worker = PipelineWorker(
         Pipeline(stages),

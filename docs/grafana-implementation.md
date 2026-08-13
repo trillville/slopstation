@@ -1,11 +1,13 @@
-# Grafana — implementation guide
+# Grafana + Langfuse — the vendor side
 
-Everything needed to take the couch system from "logs are arriving" to "it
-tells me when something breaks." Design rationale lives in
-[observability-design.md](observability-design.md); this is the doing.
+Everything the couch system's telemetry needs that lives in someone else's
+console: this rig's identity, the click-paths, the alert rules, the drills,
+and what to check when nothing arrives. The *why* is in the code — every
+telemetry rule this obeys is a comment in `k15/events.py`, `k15/voice/
+tracing.py`, and the two `alloy/config.alloy.example` files.
 
-**Status:** ingestion is live (E2). Alerts, dashboards, and the gaming PC's
-shipper are not. This guide covers all three.
+**Status:** all live — ingestion, alerts, the dashboard, agent traces, and
+the gaming PC's shipper.
 
 ## This rig's values
 
@@ -20,11 +22,21 @@ environment variable on the K15.
 | Loki push URL | `https://logs-prod-021.grafana.net/loki/api/v1/push` |
 | Loki user (instance id) | `1730320` |
 | Loki datasource uid | `grafanacloud-logs` |
-| Tempo datasource uid | `grafanacloud-traces` (unused until E5) |
+| Tempo datasource uid | `grafanacloud-traces` (unused — traces go to Langfuse) |
 | Access policy | `slopstation-write` — `logs:write`, `traces:write` |
 | Alloy config (K15) | `%PROGRAMFILES%\GrafanaLabs\Alloy\config.alloy` |
 | Alloy env vars | `GC_LOKI_USER`, `GC_LOKI_TOKEN` (Machine scope) |
 | Alloy debug UI | `http://localhost:12345` (K15, localhost only) |
+| Free tier | 10k series, 50 GB logs, 50 GB traces, **14-day retention**, 3 users |
+| Langfuse | Hobby: 50k units/mo, **30-day access, 2 users, 2 alerts**. Budget ~230 units/day ≈ 7k/mo, so headroom is large |
+
+**If you ever wire Tempo** (`tracing.py`'s TODO(E5b)): copy the exact
+`otlp-gateway-prod-us-*` hostname from the stack's **OpenTelemetry** tile —
+the region slug is per-stack and cannot be guessed from the Loki one.
+
+**Langfuse cost shows $0?** It maps model name → price from its own list, and
+a model it does not know prices at zero. Add a custom model definition in
+project settings for whatever `assistantModel*` is set to.
 
 **Where the Cloud portal hides:** grafana.com → **Cloud portal** → **Stacks**
 → your stack's **Details** → *Manage Stack*. Loki, Tempo, and OpenTelemetry
@@ -126,7 +138,7 @@ All use datasource `grafanacloud-logs`, query type **Instant**, then
 | Chord lane down | `sum(count_over_time({service="k15", lane="listener", env="prod"} \| json \| event="heartbeat" [5m]))` | `< 1` | **Alerting** | 2m | critical |
 | Voice lane down | `sum(count_over_time({service="k15", lane="voice", env="prod"} \| json \| event="heartbeat" [5m]))` | `< 1` | **Alerting** | 5m | warning |
 | Launch failed | `sum(count_over_time({service="k15", env="prod"} \| json \| event="launch_failed" [5m]))` | `> 0` | OK | 0m | warning |
-| Crash loop | `sum(count_over_time({service="k15", lane="supervisor", env="prod"} \| json \| event="restart" [10m]))` | `> 3` | OK | 0m | critical |
+| Crash loop | `sum by (what) (count_over_time({service="k15", lane="supervisor", env="prod"} \| json \| event="restart" [10m]))` | `> 3` | OK | 0m | critical |
 | Error burst | `sum(count_over_time({service="k15", env="prod", level="error"} [10m]))` | `> 5` | OK | 0m | warning |
 | TV not answering | `sum(count_over_time({service="k15", env="prod"} \| json \| event="exlink_nak" [5m]))` | `> 0` | OK | 0m | warning |
 

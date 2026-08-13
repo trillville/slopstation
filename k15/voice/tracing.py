@@ -25,11 +25,13 @@ THE RULES THIS OBEYS
     * Off by default in the absence of keys, exactly like the assistant and
       worker lanes - real_key() decides, no extra config flag to forget.
 
-PRIVACY: spans carry transcripts and completions verbatim. That is the
-recorded decision (observability-design.md, position 1: ship content). Note
-that events.scrub() does NOT apply here - it guards our own JSONL fields, and
-these attributes are built by Pipecat. Acceptable because no secret is ever a
-span attribute: what flows is speech, model names, token counts and timings.
+PRIVACY: spans carry transcripts and completions verbatim - the recorded
+decision is to ship content, since a trace without the words is not worth
+having in a single-household system. events.scrub() does NOT apply here: it
+guards our own JSONL fields, and these attributes are built by Pipecat.
+Acceptable because no secret is ever a span attribute - what flows is speech,
+model names, token counts and timings. Keep it that way: an API key or the
+VirtualHere PIN reaching a span would leave the house unredacted.
 """
 import base64
 import contextlib

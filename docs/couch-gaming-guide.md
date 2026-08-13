@@ -814,8 +814,7 @@ gaming-related.
 
 Once the chord works end to end, [voice-testing.md](voice-testing.md) is the
 bring-up path: API keys, the voice venv, audio devices, wake word, then
-escalating drills from a safe dry run to live dispatch. The architecture and its
-rationale are in [voice-control-design.md](voice-control-design.md).
+escalating drills from a safe dry run to live dispatch.
 
 Voice is an overlay, never load-bearing — the chord listener is a separate
 process and survives anything the voice stack does.

@@ -114,5 +114,11 @@ Neither is the whole story.
 - **The `--text` REPL and the chord lane are not traced** — those live in
   the logs. Background jobs ARE, see below.
 - **Free tier: 50k units/month**, where a unit is any trace, observation or
-  score. A voice session is ~1 + 4×(turn + 3 services) ≈ 17. Not a constraint
-  at this volume, but do not build polling loops.
+  score. A voice session is ~1 + 4×(turn + 3 services) ≈ 17, so ~230/day
+  ≈ 7k/mo. Not a constraint at this volume, but do not build polling loops.
+  The Hobby plan also caps **history at 30 days**, with 2 users and 2 alerts —
+  anything older lives in `state/traces/` and the logs, not here.
+- **A cost reading of $0 is a missing price, not a free call.** Langfuse maps
+  model name → price from its own list, and prices an unknown model at zero.
+  If `couch.job.cost_usd` or a session cost reads zero for a model you know
+  costs money, add a custom model definition in project settings.

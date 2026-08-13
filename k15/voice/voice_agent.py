@@ -1,10 +1,12 @@
 """K15 voice agent: wake word -> session pipeline -> dispatch.
 
-Architecture (see docs/voice-control-design.md): the wake loop runs OUTSIDE
-Pipecat (raw PyAudio + openWakeWord, zero cloud); each wake builds and runs ONE
-PipelineWorker (mic -> Flux STT -> GrammarGate -> speaker) that lives for the
-session and is torn down at its end - fresh Flux socket per session, $0 idle by
-construction. Sessions end on an exit phrase or idle timeout (holdWindowS).
+The wake loop runs OUTSIDE Pipecat (raw PyAudio + openWakeWord, zero cloud);
+each wake builds and runs ONE PipelineWorker (mic -> Flux STT -> GrammarGate
+-> speaker) that lives for the session and is torn down at its end. That
+shape is forced by Flux: it connects on StartFrame with no app-facing
+connect/disconnect and its socket dies ~20-30 s after audio stops, so a
+per-session pipeline is also what makes idle cost $0. Sessions end on an exit
+phrase or the idle timeout (holdWindowS).
 
 This file is the COMPOSITION ROOT and the wake loop, nothing else: audio.py
 owns the PortAudio world (devices, recovery, the wake listener) and
