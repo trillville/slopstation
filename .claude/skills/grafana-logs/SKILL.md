@@ -26,7 +26,7 @@ allowed in `{...}`:
 | Label | Values |
 |---|---|
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
-| `lane` | k15: `voice`, `launch`, `listener`, `library`, `jobs`, `supervisor`, `traces` — gamepc: `enter`, `exit`, `launchgame`, `wake-safety`, `office-safety`, `pc-transcript` |
+| `lane` | k15: `voice`, `launch`, `listener`, `library`, `jobs`, `supervisor`, `traces`, `manual` — gamepc: `enter`, `exit`, `launchgame`, `wake-safety`, `office-safety`, `pc-transcript` |
 | `level` | `debug`, `info`, `warn`, `error` |
 | `env` | `prod`, `test` — **always filter `env="prod"`** unless investigating the blind suite |
 
@@ -79,6 +79,10 @@ Time to READY, the number the whole system is judged on:
 ## Event vocabulary
 
 - **launch**: `launch_start` `wol_sent` `ssh_up` `enter_dispatched` `host_ready` `launch_failed` `session_ended` `session_idle` `exlink_send` `exlink_nak`
+- **manual**: `exlink_send` `exlink_nak` — the same two events from a hand-run
+  `python exlink.py <cmd>`, kept off the launch lane so operator probing does
+  not skew launch metrics. Drop the lane from a query to see every frame
+  whoever sent it: `| json | event="exlink_send"`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_close` `session_crashed` `pipeline_error` `heartbeat`
 - **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
@@ -87,6 +91,24 @@ Time to READY, the number the whole system is judged on:
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.
+
+Two fields that mislead if read at face value:
+
+- **`ack` on `exlink_send` is not confirmation.** It means the TV's serial
+  receiver accepted the frame; Ex-Link here is send-only and nothing reads TV
+  power back. A `power_on` can ack and leave the set dark — that is exactly
+  what happened on 2026-08-13.
+- **`primary_height` on `enter_failed`** separates the two failure shapes: the
+  desk's own height means the TV never came up, while anything else (or `-1`)
+  means the failed apply detached the desktop and left no active display.
+
+When a launch fails on the profile, the gaming PC now also copies the
+interesting lines of DisplayMagician's own log next to the transcript, so it
+ships under `lane="pc-transcript"` like everything else in that folder:
+
+```logql
+{service="gamepc", lane="pc-transcript"} |= "DisplayMagician"
+```
 
 ## How to answer well
 

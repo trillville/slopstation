@@ -25,6 +25,11 @@ log = cglib.make_log("launch")
 def exlink(name):
     try:
         ack = cglib.exlink_send(name, CFG["tvComPort"])
+        # `ack` means the TV's serial receiver ACCEPTED THE FRAME. It is not
+        # confirmation that the TV acted on it, and there is no read-back that
+        # would be: Ex-Link here is send-only. A power_on can ack and leave the
+        # set dark - 2026-08-13, where reading this field as "the TV came on"
+        # sent the investigation at the gaming PC for hours.
         log("exlink_send", cmd=name, ack=ack or "no-ack")
     except Exception as e:
         # non-fatal: PC readiness is independent of whether the TV heard us

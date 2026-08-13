@@ -72,7 +72,13 @@ try {
         if (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 20 1 'office restored before retry')) {
             Log 'WARNING: OFFICE did not verify - the retry below will probably be a no-op'
         }
-        if (-not (Invoke-DisplayProfile $CG.TvGamingLnk { Test-TvIsPrimary } 20 1 'TV is primary (2160p)')) {
+        $rescued = Invoke-DisplayProfile $CG.TvGamingLnk { Test-TvIsPrimary } 20 1 'TV is primary (2160p)'
+        # Captured either way, and only here: reaching this line at all means
+        # the first apply missed, which is the one condition whose explanation
+        # lives solely in DisplayMagician's log. Sampled after the retry so the
+        # copy covers both attempts.
+        Copy-DisplayMagicianLog $(if ($rescued) { 'retry-ok' } else { 'retry-failed' })
+        if (-not $rescued) {
             # Names the likeliest cause, not the symptom: the old wording here
             # ('TV-GAMING profile did not take') pointed a whole investigation at
             # DisplayMagician when the TV had simply never powered on.
@@ -142,7 +148,15 @@ catch {
     # DisplayMagician first (a hung instance is the likeliest reason we're
     # here), release best-effort, then a VERIFIED office apply. The TV input
     # was never switched - the K15 gates on READY.
-    Write-CgEvent 'enter_failed' @{ err = "$_" } 'error'
+    # Sampled BEFORE the recovery below changes it, and guarded rather than
+    # inlined: a probe that threw HERE would skip the office restore under it.
+    # The number is what separates "the TV never came up" (desk still on its
+    # own height) from "the apply detached everything and left no active
+    # display", which is what actually happened on 2026-08-13 and which the
+    # error message alone could not tell you.
+    $height = -1
+    try { $height = Get-PrimaryHeight } catch { }
+    Write-CgEvent 'enter_failed' @{ err = "$_"; primary_height = $height } 'error'
     Stop-DisplayMagician
     Request-PuckRelease 1 | Out-Null
     if (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 20 2 'office restored')) {

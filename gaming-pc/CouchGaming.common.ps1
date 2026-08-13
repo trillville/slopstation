@@ -157,6 +157,44 @@ function Stop-DisplayMagician {
     Get-Process DisplayMagician -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
+# A failed profile apply only explains itself in DisplayMagician's OWN log -
+# "the graphics mode is not supported", the display config collapsing to no
+# valid paths at all - and that log lives outside this tree, under the user's
+# LOCALAPPDATA, where DisplayMagician rotates it away within hours. On
+# 2026-08-13 the log for that morning's failed launch was already gone by
+# lunchtime, taking the only account of what happened with it.
+#
+# Copying it beside the transcript puts it inside the shipper's existing
+# C:/CouchGaming/logs/*.log glob, so it reaches Loki with no Alloy change, and
+# Clear-OldLogs archives it on the same schedule as everything else here.
+#
+# Level-filtered rather than verbatim: a run is ~800 KB of TRACE, of which the
+# ERROR/WARN/INFO lines are ~5% - and those are every line that has ever
+# mattered in a post-mortem.
+#
+# Swallows everything. This is called from INSIDE Enter's try block, where an
+# exception would convert a launch the retry had just rescued into a failure.
+function Copy-DisplayMagicianLog([string]$Tag) {
+    try {
+        $src = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'DisplayMagician\Logs\*.log') `
+                   -File -ErrorAction Stop |
+               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $src) { return }
+        $stamp = Get-Date -Format yyyyMMdd-HHmmss
+        $name = if ($script:CgTurn) { "dm-$stamp-$($script:CgTurn)-$Tag.log" }
+                else                { "dm-$stamp-$Tag.log" }
+        $keep = Select-String -Path $src.FullName -Pattern '\|(ERROR|WARN|INFO)\|' |
+                ForEach-Object { $_.Line }
+        # BOM-less, for the same reason Write-CgEvent hand-rolls its encoder:
+        # PowerShell 5.1's `-Encoding utf8` means utf8 WITH BOM.
+        [IO.File]::WriteAllLines((Join-Path $CG.LogDir $name), $keep,
+                                 (New-Object System.Text.UTF8Encoding($false)))
+        Log "captured DisplayMagician log -> $name ($($keep.Count) lines of $($src.Name))"
+    } catch {
+        Log "note: could not capture the DisplayMagician log - $_"
+    }
+}
+
 # Steam's own record of what is running; 0 = nothing. Same registry value the
 # Dispatch `playing` verb answers from, so the PC cannot disagree with itself
 # about whether a game is up.
