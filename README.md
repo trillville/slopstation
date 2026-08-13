@@ -25,7 +25,6 @@ constraints, so there is no design doc to drift away from them.
 | [couch-gaming-guide.md](docs/couch-gaming-guide.md) | **Start here to build one.** Physical install → TV settings → VirtualHere gate → display profiles → sshd + tasks → orchestrator → the chord. One-time commands, failure drills, acceptance checklist. |
 | [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. Also the ReSpeaker mic-array bring-up and its accept/reject bar. |
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
-| [grafana-implementation.md](docs/grafana-implementation.md) | The vendor side: this rig's stack identity, the console click-paths, alert rules, the dashboard, the drills, and what to check when nothing arrives. |
 | [resume-game-design.md](docs/resume-game-design.md) | The one unbuilt feature — landing back *in* a game across sessions. Two attempts, why both failed, and the two-minute experiment that gates a third. |
 | [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops — launches, errors, liveness, both machines) and `langfuse-traces` (agent — what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 
@@ -150,12 +149,13 @@ with the reasoning; if the premise changes, reopen it deliberately.
 | **A custom status page** | Grafana and Langfuse are the web app. If one is ever wanted it reads their query APIs and stores nothing. |
 | **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. The `sys.path` inserts are the price and it is already paid. |
 
-Still genuinely open: **clock skew** between the two machines (correlation is
-by `turn`, not timestamp, so skew only misorders a merged view — the
-measurement command is in grafana-implementation.md), **Tempo dual-export**
-(`TODO(E5b)` in `voice/tracing.py`), and **barge-in**, which pipecat 1.7 does
-not give us for free — the mechanism and the revival recipe are in
-`voice/session_runtime.py`.
+Still genuinely open: **clock skew** between the two machines — correlation is
+by `turn` rather than timestamp, so skew only misorders a merged view; measure
+it by running `(Get-Date).ToUniversalTime().ToString('o')` on both within a
+few seconds and close the question if it is under a second. Also **Tempo
+dual-export** (`TODO(E5b)` in `voice/tracing.py`) and **barge-in**, which
+pipecat 1.7 does not give us for free — the mechanism and the revival recipe
+are in `voice/session_runtime.py`.
 
 ## Deliberately not in the repo
 

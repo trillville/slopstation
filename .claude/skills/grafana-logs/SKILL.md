@@ -13,8 +13,10 @@ answer here.
 python .claude/skills/grafana-logs/query.py '{service="k15", level="error"}' --since 24h
 ```
 
-Setup, drills, and the alert rules live in
-[docs/grafana-implementation.md](../../../docs/grafana-implementation.md).
+Stack `narrownuthatch2355` (US West), `https://narrownuthatch2355.grafana.net`.
+When a query returns nothing and you suspect the pipeline rather than the
+query, [troubleshooting.md](../../../docs/troubleshooting.md) § *Telemetry
+stopped arriving* is the runbook.
 
 ## The data model — read this before writing a query
 

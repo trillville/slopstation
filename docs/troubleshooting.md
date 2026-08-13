@@ -5,18 +5,16 @@ voice lane is an overlay and its failures never affect the chord.
 
 **First move, always:** tail `k15/couch.log` (next to `config.json`). Every
 process tags its lines — `[listener]`, `[launch]`, `[voice]`, `[library]`,
-`[supervisor]`. `python doctor.py` on the K15 and, on the PC:
+`[supervisor]`. Then `python doctor.py` on the K15 and, on the PC:
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
 ```
 
-Each diagnoses its whole chain read-only. The `-ExecutionPolicy Bypass` is not
-optional and not a workaround: this box's policy is `Restricted` (the Windows
-client default), so a bare `C:\CouchGaming\Doctor.ps1` fails with
-`running scripts is disabled on this system`. Every scheduled task and the sshd
-forced command already invoke PowerShell exactly this way — so running it by
-hand like this is also the closest match to how the real thing runs.
+Each diagnoses its whole chain read-only. `-ExecutionPolicy Bypass` is
+required, not a workaround: the box is `Restricted`, so a bare path fails with
+`running scripts is disabled on this system` — and every scheduled task and the
+sshd forced command already invoke PowerShell exactly this way.
 
 **When one launch is the question**, the same events are also in
 `k15/logs/k15-YYYYMMDD.jsonl` with a `turn` id that follows a single intent
@@ -27,6 +25,40 @@ the same id). One launch, both machines:
 ```bash
 grep '"turn":"9f2c1a"' k15/logs/k15-*.jsonl
 ```
+
+Or ask the `grafana-logs` skill, which queries both machines at once and needs
+no RDP. **The local JSONL is the source of truth and Grafana is a mirror** —
+Alloy's position file tracks what it *read*, not what it *sent*, so lines read
+during an outage are dropped rather than queued. Nothing that matters may live
+only in the cloud.
+
+## Telemetry stopped arriving
+
+Grafana is the couch system's rear-view mirror, not part of the launch path —
+nothing here can stop a chord from working. Check in this order; the first two
+cost seconds:
+
+1. **`http://localhost:12345`** on the K15 (Alloy's UI) → `local.file_match.events`
+   → **Exports → targets**. Empty means the path or glob is wrong and nothing
+   downstream matters.
+2. **Grafana → Access Policies → the token row → `Last used at`.** `Never`
+   separates "wrong value" from "not being sent at all" — a distinction no
+   client-side symptom can make.
+3. **The Alloy log.** Its component health reads *Healthy* through hundreds of
+   rejected pushes: it means "started", not "working". The actual HTTP status
+   and Loki's error text are only here:
+
+```bash
+Get-WinEvent -LogName Application -MaxEvents 60 | Where-Object { $_.ProviderName -like '*Alloy*' -and $_.Message -like '*error*' } | Select-Object -First 5 TimeCreated, Message | Format-List
+```
+
+| Symptom | Cause |
+|---|---|
+| `401 … "invalid scope requested"` | Token is from a read-only policy; the shipper needs `logs:write`. The reverse also holds — the `grafana-logs` skill needs `logs:read` and 401s on a write token. |
+| `401 … "invalid token"` | Wrong value, **or** Alloy started before the token existed — it reads its environment once, at process start. |
+| Healthy everywhere, no data | Nothing new written since the last restart. Emit a fresh line. |
+| Explore shows nothing | The datasource defaulted to Prometheus. Switch to the `…-logs` datasource and the editor to **Code**. |
+| Alerts never fire | An absence rule (`chord/voice lane down`) set to `No data = OK` is permanently inert **and looks healthy in the UI**. Absence rules must fire through *No data = Alerting*; see `k15/events.py`'s `start_heartbeat`. |
 
 ## Chord lane
 

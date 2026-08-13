@@ -301,11 +301,14 @@ def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
     loop swallows everything - a liveness probe that can kill the thing it
     probes is worse than none.
 
-    ALERTING NOTE (docs/grafana-implementation.md): the rule cannot be
-    "heartbeat count < 1". A dead lane emits no lines, so the query returns
-    no series and a threshold never evaluates - it has to fire through
-    Grafana's *No data* handling, or the two most important alerts in the
-    system are permanently inert.
+    ALERTING NOTE, and the whole reason this signal exists: an absence rule
+    cannot be "heartbeat count < 1". A dead lane emits no lines, so the query
+    returns no series and a threshold never evaluates at all - it has to fire
+    through Grafana's *No data = Alerting* handling. Set to *No data = OK* the
+    two most important alerts in the system are permanently inert AND look
+    perfectly healthy in the UI, which is why the drill is to kill a lane and
+    confirm it actually pages (~7 min for the chord lane, ~10 for voice: the
+    5-minute count window has to empty before `for:` even starts).
     """
     def tick():
         while True:
