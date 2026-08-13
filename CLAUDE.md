@@ -25,6 +25,32 @@ principle); this file holds only the process rules an agent session needs.
   by construction — see `events.emit`'s positional-only signature for the
   standard this has to meet.
 
+## Working on the live system
+
+Don't assume which machine you are on — a session runs on the K15, on the
+gaming PC, or on a checkout that is neither. Establish that first, because what
+matters is not where a command runs but what it reaches:
+
+- **On the K15** — restarting a lane, editing `config.json`, clearing
+  `state\session.lock`.
+- **On the gaming PC** — applying a display profile, recycling the Puck claim,
+  `Deploy.ps1`.
+- **From anywhere on the LAN** — the `ssh gamepc` verbs reach the PC whether or
+  not you are sitting at it.
+
+On a checkout that is neither machine, local commands are free; the LAN verbs
+and anything you land that later gets deployed are not. Any of the above can
+end what is on the TV right now, and someone is usually on the couch.
+
+So before a command that changes state on a live machine, check that the
+evidence supports that specific action. A symptom that pattern-matches a known
+failure often has a different cause, and the `turn` id exists so you can prove
+which one it is rather than inferring it — the log and trace skills answer most
+of these questions without touching either machine, so start there.
+
+When the ask is a question or a description of something going wrong, the
+deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
+
 ## Running the tests
 
 The blind suite runs as scripts, not pytest — `events._env()` detects tests
