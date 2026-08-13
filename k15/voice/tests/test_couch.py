@@ -7,6 +7,8 @@ stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
     timestamp is legacy-accepted, and a changed one supersedes the watcher;
   * the one rule - the TV input switch happens only after READY, never on a
     failure path, which also leaves last_error for the listener;
+  * the TV-asleep rescue: exactly one extra power_on inside the READY wait,
+    and it never becomes an input switch;
   * watch() rides out ssh blips and dies honestly on a run of them;
   * reconcile resumes a live session and clears a dead one, TV untouched.
 
@@ -59,9 +61,9 @@ def wire(script, default=None):
     couch.log = log
     sent = []
 
-    def fake_exlink(name):
+    def fake_exlink(name, **kw):
         sent.append(name)
-        log("exlink_send", cmd=name)             # so event ORDER proves the one rule
+        log("exlink_send", cmd=name, **kw)       # so event ORDER proves the one rule
 
     def fake_ssh(cmd, timeout=15):
         if script:
@@ -213,6 +215,20 @@ def main():
     assert sent == ["power_on"], sent
     assert not cglib.LOCK.exists() and "READY" in cglib.LAST_ERROR.read_text()
     print("  no READY: timed out, lock released, input untouched")
+
+    # --- the TV-asleep rescue: a second power_on, and only ever one -----------
+    # Every case above sends power_on exactly once because the default retry
+    # threshold sits far past the 0.3 s test READY wait. Bring it inside that
+    # window and the re-send appears - once, however many times the poll spins,
+    # which is the whole point of the latch.
+    fresh_state()
+    couch.WAKE_RETRY_S = 0.05
+    log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
+    assert couch.start() == 1
+    assert sent == ["power_on", "power_on"], sent
+    assert log.find("exlink_send")[1]["again"] is True, log.records
+    couch.WAKE_RETRY_S = 10                # leave no trap for the next case
+    print("  wake retry: one extra power_on inside the READY wait, input alone")
 
     # --- watch: blips forgiven, a run of failures dies honestly ---------------
     fresh_state()

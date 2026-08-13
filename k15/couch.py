@@ -12,6 +12,9 @@ CFG  = cglib.load_config()
 PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
+WAKE_RETRY_S   = 10    # this far into the READY wait, re-send power_on once
+                       # (see the send in start()) - the TV-asleep rescue the
+                       # gaming PC structurally cannot perform.
 WATCH_POLL_S   = 5
 WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
                        # dead. Deliberately low: a true sleep restores the TV in
@@ -22,7 +25,7 @@ WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
 log = cglib.make_log("launch")
 
 
-def exlink(name):
+def exlink(name, **fields):
     try:
         ack = cglib.exlink_send(name, CFG["tvComPort"])
         # `ack` means the TV's serial receiver ACCEPTED THE FRAME. It is not
@@ -30,10 +33,10 @@ def exlink(name):
         # would be: Ex-Link here is send-only. A power_on can ack and leave the
         # set dark - 2026-08-13, where reading this field as "the TV came on"
         # sent the investigation at the gaming PC for hours.
-        log("exlink_send", cmd=name, ack=ack or "no-ack")
+        log("exlink_send", cmd=name, ack=ack or "no-ack", **fields)
     except Exception as e:
         # non-fatal: PC readiness is independent of whether the TV heard us
-        log.error("exlink_nak", cmd=name, err=str(e))
+        log.error("exlink_nak", cmd=name, err=str(e), **fields)
 
 
 def wol():
@@ -129,8 +132,28 @@ def start(appid=None, turn=None):
         end = time.time() + READY_WAIT_S
         ready = False
         foreign_seen = None
+        repoke_at = time.time() + WAKE_RETRY_S
         while time.time() < end:
             cglib.touch_lock()
+            # The only rescue there is for a TV that slept through the power_on
+            # at launch_start. Enter's profile retry re-applies TV-GAMING but
+            # cannot ask the set to wake - the gaming PC has no Ex-Link, this
+            # process does - so a sleeping TV used to cost the whole 120 s READY
+            # wait and the launch with it (2026-08-13 10:20). Timed to land
+            # while Enter is still on its retry, so both halves get one more go.
+            #
+            # Safe to repeat: EXLINK_FRAMES holds DISCRETE power_on/power_off
+            # values, so this is a no-op on a set already on - mute is the only
+            # toggle in that table. It is also not an input switch, so the one
+            # rule is untouched, and it stays inside the pre-READY window where
+            # a failure still leaves the TV exactly as the viewer had it.
+            #
+            # `again=True` is the field to count after deploying, and it claims
+            # exactly what every other Ex-Link line claims: that we asked twice.
+            # Nothing here can say the set heard either frame.
+            if repoke_at and time.time() >= repoke_at:
+                exlink("power_on", again=True)
+                repoke_at = None
             try:
                 st = ssh("status")
                 # Generation identity: the marker echoes the turn Enter was
