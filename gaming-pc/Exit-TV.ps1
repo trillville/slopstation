@@ -41,13 +41,10 @@ else {
     Write-CgEvent 'puck_release_failed' @{} 'warn'
 }
 
-# Repaint guard: minimize desktop Steam so it re-lays-out fresh (at the
-# ultrawide's resolution) the next time it's opened - prevents the stale-4K
+# Repaint guard: minimize desktop Steam so it re-lays-out at the ultrawide's
+# resolution next time it opens, instead of coming back as the stale-4K
 # garbled window. Shared with Enter, which minimizes it for the OTHER reason
-# (see the lib): the desktop library window must never be what holds the
-# controller. NOTE this starts actually working now - the version that lived
-# here targeted the steam process's MainWindowHandle, which is 0 whenever
-# Steam is closed to the tray, so it had never once fired in production.
+# (see the lib): that window must never be what holds the controller.
 Hide-DesktopSteam
 
 Clear-ReadyMarker

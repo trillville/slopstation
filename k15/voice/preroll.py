@@ -1,8 +1,8 @@
 """Wake pre-roll: keep mic audio flowing across the wake->pipeline gap.
 
-"hey jarvis volume up" spoken as one sentence used to lose "volume up": the
-wake stream closed at detection and the session transport reopens the mic
-~0.5-2 s later, so command words landed in dead air. Two pieces close the gap:
+Without it, "hey jarvis volume up" spoken as one sentence loses "volume up" -
+the wake stream closes at detection and the session transport reopens the mic
+~0.5-2 s later, so the command lands in dead air. Two pieces close the gap:
 
   WakeCapture   - at detection the wake stream is NOT closed; a thread keeps
                   reading it (seeded with a rolling pre-detection ring, so the
@@ -10,18 +10,17 @@ wake stream closed at detection and the session transport reopens the mic
                   right before the transport reopens the mic.
   PrerollFeeder - a pipeline stage between transport.input() and Flux that
                   replays the captured PCM during its StartFrame processing.
-                  Frame ordering does the correctness work: each processor
-                  handles frames serially through one input queue, so Flux
-                  sees [StartFrame, pre-roll, live mic] strictly in order -
-                  and Flux's own StartFrame handling (which awaits the
-                  websocket handshake) holds all queued audio until the
-                  socket is confirmed, so nothing is dropped.
+                  Frame ordering does the correctness work: processors handle
+                  frames serially through one input queue, so Flux sees
+                  [StartFrame, pre-roll, live mic] in order, and its own
+                  StartFrame handling holds queued audio until the websocket
+                  handshake is confirmed.
 
-The transcript now starts with the wake phrase; grammar_gate.strip_wake owns
-removing it text-side (more reliable than trying to trim it out of the audio).
+The transcript therefore starts with the wake phrase; grammar_gate.strip_wake
+removes it text-side, which is more reliable than trimming the audio.
 
-The capture window is also where the wake chime is timed from (WakeAck): it
-is the only place that can hear you between the wake word and the pipeline.
+The capture window is also where the wake chime is timed from (WakeAck) - the
+only place that can hear you between the wake word and the pipeline.
 """
 import threading
 import time
@@ -95,18 +94,16 @@ class WakeCapture:
         self._thread.start()
 
     def _watch(self, chunk):
-        """Fire the wake chime once you STOP talking rather than the instant
-        the wake word lands: a chime over the tail of "hey jarvis put on Elden
-        Ring" is the jarring part, and landing it at end-of-speech also masks
-        the wait before the answer. Levels are relative to the wake phrase
-        itself, so a loud TV doesn't read as talking and a quiet room doesn't
-        read as silence; if the room is too loud to call, chime at CHIME_BY_S
-        anyway. Whoever loses this race (usually the pipeline, on a one-breath
-        command that outlasts the session build) leaves the ack unclaimed for
-        GrammarGate to play at end of turn.
+        """Fire the wake chime once you STOP talking, not the instant the
+        wake word lands: a chime over the tail of "hey jarvis put on Elden
+        Ring" is the jarring part, and end-of-speech also masks the wait
+        before the answer. Levels are relative to the wake phrase itself, so
+        a loud TV doesn't read as talking nor a quiet room as silence; too
+        loud to call chimes at CHIME_BY_S anyway. Whoever loses the race
+        leaves the ack for GrammarGate to play at end of turn.
 
-        Playback goes on its own thread: stalling the pump for the length of a
-        chime would drop mic audio - the words this module exists to keep."""
+        Playback on its own thread: stalling the pump for a chime would drop
+        the mic audio this module exists to keep."""
         if self._on_quiet is None:
             return
         level = _rms(chunk)

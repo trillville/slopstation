@@ -36,7 +36,6 @@ CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4", "tvIdleCmd": "hdmi1",
 
 READY_TS = "2026-08-12T20:00:00"                 # what a legacy marker answers
 
-
 def fresh_state(lock_age_s=None, lock_content="x"):
     """Point cglib's lock + last_error into a new tmpdir. lock_age_s seeds a
     lock of that age (None = absent)."""
@@ -48,7 +47,6 @@ def fresh_state(lock_age_s=None, lock_content="x"):
         old = time.time() - lock_age_s
         os.utime(cglib.LOCK, (old, old))
     return tmp
-
 
 def wire(script, default=None):
     """Replace couch's seams. script = [(verb_prefix, reply-or-exception)],
@@ -81,7 +79,6 @@ def wire(script, default=None):
     couch.wait_port = lambda *a, **kw: True
     return log, sent
 
-
 def main():
     real_sleep = time.sleep
     time.sleep = lambda s: None                  # fast tests
@@ -104,8 +101,8 @@ def main():
             for t in threads: t.start()
             for t in threads: t.join()
             # One True AND one False: the loser must ANSWER busy, not crash.
-            # (Windows hands the loser a sharing violation, not
-            # FileExistsError - a crashed racer leaves None here.)
+            # Windows raises a sharing violation, not FileExistsError; a
+            # crashed racer would leave None here.
             assert sorted(results) == [False, True], (seed_age, results)
     print("  acquire: 50 two-way races (empty + stale recycle), one winner each")
 
@@ -135,7 +132,6 @@ def main():
             "host_ready"] == [e for e in ev if e in (
                 "launch_start", "wol_sent", "ssh_up", "enter_dispatched",
                 "host_ready")], ev
-    # The one rule, as event order: the gaming input goes out only after READY.
     switches = [i for i, r in enumerate(log.records)
                 if r["event"] == "exlink_send" and r["cmd"] == "hdmi4"]
     ready_at = ev.index("host_ready")
@@ -160,6 +156,7 @@ def main():
     assert log.find("host_ready")[0]["verified"] is True
     print("  ready: a marker echoing our turn is verified")
 
+    # --- watch: a successor's turn in the marker means stand down -------------
     fresh_state()
     log, sent = wire([
         ("enter", "OK"),
@@ -176,7 +173,6 @@ def main():
     assert switches, "the launch must still complete once the marker is ours"
     print("  ready: a FOREIGN marker is waited out, never switched to")
 
-    # --- watch: a successor's turn in the marker means stand down -------------
     fresh_state()
     assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
     log, sent = wire([("status", "eeeeee")])     # marker changed identity
@@ -264,7 +260,6 @@ def main():
     time.sleep = real_sleep
     print("OK - couch: atomic acquire, ownership, one-rule ordering, failure "
           "release, watch death, reconcile paths")
-
 
 if __name__ == "__main__":
     main()

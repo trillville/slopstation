@@ -15,12 +15,6 @@ scheduled task. No account, no credential, no network call. What the build
 taught is recorded in [What E0/E1 found](#what-e0e1-found) — two of the three
 findings were in code this plan was not otherwise touching.
 
-Every file reference and line number below was re-verified against `adb1992`
-("the repo a new person would want"), which rewrote `cglib.py`, `exlink.py`,
-and `voice_agent.py` and deleted `spike.py`. Nothing this plan depends on
-moved: the five `make_log` lanes, `rotate_log`'s rename, and the `couch.log`
-contract all survived unchanged.
-
 The verdict up front: **Grafana Cloud** for the ops lane (logs, dashboards,
 alerts) and **Langfuse** for the agent lane (trace trees, tokens, cost). Both
 free forever at this volume, both hosted, nothing self-hosted on the K15. The
@@ -29,21 +23,25 @@ shape and every user intent an id.
 
 ## Why now
 
-Two questions currently require RDP and a scrollback hunt:
+Three questions drove this. The first two took RDP and a scrollback hunt; the
+third had no answer at all.
 
-1. *Something misbehaved while I was on the couch — what?* The evidence is
+1. *Something misbehaved while I was on the couch — what?* The evidence was
    split across `k15/couch.log` and `C:\CouchGaming\logs\enter-*.log` on the
-   gaming PC, with no shared identifier. You correlate by eyeballing clocks.
+   gaming PC, with no shared identifier. You correlated by eyeballing clocks.
 2. *Why did the assistant say that / take six seconds / cost that much?*
-   `state/traces/*.json` has the messages but no timeline, no token counts,
-   and no link back to the log lines that surrounded it.
+   `state/traces/*.json` had the messages but no timeline, no token counts,
+   and no link back to the log lines around it.
+3. *Is the house even up right now?* A dead process writes no logs, so
+   silence and idle look identical.
 
-And one question nothing can answer today: *is the house even up right now?*
-A dead process writes no logs. Silence and idle look identical.
+## The baseline this started from
 
-## What exists today (the honest baseline)
+Written before E0 and kept as the motivation record — every gap in the right
+column is closed as of the build order below, so read this as "why", not as
+current state.
 
-| Surface | Today | Gap |
+| Surface | Before | Gap |
 |---|---|---|
 | K15 logs | [`cglib.make_log(tag)`](../k15/cglib.py) → `[stamp] [tag] free text`, print + append to one `couch.log`, 5 MB two-generation rotation, ~126 call sites | No levels, no fields, no ids, local-only |
 | PC logs | `Start-CgTranscript` per run → `logs/{tag}-{stamp}.log`, stopwatch prefix, 30-day cleanup | Local-only; never correlated with the K15 |
@@ -53,13 +51,13 @@ A dead process writes no logs. Silence and idle look identical.
 | Latency | Three ad-hoc `t0 = time.time()` sites; PC stopwatch prefixes | Not a metric, not a distribution |
 | LLM cost | [`assistant.py`](../k15/voice/assistant.py) computes cache read/write tokens, formats them into a display string, discards them | Invisible |
 
-One more finding worth recording, because it is the whole thesis in miniature:
-`couch.log` right now contains a `trace save failed (WinError 183 … \blocker)`
-line every ten minutes. That is [`test_traces.py`](../k15/voice/tests/test_traces.py)
-exercising its fail-soft path — **the blind suite writes into the production
+One finding from that baseline is the whole thesis in miniature: `couch.log`
+carried a `trace save failed (WinError 183 … \blocker)` line every ten
+minutes, which was [`test_traces.py`](../k15/voice/tests/test_traces.py)
+exercising its fail-soft path — **the blind suite writing into the production
 log, in a shape indistinguishable from a real failure.** Any alert on that
-string would fire on every test run. Structure is what tells a drill from an
-outage.
+string would have fired on every test run. Structure is what tells a drill
+from an outage, and it is why `events.ENV` auto-detects the suite.
 
 ## Requirements
 
@@ -543,7 +541,7 @@ are what makes it done.
 | **E1** ✅ | `turn` id: minted at wake, at chord, and per transcript; threaded through dispatch → `couch.py` → `Dispatch.ps1` → PC scripts and into the transcript filename. `\z`-anchored, case-sensitive, hex-bounded validation at the SSH boundary; `test_turn.py` drills it with 30 hostile strings read from the live patterns. | **Done 2026-08-11.** One simulated voice launch produced 8 events across 2 lanes and a process boundary under a single `turn`, and `ssh gamepc enter --turn bb8cc7` on the wire |
 | **E2** ✅ | Grafana Cloud stack (US West, `logs-prod-021`), Alloy on the K15, `slopstation-write` access policy. | **Done 2026-08-11.** Events reach Loki and are queryable in Explore. Traps hit and recorded in [What E2 found](#what-e2-found); the config itself needed one edit and worked first time |
 | **E3** ◐ | Heartbeats + the six alerts + notification channel. | **Code done 2026-08-11**: both lanes tick every 60 s to the JSONL only (never couch.log - 1440 lines/day would drown the file humans read). Rules, one dashboard and the runbook are written in [`grafana/`](../grafana/) and [grafana-implementation.md](grafana-implementation.md); importing them and proving drill 1 is the remaining work |
-| **E4** | Alloy on the gaming PC (JSONL + transcripts). | The E1 correlation query works from Grafana, not from a merged local file |
+| **E4** ✅ | Alloy on the gaming PC (JSONL + transcripts). | **Done 2026-08-12.** Config in [`gaming-pc/alloy/`](../gaming-pc/alloy/config.alloy.example), shipped and then tuned against live behaviour: the transcript stream was silently shipping nothing, and tailer CPU turned out to be per-file rather than per-byte, which is what drove archive rotation on both streams |
 | **E5** ✅ | `voice/tracing.py`, Langfuse exporter, pins, blind test. | **Done 2026-08-11**, and far smaller than planned: Pipecat 1.7 emits the whole tree itself (conversation → turn → stt/llm/tts, with tokens and TTFB), so this is plumbing rather than instrumentation. Tempo dual-export deferred - see the TODO in `tracing.py` |
 | **E6** ◐ | `doctor.py` telemetry section, README + docs updates. | **Partly done 2026-08-11**: doctor now reports the event stream's freshness and size, files past TTL, and the Alloy service state (WARN-only, like voice — losing telemetry must never turn the chain diagnosis red). Clock skew still to add at E4 |
 | **later** | Langfuse datasets + scored evals for grammar-gate regressions and title resolution; span metrics if LogQL dashboards get slow. | — |
@@ -570,7 +568,7 @@ everything; the test now patches `couch.ssh`.
 just before a trailing newline — so `'^status$'` accepted `"status\n"`. No bad
 capture was reachable (`[0-9a-f]` cannot eat a newline), but on the one file
 that *is* the remote attack surface, an anchor needing a paragraph of reasoning
-to call safe is the wrong anchor. All six verbs now end in `\z`.
+to call safe is the wrong anchor. Every verb ends in `\z`.
 
 **3. PowerShell regex is case-insensitive by default.** `switch -Regex`, like
 `-match`, ignores case unless told otherwise — so `[0-9a-f]{1,8}` quietly

@@ -6,7 +6,6 @@ that gap statically. Run:
     .venv\\Scripts\\python tests\\test_lint.py
 """
 import io
-import sys
 from pathlib import Path
 
 from pyflakes import api, reporter

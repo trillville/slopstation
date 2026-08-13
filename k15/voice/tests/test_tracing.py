@@ -21,8 +21,8 @@ import tracing
 REAL = {"langfusePublicKey": "pk-lf-" + "a" * 20,
         "langfuseSecretKey": "sk-lf-" + "b" * 20}
 
-
 def main():
+
     # -- the key gate ----------------------------------------------------------
     assert tracing.enabled(REAL)
     assert not tracing.enabled({})
@@ -36,15 +36,13 @@ def main():
     h = tracing.auth_header("pk-lf-x", "sk-lf-y")
     assert h.startswith("Basic "), h
     assert base64.b64decode(h.split(" ", 1)[1]).decode() == "pk-lf-x:sk-lf-y"
-    # A literal space, NOT %20. The escape belongs to the env-var format; in a
-    # header dict it would be sent verbatim and rejected.
+    # A literal space, NOT %20 - the escape belongs to the env-var format.
     assert "%20" not in h, "the env-var escape leaked into the header value"
     print("  auth: Basic <b64(pk:sk)>, literal space")
 
     # -- endpoint --------------------------------------------------------------
     us = tracing.endpoint({"voice": {"langfuseHost": "https://us.cloud.langfuse.com"}})
     assert us == "https://us.cloud.langfuse.com/api/public/otel/v1/traces", us
-    # Trailing slash in config must not double up.
     assert tracing.endpoint({"voice": {"langfuseHost": "https://x.dev/"}}) \
         == "https://x.dev/api/public/otel/v1/traces"
     # Missing/empty falls back rather than building a broken URL.
@@ -72,8 +70,7 @@ def main():
 
     # -- OTel attribute types --------------------------------------------------
     # OTel accepts str/bool/int/float and homogeneous sequences of those. A
-    # dict or None would be dropped (or warn) at span creation, silently
-    # costing the field that makes the trace findable.
+    # dict or None is dropped at span creation, silently costing the field.
     for k, v in tracing.span_attributes(session="s", turn="t").items():
         ok = isinstance(v, (str, bool, int, float)) or (
             isinstance(v, list) and all(isinstance(i, str) for i in v))
@@ -83,8 +80,7 @@ def main():
     # -- fail-soft: the rule that outranks all of the above --------------------
     log = cglib.CapturingLog("voice")
 
-    # No keys -> disabled, quietly, and NOT an error (this is the normal state
-    # on a machine that never set them up).
+    # No keys -> disabled quietly, NOT an error: the normal unconfigured state.
     tracing._on = False
     assert tracing.setup({}, {}, log) is False
     assert tracing.is_on() is False
@@ -94,6 +90,8 @@ def main():
     # Keys present but the exporter explodes -> error, still False, no raise.
     boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network"))  # noqa: E731
     real_exporter, tracing._exporter = tracing._exporter, boom
+
+    # -- the real exporter builds ----------------------------------------------
     try:
         assert tracing.setup({}, REAL, log) is False
         assert tracing.is_on() is False
@@ -102,10 +100,8 @@ def main():
     assert log.find("tracing_setup_failed"), log.events()
     print("  fail-soft: missing keys and a throwing exporter both return False")
 
-    # -- the real exporter builds ----------------------------------------------
     # Only meaningful once the venv has the OTel pins; skipped rather than
-    # failed on a venv that predates them, because that is exactly the state
-    # setup() is designed to survive.
+    # failed without them, because that is the state setup() must survive.
     try:
         exp = tracing._exporter(
             {"voice": {"langfuseHost": "https://us.cloud.langfuse.com"}}, REAL)
@@ -116,10 +112,9 @@ def main():
         print("  exporter: SKIPPED - opentelemetry not installed in this venv")
 
     # -- background jobs: same trace, minutes later, another thread -----------
-    # The point of the whole mechanism: a job queued during a conversation
-    # must report UNDER that conversation, not as an orphan trace. Asserted
-    # on trace ids from a real in-memory exporter, because "it looked right
-    # in the UI" is how the env=development bug survived a week.
+    # The point of the whole mechanism: a job queued during a conversation must
+    # report UNDER that conversation, not as an orphan trace. Asserted on real
+    # trace ids from an in-memory exporter, never on how the UI looks.
     tracing._on = False
     assert tracing.carrier() is None            # off -> nothing to propagate
     with tracing.job_span("j1", "task", None) as j:
@@ -176,7 +171,6 @@ def main():
               "nested, after it closed")
 
     print("OK - tracing: gate, auth, endpoint, attributes, types, fail-soft")
-
 
 if __name__ == "__main__":
     main()

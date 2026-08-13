@@ -38,22 +38,19 @@ python ..\events.py emit supervisor start what=voice >nul 2>&1
 :agent
 rem Dependency gate, INSIDE the restart loop and content-addressed.
 rem
-rem The sentinel is a COPY of requirements.txt, not the word "ok", so the
-rem question it answers is "are the installed pins the ones on disk?" rather
-rem than "did an install ever succeed?". A git pull that changes pins
-rem therefore installs itself on the next agent launch, which is the whole
-rem promise of Start-K15.bat being the one thing to run after a pull.
+rem The sentinel is a COPY of requirements.txt, not the word "ok", so it
+rem answers "are the installed pins the ones on disk?" rather than "did an
+rem install ever succeed?" - a pull that changes pins installs itself on the
+rem next agent launch.
 rem
-rem constraints.txt rides along as pip's -c: it freezes the TRANSITIVE
-rem versions at the as-built, so a rebuild is a restore rather than a fresh
-rem resolve. The gate still compares requirements.txt alone - which is why
-rem constraints.txt's header says a constraints change must ride a
-rem requirements touch to install itself.
+rem constraints.txt rides along as pip's -c, freezing the TRANSITIVE versions
+rem at the as-built so a rebuild restores rather than re-resolves. The gate
+rem compares requirements.txt alone, which is why a constraints-only change
+rem must ride a requirements touch (see that file's header).
 rem
 rem It lives here rather than at :main because Start-K15.bat reloads by
-rem killing the AGENT - the supervisor loops back to :agent and never
-rem revisits :main, so a gate up there is unreachable on every path except a
-rem cold start. That is exactly how the OTel pins shipped and did not install.
+rem killing the AGENT: the supervisor loops back to :agent and never revisits
+rem :main, so a gate up there is unreachable except on a cold start.
 fc /b requirements.txt ".venv\deps-ok" >nul 2>&1
 if errorlevel 1 (
   rem NO PARENTHESES in echo text inside a parenthesised block: an unescaped

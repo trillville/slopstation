@@ -57,23 +57,17 @@ def ssh(cmd, timeout=15):
 def ssh_intent(cmd, turn=None, **kw):
     """A MUTATING verb, tagged with this launch's turn id so the gaming PC's
     transcript and events join the same story as ours. Read-only polls
-    (status/games/playing) deliberately go through plain ssh(): they are not
-    intents, and tagging them would just multiply the id across noise.
+    (status/games/playing) go through plain ssh(): they are not intents, and
+    tagging them would multiply the id across noise.
 
-    `turn` is EXPLICIT for callers that cannot rely on the ambient one, and
-    that is not a hypothetical convenience - it shipped broken. A ContextVar
-    reaches only tasks created after it is set. The voice agent mints its turn
-    inside an already-running frame processor, so the task that later calls
-    dispatch holds an older snapshot and sees nothing: on 2026-08-11 every
-    voice-driven exit reached the gaming PC uncorrelated, and the launch ran
-    under an id couch.py minted for itself rather than the one the user's
-    sentence created. Ambient remains the default for couch.py's own
-    in-process calls, where it does propagate."""
+    Pass `turn` explicitly from any caller whose ambient context predates the
+    utterance - the voice lane's, which a ContextVar cannot reach (see
+    dispatch.Utterance). Ambient is the default for couch.py's own in-process
+    calls, where it does propagate."""
     turn = turn or events.current().get("turn")
-    # Re-validate at the wire, not just at mint: Dispatch fails CLOSED on a
-    # malformed id (it would match no verb and answer DENIED), so a telemetry
-    # bug must not be able to take launches down with it. Uncorrelated beats
-    # refused, every time.
+    # Re-validate at the wire: Dispatch fails CLOSED on a malformed id (it
+    # matches no verb and answers DENIED), so a telemetry bug must not be
+    # able to take launches down with it. Uncorrelated beats refused.
     return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd, **kw)
 
 
@@ -270,9 +264,9 @@ def usage():
 
 
 def take_turn(argv):
-    """Pull `--turn <id>` out of argv (mutating it) and return the id, or None.
-    Hand-rolled rather than argparse to keep this lane's import list as short
-    as it has always been."""
+    """Pull `--turn <id>` out of argv (mutating it) and return the id, or
+    None. Hand-rolled rather than argparse: this lane's import list stays
+    short by rule."""
     if "--turn" in argv:
         i = argv.index("--turn")
         turn = argv[i + 1] if i + 1 < len(argv) else None

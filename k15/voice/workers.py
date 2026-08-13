@@ -93,11 +93,10 @@ class _CliWorker:
                     "detail": f"{self.exe}: {e}"}
         if p.returncode != 0:
             tail = (p.stderr or p.stdout or "").strip()[-500:]
-            # Auth is the one failure that needs a HUMAN, not a retry: tokens
-            # live in the profile of whoever ran `<cli> login` and survive
-            # reboots, but a password/subscription change or a revocation
-            # invalidates them silently - and "the task failed" from across
-            # the room says nothing about what to do next.
+            # Auth is the one failure needing a HUMAN rather than a retry:
+            # CLI tokens survive reboots but a password change or revocation
+            # invalidates them silently, and "the task failed" heard from
+            # across the room says nothing about what to do next.
             need_login = any(w in tail.lower() for w in (
                 "not logged in", "log in", "login", "unauthorized",
                 "authenticate", "authentication", "401", "expired"))
@@ -121,12 +120,10 @@ def _short(v, n=300):
 
 
 def result_meta(d):
-    """The fields `claude -p` returns alongside `result` and we used to drop.
-
-    Names verified against the CLI on 2026-08-12 rather than assumed - they
-    are not in the published reference. Anything absent is omitted rather
-    than guessed, so a CLI that renames one loses a span attribute and
-    nothing else."""
+    """Cost/usage fields `claude -p` returns alongside `result`. The names
+    are not in the published reference (verified against the CLI directly),
+    so anything absent is omitted rather than guessed - a rename costs a span
+    attribute and nothing else."""
     usage = d.get("usage") or {}
     server = usage.get("server_tool_use") or {}
     models = d.get("modelUsage") or {}
@@ -158,19 +155,16 @@ class ClaudeWorker(_CliWorker):
     lane; voice-control-design.md § worker lane has the full posture, and the
     injection canary drill (voice-testing 10c) proves it on this machine.
 
-    Output is stream-json so the TOOL CALLS are visible: with plain --output-
-    format json the only artefact of three minutes of research is the final
-    text, which is why "what did it actually look at" was unanswerable. The
-    stream is newline-delimited SDK messages (system / assistant / user /
-    result); we read tool_use blocks off the assistant messages and take the
-    final `type: result` object exactly as before.
+    Output is stream-json so the TOOL CALLS are visible - with plain json the
+    only artefact of three minutes of research is the final text. The stream
+    is newline-delimited SDK messages (system / assistant / user / result):
+    tool_use blocks come off the assistant messages, the answer off the final
+    result object.
 
-    Format churn is the known risk here - CodexWorker below avoids codex's
-    JSONL entirely for that reason. So the parse is defensive on both ends:
+    Format churn is the known risk, so the parse is defensive on both ends:
     unrecognised lines are skipped, a stream with no result object falls back
-    to the old whole-stdout parse, and a CLI that rejects the flags at all
-    retries once in legacy mode (see run). Churn costs tool spans, never the
-    job."""
+    to a whole-stdout parse, and a CLI that rejects the flags retries once in
+    legacy mode (see run). Churn costs tool spans, never the job."""
     exe = "claude"
     TOOLS = "WebSearch,WebFetch,Read,Glob,Grep,Write"
 
@@ -192,9 +186,9 @@ class ClaudeWorker(_CliWorker):
         if r["ok"] or not self.stream:
             return r
         # A CLI that does not know these flags fails in milliseconds with a
-        # usage error. Distinguish that from a real task failure and retry
-        # once in the old format, so an older or newer claude degrades to
-        # "no tool spans" instead of "background tasks are broken".
+        # usage error - distinguish that from a real task failure and retry
+        # in the old format, so a CLI version skew costs tool spans rather
+        # than the whole lane.
         blurb = f"{r.get('detail', '')}".lower()
         if any(w in blurb for w in ("unknown option", "unrecognized",
                                     "invalid option", "usage:",

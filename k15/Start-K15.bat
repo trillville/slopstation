@@ -10,20 +10,17 @@ rem   supervisor down -> start it (its agent comes up on current code anyway)
 rem   supervisor up   -> kill the AGENT; the supervisor relaunches it on
 rem                      current code after its 10s backoff
 rem
-rem Nothing to remember and no flags: at boot it starts both, after a pull it
-rem reloads both, and a pointless double-click costs 10s of nothing. Whether a
-rem lane is up is read from the fd-9 lock its supervisor holds for the window's
-rem lifetime - the same probe the supervisors use to bounce each other, so the
-rem two can never disagree about what "running" means.
+rem No flags and nothing to remember: at boot it starts both, after a pull it
+rem reloads both. Whether a lane is up is read from the fd-9 lock its
+rem supervisor holds for the window's lifetime - the same probe the
+rem supervisors use to bounce each other, so the two cannot disagree.
 rem
-rem Killing agents rather than supervisor windows is load-bearing, not taste:
-rem couch.py runs in its own console (CREATE_NEW_CONSOLE), so killing the
-rem listener's WINDOW would orphan a live session's watch loop, and the
-rem replacement supervisor's `couch.py reconcile` would adopt that same session
-rem - two watch loops racing one teardown. reconcile runs at :main, OUTSIDE the
-rem restart loop, so bouncing the agent alone can't re-trigger it. A live
-rem session is undisturbed: the relaunched listener finds the Puck claimed and
-rem stands by at 1Hz until the session ends.
+rem Killing AGENTS rather than supervisor windows is load-bearing: couch.py
+rem runs in its own console, so killing the listener's window would orphan a
+rem live session's watch loop, and the replacement supervisor's `couch.py
+rem reconcile` would adopt that same session - two watch loops racing one
+rem teardown. reconcile runs at :main, outside the restart loop, so bouncing
+rem the agent alone cannot re-trigger it.
 setlocal
 set "RELOADED="
 if not "%~1"=="" echo [start-k15] note: no arguments needed - this always reloads

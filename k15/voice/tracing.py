@@ -112,23 +112,17 @@ def setup(cfg, secrets, log):
     try:
         from pipecat.utils.tracing.setup import setup_tracing
 
-        # Langfuse's "Env" badge comes from the deployment.environment RESOURCE
+        # Langfuse's "Env" badge reads the deployment.environment RESOURCE
         # attribute, which pipecat builds from os.getenv("ENVIRONMENT",
-        # "development") - so without this every real session is filed under
-        # "development" and the environment filter is worse than useless.
-        # Reusing events.ENV keeps ONE vocabulary across Loki and Langfuse, and
-        # means a blind-suite run tags its traces "test" for free.
-        # setdefault, so an explicit ENVIRONMENT in the shell still wins.
+        # "development") - without this every real session files under
+        # "development". events.ENV keeps ONE vocabulary across Loki and
+        # Langfuse; setdefault so an explicit shell value still wins.
         os.environ.setdefault("ENVIRONMENT", events.ENV)
 
-        # Export failures stay VISIBLE. The first draft silenced this logger
-        # to CRITICAL to keep a dead uplink from putting a stack trace on the
-        # console every minute - which would also have hidden the only
-        # message that says "your keys are wrong" or "wrong region", forever.
-        # That is precisely the trap Alloy's loki.write set earlier the same
-        # day: a component reporting healthy while every push was rejected,
-        # and four rounds of guessing before someone read the log. Noise is
-        # recoverable; a silent misconfiguration is not. WARNING keeps the
+        # Export failures stay VISIBLE. Silencing this logger to CRITICAL
+        # quiets a dead uplink's per-minute stack trace, but also hides the
+        # only message that says "wrong keys" or "wrong region" - noise is
+        # recoverable, a silent misconfiguration is not. WARNING keeps the
         # per-export chatter down without touching the errors that matter.
         logging.getLogger("opentelemetry").setLevel(logging.WARNING)
 
@@ -154,18 +148,14 @@ def setup(cfg, secrets, log):
 
 
 def span_attributes(session=None, turn=None):
-    """Attributes for the conversation (root) span.
+    """Attributes for the conversation (root) span - the only one Pipecat
+    applies them to, and the one Langfuse reads trace-level fields from.
+    Without langfuse.trace.name every trace in the list reads "conversation"
+    or a bare UUID.
 
-    Pipecat only applies these to the top-level span, which is also the one
-    Langfuse reads trace-level fields from - so this is where the trace gets
-    a usable name and an identity. Without langfuse.trace.name every trace in
-    the list is called "conversation" or a bare UUID, which makes the session
-    list useless at exactly the moment you need it.
-
-    Both spellings of session/user are set on purpose: langfuse.* is what
-    Langfuse reads, session.id/user.id are the OTel-conventional names any
-    other backend would look for. Cheap, and it keeps the escape hatch open.
-    """
+    Both spellings of session/user are set: langfuse.* is what Langfuse
+    reads, session.id/user.id are the OTel-conventional names another backend
+    would look for."""
     ctx = events.current()
     session = session or ctx.get("session")
     turn = turn or ctx.get("turn")
@@ -196,23 +186,19 @@ def conversation_id():
 
 # --- Tier-3 background jobs ---------------------------------------------------
 #
-# A background job is queued during a conversation and finishes minutes later,
-# on the job-worker thread, long after the conversation's spans have closed.
-# Left alone its work lands nowhere: Pipecat traces the pipeline, and the
-# worker is a subprocess outside it. So the question "what did the agent
-# actually DO for three minutes" had no answer in either system - the JSONL
-# said job_done and the trace said nothing at all.
+# A job is queued during a conversation and finishes minutes later on the
+# worker thread, long after the conversation's spans have closed - and the
+# worker is a subprocess outside the pipeline Pipecat traces, so "what did
+# the agent actually DO for three minutes" had no answer in either system.
 #
-# The fix is W3C trace context. carrier() freezes the span that was active
-# when the tool fired; job_span() re-parents the worker's spans onto it, so
-# the whole job hangs under the turn that asked for it. Same mechanism as
-# cross-service tracing, used across a thread and a few minutes instead.
+# W3C trace context fixes it: carrier() freezes the span active when the tool
+# fired, job_span() re-parents the worker's spans onto it. Same mechanism as
+# cross-service tracing, across a thread and a few minutes instead.
 #
-# ONE CONSEQUENCE, deliberately accepted: the conversation's trace latency
-# becomes wall-clock to job completion - the 91s conversation that queued a
-# 3-minute job reads as ~3 minutes. That is the truer number (the user's
-# request was not finished until the announcement) but it is not the number
-# that was there before, so it is written down here rather than discovered.
+# ONE CONSEQUENCE, accepted: the conversation's trace latency becomes
+# wall-clock to job completion, so a 91 s conversation that queued a 3-minute
+# job reads as ~3 minutes. Truer (the request was not finished until the
+# announcement), but not the number that was there before.
 
 
 def carrier():

@@ -46,15 +46,10 @@ ARCHIVE_DAYS = 2        # out of Alloy's glob; see _prune
 
 DEBUG, INFO, WARN, ERROR = "debug", "info", "warn", "error"
 
-# Reserved keys, emitted in this order so a raw line reads left-to-right like
-# a sentence. Everything a caller passes is a free field appended after these.
-_RESERVED = ("ts", "level", "env", "service", "lane", "event",
-             "turn", "session", "job", "dur_ms", "err")
-
-# Of those, the ones the EMITTER owns - a caller field of the same name would
-# either shadow a Loki label or make the record lie about itself, so it gets
-# renamed rather than dropped (losing the value silently would be worse).
-# dur_ms/err are absent on purpose: those are ordinary caller fields.
+# Keys the EMITTER owns (emit builds them in order, so a raw line reads
+# left-to-right like a sentence). A caller field of the same name would
+# shadow a Loki label or make the record lie about itself, so it is renamed
+# rather than dropped - losing the value silently would be worse.
 _EMITTER_OWNED = frozenset(("ts", "level", "env", "service", "lane", "event",
                             "host"))
 
@@ -78,10 +73,10 @@ def _service():
 def _env():
     """prod unless we are demonstrably inside the blind suite.
 
-    Auto-detected rather than opt-in because the failure mode we are fixing is
-    exactly a test that forgot to say it was a test: couch.log has carried
-    `trace save failed` lines from test_traces.py's fail-soft case for weeks,
-    in a shape indistinguishable from a real outage."""
+    Auto-detected rather than opt-in, because the failure being fixed is
+    exactly a test that forgot to say it was one: fail-soft cases wrote
+    couch.log lines indistinguishable from a real outage. Keyed on argv[0],
+    which is why the suite runs as scripts and not under pytest."""
     override = os.environ.get("CG_ENV")
     if override:
         return override
@@ -192,22 +187,16 @@ def _path(day):
 
 def _prune():
     """Archive closed daily files out of the shipper's glob, then delete the
-    expired ones. Called on the first emit of a process and again whenever the
-    date rolls over - not per line, because a glob per event would be a real
-    cost for no benefit.
+    expired ones. Called on the first emit of a process and at date rollover,
+    not per line - a glob per event would cost real time for no benefit.
 
-    The MOVE is what keeps Alloy cheap, and it is not tidiness. Alloy's glob
-    is k15-*.jsonl in this directory, and a tailed file costs ~0.04% of a core
-    whether or not it can still change - measured by A/B on one live process,
-    see gaming-pc/alloy/config.alloy.example. Only today's file is ever
-    appended to, so at TTL_DAYS=14 this directory grew to 13 tailers polling
-    files that were finished forever. archive/ is outside the glob.
-
-    Nothing is deleted early: archived files sit on disk until TTL_DAYS, and
-    the delete pass below scans both folders so they still expire on time.
-    Alloy holding a handle on a file being moved is safe - Windows lets the
-    rename through and the handle follows the file, so a partially-read
-    transcript still gets read to EOF."""
+    The MOVE keeps Alloy cheap rather than tidy: its glob is k15-*.jsonl here
+    and a tailed file costs ~0.04% of a core whether or not it can still
+    change (A/B-measured, see gaming-pc/alloy/config.alloy.example), so at
+    TTL_DAYS=14 this directory held 13 tailers on files finished forever.
+    archive/ is outside the glob and nothing is deleted early - the delete
+    pass scans both folders. Moving a file Alloy holds open is safe: Windows
+    lets the rename through and the handle follows it."""
     now = time.time()
     archive = LOG_DIR / ARCHIVE_NAME
     try:
@@ -238,13 +227,11 @@ def emit(lane, event, level=INFO, /, **fields):
     built at all.
 
     EVERY parameter is POSITIONAL-ONLY (the `/`), so no caller field name can
-    ever collide with one - they all land in **fields. Without it,
+    collide with one - they all land in **fields. Without it,
     `log("lane_up", lane="assistant")` raises TypeError at call BINDING,
-    before any try/except in here can run, and takes down the caller. Which
-    is exactly what it did: a crash-looping voice agent, caused by the
-    telemetry that was supposed to explain crashes. Argument binding is the
-    one failure this module cannot catch from the inside, so it is designed
-    out rather than guarded against."""
+    before any try/except in here can run, and takes the caller down with it.
+    Argument binding is the one failure this module cannot catch from the
+    inside, so it is designed out rather than guarded against."""
     global _last_day
     try:
         now = datetime.now(timezone.utc)
@@ -310,15 +297,15 @@ def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
     pure noise in the one file a human reads, and couch.log's entire value is
     that it is readable. Grafana wants the tick; people do not.
 
-    Daemon thread: it must never hold the process open at shutdown. Every
-    emit is already fail-soft, and the loop swallows anything else, because a
-    liveness probe that can kill the thing it is probing is worse than none.
+    Daemon thread: it must never hold the process open at shutdown, and the
+    loop swallows everything - a liveness probe that can kill the thing it
+    probes is worse than none.
 
-    NOTE for the alerting side (see docs/grafana-implementation.md): the alert
-    cannot be "heartbeat count < 1". A dead lane emits NO lines, so the query
-    returns no series and a threshold never evaluates at all. The rule has to
-    fire through Grafana's *No data* handling. Getting that wrong leaves the
-    two most important alerts in the system permanently inert.
+    ALERTING NOTE (docs/grafana-implementation.md): the rule cannot be
+    "heartbeat count < 1". A dead lane emits no lines, so the query returns
+    no series and a threshold never evaluates - it has to fire through
+    Grafana's *No data* handling, or the two most important alerts in the
+    system are permanently inert.
     """
     def tick():
         while True:

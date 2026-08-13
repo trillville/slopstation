@@ -18,16 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import llm_audit
 
-
 def ev(kind, item=None):
     return types.SimpleNamespace(type=kind, item=item)
-
 
 def search_item(query, kind="web_search_call", status="completed"):
     return types.SimpleNamespace(
         type=kind, status=status,
         action=types.SimpleNamespace(type="search", query=query))
-
 
 class FakeStream:
     def __init__(self, evs):
@@ -42,7 +39,6 @@ class FakeStream:
 
     async def close(self):
         self.closed = True
-
 
 class FakeService:
     def __init__(self, stream):
@@ -60,14 +56,12 @@ class FakeService:
         self.contexts.append(list(ctx.messages))
         return "ok"
 
-
 class FakeContext:
     def __init__(self):
         self.messages = []
 
     def add_message(self, m):
         self.messages.append(m)
-
 
 class FakeTracing:
     def __init__(self):
@@ -76,17 +70,13 @@ class FakeTracing:
     def tool_span(self, kind, query, status=None):
         self.spans.append((kind, query, status))
 
-
 async def drain(stream):
     return [e async for e in stream.__aiter__()]
-
 
 def main():
     log = cglib.CapturingLog("audit")
 
     # -- the tee is transparent -----------------------------------------------
-    # Everything else here is secondary to this: the stream it wraps carries
-    # every token the user hears.
     evs = [ev("response.output_text.delta"),
            ev("response.output_item.done", search_item("couch co-op 2026")),
            ev("response.output_text.delta"),
@@ -125,8 +115,7 @@ def main():
     assert len(hits) == 1, f"expected one record, got {hits}"
     print("  search: counted once (not on `added`), function_call ignored")
 
-    # A new search family member must be recorded, not silently dropped the
-    # way this entire class of item was until today.
+    # A new search family member must be recorded, not silently dropped.
     svc3 = FakeService(FakeStream([
         ev("response.output_item.done", search_item("f", kind="file_search_call"))]))
     log3 = cglib.CapturingLog("audit")
@@ -137,8 +126,7 @@ def main():
     print("  search: matches the family, not one literal type")
 
     # -- the model gets told, on the NEXT turn --------------------------------
-    # Mid-stream mutation is how a conversation gets corrupted, so the note
-    # lands on the following context build.
+    # Mid-stream mutation corrupts a conversation, so the note lands next turn.
     assert ctx.messages == [], "context was mutated mid-turn"
     asyncio.run(svc._process_context(ctx))
     assert len(ctx.messages) == 1, ctx.messages
@@ -166,8 +154,6 @@ def main():
     assert llm_audit.install(naked, log) is False
     print("  fail-soft: a throwing sink and a moved client both shrug")
 
-    # The stream's own close path still reaches the real stream, or sockets
-    # leak for the rest of the session.
     s = FakeStream([])
     svc4 = FakeService(s)
     llm_audit.install(svc4, log)
@@ -178,9 +164,8 @@ def main():
 
     # -- against the REAL pipecat class ---------------------------------------
     # Everything above runs on fakes, so it would keep passing after a pipecat
-    # upgrade moved _client and left production silently unaudited again -
-    # which is the exact failure this module exists to end. Assert the shape
-    # on the real service.
+    # upgrade moved _client and left production silently unaudited. Assert the
+    # shape on the real service.
     try:
         from pipecat.services.openai.responses.llm import (
             OpenAIResponsesHttpLLMService, OpenAIResponsesReasoningConfig)
@@ -203,7 +188,6 @@ def main():
 
     print("OK - llm_audit: transparent tee, search recorded, context fed, "
           "fail-soft")
-
 
 if __name__ == "__main__":
     main()

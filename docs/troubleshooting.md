@@ -43,7 +43,7 @@ grep '"turn":"9f2c1a"' k15/logs/k15-*.jsonl
 | `FAILED:1` repeating during a launch | PC is at the login screen — no interactive session, so the Enter task can't start | Log in at the PC; couch launches from **sleep** (the supported couch-ready state) don't hit this |
 | `office-safety` log says `standing down` | An Enter/Exit was genuinely running at logon | Normal. If it repeats every logon, check for a wedged task: `schtasks /Query /TN \CouchGaming\Enter /FO LIST` |
 | Keyboard wake doesn't clean up a stale session | `wake-safety-*.log`'s raw `powercfg /lastwake` dump doesn't match the pattern | Widen `$NetworkWakePattern` in `Wake-Safety.ps1` to match your NIC's actual string |
-| Enter/Exit transcript shows `Log is not recognized` | `CouchGaming.common.ps1` missing or a partial copy | Re-copy all of `gaming-pc/` to `C:\CouchGaming\` |
+| Enter/Exit transcript shows `Log is not recognized` | `CouchGaming.common.ps1` missing or a partial copy | Re-run `gaming-pc\Deploy.ps1` (it ships the set atomically) |
 
 ## Voice lane
 
@@ -57,7 +57,7 @@ grep '"turn":"9f2c1a"' k15/logs/k15-*.jsonl
 | Audio flapping / `-9999` on Bluetooth (AirPods) | HFP/A2DP endpoint split: Windows exposes BT input on the Hands-Free device and output on the A2DP "Headphones" device, and the two profiles are mutually exclusive. A session's held mic keeps HFP active, so the first playback tries to wake the suspended A2DP endpoint | Point BOTH `inputDeviceName`/`outputDeviceName` at the "Headset" endpoints — one profile, no flapping, phone-quality output. Bluetooth is a degraded test rig, not a target: wired/USB (the array) has none of this |
 | A phrase never matches | The log shows `heard "…" - passing to assistant` | The grammar is deliberately narrow for risky commands. Add the phrasing to `voice/grammar.yaml` and re-run `tests/test_grammar.py` |
 | `play <title>` finds nothing | `no confident title match`, or an ambiguity refusal (near-ties refuse on purpose) | `python library.py sync` then `show`; say more of the title. The index needs the PC awake for the installed layer |
-| `library refresh skipped (… returned non-zero exit status 1)` | The PC's `Dispatch.ps1` is older than the six-verb version — `games` returns `DENIED` | Re-deploy the PC side (voice-testing.md §2b) |
+| `library refresh skipped (… returned non-zero exit status 1)` | The PC's `Dispatch.ps1` predates the `games` verb, so it returns `DENIED` | Re-run `Deploy.ps1` on the PC; `python doctor.py` names the skew |
 | Launch says OK but no game starts | Big Picture up, game never asked for | Read the newest `C:\CouchGaming\logs\launchgame-*.log`. A `Remove-Item … Access denied` there means the marker/token fix isn't deployed — re-deploy `Dispatch.ps1` + `Launch-Game.ps1` |
 | TV command silently does nothing | `exlink … FAILED` in the log (acks are validated: `030cf1` or it didn't land) | TV off/asleep, or COM contention. `python exlink.py vol_up` to test the port directly |
 | Mute state feels backwards | Mute is a **blind toggle** — the S90C acks its status query but answers with a constant canned echo, byte-identical muted or not, so there is no state to read | Say a volume number ("volume 20") — an absolute set is the resync |

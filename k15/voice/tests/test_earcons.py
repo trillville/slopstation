@@ -46,11 +46,9 @@ def test_specs():
         # gap of a counted earcon, and its two notes must not read as two.
         got = burst_count(x)
         assert got == want, f"{name}: segmented {got} bursts, want {want}"
-        # Fade: edges quiet (no clicks), peak lands on the spec'd amplitude.
         assert abs(int(x[0])) < 200 and abs(int(x[-1])) < 200, f"{name}: clicky edges"
         peak = int(np.max(np.abs(x.astype(np.int32))))
         assert amp * 0.9 <= peak <= amp * 1.01, f"{name}: peak {peak} vs amp {amp}"
-        # PCM bytes are s16le of the same array.
         assert earcons.pcm(name) == x.tobytes()
     print(f"OK - {len(expected_counts)} earcons: counts, lengths, fades, amplitudes")
 
@@ -58,9 +56,8 @@ def test_specs():
 def test_nothing_shouts():
     """The level order is the design, and it follows from how often and how
     unasked each one arrives: sleep < wake < the acks < announce
-    (unsolicited, across the room). RMS, not peak, is what the ear reports -
-    the old flat tones peaked at 9000 and SUSTAINED it (rms 6001), which is
-    what a ceiling here would have caught."""
+    (unsolicited, across the room). RMS, not peak, is what the ear reports:
+    a flat tone can peak modestly and still sustain a punishing level."""
     r = {n: rms(earcons.samples(n)) for n in earcons.SPECS}
     acks = min(r["ok"], r["busy"], r["fail"])
     assert r["close"] < r["wake"] < acks < r["announce"], \

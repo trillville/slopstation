@@ -60,13 +60,13 @@ share one Startup shortcut; see **Autostart** below.)
 ## 2b. Gaming PC side — deploy once
 
 The PC deploys **by copy** (its runtime needs gitignored binaries), so a repo
-change there is not live until you copy it. Voice needs the six-verb
-`Dispatch.ps1` (`games`/`playing`/`launch` on top of `enter`/`exit`/`status`)
-plus `Launch-Game.ps1` — without them `library.py sync` logs `refresh skipped`
-and launches never fire. On the **gaming PC**, from its checkout:
+change there is not live until you deploy it. Voice needs `Dispatch.ps1`'s
+`games`/`playing`/`launch` verbs on top of `enter`/`exit`/`status`, plus
+`Launch-Game.ps1` — without them `library.py sync` logs `refresh skipped` and
+launches never fire. On the **gaming PC**, from its checkout:
 
 ```
-Copy-Item <repo>\gaming-pc\*.ps1 -Destination C:\CouchGaming\
+powershell -NoProfile -ExecutionPolicy Bypass -File <repo>\gaming-pc\Deploy.ps1
 ```
 
 Register the launch task once (runs as you, non-elevated, only when logged on —

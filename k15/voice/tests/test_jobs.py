@@ -20,7 +20,6 @@ import cglib
 import jobs as jobs_mod
 import workers
 
-
 def wait_for(pred, timeout=5.0):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -28,7 +27,6 @@ def wait_for(pred, timeout=5.0):
             return True
         time.sleep(0.02)
     return False
-
 
 def main():
     log = cglib.CapturingLog("jobs")
@@ -41,7 +39,7 @@ def main():
     assert r["summary"] == "S." and r["detail"] == "D."
     r = workers.parse_reply("First sentence here. Second sentence.")
     assert r["summary"] == "First sentence here." and "Second" in r["detail"]
-    r = workers.parse_reply('{"detail": "no summary key"}')      # bad contract
+    r = workers.parse_reply('{"detail": "no summary key"}')
     assert "no summary key" in r["detail"]                       # fallback path
     r = workers.parse_reply("")
     assert r["summary"] and r["detail"]                          # never empty
@@ -52,18 +50,16 @@ def main():
     cw.path = r"C:\x\claude.cmd"
     argv = cw._argv()
     assert argv[:3] == ["cmd.exe", "/c", r"C:\x\claude.cmd"]     # .cmd shim
-    # stream-json, because the tool calls only exist in the stream - with
-    # plain json the only trace of three minutes of research is the final
-    # text. --verbose rides along because the CLI requires it in print mode.
+    # stream-json: the tool calls exist only in the stream, and plain json
+    # leaves just the final text. --verbose is required alongside it.
     assert "-p" in argv and "--output-format" in argv
     assert "stream-json" in argv and "--verbose" in argv
     cw.stream = False                            # the usage-error fallback
     assert "json" in cw._argv() and "stream-json" not in cw._argv()
     cw.stream = True
     assert "--model" not in argv                 # empty = the CLI's own
-    # One vocabulary across both lanes, and a model key per vendor - so a
-    # claude alias can never reach codex (invalid-model error) and neither
-    # lane hides a default this file would have to be read to discover.
+    # One vocabulary across both lanes, a model key per vendor: a claude alias
+    # can never reach codex, and neither lane hides an undiscoverable default.
     assert set(workers.WORKERS) == set(workers.MODEL_KEY) == {"anthropic",
                                                               "openai"}
     assert workers.WORKERS["anthropic"].exe == "claude"
@@ -74,18 +70,16 @@ def main():
     cw2 = workers.ClaudeWorker(model="claude-haiku-4-5", effort="high")
     cw2.path = r"C:\x\claude.exe"
     assert cw2._argv()[0].endswith(".exe") and "--model" in cw2._argv()
-    # Claude's depth knob is an env var, and the rest of the environment
-    # (PATH, the CLI's own credentials) must survive it.
+    # Claude's depth knob is an env var; PATH/credentials must survive it.
     env = cw2._env()
     assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "high" and "PATH" in env
-    # Legacy single-object stdout still parses - this is the shape the
-    # fallback produces, and the shape any older CLI emits.
+    # Single-object stdout: what the fallback produces and older CLIs emit.
     out = json.dumps({"type": "result", "result":
                       '{"summary": "Found it.", "detail": "All of it."}'})
     r = cw._extract(types.SimpleNamespace(stdout=out))
     assert r["summary"] == "Found it." and r["detail"] == "All of it."
     r = cw._extract(types.SimpleNamespace(stdout="not json at all"))
-    assert r["summary"]                                          # fallback
+    assert r["summary"]
 
     # -- the stream: tool calls, their results, and the discarded metadata ----
     # Field names verified against the real CLI (2026-08-12); they are not in
@@ -117,9 +111,9 @@ def main():
     r = cw._extract(types.SimpleNamespace(stdout=stream))
     assert r["summary"] == "Three picks." and r["detail"] == "The long form."
     assert [s["tool"] for s in r["steps"]] == ["WebSearch", "WebFetch"]
-    assert r["steps"][0]["input"] == "couch co-op 2026"           # the query
+    assert r["steps"][0]["input"] == "couch co-op 2026"
     assert r["steps"][0]["result"] == "ten results"               # joined back
-    assert r["steps"][1]["input"] == "https://example.com/a"      # the URL
+    assert r["steps"][1]["input"] == "https://example.com/a"
     m = r["meta"]
     assert m["cost_usd"] == 0.073279 and m["turns"] == 4
     assert m["web_searches"] == 3 and m["web_fetches"] == 1
@@ -139,16 +133,15 @@ def main():
     argv = xw._argv()
     assert "exec" in argv and "--output-last-message" in argv
     assert argv[-1] == "-"                                       # prompt=stdin
-    # Codex carries effort as a TOML -c override (its own default is medium,
-    # tuned for interactive work - wrong trade for a latency-free lane).
+    # Codex carries effort as a TOML -c override, not an env var; its own
+    # default is medium, tuned for interactive work rather than this lane.
     assert 'model_reasoning_effort="high"' in argv
     assert xw._env() is None                     # flag-carried, not env
     xw_bare = workers.CodexWorker()
     xw_bare.path = r"C:\x\codex.exe"
     assert not any("model_reasoning_effort" in a for a in xw_bare._argv())
 
-    # Auth failures need a human, so they say so from across the room; every
-    # other non-zero exit stays the generic line (with the tail in detail).
+    # Auth failures name themselves; other non-zero exits stay generic.
     def canned(returncode, stderr):
         w = workers.ClaudeWorker()
         w.path = r"C:\x\claude.exe"
@@ -213,7 +206,6 @@ def main():
     assert store.latest_result()["summary"] == "the task failed"
     print("  JobStore: enqueue -> DONE/FAILED, hook fired, unread flow")
 
-    # Cap: fill the queue with a slow adapter, 4th refused truthfully.
     fake.run = lambda task, timeout: (time.sleep(0.5),
                                       {"ok": True, "summary": "s",
                                        "detail": "d"})[1]
@@ -224,7 +216,6 @@ def main():
     assert wait_for(lambda: store.status_line() is None, timeout=8)
     print("  JobStore: cap refuses the 4th, cancel clears the queue")
 
-    # Reconciler: a RUNNING row from a "dead process" -> FAILED + unread.
     rows = json.loads(jobs_mod.JOBS_FILE.read_text(encoding="utf-8"))
     rows.append({"id": "orphan01", "task": "t", "status": "RUNNING",
                  "provider": "fake", "created": 0, "summary": "",
@@ -249,7 +240,7 @@ def main():
     time.sleep(0.4)
     assert not played, "must defer while a session is active"
     ann.session_active.clear()
-    assert wait_for(lambda: played)                 # spoke after session close
+    assert wait_for(lambda: played)
     assert wait_for(
         lambda: not any(j["id"] == target["id"] for j in store.unread()))
     ann._play = lambda pcm: False                   # aborted mid-playback
@@ -260,16 +251,13 @@ def main():
     ann.submit(store.latest_result())
     time.sleep(0.4)
     assert store.unread(), "an aborted announcement must stay unread"
-    # speak() is the whole out-of-session path in one call - what
-    # --announce-test rehearses, and what _run uses per job.
+    # speak() is the whole out-of-session path: what --announce-test rehearses.
     ann._play = lambda pcm: played.append(len(pcm)) or True
     played.clear()
     assert ann.speak("bench line") and played
 
-    # The follow-up window opens only after a bulletin heard in FULL - an
-    # aborted one must not leave the mic open on a room that heard nothing.
     ann.follow_up.clear()
-    ann._play = lambda pcm: False               # cut short
+    ann._play = lambda pcm: False
     rows = json.loads(jobs_mod.JOBS_FILE.read_text(encoding="utf-8"))
     for j in rows:
         j["read"] = False
@@ -282,14 +270,10 @@ def main():
     assert wait_for(ann.follow_up.is_set), "full bulletin should open the mic"
     print("  announcer: follow-up window only after a bulletin played in full")
 
-    # Job results reach the assistant as prior conversation, so a follow-up
-    # ("which was cheapest?") lands on a model that already knows.
+    # Job results ride into the assistant as prior conversation.
     import session_runtime
-    # The replay must never put the MODEL's words in the USER's mouth. It
-    # used to seed the generated brief as role=user, so a bad brief ("using
-    # only games in the provided catalog") became a standing instruction
-    # attributed to the user for the whole CONTEXT_AGE_S window - observed
-    # in a live session, trace 50452ed5.
+    # The replay must never put the MODEL's words in the USER's mouth: a brief
+    # attributed to the user is a standing instruction for CONTEXT_AGE_S.
     msgs = session_runtime.job_messages(store)
     assert msgs and len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
     brief = store.for_context()[0]["task"]
@@ -300,7 +284,7 @@ def main():
     assert session_runtime.job_messages(None) == []          # worker lane off
 
     # With a transcript: a true exchange, quoting the person. `asked` is an
-    # ARGUMENT now (from dispatch's utterance snapshot), not store state.
+    # argument (dispatch's utterance snapshot), not store state.
     store.enqueue("Research couch co-op titles, excluding owned games.",
                   asked="find me some couch co-op games")
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
@@ -328,9 +312,8 @@ def main():
     print("  announcer: defers for sessions, marks read only after full playback")
 
     # latest_result orders by COMPLETION time, not file position: _save
-    # regroups live-then-done, so a queued-later job that finished last can
-    # sit earlier in the file (the audit bug: A then B queued, both done ->
-    # file [B, A] -> naive [-1] speaks the older A).
+    # regroups live-then-done, so a job that finished last can sit earlier in
+    # the file - which is why this fixture's newer row comes first.
     base = {"task": "t", "status": "DONE", "provider": "fake", "created": 0,
             "detail": "d", "read": True}
     jobs_mod.JOBS_FILE.write_text(json.dumps([
@@ -341,7 +324,6 @@ def main():
     print("  latest_result: completion-time ordering beats file order")
 
     print("OK - jobs: parsing, adapters, store lifecycle, reconcile, announcer gates")
-
 
 if __name__ == "__main__":
     main()

@@ -1,31 +1,20 @@
 """Provider-executed tool calls, made visible.
 
 THE HOLE THIS FILLS. OpenAI's web_search runs server-side, inside the same
-API call as the completion. Pipecat 1.7's Responses service handles exactly
-two output item types - function_call and reasoning - and there is no
-`web_search` anywhere in it. So a search streams past, is ignored, pushes no
-frame, and never enters the context. Consequences, both observed for real on
-2026-08-11:
+API call as the completion, and pipecat 1.7's Responses service handles only
+function_call and reasoning items. A search therefore streams past ignored,
+pushes no frame, and never enters the context. Two consequences, both
+observed live: nothing recorded that a lookup happened (correct, searched
+recommendations got written off as hallucinations), and the MODEL could not
+tell either - asked where an answer came from it saw only its own prior text
+and disowned a good one. The second is why this writes back into the context
+instead of only emitting telemetry.
 
-  * Nothing recorded that a lookup happened. Five correct, searched game
-    recommendations were written off as hallucinations, and it took a store
-    page and a token-count comparison to establish otherwise.
-  * The MODEL could not tell either. Asked where the picks came from, it saw
-    only its own prior text - the searches were not in its context - so it
-    reasoned about plausibility and disowned a good answer.
-
-The second one is why this module writes back into the context rather than
-only emitting telemetry. Observability alone would have let us audit the
-model while leaving the model itself amnesiac.
-
-WHY A STREAM TEE AND NOT A HOOK. There is no hook. LLMService registers
-event handlers only for on_function_calls_started / _cancelled /
-on_completion_timeout / on_connection_error - all function-call shaped.
-Observers see FRAMES, and no frame is ever pushed for a server-side tool, so
-an observer sees nothing. What is left is the stream itself, and the smallest
-honest seam is to wrap the iterator: every event still reaches Pipecat
-untouched and in order, we only look. Nothing here reimplements Pipecat's
-handling, so its parsing can change freely without breaking this.
+WHY A STREAM TEE AND NOT A HOOK. There is no hook: LLMService's event
+handlers are all function-call shaped, and observers see frames, of which a
+server-side tool pushes none. Wrapping the iterator is the smallest honest
+seam - every event reaches Pipecat untouched and in order, we only look - and
+nothing here reimplements its parsing, so that can change freely.
 """
 log = None                                      # set by install()
 
@@ -33,10 +22,9 @@ log = None                                      # set by install()
 def _search_item(item):
     """-> (kind, query) for a provider-executed search item, else None.
 
-    Matches on the type CONTAINING 'search' rather than on an exact string:
-    the family has grown before (web_search_call, file_search_call, and
-    provider-specific spellings) and a new member should be recorded, not
-    silently dropped the way the whole class was until today."""
+    Matches a type CONTAINING 'search' rather than an exact string: the
+    family has grown before (web_search_call, file_search_call, provider
+    spellings), and a new member should be recorded, not silently dropped."""
     kind = getattr(item, "type", "") or ""
     if "search" not in kind:
         return None

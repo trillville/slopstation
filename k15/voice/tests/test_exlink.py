@@ -92,7 +92,6 @@ def main():
         time.sleep = _real_sleep
         del sys.modules["serial"]
 
-    # Every frame is 7 bytes and its own checksum verifies.
     for name, hexs in cglib.EXLINK_FRAMES.items():
         b = bytes.fromhex(hexs)
         assert len(b) == 7, f"{name}: {len(b)} bytes"

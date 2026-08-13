@@ -4,7 +4,6 @@ install on this machine, cross-validated against the actual Dispatch.ps1
 the ARMORED-CORE-™-VI-vs-"armored core six" normalization problem. Run:
     .venv\\Scripts\\python tests\\test_library.py
 """
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -63,8 +62,7 @@ def main():
         assert resolve("armored core")[0] == 1888160
         print(f"  '{by_id[1888160]}' answers to 'armored core six' and 'armored core'")
 
-    # Grammar + resolver combined: the full production path for "play X" -
-    # wildcard {game} captures the phrase, the resolver lands the appid.
+    # Grammar + resolver combined: the full production path for "play X".
     m = GrammarMatcher(VOICE_CFG)
     hits = 0
     for r in rows[:10]:

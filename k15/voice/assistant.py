@@ -303,9 +303,9 @@ class AnthropicBackend:
     def turn(self, system_text, user_text, impls):
         # cache_control on the system block caches tools+system together
         # (render order is tools -> system -> messages; a breakpoint covers
-        # everything before it). CAVEAT: Haiku 4.5's minimum cacheable prefix
-        # is 4096 tokens - below that the marker silently does nothing, which
-        # is why the REPL prints cache w/r per answer (w0/r0 = too small).
+        # everything before it). CAVEAT: small models have a minimum cacheable
+        # prefix (4096 tokens on Haiku 4.5) below which the marker silently
+        # does nothing - the REPL prints cache w/r so w0/r0 is visible.
         system = [{"type": "text", "text": system_text,
                    "cache_control": {"type": "ephemeral"}}]
         self.messages.append({"role": "user", "content": user_text})
@@ -373,14 +373,10 @@ class OpenAIBackend:
             self.cache_note = (
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
             # Server-side searches are ITEMS in resp.output, not function
-            # calls, and filtering to function_call dropped them entirely -
-            # which is why the openai trace dumps carried no evidence of a
-            # lookup while the anthropic ones carry web_search_tool_result
-            # blocks. That asymmetry cost real time: five correct, searched
-            # recommendations were written off as invented (2026-08-11)
-            # because nothing recorded that the search had happened, and the
-            # model's own account of itself is not evidence - it cannot tell
-            # afterwards whether a server-side tool ran.
+            # calls: filtering to function_call drops them entirely and the
+            # trace then carries no evidence a lookup happened. That is not
+            # cosmetic - a model's own account of itself is not evidence,
+            # since it cannot tell afterwards whether a server-side tool ran.
             for o in resp.output:
                 if "search" in (getattr(o, "type", "") or ""):
                     action = getattr(o, "action", None)

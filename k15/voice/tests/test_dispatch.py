@@ -53,7 +53,7 @@ def main():
     r = h.d.start_session()
     assert not r.ok and r.earcon == "busy", r
 
-    with_temp_lock(None)                              # no lock
+    with_temp_lock(None)
     h = Harness(dry_run=True)
     r = h.d.start_session(appid=12345)
     assert r.ok and "couch.py start 12345" in r.detail, r
@@ -71,8 +71,7 @@ def main():
     dp.subprocess.Popen = lambda args, **kw: spawned.append(args)
     h = Harness()
     r = h.d.start_session(appid=777)
-    # Positional, not tail-anchored: a turn id may follow (E1), and this
-    # assertion is about the verb and the appid.
+    # Positional, not tail-anchored: a turn id may follow the appid.
     i = spawned[0].index("start")
     assert r.ok and spawned[0][i:i + 2] == ["start", "777"], spawned
 
@@ -100,12 +99,11 @@ def main():
     cglib.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
     h = Harness(); sent.clear()
     assert not h.d.switch_input("garage").ok          # unknown name
-    assert h.d.switch_input("Apple TV ").ok           # case/space tolerant
+    assert h.d.switch_input("Apple TV ").ok
     assert sent == [cglib.EXLINK_FRAMES["hdmi1"]]
 
-    # No session: "switch to the pc" = "start a session" - it
-    # spawns the full couch launch, never refuses, never touches the TV
-    # itself (couch.py flips the input at READY).
+    # No session: "switch to the pc" means "start a session" - it spawns the
+    # full couch launch and never touches the TV (couch.py flips at READY).
     with_temp_lock(None)
     sent.clear(); spawned.clear()
     r = h.d.switch_input("the pc")

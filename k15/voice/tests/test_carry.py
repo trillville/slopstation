@@ -41,7 +41,6 @@ def main():
     m = _trim_carry([U, A, U, A_TOOL])
     assert no_dangling_tail(m) and first_is_plain_user(m), m
 
-    # A clean whole exchange is preserved intact.
     whole = [U, A_TOOL, TOOL_RES, A]
     assert _trim_carry(whole) == whole
 

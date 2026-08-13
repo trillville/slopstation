@@ -25,14 +25,12 @@ $CG = @{
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 # The K15's correlation id for whatever caused this run. Re-validated on read
-# even though Dispatch's regex already enforced it: this file is on disk, the
-# value ends up in a filename, and a second cheap check is worth more than the
-# assumption that nothing else can ever write there. Absent or malformed = no
-# correlation, never a failure - the session matters, the telemetry does not.
-# Age-gated for the same reason the session lock is: the marker outlives its
-# run (the LaunchGame task is not elevated, so it cannot reliably delete a
-# file the elevated Dispatch context created - see Dispatch.ps1), and a logon
-# hours later must not tag Office-Safety's events with a long-dead launch.
+# even though Dispatch's regex enforced it: the value ends up in a filename,
+# and a cheap second check beats assuming nothing else can write there.
+# Absent or malformed = no correlation, never a failure. Age-gated because
+# the marker outlives its run (LaunchGame runs unelevated and cannot delete
+# what elevated Dispatch created), and a logon hours later must not tag
+# Office-Safety's events with a long-dead launch.
 $script:CgTurnStaleSec = 300
 
 function Get-CgTurn {
@@ -73,11 +71,11 @@ function Write-CgEvent {
         if ($script:CgTurn) { $rec.turn = $script:CgTurn }
         $rec.host = $env:COMPUTERNAME
         $rec.dur_ms = [int]$script:CgStopwatch.Elapsed.TotalMilliseconds
-        # A caller field must never overwrite a key the emitter owns (those are
-        # Loki labels, and a record that misdescribes itself is worse than a
-        # missing one). Keep the value under a prefixed name rather than
-        # dropping it. Same rule as events.py - no binding hazard here, because
-        # fields arrive in a hashtable rather than as splatted parameters.
+        # A caller field must never overwrite a key the emitter owns (Loki
+        # labels; a record that misdescribes itself is worse than a missing
+        # one), so it is prefixed rather than dropped - same rule as
+        # events.py, minus its binding hazard since fields arrive as a
+        # hashtable rather than splatted parameters.
         $owned = @('ts','level','env','service','lane','event','host')
         foreach ($k in $Fields.Keys) {
             if ($owned -contains $k) { $rec["f_$k"] = $Fields[$k] }
@@ -85,11 +83,10 @@ function Write-CgEvent {
         }
         $file = Join-Path $CG.LogDir ("pc-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
         $line = ConvertTo-Json -InputObject $rec -Compress -Depth 4
-        # AppendAllText with an explicit BOM-less encoder, NOT
-        # `Add-Content -Encoding utf8`: on Windows PowerShell 5.1 that flag
-        # means "UTF-8 with BOM", and the three bytes it puts in front of the
-        # first '{' make that line unparseable JSON forever after. Verified on
-        # 5.1.26100 - the file starts EF BB BF 7B.
+        # AppendAllText with a BOM-less encoder, NOT `Add-Content -Encoding
+        # utf8`: on PowerShell 5.1 that flag means UTF-8 WITH BOM, and those
+        # three bytes in front of the first '{' make the line unparseable
+        # JSON forever after.
         [IO.File]::AppendAllText(
             $file, $line + [Environment]::NewLine,
             (New-Object System.Text.UTF8Encoding($false)))
@@ -169,12 +166,11 @@ function Get-RunningAppId {
 }
 
 if (-not ('CG.Win' -as [type])) {
-    # WindowByTitle rather than the obvious FindWindow(null, title): verified on
-    # this hardware, FindWindow returns 0 for windows EnumWindows reports with
-    # exactly that title. Steam's UI is CEF, drawn by steamwebhelper.exe - which
-    # is also why the steam.exe MainWindowHandle the original guard used reads 0
-    # and why that guard never fired. Enumerating is the thing that works.
-    # Visible-only on purpose: closed to the tray there is nothing to put away.
+    # WindowByTitle rather than FindWindow(null, title): on this hardware
+    # FindWindow returns 0 for windows EnumWindows reports under exactly that
+    # title (Steam's UI is CEF, drawn by steamwebhelper.exe - which is also
+    # why steam.exe's MainWindowHandle reads 0). Enumerating is what works.
+    # Visible-only: closed to the tray there is nothing to put away.
     Add-Type -Namespace CG -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
@@ -205,23 +201,16 @@ public static IntPtr WindowByTitle(string want) {
 
 # THE window a couch session must never hand the controller to. Steam delivers
 # input to the FOCUSED window, so a session holding the desktop library window
-# plays a navigation sound per button press and moves nothing on the TV - and
-# the Steam button still works, because Steam Input handles that one globally.
-# That combination is what makes the failure so baffling from the couch.
+# plays a navigation sound per button press and moves nothing on the TV - while
+# the Steam button keeps working, because Steam Input handles that one
+# globally. That combination is what makes the failure baffling from the couch.
 #
-# Targeted by EXACT window title, NOT by the steam process's MainWindowHandle
-# the way the original repaint guard did. That is why the original never once
-# fired: Steam closed to the tray reports MainWindowHandle = 0, and across
-# every exit in the logs the 'desktop Steam minimized' line is simply absent.
-# An exact title match also cannot hit 'Steam Big Picture Mode', so unlike the
-# handle version this is safe to call at any point in a session.
+# Matched by EXACT title, not by steam.exe's MainWindowHandle (0 when closed
+# to the tray, so a handle-based guard never fires). An exact match also
+# cannot hit 'Steam Big Picture Mode', so this is safe to call at any point.
 #
-# Deliberately the same window AppActivate('Steam') used to focus: the thing
-# that stole the controller is now the thing that gets put away.
-#
-# Minimizing rather than merely not-focusing also keeps Exit's original intent:
-# a library window laid out at 4K comes back garbled when reopened at the
-# ultrawide's resolution.
+# Minimize rather than merely unfocus: a library window laid out at 4K comes
+# back garbled when reopened at the ultrawide's resolution.
 function Hide-DesktopSteam {
     $h = [CG.Win]::WindowByTitle($CG.SteamWindow)
     if ($h -ne [IntPtr]::Zero) {
@@ -319,21 +308,13 @@ function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | O
 # Called from Office-Safety (every logon) and Wake-Safety (every desk wake -
 # the real cadence, since sleep-centric use makes logons rare).
 function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
-    # Transcripts move to archive\ after a couple of days, and are deleted
-    # from there at $Days. The move exists for the SHIPPER, not for tidiness:
-    # Alloy tails every file its glob matches, and a finished transcript can
-    # never be appended to again - only a currently-running script's can grow.
-    # Keeping 100+ closed files in the glob meant 100+ pointless tailers, and
-    # a tailer costs ~0.04% of a core whether or not its file ever changes -
-    # measured by A/B on one live process, see the cost note in
-    # alloy\config.alloy.example (which also records why the obvious way to
-    # measure this returns a silent zero). 110 files was ~4.5% of a core to
-    # watch files that were finished. Archiving keeps the live set to the
-    # handful that can actually still be written to, and the files stay on
-    # disk.
-    # Both streams archive, for the same reason: pc-*.jsonl is one file per day
-    # and only TODAY's can be appended to, so at 30-day retention it was 29
-    # tailers (~1.2% of a core) polling files that are finished forever.
+    # Transcripts and daily jsonl move to archive\ after a couple of days and
+    # are deleted at $Days. The move is for the SHIPPER, not tidiness: Alloy
+    # tails every file its glob matches at ~0.04% of a core each (A/B
+    # measured - see alloy\config.alloy.example, which also records why the
+    # obvious way to measure it returns a silent zero), and only a running
+    # script's transcript or today's jsonl can still grow. 110 finished files
+    # was ~4.5% of a core to watch nothing happen.
     $archive = Join-Path $CG.LogDir 'archive'
     New-Item -ItemType Directory -Force -Path $archive -ErrorAction SilentlyContinue | Out-Null
     # Wildcard path + -Include and NO -Recurse: enumerates this directory's

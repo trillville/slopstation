@@ -72,11 +72,6 @@ def variant_map(titles):
     return out
 
 
-def slot_tuples(titles):
-    """[(variant, canonical_title)] for hassil's {game} slot."""
-    return list(variant_map(titles).items())
-
-
 def build_resolver(threshold, margin=5):
     """spoken -> (appid, canonical title) or (None, None). Fuzzy over the
     culled variant space; a near-tie between DIFFERENT games (token_set_ratio

@@ -84,11 +84,11 @@ def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
 
 
 def play_pattern(dev, steps, gain=0):
-    """THE haptic playback engine - production ack, bench audition, and the
-    blind quiz all use this one function, so what you audition is exactly
-    what ships. steps = ((freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth), ...).
-    Each tone plays out fully before the next starts; trailing stops are sent
-    after the last (harmless if tones self-terminated, required if sustained)."""
+    """THE haptic playback engine - production ack, bench audition and the
+    blind quiz all use it, so what you audition is what ships.
+    steps = ((freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth), ...). Each
+    tone plays out before the next; the trailing stops are harmless if tones
+    self-terminated and required if they sustained."""
     for freq, dur, gap, lfo_f, lfo_d in steps:
         for side in (0, 1):
             dev.write(tone_report(side, freq, dur, gain, lfo_f, lfo_d))
@@ -112,22 +112,20 @@ def lock_age():
 
 
 def session_active(age=None):
-    """True while a launch or a live session owns the Puck. THE arbiter, and
-    the only place this predicate is spelled out - couch.py refuses a second
-    launch on it, voice dispatch answers "busy" from it, doctor reports it, and
-    the chord listener stands off the device on it. couch.py touches the lock
-    before its first side effect and every few seconds thereafter, so one
-    predicate covers the whole window from dispatch through teardown.
+    """True while a launch or a live session owns the Puck - THE arbiter, and
+    the only place this predicate is spelled out: couch.py refuses a second
+    launch on it, voice dispatch answers "busy" from it, doctor reports it,
+    the listener stands off the device on it. couch.py holds the lock fresh
+    from before its first side effect through teardown, so one predicate
+    covers the whole window.
 
-    `age` is for callers that ALSO want the number for a log field: pass the
-    lock_age() they already took, so the decision and the number they report it
-    with come from one stat. Taking two would let a lock that appears between
-    them disagree - `round(None)` in a load-bearing lane, for nothing.
+    Pass `age` when you also want the number for a log field, so the decision
+    and the number come from one stat - taking two lets a lock appearing
+    between them disagree, and `round(None)` in a load-bearing lane.
 
-    A STALE lock deliberately reads as free, and that bound is load-bearing now
-    that the listener stands off on this: it is the only thing between a lock
-    nobody cleaned up and a permanently deaf chord lane. Worst case is
-    LOCK_STALE_S of deafness - exactly the bound launch_busy has always had."""
+    A STALE lock deliberately reads as free: it is the only thing between a
+    lock nobody cleaned up and a permanently deaf chord lane. Worst case is
+    LOCK_STALE_S of deafness."""
     if age is None:
         age = lock_age()
     return age is not None and age < LOCK_STALE_S
@@ -288,28 +286,26 @@ class _Log:
     same event as structured JSON for the log shipper.
 
     Called as `log("event_name", field=value, ...)`. The event name is a
-    closed vocabulary - it is what dashboards group by and alerts fire on - so
-    variable data goes in fields, never in the name. `log.warn(...)` /
-    `log.error(...)` pick the level; the rule for choosing is whether the
-    thing that just happened cost the user something they would notice.
+    closed vocabulary - what dashboards group by and alerts fire on - so
+    variable data goes in fields, never in the name. warn/error pick the
+    level; the rule is whether what happened cost the user something they
+    would notice.
 
-    Under the blind suite (env=test) the console still gets everything, but
-    couch.log does not: test output and production failures sharing one file
-    in one shape is precisely the confusion this exists to end."""
+    Under the blind suite (env=test) the console still gets everything but
+    couch.log does not: test output and production failures must never share
+    one file in one shape."""
 
     def __init__(self, lane):
         self.lane = lane
         self._logf = BASE / "couch.log"
 
     def _write(self, level, event, fields):
-        # The whole body is guarded, not just the I/O. "Telemetry never costs
-        # a session" has to be structural: this is the single choke point every
-        # log call in the system funnels through, so if anything in here can
-        # raise, it can crash the lane it was meant to describe - and once did.
+        # The whole body is guarded, not just the I/O: every log call in the
+        # system funnels through here, so anything that can raise in here can
+        # crash the lane it was meant to describe.
         try:
-            # level passed POSITIONALLY on both calls - see events.emit's
-            # docstring. Passing it by keyword would reintroduce exactly the
-            # collision this is designed out of, for a field named `level`.
+            # level POSITIONAL on both calls - by keyword it would collide
+            # with a caller field named `level` (see events.emit).
             line = (f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{self.lane}] "
                     + events.human(event, level, **fields))
             try:
@@ -352,12 +348,11 @@ class CapturingLog(_Log):
     """Test double with the PRODUCTION shape - same call signature, same
     levels - that records instead of writing.
 
-    Shared rather than hand-rolled per test on purpose: the blind suite used
-    to pass `logs.append` as a logger, which silently accepted anything and
-    so could not notice the day the logging interface changed. Tests assert
-    on events and fields now, never on prose, so rewording a message is free
-    and renaming an event (which IS an interface - alerts group by it) is
-    caught."""
+    Shared rather than hand-rolled per test: a bare list-append logger
+    accepts anything and so cannot notice the day the logging interface
+    changes. Tests assert on events and fields, never prose, so rewording a
+    message is free and renaming an event (an interface - alerts group by it)
+    is caught."""
 
     def __init__(self, lane="test", echo=False):
         super().__init__(lane)
@@ -384,13 +379,12 @@ def _exlink_txn(frame_hex, port):
 
 
 def exlink_send_hex(frame_hex, port):
-    """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK on success,
-    raises ExlinkNak on any other answer - the TV acks every accepted frame, so
-    anything else means the command did not land. A NAK is not retried, only
-    reported. serial is imported lazily so machines without pyserial can import
-    cglib. The one retry after 1 s is for PORT CONTENTION only: couch.py and
-    the voice agent share this port from separate processes in
-    open-write-close bursts, so a transient open collision gets patience."""
+    """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK, raises
+    ExlinkNak on any other answer - the TV acks every accepted frame, so
+    anything else means the command did not land. A NAK is reported, never
+    retried. serial imports lazily so a machine without pyserial can still
+    import cglib. The 1 s retry is for PORT CONTENTION only: couch.py and the
+    voice agent share this port from separate processes."""
     import serial
     try:
         ack = _exlink_txn(frame_hex, port)

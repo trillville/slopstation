@@ -207,10 +207,9 @@ def _save_meta(cache):
 
 
 def refresh_meta(appids, limit=200):
-    """Top up NEW appids only, ~1 req/2s (appdetails' unofficial ceiling).
-    Saves after each fetch (atomic replace): the crawl runs on a daemon thread
-    that dies when the agent is Ctrl+C'd, so a full-library first pass would
-    otherwise lose all progress and re-crawl from zero every restart."""
+    """Top up NEW appids only, ~1 req/2 s (appdetails' unofficial ceiling).
+    Saves after EACH fetch: the crawl runs on a daemon thread that dies with
+    the agent, so a batched save would re-crawl from zero every restart."""
     cache = load_meta()
     todo = [a for a in appids if str(a) not in cache][:limit]
     for i, appid in enumerate(todo):
@@ -238,9 +237,9 @@ def refresh_owned():
 
 
 # --- the sync orchestrator (all three layers, staleness- and key-gated) -------
-# Cadence note: layer 1 (installed) needs the PC awake and fail-softs if it's
-# asleep; layers 2-3 (owned/metadata) come from the Steam cloud and refresh
-# with no PC at all - so the catalog stays current even while the rig sleeps.
+# Layer 1 (installed) needs the PC awake and fail-softs when it is asleep;
+# layers 2-3 come from the Steam cloud, so the catalog stays current even
+# while the rig sleeps.
 OWNED_MAX_AGE_S = 6 * 3600      # playtime/recency drift slowly; one call/6h
 _sync_lock = threading.Lock()
 

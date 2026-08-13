@@ -54,7 +54,6 @@ def test_capture_orders_and_stops():
     pcm = cap.stop()
     assert pcm.startswith(seed[0] + seed[1]), "seed ring must lead the pcm"
     assert len(pcm) > 2 * CHUNK_BYTES, "pump added nothing"
-    # Pumped chunks arrive in read order right after the seed.
     assert pcm[2 * CHUNK_BYTES:3 * CHUNK_BYTES] == bytes([1]) * CHUNK_BYTES
     assert pcm[3 * CHUNK_BYTES:4 * CHUNK_BYTES] == bytes([2]) * CHUNK_BYTES
     assert stream.closed, "stop() must close the wake stream"
@@ -84,9 +83,9 @@ def test_capture_runaway_cap():
 
 
 def test_dead_wake_stream_surfaces_original_error():
-    """Regression: a -9999 mid-listen made cleanup raise 'Stream
-    not open', which replaced the real error AND escaped the handler, killing
-    the agent. The listener must re-raise the ORIGINAL OSError."""
+    """A -9999 mid-listen makes cleanup raise 'Stream not open', which would
+    replace the real error AND escape the handler. The listener must re-raise
+    the ORIGINAL OSError."""
     import audio
 
     class DeadStream:
@@ -117,11 +116,10 @@ def test_dead_wake_stream_surfaces_original_error():
 
 
 def test_zombie_stream_trips_silence_watchdog():
-    """Regression: after a device flap the reopened stream
-    'worked' but delivered only zeros - no error, no wake, all night. A solid
-    run of zero chunks must raise into the same OSError recovery path as an
-    honest stream death, and any real audio must reset the counter (a live
-    mic always carries a noise floor)."""
+    """After a device flap the reopened stream can 'work' while delivering only
+    zeros - no error, no wake. A solid run of zero chunks must raise into the
+    same OSError recovery path as an honest stream death, and any real audio
+    must reset the counter (a live mic always carries a noise floor)."""
     import numpy as np
     import audio
 
@@ -163,9 +161,9 @@ def test_zombie_stream_trips_silence_watchdog():
 
 
 def test_wake_chime_waits_for_the_end_of_speech():
-    """The point of the whole watcher: a chime over "hey jarvis put on Elden
-    Ring" is what made the old tick jarring, so loud chunks must hold it back
-    and only a real gap may release it - once."""
+    """The point of the whole watcher: a chime landing over "hey jarvis put on
+    Elden Ring" is jarring, so loud chunks must hold it back and only a real
+    gap may release it - once."""
     import numpy as np
 
     def chunk(level):

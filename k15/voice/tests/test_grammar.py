@@ -123,15 +123,14 @@ def main():
         got = strip_wake(text)
         if got != want:
             failures.append(f"strip '{text}': got {got!r}, want {want!r}")
-    # Strip output must still match the grammar (the whole point).
+    # Strip output must still match the grammar.
     stripped = strip_wake("hey jarvis volume up")
     if m.match(stripped) is None or m.match(stripped)[0] != "VolumeUp":
         failures.append(f"stripped {stripped!r} no longer matches VolumeUp")
 
     # is_busy: an assistant turn in flight defers the idle timeout (a model
-    # slower than holdWindowS must not get its session killed mid-answer),
-    # but a hung turn expires after ASSISTANT_WAIT_S so it can't pin the
-    # session open.
+    # slower than holdWindowS must not be killed mid-answer), but a hung turn
+    # expires after ASSISTANT_WAIT_S so it can't pin the session open.
     import time as _t
 
     from grammar_gate import GrammarGate
@@ -145,10 +144,8 @@ def main():
     if g.is_busy():
         failures.append("expired assistant turn must not pin the session")
 
-    # An assistant turn is SILENT while it works: a repeating "thinking" cue
-    # was built, lived a day, and was removed for nagging. The only sounds
-    # around an answer are the answer itself and, if it errors, the fail
-    # earcon. Nothing here should ever reassure again.
+    # An assistant turn is SILENT while it works: the only sounds around an
+    # answer are the answer itself and, if it errors, the fail earcon.
     import earcons
     if "think" in earcons.SPECS:
         failures.append("the think earcon is back - it was removed on purpose")

@@ -45,7 +45,7 @@ already uses them; nothing needs substituting.
 
 | Machine | Location | How to update |
 |---|---|---|
-| Gaming PC | `C:\CouchGaming\` with a `logs\` subfolder | **copy** `gaming-pc\*` there — its runtime needs gitignored binaries (`vhui64.exe`) and shortcuts (`OFFICE.lnk`, `TV-GAMING.lnk`) that can't live in the repo |
+| Gaming PC | `C:\CouchGaming\` with a `logs\` subfolder | **`gaming-pc\Deploy.ps1`** ships the scripts there and stamps `build-id`; the runtime also needs gitignored binaries (`vhui64.exe`) and shortcuts (`OFFICE.lnk`, `TV-GAMING.lnk`) that can't live in the repo |
 | K15 | a git clone on the Desktop, e.g. `%USERPROFILE%\Desktop\slopstation\k15\` with `logs\` and `state\` subfolders | **`git pull` in place** |
 
 Every script derives its sibling paths from its own location, so each folder is
@@ -486,9 +486,10 @@ icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r `
 ```
 
 [`gaming-pc/Dispatch.ps1`](../gaming-pc/Dispatch.ps1) is **the entire remote
-attack surface**: six verbs — `enter` / `exit` / `status` / `games` / `playing` /
-`launch <appid>` — and everything else answers `DENIED`. It is deliberately
-dependency-free (no dot-sourcing in the sshd context).
+attack surface**: seven verbs — `enter` / `exit` / `status` / `games` /
+`playing` / `launch <appid>` / `version` — and everything else answers
+`DENIED`. It is deliberately dependency-free (no dot-sourcing in the sshd
+context).
 
 On the K15, `%USERPROFILE%\.ssh\config`:
 
@@ -858,7 +859,7 @@ process and survives anything the voice stack does.
 |---|---|
 | Ex-Link frames | `08 22 c1 c2 c3 val + (0x100 − Σ)&0xFF`, 9600 8N1 · on `D4` / off `D5` / HDMI4 `08220A000503C4` · ack `030cf1` |
 | VirtualHere claim/release | `vhui64.exe -t "USE,K15.5"` / `"STOP USING,K15.5"` |
-| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>` — nothing else exists |
+| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>\|version` — nothing else exists |
 | Fail-safe | `\CouchGaming\ForceOfficeAtLogon` — unconditional, sends no TV commands |
 | Diagnosis | `python doctor.py` on the K15 · `Doctor.ps1` on the PC |
 | The one rule | Nothing switches the TV to HDMI 4 before the host writes READY |

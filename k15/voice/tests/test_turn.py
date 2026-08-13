@@ -28,13 +28,11 @@ HOSTILE = [
     "9f2c1a1234", "", "zzzz", "9f2c-1a", "9f2c1a\n", "9f2c1a\r\nenter",
 ]
 
-
 def dispatch_patterns():
     """Every verb pattern from the switch -Regex in Dispatch.ps1, read from
     the file so this can never test a stale copy."""
     text = DISPATCH.read_text(encoding="utf-8")
     return re.findall(r"^\s*'(\^[^']+)'", text, re.MULTILINE)
-
 
 def compile_ps(pattern):
     """.NET spells absolute-end-of-string \\z; Python spells it \\Z (and has no
@@ -42,8 +40,8 @@ def compile_ps(pattern):
     the shipping pattern to something both engines happen to accept."""
     return re.compile(pattern.replace(r"\z", r"\Z"))
 
-
 def main():
+
     # -- minting ---------------------------------------------------------------
     ids = {events.new_turn() for _ in range(2000)}
     assert len(ids) > 1990, f"only {len(ids)} unique in 2000 - collision-prone"
@@ -63,9 +61,8 @@ def main():
     allpats = dispatch_patterns()
     assert len(allpats) == 7, f"expected 7 verbs, got {allpats}"
     for p in allpats:
-        # \z, not $: '$' also matches before a trailing newline in .NET, and
-        # this file is the whole remote attack surface. Applies to the
-        # read-only verbs too - one lax anchor in here is one too many.
+        # \z, not $: in .NET '$' also matches before a trailing newline, and
+        # this file is the whole remote attack surface - read-only verbs too.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
 
     pats = [p for p in allpats if "--turn" in p]
@@ -78,7 +75,6 @@ def main():
         verb = next(v for v in verbs if p.lstrip("^").startswith(v))
         base = verbs[verb]
         rx = compile_ps(p)
-        # The happy path still works, with and without a turn.
         assert rx.match(base), f"{p} no longer matches the bare verb {base!r}"
         assert rx.match(f"{base} --turn 9f2c1a"), f"{p} rejects a good turn"
         # And every hostile string fails to match AT ALL, so Dispatch falls
@@ -106,19 +102,14 @@ def main():
         assert sent[-1] == "enter", f"malformed turn reached the wire: {sent[-1]!r}"
         events.reset(tok)
 
-        # No turn at all is simply an untagged command.
         couch.ssh_intent("exit")
         assert sent[-1] == "exit", sent[-1]
 
         # -- THE TASK BOUNDARY -------------------------------------------------
-        # This is the regression that shipped. A ContextVar is copied into a
-        # task when that task is CREATED, so a turn minted inside a running
-        # frame processor cannot reach the assistant's tool-dispatch task,
-        # which is a sibling holding an older snapshot. Result on 2026-08-11:
-        # every voice-driven exit arrived at the gaming PC with no turn, and
-        # the launch ran under an id couch.py minted for itself instead of the
-        # one the user's sentence created. Ambient absent, explicit present,
-        # must still tag the wire - that asymmetry IS the bug.
+        # A ContextVar is copied into a task when that task is CREATED, so a
+        # turn minted inside a running frame processor cannot reach the
+        # assistant's tool-dispatch task - a sibling holding an older snapshot.
+        # Ambient absent + explicit present must still tag the wire.
         couch.ssh_intent("exit", turn="4c1d0e")
         assert sent[-1] == "exit --turn 4c1d0e", \
             f"explicit turn lost when ambient is empty: {sent[-1]!r}"
@@ -129,8 +120,7 @@ def main():
         assert sent[-1] == "exit --turn 4c1d0e", sent[-1]
         events.reset(tok)
 
-        # A hostile explicit id is still dropped at the wire - the new
-        # parameter must not become a way around the validation above.
+        # A hostile explicit id is still dropped - the parameter is no bypass.
         couch.ssh_intent("exit", turn="../../evil")
         assert sent[-1] == "exit", \
             f"explicit turn bypassed validation: {sent[-1]!r}"
@@ -140,9 +130,9 @@ def main():
     print("  wire: explicit turn survives an empty/stale ambient, still validated")
 
     # -- Dispatch hands the id over without the ContextVar ----------------------
-    # Same bug one layer up, asserted end to end: with NO ambient turn at all,
-    # a Dispatch that was told the turn must still tag both machine-crossing
-    # verbs. This is what GrammarGate does when it mints the id.
+    # The same shape one layer up: with NO ambient turn, a Dispatch that was
+    # told the turn must still tag both machine-crossing verbs - which is what
+    # GrammarGate does when it mints the id.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import cglib
     import dispatch as dp
@@ -159,8 +149,7 @@ def main():
             f"voice-driven exit reached the PC uncorrelated: {sent[-1]!r}"
 
         # The interleave the snapshot contract exists for: a SECOND utterance
-        # lands while the first's dispatch is still on the wire. The
-        # in-flight action must keep the id it started with - consumers
+        # lands while the first's dispatch is still on the wire. Consumers
         # snapshot at operation start, so the re-point cannot reach them.
         def ssh_mid_flight(cmd, **kw):
             sent.append(cmd)
@@ -189,7 +178,6 @@ def main():
     print("  cli: --turn parsed in any position, and a bare --turn is harmless")
 
     print("OK - turn: minting, validation, the Dispatch boundary, wire, CLI")
-
 
 if __name__ == "__main__":
     main()

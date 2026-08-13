@@ -115,30 +115,18 @@ def main():
     last_session_check = 0.0
     standoff = False
     while True:
-        # HANDS OFF for as long as a session owns the Puck, launch included.
-        # The claim is the fragile moment: VirtualHere has to unbind the Puck
-        # from the K15's own HID stack to forward it, and doing that while 13
-        # interfaces are being read at 200 Hz is what produces the controller
-        # that enumerates, rumbles, and then ignores every button.
+        # HANDS OFF while a session owns the Puck, launch included. The claim
+        # is the fragile moment: VirtualHere unbinds the Puck from the K15's
+        # HID stack to forward it, and doing that while 13 interfaces are
+        # read at 200 Hz is a plausible cause of the controller that
+        # enumerates, rumbles, then ignores every button (unproven - the
+        # other candidate is Steam-side binding - but reading a device
+        # through its own handoff is not something to do on purpose).
         #
-        # The chord path always had this for free - it closes before it
-        # dispatches. A VOICE launch dispatches from a different process
-        # entirely and had no way to ask, so the listener read straight through
-        # the handoff and had its handles torn away mid-read: on turn eaa8bc
-        # the K15 was still reading at 22:57:32 while the PC finished claiming
-        # at 22:57:37 (puck_vanished reason=claimed IS that tear-away, and it
-        # appears on every voice launch and no chord launch).
-        #
-        # Whether that contention was the CAUSE of the dead controllers is not
-        # proven - the evidence was two launches and a mechanism, and the other
-        # live candidate is Steam-side binding. A dead controller on a launch
-        # that logged no puck_vanished would falsify it. Standing off is right
-        # regardless: reading a device through its own handoff is not something
-        # to do on purpose.
-        #
-        # The session lock is the signal both paths already share, so this
-        # needs no new IPC: couch.py touches it before its first side effect,
-        # ~10 s ahead of the claim.
+        # The chord path gets this free by closing before it dispatches; a
+        # VOICE launch comes from another process, so it needs the session
+        # lock as the shared signal - couch.py holds it from ~10 s before the
+        # claim, which is why no new IPC is required here.
         if time.time() - last_session_check >= STANDOFF_POLL_S:
             last_session_check = time.time()
             standoff = cglib.session_active()
@@ -167,11 +155,11 @@ def main():
                 held = held or time.time()
                 if time.time() - held >= HOLD_S:
                     age = cglib.lock_age()
-                    # Backstop, not the main gate: the standoff above catches a
-                    # fresh lock within STANDOFF_POLL_S and we never get here.
-                    # This still covers a launch that started inside that
-                    # window - couch.py would refuse anyway, so say "busy"
-                    # rather than promise a launch that won't happen.
+                    # Backstop, not the main gate - the standoff above
+                    # normally catches a fresh lock first. Covers a launch
+                    # started inside that window: couch.py would refuse it,
+                    # so say "busy" rather than promise a launch that won't
+                    # happen.
                     if cglib.session_active(age):
                         if time.time() - last_busy >= BUSY_COOLDOWN_S:
                             log("chord_busy", lock_age_s=round(age))
@@ -179,16 +167,14 @@ def main():
                             last_busy = time.time()
                         held = None
                     else:
-                        # The chord is where this intent begins, so the id is
-                        # minted here and handed to couch.py - which passes it
-                        # on to the gaming PC. One chord, one story, two
-                        # machines.
+                        # The intent begins here, so the id is minted here
+                        # and handed to couch.py, which passes it to the
+                        # gaming PC. One chord, one story, two machines.
                         turn = events.new_turn()
                         log("chord", turn=turn)
                         buzz(puck.active, cglib.PATTERN_LAUNCH, "launch")
-                        # Kept even though the standoff now covers the launch
-                        # window: this is the only silence guaranteed BEFORE
-                        # couch.py has started python and touched the lock.
+                        # The only silence guaranteed BEFORE couch.py has
+                        # started python and taken the lock.
                         puck.close()
                         subprocess.Popen([sys.executable, str(COUCH), "start",
                                           "--turn", turn],

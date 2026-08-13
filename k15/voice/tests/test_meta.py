@@ -21,9 +21,8 @@ def main():
     real_sleep = time.sleep
     time.sleep = lambda s: None
 
-    # Incremental invariant: the cache is saved after EACH fetch (sizes 1,2,3),
-    # not once at the end (which would be a single save of size 3). A daemon-
-    # thread kill after item N therefore leaves N on disk, not zero.
+    # Incremental invariant: the cache is saved after EACH fetch, not once at
+    # the end, so a daemon-thread kill after item N leaves N on disk, not zero.
     orig_save = library._save_meta
     sizes = []
 
@@ -43,8 +42,7 @@ def main():
     assert fetched == [4, 5], f"re-fetched {fetched}, should only do the missing 2"
     assert len(library.load_meta()) == 5
 
-    # query_terms: the ask-about-games vocabulary - distinct tags/genres,
-    # frequency-ranked, lowercased, limit respected.
+    # query_terms: the ask-about-games vocabulary, frequency-ranked.
     library._save_meta({
         "1": {"tags": ["Mechs", "Action"], "genres": []},
         "2": {"tags": ["Mechs"], "genres": ["RPG"]},

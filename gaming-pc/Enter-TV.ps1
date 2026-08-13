@@ -52,56 +52,41 @@ try {
     Stop-DisplayMagician
 
     # 5. Big Picture, and the foreground policy that decides whether the
-    # session is usable at all. Steam delivers controller input to the FOCUSED
-    # window, so this step is not cosmetic.
+    # session is usable at all - Steam delivers controller input to the
+    # FOCUSED window, so this step is not cosmetic.
     #
-    # It used to try 'Steam Big Picture Mode' and then fall back to 'Steam'.
-    # That fallback matches the DESKTOP library window, which is present and
-    # visible the whole time Steam is running - Exit means to minimize it on
-    # teardown but that guard had never once fired (see Hide-DesktopSteam).
-    # Worse, the fallback succeeding on the first pass set $focused and broke
-    # out of the retry loop, so the wait for Big Picture never actually waited.
-    #
-    # Four launches, one transcript line apart: the one that logged
-    # focused 'Steam Big Picture Mode' worked; the three that logged 'Steam'
-    # gave a controller that chimed on every button and moved nothing on the
-    # TV. The discriminator was a game left running by the previous session
-    # (Exit closes Big Picture but never quits games): with a game up, Big
-    # Picture has no window ~1 s after the URL handoff, so the fallback won
-    # every time.
+    # There is deliberately NO fallback to the 'Steam' window title: that is
+    # the desktop library window (see Hide-DesktopSteam), and focusing it
+    # gives a controller that chimes on every button and moves nothing on the
+    # TV. It also wins the race whenever a game from a previous session is
+    # still running, because Big Picture then has no window ~1 s after the
+    # URL handoff.
     Hide-DesktopSteam
     Start-Process 'steam://open/bigpicture'
     if (-not (Wait-For { Get-Process steam -ErrorAction SilentlyContinue } 20 'Steam running')) {
         throw 'Steam failed to start'
     }
-    # Recorded, NOT acted on. A branch here once skipped the Big Picture focus
-    # when a game was up, on the theory that the game still held the foreground
-    # - it doesn't, ending a session switches the display profile and that
-    # minimizes the game on the way out. Then a resume replaced it and was
-    # worse: `-applaunch` a few hundred ms before the ready marker put the
-    # game's 2160p re-init inside the window where the K15 is still flipping
-    # the TV input. Black screen, dead controller.
-    #
-    # So Enter now does exactly one thing about the foreground - Big Picture -
-    # and merely REPORTS whether a game was up, because how often that state
-    # occurs is the thing any future resume has to be designed against.
+    # Recorded, NOT acted on: Enter does exactly one thing about the
+    # foreground (Big Picture) and merely reports whether a game was already
+    # up, because how often that happens is what any future resume has to be
+    # designed against. Do not branch on it here - docs/resume-game-design.md
+    # has both failed attempts and why Enter is structurally the wrong place.
     $running = Get-RunningAppId
     $wsh = New-Object -ComObject WScript.Shell
     $focused = Wait-For { $wsh.AppActivate($CG.BpmWindow) } 20 'Big Picture focused'
     if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
     if ($running) { Log "note: game $running was already running at Enter" }
 
-    # 6. Ready marker - the K15 switches the TV input only after seeing this
+    # 6. Ready marker - the K15 switches the TV input only after seeing this.
     #
-    # First, MEASURE the foreground instead of trusting the steps above to have
-    # got it right. AppActivate returning true is a claim, not an observation -
-    # and an unchecked claim is
-    # exactly what let this bug survive three sessions: `focused=True` sat in
-    # the ready event the whole time the controller was reaching nothing. The
-    # desktop library window in front is the one state we KNOW is broken, so it
-    # can never read as success. Sampled here, which is a second or so before
-    # the K15 flips the TV input, so run desk-side it may name whatever you
-    # were doing - it is conclusive when it says 'Steam', suggestive otherwise.
+    # First MEASURE the foreground rather than trusting the steps above:
+    # AppActivate returning true is a claim, not an observation, and an
+    # unchecked claim let `focused=True` sit in the ready event while the
+    # controller reached nothing. The desktop library window in front is the
+    # one state KNOWN to be broken, so it can never read as success. Sampled
+    # a second or so before the K15 flips the input, so run desk-side it may
+    # name whatever you were doing: conclusive on 'Steam', suggestive
+    # otherwise.
     $fg = Get-ForegroundTitle
     if ($fg -eq $CG.SteamWindow) {
         $focused = $false
@@ -109,13 +94,12 @@ try {
     }
     Set-ReadyMarker
     Log "READY (foreground: '$fg')"
-    # The milestone the whole system is gated on: dur_ms here IS time-to-READY,
-    # which is the distribution the launch-health dashboard is built from.
-    # Warn-level when nothing took the foreground: the TV still switches (a
-    # session you can rescue with one click beats no session), but the failure
-    # this whole step exists to prevent looks EXACTLY like success from here,
-    # so it must not be logged as one. `ready focused=False` is the alert, and
-    # `fg` is the field that says what to go look at.
+    # The milestone the whole system is gated on: dur_ms here IS
+    # time-to-READY, the distribution the launch-health dashboard is built
+    # from. Warn-level when nothing took the foreground - the TV still
+    # switches (a session rescuable with one click beats no session), but
+    # this failure looks EXACTLY like success from here, so it must not log
+    # as one. `ready focused=False` is the alert; `fg` says what to look at.
     Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused) { 'info' } else { 'warn' })
 }
 catch {

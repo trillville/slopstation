@@ -31,15 +31,12 @@ def main():
     rows = library.load()["installed"]
     real_appid = rows[0]["appid"]
 
-    # System prompt: rules + one line per game, sane token budget.
     si = assistant.system_instruction(CFG_MIN)
     assert "CATALOG" in si and str(real_appid) in si
-    # The mishear-repair rule (live: "met games" confused the model until the
-    # prompt said input is STT and taught it to read phonetically).
+    # Mishear-repair: the model must know its input is STT, not typed text.
     assert "speech-to-text" in si and "mishears" in si
     # Dynamic tail: the facts only config knows, each stated exactly once -
-    # date (so "lately" means something), spoken input names + the gaming
-    # input's start-a-session behavior, volume clamp, mute-is-blind.
+    # the date (so "lately" resolves), input names, volume clamp, mute-is-blind.
     assert time.strftime("%Y-%m-%d") in si
     assert "apple tv" in si and "'gaming' starts a session" in si
     assert "clamped" in si and "blind toggle" in si
@@ -49,14 +46,12 @@ def main():
     assert 500 < n_tokens < 30000, n_tokens
     print(f"  system prompt: ~{n_tokens} tokens, {len(library.catalog_lines())} games")
 
-    # Tool boundary: unknown appid refused, real one dry-dispatches.
     r = impls["launch_game"]({"appid": 999999999})
     assert not r["ok"] and "not in the catalog" in r["error"]
     r = impls["launch_game"]({"appid": real_appid})
     assert r["ok"] and "dry-run" in r["detail"], r
     print(f"  launch_game: unknown appid refused, {real_appid} dry-dispatched")
 
-    # control routing + clamp via dispatch.
     assert impls["control"]({"action": "volume_up"})["ok"]
     assert impls["control"]({"action": "set_volume", "level": 30})["ok"]
     assert not impls["control"]({"action": "self_destruct"})["ok"]
@@ -66,8 +61,7 @@ def main():
     assert r["ok"]                                # dry-run path
     r = impls["get_game_details"]({"appid": real_appid})
     assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
-    # background_task: truthful refusal with no JobStore (REPL / CLI missing),
-    # queues through one when present, empty task refused.
+    # background_task without a JobStore (REPL, or the CLI missing): refused.
     r = impls["background_task"]({"task": "find coop deals"})
     assert not r["ok"] and "aren't available" in r["error"]
 
@@ -84,8 +78,7 @@ def main():
     # tool call runs in a task whose ambient context predates the utterance.
     assert fake.asked == "find me co-op deals", fake.asked
     assert not jimpls["background_task"]({"task": "  "})["ok"]
-    # Owned-but-not-installed must still come back named (review gap: the
-    # model got details for a game it couldn't name).
+    # Owned-but-not-installed must still come back named.
     inst_ids = {row["appid"] for row in rows}
     owned_only = [a for a, o in library.load().get("owned", {}).items()
                   if int(a) not in inst_ids and o.get("name")]
@@ -94,7 +87,6 @@ def main():
         assert r["ok"] and r["name"] and not r["installed"], r
     print("  control/get_now_playing/get_game_details: routed and validated")
 
-    # Both tool renderers cover every tool, in each provider's shape.
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
     names = {n for n, *_ in assistant.TOOL_DEFS}
     assert {t["name"] for t in at} == names
@@ -112,9 +104,8 @@ def main():
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
-    # Server-side search: knob off -> absent everywhere (prompt included);
-    # knob on -> each provider's NATIVE entry, next to (never instead of)
-    # the function tools; empty location fields fold away entirely.
+    # Server-side search: knob off -> absent everywhere, prompt included; knob
+    # on -> each provider's NATIVE entry NEXT TO, never instead of, the tools.
     voice_off = CFG_MIN["voice"]
     assert assistant.server_tools(voice_off, "anthropic") == []
     assert assistant.server_tools(voice_off, "openai") == []
@@ -132,15 +123,14 @@ def main():
                                      "timezone": ""}}
     assert "user_location" not in assistant.server_tools(bare, "openai")[0]
     si_on = assistant.system_instruction({**CFG_MIN, "voice": voice_on})
-    # The two spoken-register guardrails that came out of the live probes:
-    # no citations in TTS output, no narrating the search itself.
+    # Two spoken-register guardrails: no citations in TTS, no narrating search.
     assert "search the web" in si_on and "NO citations" in si_on
     assert "Never announce or offer to search" in si_on
     print("  server_tools: knob-gated, provider-native shapes, location folding")
 
-    # pause_turn continuation (a long server-side search pauses the turn):
-    # the partial assistant content is re-sent as-is and the spoken text
-    # accumulates across the pause - the API's documented contract.
+    # pause_turn (a long server-side search pauses the turn): the partial
+    # assistant content is re-sent as-is and the text accumulates - the
+    # API's documented contract.
     import types
     b = assistant.AnthropicBackend({"anthropicApiKey": "x" * 24},
                                    "claude-haiku-4-5", voice=voice_on)
@@ -164,10 +154,9 @@ def main():
     print("  pause_turn: continuation re-sent as-is, text accumulated")
 
     # Pipecat constructions with dummy keys (no network at init), both
-    # providers - built through the PRODUCTION _make_llm, not a test-local
-    # copy: the copy passed a dict for `reasoning` while the dataclass
-    # settings accepted it silently, and the crash only surfaced at live
-    # inference ("'dict' object has no attribute 'model_dump'").
+    # providers, built through the PRODUCTION _make_llm: a test-local copy can
+    # pass a dict for `reasoning`, which the settings accept silently and only
+    # live inference rejects.
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 5
     import session_runtime
@@ -186,17 +175,15 @@ def main():
                "assistantModelOpenai": "gpt-5.6-luna",
                "assistantReasoningEffort": "low"}
     llm_o = session_runtime._make_llm(voice_o, dummy, si)
-    # Prove the inference path's model_dump() call survives - exactly the
-    # line that died live when reasoning was a plain dict.
+    # The inference path's model_dump() call, which a plain dict would fail.
     assert llm_o._settings.reasoning.model_dump(exclude_none=True) == {
         "effort": "low"}, llm_o._settings.reasoning
     tts = DeepgramTTSService(api_key="x" * 24, sample_rate=16000,
                              settings=DeepgramTTSService.Settings(
                                  voice="aura-2-thalia-en"))
     assert ua and aa and llm_a and llm_o and tts
-    # The prod search passthrough: native tools ride ToolsSchema.custom_tools
-    # through the OpenAI Responses adapter VERBATIM, after the function tools
-    # - exactly the shape run_session builds when the knob is on.
+    # Native tools ride ToolsSchema.custom_tools through the OpenAI Responses
+    # adapter VERBATIM, after the function tools - the shape run_session builds.
     from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
     ts = ToolsSchema(standard_tools=schemas,
                      custom_tools={AdapterType.OPENAI:

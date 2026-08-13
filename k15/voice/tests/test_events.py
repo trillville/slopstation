@@ -16,15 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import events
 
-
 def read(path):
     return [json.loads(l) for l in
             path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
-
 def main():
     tmp = Path(tempfile.mkdtemp())
     events.LOG_DIR = tmp
+
     events._last_day = None
 
     # -- the record shape ------------------------------------------------------
@@ -32,8 +31,7 @@ def main():
     assert r["lane"] == "voice" and r["event"] == "wake" and r["score"] == 0.71
     assert r["level"] == "info" and r["service"] == "k15"
     assert r["ts"].endswith("Z") and "T" in r["ts"], r["ts"]
-    # Under the blind suite env auto-detects as test, so nothing here can be
-    # mistaken for production traffic - the whole point of the field.
+    # env auto-detects as test, so nothing here reads as production traffic.
     assert r["env"] == "test", f"env={r['env']} - auto-detection missed the suite"
 
     files = list(tmp.glob("*.jsonl"))
@@ -43,8 +41,7 @@ def main():
     assert read(files[0])[0]["event"] == "wake"
     print(f"  shape: {files[0].name}, env auto-detected as test")
 
-    # None is absence, not a value: an optional field that did not apply must
-    # not clutter every record with nulls.
+    # None is absence, not a value: an inapplicable field must not emit null.
     r = events.emit("launch", "host_ready", status="READY", appid=None)
     assert "appid" not in r and r["status"] == "READY"
 
@@ -59,12 +56,10 @@ def main():
         "info is the default and should not shout"
 
     # -- a caller field may be named ANYTHING ----------------------------------
-    # Regression, and the expensive kind: `log("lane_up", lane="assistant")`
-    # used to raise TypeError at argument BINDING - before any try/except
-    # inside emit could run - which crash-looped the voice agent. Telemetry
-    # taking down the lane it exists to describe is the one outcome this
-    # module must make impossible, so every parameter is positional-only and
-    # the emitter's own keys win with the caller's value kept under f_*.
+    # A caller kwarg colliding with an emitter key raises TypeError at argument
+    # BINDING - before any try/except inside emit can run, so it crash-loops
+    # the lane telemetry exists to describe. Hence positional-only parameters,
+    # emitter keys winning, and the caller's value kept under f_*.
     log = cglib.CapturingLog("voice")
     for name in ("ts", "level", "env", "service", "lane", "event", "host",
                  "turn", "session", "job", "dur_ms", "err", "msg", "self"):
@@ -73,7 +68,6 @@ def main():
         assert r["lane"] == "voice" and r["event"] == "collide", \
             f"field {name!r} clobbered an emitter-owned key: {r}"
         assert "X" in r.values(), f"field {name!r} was dropped silently: {r}"
-        # And the same through the real logger, which is how it actually broke.
         log(f"collide_{name}", **{name: "X"})
     assert len(log.records) == 14, log.records
     print("  collisions: 14 reserved field names, none fatal, none clobbering")
@@ -82,8 +76,7 @@ def main():
     tok = events.context(turn="9f2c1a", session="3b7e")
     r = events.emit("voice", "gate_match", intent="PlayGame")
     assert r["turn"] == "9f2c1a" and r["session"] == "3b7e"
-    # Explicit always beats ambient - a nested intent can override the id it
-    # inherited without disturbing the caller's context.
+    # Explicit beats ambient, without disturbing the caller's context.
     r = events.emit("voice", "gate_match", turn="deadbe")
     assert r["turn"] == "deadbe" and r["session"] == "3b7e"
     # Correlation ids are for the machine; the human line stays readable.
@@ -97,22 +90,21 @@ def main():
     r = events.emit("voice", "lane_up", note="using sk-ant-supersecretvalue123 now")
     assert "supersecret" not in json.dumps(r), r
     assert "***" in r["note"]
-    # By field name, whatever the value: a key that never reached secrets.json
-    # is still caught on its way out.
+    # By field name too: a key that never reached secrets.json is still caught.
     r = events.emit("voice", "lane_up", apiKey="anything-at-all", token="xyz")
     assert r["apiKey"] == "***" and r["token"] == "***", r
-    # And the human line goes through the same boundary - a console is a
-    # screenshot away from being shared.
+    # The human line crosses the same boundary - consoles get screenshotted.
     assert "supersecret" not in events.human("x", note="sk-ant-supersecretvalue123")
     events._redactions = None
     print("  scrub: by value and by field name, in JSONL and the human line")
 
     # -- fail-soft -------------------------------------------------------------
     # Unwritable dir (parent is a file) must not raise: telemetry never costs
-    # a session. Same rule traces.py lives by.
+    # a session.
     blocker = tmp / "blocker"
     blocker.write_text("", encoding="utf-8")
     events.LOG_DIR = blocker / "sub"
+
     events._last_day = None
     assert events.emit("voice", "wake") is not None      # record built, write lost
     # An unserializable value costs the field's fidelity, never the event.
@@ -169,7 +161,6 @@ def main():
     print("  double: CapturingLog answers to the same calls as the real logger")
 
     print("OK - events: shape, levels, context, scrub, fail-soft, rollover, CLI")
-
 
 if __name__ == "__main__":
     main()

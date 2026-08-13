@@ -1,20 +1,16 @@
-"""Earcon synthesis: the count vocabulary as audio, plus the two session
-bookends (a wake chime and its mirror at sleep) and the background lane's
-announcement cue. Synthesized at import from specs; no binary assets in the
-repo. All PCM is SAMPLE_RATE mono s16le, ready to wrap in an
-OutputAudioRawFrame.
+"""Earcon synthesis: the count vocabulary as audio, plus the session bookends
+and the background lane's announcement cue. Synthesized at import from specs;
+no binary assets in the repo. All PCM is SAMPLE_RATE mono s16le, ready to
+wrap in an OutputAudioRawFrame.
 
 The counts are the contract, mirroring the haptic thuds: 1 = accepted,
 2 = busy, 3 = failed. Pitch, contour and level are taste, tuned so the six
-sound like one family - the bookends quietest, the acks just above them, and
-the announcement cue on top, since it is the only one that has to carry across
-the room unasked.
+sound like one family - bookends quietest, acks above them, the announcement
+cue on top since it alone has to carry across the room unasked.
 
-Everything is a bell: overlapping or sequential notes, a few light partials,
-exponential decay. A decaying note is perceptually far softer than a flat one
-of the same peak - flat sines at tick level are exactly what made the old
-vocabulary jarring - so these read much quieter than their amplitudes suggest.
-The engine still does flat tones (decay=None) if a spec ever wants one.
+Everything is a bell: a few light partials with exponential decay. A decaying
+note reads far softer than a flat one of the same peak, so these are quieter
+than their amplitudes suggest (decay=None still gives a flat tone).
 
 Tier-1 acks must be instant: never synthesize speech for them, never wait on
 anything - pcm() is a dict lookup after first use.
@@ -27,17 +23,16 @@ ATTACK_MS = 5        # per-note fade-in (click prevention)
 RELEASE_MS = 10      # per-note fade-out to true zero - a decaying note still
                      # clicks if it is simply truncated
 
-# Bell timbre: a few light partials, each decaying faster than the one below
-# it, as a struck object does. Enough harmonic content to sound like a thing
-# rather than a test tone; not enough to be bright or harsh.
+# Bell timbre: partials decaying faster the higher they are, as a struck
+# object does. Enough harmonic content to sound like a thing, not a test tone.
 PARTIALS = ((1, 1.00), (2, 0.22), (3, 0.07))
 
 GAIN = 1.0           # global volume knob, config voice.earconGain
 
 
 def _seq(bursts, gap_ms=GAP_MS):
-    """Counted earcon -> notes at start offsets. The SILENCE between bursts is
-    what makes the count recoverable - by ear and by test_earcons - so these
+    """Counted earcon -> notes at start offsets. The SILENCE between bursts
+    is what makes the count recoverable, by ear and by test_earcons, so these
     never overlap."""
     notes, t = [], 0
     for freq, dur in bursts:
@@ -50,23 +45,20 @@ def _seq(bursts, gap_ms=GAP_MS):
 #          a flat tone -, [(freq_hz, start_ms, dur_ms), ...])
 SPECS = {
     # Bookends: an ascending fifth to open, the same fifth descending to
-    # close. The sleep sound is the wake sound backwards, which needs no
-    # learning; the wake chime keeps the old tick's 1175 Hz as its top note.
+    # close - the sleep sound is the wake sound backwards, so it needs no
+    # learning.
     "wake":  (3800, 0.32, [(784.0, 0, 200), (1174.7, 70, 310)]),
     "close": (2400, 0.32, [(1174.7, 0, 200), (784.0, 70, 340)]),
-    # The count vocabulary - the count IS the message (it mirrors the haptic
-    # thuds), so contour and timbre are free to make each one distinctive:
-    #   ok   - one bell on D6, the note the wake chime landed on: "yes, that"
-    #   busy - the same note struck twice, flat, like a knock at a shut door
-    #   fail - three falling, the shape every ear already reads as "no"
-    # Levels sit just above the wake chime, not 6x over it: ok fires on every
-    # single command, so it has to be an answer, not an alarm.
+    # The count vocabulary. Count IS the message, so contour is free to make
+    # each distinctive: ok = one bell on the note the wake chime landed on,
+    # busy = the same note struck twice like a knock at a shut door, fail =
+    # three falling. Levels sit just above the wake chime - ok fires on every
+    # command, so it has to be an answer, not an alarm.
     "ok":    (5200, 0.30, _seq([(1174.7, 260)])),
     "busy":  (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
     "fail":  (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
-    # The announcement cue is the loudest: it arrives unasked, across the
-    # room, ahead of spoken news, and a rising third is the one shape here
-    # that sounds like a question being opened rather than an answer closing.
+    # Loudest: it arrives unasked, across the room. A rising third sounds
+    # like a question opening rather than an answer closing.
     "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
 

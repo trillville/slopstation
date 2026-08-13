@@ -120,12 +120,9 @@ class JobStore:
                    # restart still reports under the turn that queued it.
                    "trace": tracing.carrier(),
                    "session": events.current().get("session"),
-                   # What the USER said, next to the brief the MODEL wrote.
-                   # Keeping both is the point: the replay needs a true user
-                   # turn, and the brief is the model's own words - presenting
-                   # it as the user's put a bad instruction ("using only games
-                   # in the provided catalog") into six hours of context as
-                   # though it had been asked for.
+                   # What the USER said, beside the brief the MODEL wrote.
+                   # Both, because the replay needs a true user turn and the
+                   # brief is not one (see session_runtime.job_messages).
                    "asked": asked}
             self._save(jobs + [job])
         self.log("job_queued", job=job["id"], task=task[:200])
@@ -170,9 +167,8 @@ class JobStore:
                              finished=int(time.time()),
                              summary=r["summary"], detail=r["detail"])
                 emit = self.log if r["ok"] else self.log.error
-                # What it cost and what it touched, not just that it ended.
-                # job_done used to carry status=DONE alone, so "what came
-                # back" was unanswerable from the logs at all.
+                # What it cost and what it touched, not just that it ended -
+                # status alone leaves "what came back" unanswerable.
                 emit("job_done" if r["ok"] else "job_failed", job=job["id"],
                      status=status, dur_ms=round((time.time() - t0) * 1000),
                      session=job.get("session"), summary=r["summary"][:200],
@@ -220,8 +216,8 @@ class JobStore:
     def latest_result(self):
         """Newest finished job BY COMPLETION TIME, unread first - the 'what
         did you find' answer. File order won't do: _save regroups live-then-
-        done, so a queued-later job that finished last can sit earlier in the
-        file. Does NOT mark read; the caller does once it was spoken."""
+        done, so a job that finished last can sit earlier in the file. Does
+        NOT mark read; the caller does once it was spoken."""
         with self._lock:
             done = [j for j in self._load() if j["status"] in (DONE, FAILED)]
         if not done:

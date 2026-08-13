@@ -21,11 +21,9 @@ import couch
 import events
 import library
 # couch.ssh / couch.ssh_intent are reached through the MODULE, never imported
-# by name. One ssh implementation and, just as importantly, ONE SEAM: swapping
-# couch.ssh intercepts every verb, including the mutating ones that leave via
-# ssh_intent. `from couch import ssh` would give this module a second binding
-# that such a swap silently misses - which is exactly how the blind suite came
-# to be testing an unpatched path.
+# by name: one implementation and ONE SEAM, so swapping couch.ssh intercepts
+# every verb. `from couch import ssh` would create a second binding that such
+# a swap silently misses - i.e. a test patching an unpatched path.
 
 COUCH = cglib.BASE / "couch.py"
 
@@ -181,10 +179,9 @@ class Dispatch:
         if out == "ALREADY":
             return _ok(f"{_name(appid)} is already running")
         if out.startswith("BUSY:"):
-            # Name the blocker. The assistant lane sees only `detail`, and a
-            # bare appid there leaves it unable to tell the user WHAT to quit
-            # - it would just say "something else is running". The raw code
-            # stays for the log.
+            # Name the blocker: the assistant lane sees only `detail`, so a
+            # bare appid leaves it saying "something else is running" with no
+            # way to say WHAT to quit. The raw code stays for the log.
             return _busy(f"{_name(out.split(':', 1)[1])} is already running - "
                          f"it has to be quit with the controller first ({out})")
         if out == "NOTREADY":
@@ -225,20 +222,19 @@ class Dispatch:
 
     def mute_toggle(self):
         """Blind toggle, permanently: the S90C exposes no discrete mute
-        on/off, and the decode drill proved its status query returns a
-        constant canned echo (byte-identical across volume/mute states) -
-        there is no state to read, so none is tracked. The vocabulary is
-        'mute' = toggle, with vol_set as the resync."""
+        on/off, and its status query returns a canned echo that is
+        byte-identical across volume and mute states - there is no state to
+        read, so none is tracked. 'mute' means toggle; vol_set is the
+        resync."""
         return self._exlink("mute_toggle", cglib.EXLINK_FRAMES["mute_toggle"])
 
     def switch_input(self, spoken_name):
         """Config owns the spoken-name -> input map. The GAMING input means
-        "get me gaming": with no session it STARTS one (identical UX to
-        "start a session" - refusing with a hint was worse than doing the
-        thing); mid-launch it answers "still starting"; with a READY session it
-        flips instantly. The one rule is untouched either way - couch.py
-        switches the input only at READY, so nothing dead is ever shown. Other
-        inputs switch freely, like a remote."""
+        "get me gaming": with no session it STARTS one, mid-launch it answers
+        "still starting", with a READY session it flips instantly. The one
+        rule holds either way - couch.py switches the input only at READY, so
+        nothing dead is ever shown. Other inputs switch freely, like a
+        remote."""
         cmd = self.voice["inputs"].get(spoken_name.strip().lower())
         if cmd is None:
             return _fail(f"there is no input called '{spoken_name}'")
