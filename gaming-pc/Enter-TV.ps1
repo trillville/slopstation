@@ -44,10 +44,45 @@ try {
     Write-CgEvent 'puck_claimed'
 
     # 4. NOW verify the profile actually took (it had the whole USB phase to settle)
+    $retried = $false
     if (-not (Wait-For { Test-TvIsPrimary } 20 'TV is primary (2160p)')) {
-        throw 'TV-GAMING profile did not take'
+        # A retry is the ENTIRE defence here, because this condition cannot be
+        # detected in advance. While the TV is detached, its EDID and all three
+        # WMI monitor classes read identically whether the panel is awake or
+        # asleep - measured across a full power cycle, 2026-08-13, nothing moved.
+        # So step 1's TV-detect gate cannot catch a TV that never woke, and no
+        # smarter gate can: the information does not exist on this machine.
+        #
+        # The OFFICE apply in the middle is load-bearing, not tidiness. A failed
+        # TV-GAMING apply detaches the desk display WITHOUT activating the TV,
+        # and in that state QueryDisplayConfig has no valid paths at all:
+        # DisplayMagician cannot initialise, cannot load its own profiles, and
+        # every further apply is a silent no-op (2026-08-13: seven consecutive
+        # dead applies, recovering only when the TV was switched on by hand).
+        # Re-applying OFFICE re-establishes a config it can work from - and
+        # hands the desk back meanwhile, instead of leaving both screens dark.
+        $retried = $true
+        Log 'TV-GAMING did not take - restoring OFFICE, then one retry'
+        Write-CgEvent 'profile_retry' @{ profile = 'TV-GAMING' } 'warn'
+        Stop-DisplayMagician
+        # ONE attempt, not the two the abort path uses: if OFFICE will not come
+        # back within 20 s the retry below is hopeless anyway, and the whole of
+        # step 4 has to fit inside the K15's 120 s READY wait (couch.py) with
+        # room for the abort's own OFFICE attempts afterwards.
+        if (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 20 1 'office restored before retry')) {
+            Log 'WARNING: OFFICE did not verify - the retry below will probably be a no-op'
+        }
+        if (-not (Invoke-DisplayProfile $CG.TvGamingLnk { Test-TvIsPrimary } 20 1 'TV is primary (2160p)')) {
+            # Names the likeliest cause, not the symptom: the old wording here
+            # ('TV-GAMING profile did not take') pointed a whole investigation at
+            # DisplayMagician when the TV had simply never powered on.
+            throw 'TV never came up at 2160p - most likely still asleep (Ex-Link power_on is send-only; this machine cannot verify TV power)'
+        }
     }
-    Write-CgEvent 'profile_applied' @{ profile = 'TV-GAMING' }
+    # retried=True is the launch that would have failed outright before this
+    # existed - the number to watch after deploying, and the one that says
+    # whether the TV's wake is drifting slower.
+    Write-CgEvent 'profile_applied' @{ profile = 'TV-GAMING'; retried = $retried }
     Start-Sleep -Milliseconds 500   # audio-device settle margin
     Stop-DisplayMagician
 

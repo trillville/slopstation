@@ -83,7 +83,7 @@ Time to READY, the number the whole system is judged on:
 - **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **jobs**: `job_queued` `job_running` `job_done` `job_failed` `job_announced`
-- **gamepc**: `enter_start` `profile_applied` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched`
+- **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched`
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.
