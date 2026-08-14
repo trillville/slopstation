@@ -195,6 +195,18 @@ def main():
     assert store._task_text({"task": "x"}) == "x"
     ok, detail = store.enqueue("find coop games")
     assert ok and "queued" in detail
+
+    # This store has a DOUBLE in bench/harness.py, and a double that drifts is
+    # worse than no double: when `asked` arrived here, the tool called the fake
+    # with a keyword it did not take, the trial loop's `except Exception` read
+    # the TypeError as an API blip, and probe_task_brief failed every trial on
+    # briefs it had never been handed. Pinned where the real signature lives.
+    import inspect
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
+    import harness
+    real, fake_sig = (inspect.signature(jobs_mod.JobStore.enqueue),
+                      inspect.signature(harness.FakeJobs.enqueue))
+    assert real == fake_sig, f"bench double drifted: {fake_sig} vs {real}"
     assert wait_for(lambda: len(done_hook) == 1)
     assert done_hook[0]["status"] == "DONE"
     job = store.latest_result()
