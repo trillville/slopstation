@@ -221,10 +221,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
             messages=carry,
             tools=ToolsSchema(
                 standard_tools=function_schemas(
-                    # The gate is built above precisely so its request_stop can
-                    # be handed down here: the assistant's way out of a session
-                    # is the same EndWorkerFrame the exit phrase pushes, and
-                    # there is no second path to drift.
+                    # Built after the gate so its request_stop can ride down
+                    # here; why the tool ends a session that way is on the
+                    # method itself.
                     tool_impls(dispatcher, log, jobs=jobs,
                                on_stop_listening=gate.request_stop)),
                 custom_tools={AdapterType.OPENAI: native} if native else None))

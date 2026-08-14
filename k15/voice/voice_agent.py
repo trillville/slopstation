@@ -332,7 +332,8 @@ def main():
         refresh_library_bg()                    # pick up installs between sessions
         # Going-to-sleep chime, after teardown so it marks the moment the mic
         # actually goes dormant - and every ending sounds the same, whether it
-        # was an exit phrase, the idle timeout or a crash (fail says which).
+        # was an exit phrase, a stop_listening tool call, the idle timeout or a
+        # crash (fail says which).
         play_pcm(pa, earcons.pcm(ending), output_idx)
         log("session_close", ending=ending)
         if args.once:

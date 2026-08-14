@@ -129,9 +129,8 @@ class GrammarGate(FrameProcessor):
         self.log("session_stop_requested")
 
     async def _stop_if_armed(self, reason):
-        """End the session if stop_listening armed one. The wake loop plays
-        the same sleep chime as every other ending - the way out is new, the
-        way it sounds is not."""
+        """End the session if stop_listening armed one - a helper because two
+        different frames can prove the goodbye is over."""
         if not self._stop_after_reply:
             return
         self._stop_after_reply = False
@@ -182,8 +181,8 @@ class GrammarGate(FrameProcessor):
             self.log("session_exit_phrase")
             # No earcon here: the sleep chime now plays from the wake loop
             # after teardown, so every way a session can end - exit phrase,
-            # idle, crash - sounds the same and marks the actual moment the
-            # mic goes dormant.
+            # stop_listening, idle, crash - sounds the same and marks the
+            # actual moment the mic goes dormant.
             await self.push_frame(EndWorkerFrame(reason="exit phrase"))
             return True
         if intent in ("TaskResult", "TaskDetail", "TaskCancel"):
@@ -274,9 +273,8 @@ class GrammarGate(FrameProcessor):
             # LLM response, off the TTSStoppedFrame that closes its audio
             # context - so an armed stop can now end the session without
             # cutting it off. A model that calls the tool and says NOTHING
-            # produces no such frame: the idle timeout ends that session
-            # instead, and the log says so (session_stop_requested followed by
-            # session_idle_timeout rather than by session_close).
+            # produces no such frame, and the idle timeout ends that session
+            # instead (voice-testing.md reads that case out of the log).
             await self._stop_if_armed("stop listening")
         elif isinstance(frame, ErrorFrame):
             # Pipecat reports service failures (LLM 401/400, TTS death) via
