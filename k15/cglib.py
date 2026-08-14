@@ -131,13 +131,25 @@ def session_active(age=None):
     return age is not None and age < LOCK_STALE_S
 
 
-def _recycle_stale_lock():
-    """Clear a stale lock so acquire_lock can retry, one racer at a time.
+def _recycle_stale_lock(content):
+    """Take over a stale lock, one racer at a time; True if THIS call now owns
+    it - acquire_lock's other way to win, on the same terms as its create.
+
+    The takeover is ONE os.replace, never unlink-then-create, and that
+    distinction is a bug we shipped: unlinking leaves the path EMPTY for an
+    instant, a racer's exclusive create lands in it, and the next recycler -
+    whose staleness test ran before that create - unlinks the fresh lock and
+    creates its own. Both callers were told they won, which is the two-launch
+    outcome acquire_lock exists to prevent, reached through acquire_lock.
+    os.replace never empties the path, so no create can slip inside the swap.
 
     The guard's exclusive create serializes recyclers and the staleness
-    re-check happens INSIDE it, so the unlink provably takes the stale file:
-    while it exists, no fresh lock can be created over it (acquire is
-    O_EXCL). A guard orphaned by a crash mid-section is recycled at 10 s."""
+    re-check happens INSIDE it, so the file we swap out is provably the stale
+    one: while it exists, no fresh lock can be created over it (acquire is
+    O_EXCL). The guard doubles as the incoming lock - we won its exclusive
+    create, so it is the one file no racer can hold - and the swap consumes
+    it; a recycler arriving after that reads a fresh LOCK and stands down. A
+    guard orphaned by a crash mid-section is recycled at 10 s."""
     guard = LOCK.with_name(LOCK.name + ".recycle")
     try:
         if time.time() - guard.stat().st_mtime > 10:
@@ -147,33 +159,56 @@ def _recycle_stale_lock():
     try:
         fd = os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except OSError:
-        return                      # someone else is recycling right now
+        return False                # someone else is recycling right now
     try:
-        if not session_active():
-            try:
-                LOCK.unlink(missing_ok=True)
-            except OSError:
-                pass                # a racer holds a handle; next attempt
-    finally:
+        if session_active():
+            return False            # a racer took it while we opened the guard
+        os.write(fd, content.encode("utf-8"))
         os.close(fd)
-        try:
-            guard.unlink(missing_ok=True)
-        except OSError:
-            pass
+        fd = None                   # Windows will not rename an open file
+        # The swap is retried because on Windows a rename needs its
+        # destination unopened, and the LOSING racer's session_active() stat
+        # is enough to deny it - measured at ~27% of swaps against a stat
+        # spin, so one attempt leaves both launches answering busy over a
+        # lock that is stale. A denied swap changes nothing, so the only
+        # thing a retry must re-read is staleness: a release landing in
+        # between would put a live lock under our rename.
+        for _ in range(8):
+            try:
+                os.replace(guard, LOCK)
+                guard = None        # consumed by the swap; not ours to unlink
+                return True
+            except OSError:
+                if session_active():
+                    return False    # now someone's live lock; leave it alone
+        return False
+    except OSError:
+        return False                # guard write failed; nothing was touched
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if guard is not None:
+            try:
+                guard.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def acquire_lock(content=""):
-    """Take the session lock, or answer no. True only if THIS call created
-    the file - the exclusive create is THE arbiter, so two launches racing
-    through "looks free" still produce exactly one winner. Check-then-write
-    could not say that: a chord landing inside the few hundred ms between a
-    voice dispatch's check and couch.py's first touch let both proceed, and
-    the second Enter recycles the Puck claim under the live session - the
-    inputs-dead controller, manufactured by the launch path itself.
+    """Take the session lock, or answer no. True only if THIS call is the one
+    that put the file there - by exclusive create, or by the atomic swap that
+    takes over a stale lock. Each is a single filesystem operation and THE
+    arbiter on its path, so two launches racing through "looks free" still
+    produce exactly one winner. Check-then-write could not say that: a chord
+    landing inside the few hundred ms between a voice dispatch's check and
+    couch.py's first touch let both proceed, and the second Enter recycles the
+    Puck claim under the live session - the inputs-dead controller,
+    manufactured by the launch path itself.
 
-    A stale lock is recycled first. `content` is the owner note (couch.py
-    writes "<turn> <pid>") read back by release_lock; mtime stays the only
-    datum session_active and the listener key on."""
+    A stale lock is taken over rather than waited out, and that takeover is a
+    win: _recycle_stale_lock's True is this function's True. `content` is the
+    owner note (couch.py writes "<turn> <pid>") read back by release_lock;
+    mtime stays the only datum session_active and the listener key on."""
     LOCK.parent.mkdir(exist_ok=True)
     denied = None
     for attempt in (1, 2, 3):
@@ -191,7 +226,8 @@ def acquire_lock(content=""):
             denied = e
         if session_active() or attempt == 3:
             break
-        _recycle_stale_lock()
+        if _recycle_stale_lock(content):
+            return True
     if denied is not None and not LOCK.exists():
         raise denied
     return False
