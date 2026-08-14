@@ -200,11 +200,11 @@ def start(appid=None, turn=None):
             #
             # Except on ALREADY, which means the PC found this appid running
             # from an EARLIER session - the one shape where landing on Big
-            # Picture is not a working outcome, because Steam keeps the pad
-            # bound to that game's config and nothing on screen moves (see
-            # Enter-TV.ps1 step 5). Warn so the launch reads as degraded:
-            # 2026-08-13 turn 14852d looked flawless from here and was unusable
-            # on the couch.
+            # Picture is not a working outcome. Big Picture comes up and the
+            # couch cannot drive it (see the ready event's comment in
+            # Enter-TV.ps1 for what that looks like and what has been ruled
+            # out). Warn so the launch reads as degraded: 2026-08-13 turn
+            # 14852d looked flawless from here and was unusable on the couch.
             try:
                 answer = ssh_intent(f"launch {appid}")
                 emit = log.warn if answer == "ALREADY" else log

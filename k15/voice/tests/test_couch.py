@@ -153,12 +153,12 @@ def main():
 
     # --- ALREADY is a degraded launch, not a clean one -----------------------
     # The PC answers ALREADY when the appid is already up from an EARLIER
-    # session, and Steam then keeps the pad bound to that game's config: Big
-    # Picture on screen, every button inert (2026-08-13, turn 14852d). It read
-    # as a flawless launch from here. Asserting on the LEVEL rather than the
-    # event is the exception the interface rule earns here - renaming
-    # game_launch already breaks the happy path above, but sliding back to
-    # info would be silent, and info is exactly the bug.
+    # session, which is the shape that leaves Big Picture on the TV and
+    # undrivable from the couch (2026-08-13, turn 14852d). It read as a
+    # flawless launch from here. Asserting on the LEVEL rather than the event
+    # is the exception the interface rule earns: renaming game_launch already
+    # breaks the happy path above, but sliding back to info would be silent,
+    # and info is exactly the bug.
     fresh_state()
     log, _ = wire([
         ("enter", "OK"),
