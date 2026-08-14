@@ -118,6 +118,37 @@ try {
     if (-not $focused) { Log 'WARNING: Big Picture never took focus - session will need a click' }
     if ($running) { Log "note: game $running was already running at Enter" }
 
+    # Hand the controller back to the shell. Steam binds input by ACTIVE APP,
+    # not by focused window: with a game still up from an earlier session, Big
+    # Picture takes the foreground and the pad still runs the GAME's config,
+    # so nothing on screen moves. Only the Steam button answers - Steam
+    # reserves that one for itself, and that asymmetry is the tell.
+    #
+    # 2026-08-13: three sessions with running_appid set (turns 2c7936, 457a79,
+    # 14852d), every one abandoned inside three minutes; every session with
+    # running_appid=0 ran to completion. Nothing else in the Enter transcript
+    # separated them. In particular the VirtualHere 'API Timeout 3 sec' on
+    # those runs is a red herring - it is present in both clean 60-90 minute
+    # sessions and absent from one of the broken ones. Enumeration is the
+    # arbiter of claim state, as ever; the IPC report still lies.
+    #
+    # SPECULATIVE. This clears a FORCED binding, and whether Steam is honouring
+    # a force here or just its own default is not knowable from this machine.
+    # Unconditional on purpose: clearing when nothing is forced is harmless, so
+    # it needs no branch on $running and leaves what docs/resume-game-design.md
+    # settled about Enter untouched. If it turns out to do nothing, the fix is
+    # to stop LEAVING games running - quit at Exit whatever the session itself
+    # started, which is a bigger change and only ever catches the orphans this
+    # system creates, never one you left running at the desk.
+    #
+    # Logged, not evented, deliberately: this records that the URL was SENT.
+    # Whether the controller then reaches Big Picture is not observable from
+    # here - there is no probe for it, and Enter writes READY and exits. The
+    # `ready` warn below is the tripwire. `game_resumed` is the cautionary tale
+    # about instrumenting the intent and calling it the outcome.
+    Start-Process 'steam://forceinputappid/0'
+    Log 'input binding cleared (steam://forceinputappid/0)'
+
     # 6. Ready marker - the K15 switches the TV input only after seeing this.
     #
     # First MEASURE the foreground rather than trusting the steps above:
@@ -141,7 +172,14 @@ try {
     # switches (a session rescuable with one click beats no session), but
     # this failure looks EXACTLY like success from here, so it must not log
     # as one. `ready focused=False` is the alert; `fg` says what to look at.
-    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused) { 'info' } else { 'warn' })
+    #
+    # ALSO warn when a game was already up, foreground won or not: that is the
+    # shape of 2026-08-13's dead controller (fg='Steam Big Picture Mode',
+    # focused=True, every button inert), and at info it was indistinguishable
+    # from a perfect launch. This is the tripwire for the forceinputappid line
+    # above - if that proves out, running_appid stops meaning "degraded" and
+    # this goes back to keying on $focused alone.
+    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused -and -not $running) { 'info' } else { 'warn' })
 }
 catch {
     # The failure path obeys the same rules as the success path: kill
