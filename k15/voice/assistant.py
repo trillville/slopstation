@@ -71,7 +71,15 @@ def system_instruction(cfg):
     moves under the prompt cache."""
     voice = cfg["voice"]
     inputs = voice.get("inputs", {})
-    tail = [f"Today is {time.strftime('%Y-%m-%d')}."]
+    # The zone is half of the date. Naming only the day left the model to
+    # resolve the ambiguity, and it resolved toward UTC: from 5pm Pacific on,
+    # briefs went out dated tomorrow (observed 2026-08-13 in probe_task_brief).
+    # config's location already carries the zone for web search; empty is a
+    # normal deployment, so say the day is local rather than assert one we
+    # don't have.
+    tz = voice.get("location", {}).get("timezone")
+    tail = [f"Today is {time.strftime('%Y-%m-%d')}"
+            + (f" in {tz}." if tz else " local time.")]
     if inputs:
         gaming = next((k for k, v in inputs.items()
                        if v == cfg.get("tvGamingCmd")), None)

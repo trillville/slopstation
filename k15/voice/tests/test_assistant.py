@@ -38,6 +38,15 @@ def main():
     # Dynamic tail: the facts only config knows, each stated exactly once -
     # the date (so "lately" resolves), input names, volume clamp, mute-is-blind.
     assert time.strftime("%Y-%m-%d") in si
+    # A date with no zone is half a fact - the model closed the gap toward UTC
+    # and dated briefs tomorrow. CFG_MIN ships an empty location, which is a
+    # real deployment shape, so it must still say the day is local.
+    assert "local time" in si
+    zoned = {**CFG_MIN["voice"],
+             "location": {**CFG_MIN["voice"]["location"],
+                          "timezone": "America/Los_Angeles"}}
+    si_tz = assistant.system_instruction({**CFG_MIN, "voice": zoned})
+    assert f"{time.strftime('%Y-%m-%d')} in America/Los_Angeles" in si_tz
     assert "apple tv" in si and "'gaming' starts a session" in si
     assert "clamped" in si and "blind toggle" in si
     # Out-of-catalog carve-out, so mishear-repair can't force a wrong match.
