@@ -47,7 +47,9 @@ RULES = (
     "TV, so never take either as a guess. 'Back to the office', 'back to my "
     "desk' and 'I'm done playing' mean END THE SESSION - the office is the "
     "desk setup, not a TV input, and the only valid input names are listed "
-    "below. "
+    "below. 'Stop listening', 'go away' and 'leave us alone' are the opposite "
+    "ask and cost nothing: call stop_listening, which closes the mic and "
+    "touches nothing else - never end the gaming session for them. "
     "You hear the user through speech-to-text, so expect mishears: 'met "
     "games' is probably 'mech games', 'bolder's gate' is Baldur's Gate, "
     "'dead lock' is Deadlock. When a request reads odd, find the "
@@ -104,10 +106,12 @@ def known_appids():
     return ids
 
 
-def tool_impls(dispatch, log, jobs=None):
+def tool_impls(dispatch, log, jobs=None, on_stop_listening=None):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL. jobs is
     the Tier-3 JobStore; None (REPL, or worker CLI missing) makes
-    background_task refuse truthfully instead of pretending."""
+    background_task refuse truthfully instead of pretending.
+    on_stop_listening is GrammarGate.request_stop, and None refuses the same
+    way: only a live voice session has a mic to close."""
     def launch_game(args):
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
@@ -139,6 +143,18 @@ def tool_impls(dispatch, log, jobs=None):
         else:
             return {"ok": False, "error": f"unknown action {action}"}
         return {"ok": r.ok, "detail": r.detail}
+
+    def stop_listening(args):
+        """The one tool that acts on the CONVERSATION rather than the room.
+        Not dry-run gated, unlike everything in dispatch.py: closing our own
+        mic changes nothing on the TV or the PC, and a drill where "go away"
+        is answered but never obeyed would be testing the wrong thing."""
+        if on_stop_listening is None:
+            return {"ok": False, "error": "there is no open voice session to "
+                    "close - nothing is listening in the first place"}
+        on_stop_listening()
+        return {"ok": True, "detail": "going quiet once you've said your "
+                "goodbye - the wake word is what reopens the mic"}
 
     def get_now_playing(args):
         r = dispatch.now_playing()
@@ -174,6 +190,7 @@ def tool_impls(dispatch, log, jobs=None):
         return {"ok": ok, "detail" if ok else "error": detail}
 
     return {"launch_game": launch_game, "control": control,
+            "stop_listening": stop_listening,
             "get_now_playing": get_now_playing,
             "get_game_details": get_game_details,
             "background_task": background_task}
@@ -197,6 +214,13 @@ TOOL_DEFS = [
                 "description": "spoken input name for switch_input; valid "
                 "names are in the system prompt"}},
      ["action"]),
+    ("stop_listening", "Stop listening: close the mic and end the "
+     "conversation. Call it when the user tells you to go away, stop "
+     "listening, or leave them alone - usually because they want to talk to "
+     "someone else in the room. This is NOT end_session: nothing on the TV "
+     "changes and a running game is untouched. Say a short goodbye in the "
+     "same turn - it is spoken first, and only then does the mic close. The "
+     "wake word reopens it, so this costs the user nothing.", {}, []),
     ("get_now_playing", "What game is currently running, if any.", {}, []),
     ("get_game_details", "Details (tags, description, score) for one appid.",
      {"appid": {"type": "integer"}}, ["appid"]),

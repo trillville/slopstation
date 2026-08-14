@@ -144,6 +144,51 @@ def main():
     if g.is_busy():
         failures.append("expired assistant turn must not pin the session")
 
+    # Tier 2's way out: the stop_listening tool ARMS the gate, and the session
+    # ends only once the goodbye has been spoken - the tool itself runs before
+    # the model has said a word, so ending there would close the mic over it.
+    import asyncio
+
+    import cglib
+    from pipecat.frames.frames import (BotStoppedSpeakingFrame, EndWorkerFrame,
+                                       ErrorFrame)
+    from pipecat.processors.frame_processor import FrameDirection
+
+    def drive(frames, arm):
+        """Feed frames to a fresh gate with push_frame stubbed (there is no
+        pipeline here); return the EndWorkerFrames it pushed, and its log."""
+        glog = cglib.CapturingLog("voice")
+        gate = GrammarGate(m, None, glog)
+        pushed = []
+
+        async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
+            pushed.append(frame)
+
+        gate.push_frame = fake_push
+
+        async def run():
+            if arm:
+                gate.request_stop()
+            for f in frames:
+                await gate.process_frame(f, FrameDirection.UPSTREAM)
+
+        asyncio.run(run())
+        return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog
+
+    ended, glog = drive([BotStoppedSpeakingFrame()], arm=True)
+    if len(ended) != 1:
+        failures.append(f"an armed stop must end the session exactly once, "
+                        f"got {len(ended)}")
+    if "session_stop_requested" not in glog.events():
+        failures.append("arming the stop must log session_stop_requested")
+    ended, _ = drive([BotStoppedSpeakingFrame()], arm=False)
+    if ended:
+        failures.append("finishing an ordinary answer must not end the session")
+    # The goodbye can die between the model and the speaker; the ask stands.
+    ended, _ = drive([ErrorFrame(error="synthetic tts failure")], arm=True)
+    if len(ended) != 1:
+        failures.append("a failed answer must still honour an armed stop")
+
     # An assistant turn is SILENT while it works: the only sounds around an
     # answer are the answer itself and, if it errors, the fail earcon.
     import earcons
@@ -155,7 +200,8 @@ def main():
     assert not failures, f"{len(failures)} grammar failures"
     print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
           f"risky-command narrowness; {len(STRIP)} wake-strip cases; "
-          f"is_busy defers for in-flight assistant turns")
+          f"is_busy defers for in-flight assistant turns; an armed stop ends "
+          f"the session after the goodbye, never before")
 
 
 if __name__ == "__main__":

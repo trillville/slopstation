@@ -272,6 +272,13 @@ Steam layers — recommendations need the tags.) When it reads well, go live:
 "hey jarvis … what should I play tonight?" — spoken answer, follow-ups without
 re-waking, "play it" launches. This is the whole thing working.
 
+Then end the conversation on purpose: **"go away, stop listening"** — a short
+goodbye, then the sleep chime, and the mic is dormant until the next "hey
+jarvis". That is the drill for talking to someone else in the room. In
+`couch.log`, `session_stop_requested` is the tool firing; if it is followed by
+`session_idle_timeout` instead of a prompt `session_close`, the model called
+the tool without speaking and the idle clock ended the session instead.
+
 ## 10. The A/B (optional) — Haiku vs GPT-5.6
 
 Needs the OpenAI key. Same prompts, both providers, watch latency + quality:

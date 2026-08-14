@@ -83,7 +83,7 @@ Time to READY, the number the whole system is judged on:
   `python exlink.py <cmd>`, kept off the launch lane so operator probing does
   not skew launch metrics. Drop the lane from a query to see every frame
   whoever sent it: `| json | event="exlink_send"`
-- **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_close` `session_crashed` `pipeline_error` `heartbeat`
+- **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat`
 - **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **jobs**: `job_queued` `job_running` `job_done` `job_failed` `job_announced`

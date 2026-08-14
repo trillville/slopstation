@@ -57,6 +57,15 @@ def main():
     assert not impls["control"]({"action": "self_destruct"})["ok"]
     r = impls["control"]({"action": "set_volume"})     # no level -> refused
     assert not r["ok"] and "level" in r["error"]
+    # stop_listening with nothing to stop (the REPL, the probes): refused
+    # truthfully rather than reporting a mic it never closed.
+    r = impls["stop_listening"]({})
+    assert not r["ok"] and "nothing is listening" in r["error"], r
+    stops = []
+    simpls = assistant.tool_impls(d, log,
+                                  on_stop_listening=lambda: stops.append(1))
+    r = simpls["stop_listening"]({})
+    assert r["ok"] and stops == [1], (r, stops)
     r = impls["get_now_playing"]({})
     assert r["ok"]                                # dry-run path
     r = impls["get_game_details"]({"appid": real_appid})
@@ -85,7 +94,8 @@ def main():
     if owned_only:
         r = impls["get_game_details"]({"appid": int(owned_only[0])})
         assert r["ok"] and r["name"] and not r["installed"], r
-    print("  control/get_now_playing/get_game_details: routed and validated")
+    print("  control/stop_listening/get_now_playing/get_game_details: "
+          "routed and validated")
 
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
     names = {n for n, *_ in assistant.TOOL_DEFS}
@@ -99,6 +109,10 @@ def main():
     # not the tool def; session-start semantics live on launch_game.
     assert "0-100" not in str(assistant.TOOL_DEFS)
     assert "never call start_session" in str(assistant.TOOL_DEFS)
+    # Closing the mic must never read as ending the session on the TV - the
+    # contrast is spelled out in BOTH places the model reads it.
+    assert "NOT end_session" in str(assistant.TOOL_DEFS)
+    assert "never end the gaming session for them" in si
     assert set(assistant.BACKENDS) == {"anthropic", "openai"}
     assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"
@@ -158,7 +172,7 @@ def main():
     # pass a dict for `reasoning`, which the settings accept silently and only
     # live inference rejects.
     schemas = assistant.function_schemas(impls)
-    assert len(schemas) == 5
+    assert len(schemas) == 6
     import session_runtime
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (

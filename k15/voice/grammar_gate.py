@@ -5,7 +5,9 @@ FIRST - command matches are swallowed (the LLM lane never sees them), acked
 with a count-coded earcon, and dispatched. Non-matches flow downstream to the
 assistant lane (or dead-end with a fail earcon when no LLM key is configured).
 
-Exit phrases end the session by pushing EndWorkerFrame downstream.
+Both ways out of a session end here, by pushing EndWorkerFrame downstream: a
+Tier-1 exit phrase ends it on the spot, and the assistant's stop_listening
+tool arms request_stop() so it ends once the goodbye has been spoken.
 """
 import asyncio
 import time
@@ -15,7 +17,8 @@ import yaml
 from hassil import Intents, TextSlotList, recognize
 from rapidfuzz import fuzz
 
-from pipecat.frames.frames import (BotStartedSpeakingFrame, EndWorkerFrame,
+from pipecat.frames.frames import (BotStartedSpeakingFrame,
+                                   BotStoppedSpeakingFrame, EndWorkerFrame,
                                    ErrorFrame, Frame, OutputAudioRawFrame,
                                    TranscriptionFrame, TTSSpeakFrame,
                                    UserStartedSpeakingFrame,
@@ -108,6 +111,31 @@ class GrammarGate(FrameProcessor):
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
+        self._stop_after_reply = False          # stop_listening tool armed one
+
+    def request_stop(self):
+        """The assistant's stop_listening tool asking for the mic back - "go
+        away, stop listening". ARMS the ending; the frame itself goes out from
+        process_frame, once the goodbye has actually been spoken.
+
+        It cannot end the session from here, for two reasons. A tool impl runs
+        on a worker thread (function_schemas hands every one of them to
+        asyncio.to_thread) and frames belong to the event loop. And it runs
+        BEFORE the model has said anything at all - the reply is generated
+        from this tool's result - so ending now would close the mic over the
+        goodbye. Called from that thread, so it does nothing that can raise.
+        """
+        self._stop_after_reply = True
+        self.log("session_stop_requested")
+
+    async def _stop_if_armed(self, reason):
+        """End the session if stop_listening armed one. The wake loop plays
+        the same sleep chime as every other ending - the way out is new, the
+        way it sounds is not."""
+        if not self._stop_after_reply:
+            return
+        self._stop_after_reply = False
+        await self.push_frame(EndWorkerFrame(reason=reason))
 
     def is_busy(self):
         """True while the user is mid-turn, a dispatch is running, or an
@@ -241,6 +269,15 @@ class GrammarGate(FrameProcessor):
             await self._ack_wake()              # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._assistant_pending = 0.0       # answer arrived; idle clock owns it now
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            # The goodbye is out of the speaker - pipecat emits this once per
+            # LLM response, off the TTSStoppedFrame that closes its audio
+            # context - so an armed stop can now end the session without
+            # cutting it off. A model that calls the tool and says NOTHING
+            # produces no such frame: the idle timeout ends that session
+            # instead, and the log says so (session_stop_requested followed by
+            # session_idle_timeout rather than by session_close).
+            await self._stop_if_armed("stop listening")
         elif isinstance(frame, ErrorFrame):
             # Pipecat reports service failures (LLM 401/400, TTS death) via
             # loguru to the console only - mirror them into couch.log so a
@@ -252,6 +289,10 @@ class GrammarGate(FrameProcessor):
                 # idle handler open.
                 self._assistant_pending = 0.0
                 await self._earcon("fail")
+            # Someone asked to be left alone and the answer died on the way to
+            # the speaker: honour the ask anyway rather than holding the mic
+            # open to the idle timeout for a goodbye that is not coming.
+            await self._stop_if_armed("stop listening (answer failed)")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
             if text:
