@@ -251,6 +251,16 @@ class ClaudeWorker(_CliWorker):
             s["result"] = results.get(s.pop("id"), "")
         out = parse_reply(final.get("result", ""))
         out["meta"] = result_meta(final)
+        # Count the searches from the STEPS, not from usage.server_tool_use:
+        # that field counts the API's own server-executed web_search, while
+        # this CLI's WebSearch/WebFetch are harness tools, so it read 0 on a
+        # job with six real searches (2026-08-14) - and "0 web searches" reads
+        # as "the research lane did nothing", the opposite of what happened.
+        for field, tool in (("web_searches", "WebSearch"),
+                            ("web_fetches", "WebFetch")):
+            n = sum(1 for s in steps if s.get("tool") == tool)
+            if n:
+                out["meta"][field] = n
         out["steps"] = steps
         return out
 

@@ -71,6 +71,12 @@ def main():
     library.TAGMAP = tmp / "store-tags.json"
     library.PLAYHIST = tmp / "playtime-history.json"
     library._get = fake_get
+    # Pin the secrets BEFORE anything runs: several fetchers reach for a key
+    # (fetch_store_search -> _tag_map does). On a checkout that HAS a real
+    # secrets.json this took the keyed path, cached a tag map, and then failed
+    # the keyless assertion below - green on a bare worktree, red on the rig,
+    # which is the worst way for a blind test to behave. Same answer anywhere.
+    cglib.load_secrets = lambda: {}
 
     # --- specials: parsed, NOT_GAMES filtered, cents -> dollars --------------
     sp = library.fetch_specials()

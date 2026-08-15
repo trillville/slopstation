@@ -1,6 +1,6 @@
 ---
 name: langfuse-traces
-description: Read agent traces from Langfuse - what the voice assistant actually heard, said, how long each stage took, and what it cost. Use when asked why the assistant answered a certain way, why a reply was slow, what a conversation cost or how many tokens it used, whether the grammar or the LLM handled something, or to review agent behaviour and conversation quality. Complements the grafana-logs skill: that one is for ops (launches, crashes, liveness), this one is for what the model did.
+description: Read agent traces from Langfuse - what the voice assistant actually heard, said, which tools it called with what arguments, how long each stage took, and what it cost. Use when asked why the assistant answered a certain way, which tool it reached for (or failed to), why a reply was slow, what a conversation cost or how many tokens it used, whether the grammar or the LLM handled something, or to review agent behaviour and conversation quality. Complements the grafana-logs skill: that one is for ops (launches, crashes, liveness), this one is for what the model did.
 ---
 
 # Reading agent traces
@@ -89,8 +89,9 @@ Neither is the whole story.
    model, 2.0 s on TTS" is useful; "it was slow" is not.
 3. **Read `--io` before judging behaviour.** The assistant's context carries
    the whole game catalog and carried turns; a strange answer is usually a
-   context problem, not a model problem. But `--io` shows what the model
-   **said**, never what it **called** — see the tool-call gotcha below.
+   context problem, not a model problem. `--io` shows what the model **said**;
+   the `tool: <name>` spans show what it **called**, with arguments — read
+   both, and see the tool-call gotcha for traces older than 2026-08-14.
 4. **Watch the prompt token count.** Around 60k per turn is normal here —
    catalog-in-context — and prompt caching is what keeps the cost near zero.
    A sudden jump means the catalog or the carry grew.
@@ -103,21 +104,23 @@ Neither is the whole story.
 
 ## Gotchas
 
-- **The assistant's tool calls are NOT in Langfuse.** Pipecat's `llm` spans
-  record the completion **text** only, so a turn that called a tool has
-  `output: null` and no arguments anywhere on the span — the tool NAMES you
-  see in `metadata.attributes.tools` are the schemas *sent* to the model, not
-  calls it made. `output: null` on an `llm` span with output tokens IS the
-  tell that it emitted a tool call. To see which tool ran and with what args,
-  read the local mirror the agent writes per session:
-  `k15\state\traces\<stamp>-voice.json` (`messages[].tool_calls`, provider
-  shape) — the `trace_saved` log event names the exact file. Loki's
-  `event="tool_call"` / `tool_refused` lines are the other half.
-  Worker tool calls (`WebSearch`, `Read`, …) DO get spans, because those are
-  parsed from the CLI's stream — only the assistant's own are missing.
-- **`couch.job.web_searches` under-reports.** Seen reading `0` on a job with
-  six `WebSearch` child spans (2026-08-14). Trust the spans, not the counter;
-  `couch.job.denials` may be absent entirely rather than zero.
+- **Pipecat's `llm` span never carries the tool call**, so `output: null` on a
+  span that burned output tokens IS the tell that the model emitted one. We
+  record it ourselves instead: `function_schemas` wraps every tool and calls
+  `tracing.tool_span`, so each shows as a **`tool: <name>`** span with its
+  arguments and result, parented to that `llm` span. Same for the Loki
+  `event="tool_call"` line (with `turn`), which is the greppable half and
+  outlives Langfuse's 30-day retention.
+  **Traces from before 2026-08-14 have neither** — for those, the local mirror
+  `k15\state\traces\<stamp>-voice.json` (`messages[].tool_calls`) is the only
+  source, and the `trace_saved` log event names the exact file. That mirror
+  stays the richest view regardless: it holds the whole message history, not
+  just the calls.
+- **Worker tool spans come from the CLI stream**, so a CLI output-format churn
+  costs the spans (`stream_fallback` in the job metadata means exactly that).
+  `couch.job.web_searches` counts them from the stream too — it used to read
+  the API's `server_tool_use` instead and reported `0` on a job with six real
+  searches (2026-08-14). `couch.job.denials` may be absent rather than zero.
 - **A trace can span several API pages.** `limit=100` is the hard maximum and
   the ROOT observation is often on a later page. `query.py` paginates on
   `meta.totalPages` and prints unreachable spans flat — if you ever hand-roll

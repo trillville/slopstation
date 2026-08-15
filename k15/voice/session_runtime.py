@@ -228,7 +228,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
                     # method itself.
                     tool_impls(dispatcher, log, jobs=jobs,
                                on_stop_listening=gate.request_stop,
-                               voice=voice, steam=steam)),
+                               voice=voice, steam=steam),
+                    log),                   # -> one tool_call event per call
                 custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
         llm = _make_llm(voice, secrets, system_instruction(cfg))

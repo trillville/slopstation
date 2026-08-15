@@ -163,6 +163,34 @@ def main():
     _a.run(sch.handler(P()))
     assert got and got[0]["ok"] is False, got
 
+    # --- every tool call is RECORDED, including the ones that raise ----------
+    # Neither telemetry system could say which tool ran with what args (a
+    # tool-calling llm span traces as output:null), so function_schemas is the
+    # one home that emits it. A raising impl must still be recorded - that is
+    # exactly the call someone goes looking for.
+    tlog = cglib.CapturingLog("voice")
+    calls = {"n": 0}
+    def spy(kind, query, status=None): calls["n"] += 1
+    _saved_span, assistant.tracing.tool_span = assistant.tracing.tool_span, spy
+    schemas = assistant.function_schemas(
+        {"get_now_playing": lambda a: {"ok": True, "game": "Hades"},
+         "launch_game": boom}, tlog)
+    class P2:
+        arguments = {"appid": 1145360}
+        async def result_callback(self, out): pass
+    for s in schemas:
+        _a.run(s.handler(P2()))
+    assistant.tracing.tool_span = _saved_span
+    # Order follows TOOL_DEFS, not the impls dict, so key by tool name.
+    rec = {r["tool"]: r for r in tlog.records if r.get("event") == "tool_call"}
+    assert set(rec) == {"get_now_playing", "launch_game"}, rec   # the raiser too
+    assert rec["get_now_playing"]["ok"] is True
+    assert rec["launch_game"]["ok"] is False, "a raising impl must still record"
+    assert "1145360" in rec["launch_game"]["args"]   # args carried, for search terms
+    assert calls["n"] == 2, "tool_span not called per tool"
+    # log=None (REPL/bench/tests) stays quiet rather than crashing.
+    assistant.function_schemas({"get_now_playing": boom})[0]
+
     # --- nav tool: target->kind remap + catalog guard (only dispatch.nav was
     # covered before, in test_dispatch) --------------------------------------
     seen = []

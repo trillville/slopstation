@@ -18,6 +18,8 @@ sys.path.insert(0, str(HERE.parent))
 import cglib                                    # noqa: E402
 import library                                  # noqa: E402
 import traces                                   # noqa: E402
+import tracing                                  # noqa: E402  (tool spans; the
+#                                    module self-gates, so REPL/bench are no-ops)
 
 RULES = (
     "You are the voice assistant for a couch gaming setup (Steam on a TV). "
@@ -349,7 +351,10 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                     "right now - answer from what you know instead"}
         # The user's words ride the gate's snapshot (see dispatch.Utterance).
         ok, detail = jobs.enqueue(task, asked=dispatch.utterance.asked)
-        log("tool_call", tool="background_task", ok=ok, task=task[:200])
+        # The generic tool_call event comes from function_schemas now (one
+        # home, every tool); this one keeps the TASK text, which the generic
+        # args field truncates and which is what a job post-mortem needs.
+        log("job_requested", ok=ok, task=task[:200])
         return {"ok": ok, "detail" if ok else "error": detail}
 
     impls = {"launch_game": launch_game, "control": control,
@@ -494,27 +499,56 @@ TOOL_DEFS = [
 ]
 
 
-def function_schemas(impls):
+def function_schemas(impls, log=None):
     """Pipecat FunctionSchema list with auto-registering async handlers.
     Tool impls call blocking dispatch (ssh/serial) - run them off the event
-    loop so audio and the Flux socket keep flowing during a tool call."""
+    loop so audio and the Flux socket keep flowing during a tool call.
+
+    This is also the ONE place every assistant tool call passes through, so it
+    is where the call is RECORDED - see _record below. log=None (REPL, bench,
+    tests) keeps the Loki half quiet; the span half self-gates on tracing."""
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
-    def wrap(fn):
+    def _record(name, args, out, log=log):
+        """Emit the tool call to both telemetry sinks.
+
+        WHY BOTH, and why here (2026-08-14): neither system could answer "which
+        tool did it call, with what?" - Pipecat's llm span carries the
+        completion TEXT only, so a tool-calling turn traces as output:null, and
+        Loki only had the one hand-rolled event inside background_task. A live
+        search that returned junk took a local trace-mirror dig to explain.
+        The span puts it in the tree beside the turn's timings; the EVENT is
+        greppable, joins on turn, and outlives Langfuse's 30-day retention.
+        Fail-soft on both: telemetry never costs a session.
+        """
+        try:
+            tracing.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
+        except Exception:
+            pass
+        if log:
+            ok = out.get("ok") if isinstance(out, dict) else None
+            log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
+
+    def wrap(name, fn):
         async def handler(params):
+            args = dict(params.arguments)
             try:
-                out = await asyncio.to_thread(fn, dict(params.arguments))
+                out = await asyncio.to_thread(fn, args)
             except Exception as e:
                 # The fail-soft backstop for the whole tool surface: an impl
                 # that raises (a store shape drift, an expired-token mint
                 # failure) must never leave result_callback uncalled - that
                 # breaks the turn instead of answering. Log it and hand back a
                 # spoken error so the assistant says something.
-                print(f"  [tool-error] {getattr(fn, '__name__', 'tool')}: {e!r}")
+                print(f"  [tool-error] {name}: {e!r}")
                 out = {"ok": False, "error": "that didn't go through - "
                        "something upstream failed"}
+            # After the call, so the span carries the RESULT too. The await
+            # above suspends but does not lose the OTel context (contextvars
+            # are per-task), so this still parents onto Pipecat's llm span.
+            _record(name, args, out)
             await params.result_callback(out)
         return handler
 
@@ -522,7 +556,7 @@ def function_schemas(impls):
     # tool_impls' docstring describes (a dropped tool leaves the model's view,
     # not just its reach).
     return [FunctionSchema(name=n, description=d, properties=p, required=r,
-                           handler=wrap(impls[n]))
+                           handler=wrap(n, impls[n]))
             for n, d, p, r in TOOL_DEFS if n in impls]
 
 

@@ -102,10 +102,15 @@ def main():
          "result": '{"summary": "Three picks.", "detail": "The long form."}',
          "total_cost_usd": 0.073279, "num_turns": 4, "stop_reason": "end_turn",
          "session_id": "2c18b2b6", "duration_api_ms": 2514,
+         # server_tool_use counts the API's OWN server-executed searches, but
+         # this CLI's WebSearch/WebFetch are harness tools, so it reports
+         # zeros while the stream carries real tool_use blocks - observed on a
+         # live job that made six searches and logged "web_searches=0"
+         # (2026-08-14). The fixture mirrors that; the counts come from steps.
          "usage": {"input_tokens": 2, "output_tokens": 12,
                    "cache_read_input_tokens": 20938,
-                   "server_tool_use": {"web_search_requests": 3,
-                                       "web_fetch_requests": 1}},
+                   "server_tool_use": {"web_search_requests": 0,
+                                       "web_fetch_requests": 0}},
          "permission_denials": [{"tool": "Bash"}],
          "modelUsage": {"claude-opus-5[1m]": {"canonicalModel": "claude-opus-5",
                                               "costUSD": 0.073279}}},
@@ -118,7 +123,7 @@ def main():
     assert r["steps"][1]["input"] == "https://example.com/a"
     m = r["meta"]
     assert m["cost_usd"] == 0.073279 and m["turns"] == 4
-    assert m["web_searches"] == 3 and m["web_fetches"] == 1
+    assert m["web_searches"] == 1 and m["web_fetches"] == 1   # from the steps
     assert m["denials"] == 1 and m["model"] == "claude-opus-5"
     assert m["cache_read_tokens"] == 20938 and m["cli_session"] == "2c18b2b6"
 
