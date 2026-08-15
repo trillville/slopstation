@@ -233,8 +233,19 @@ def main():
     # OTel pins, disables the lane with a message and changes nothing else.
     tracing.setup(cfg, secrets, log)
 
-    listener = WakeListener(pa, voice, input_idx)
+    try:
+        listener = WakeListener(pa, voice, input_idx)
+    except FileNotFoundError as e:
+        # _resolve_model already logged wake_model_missing with the paths it
+        # tried; exiting cleanly keeps the supervisor's restart line readable
+        # instead of burying it under a traceback every 10 s.
+        print(f"[voice] {e}")
+        return 1
+    # model_source says WHICH copy answered - a vendored model and a
+    # same-named pretrained one are indistinguishable from the name alone,
+    # and that is exactly the skew worth catching from couch.log.
     log("agent_up", wake_model=listener.model_name,
+        model_source=listener.model_source,
         threshold=voice["wakeThreshold"], dry_run=args.dry_run or None)
     # Liveness. The wake loop blocks in wait_for_wake_capture for minutes at a
     # time, so this has to be its own thread rather than a check in the loop.
