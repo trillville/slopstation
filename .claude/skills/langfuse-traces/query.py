@@ -280,6 +280,14 @@ def cmd_session(a):
 
 
 def main():
+    # Transcripts and store names carry anything a person or a game title can
+    # say, and a Windows console is cp1252 by default - one CJK character in a
+    # --io dump crashed the whole render mid-tree (2026-08-14). Degrade the
+    # character, never the report.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)

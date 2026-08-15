@@ -217,6 +217,19 @@ def main():
     assert seen[-1] == ("store", 1478500), seen[-1]
     assert not navimpls["nav"]({"target": "store_page", "appid": 0})["ok"]
 
+    # Collections by NAME, with the miss handing back the real list. STT turned
+    # "mech" into "neck" on the couch; with no collection path at all the
+    # assistant answered by navigating to the library three times while the
+    # user repeated themselves (2026-08-14).
+    _load = library.load
+    library.load = lambda: {"collections": [{"name": "mech", "id": "uc-m1"},
+                                            {"name": "RPG", "id": "uc-r1"}]}
+    r = navimpls["nav"]({"target": "collection", "collection": "mech"})
+    assert r["ok"] and seen[-1] == ("collection", "uc-m1"), (r, seen[-1])
+    r = navimpls["nav"]({"target": "collection", "collection": "neck"})
+    assert not r["ok"] and set(r["collections"]) == {"mech", "RPG"}, r
+    library.load = _load
+
     # --- list_games success routing + get_game_details hltb-fallback (offline
     # via mocked fetchers; test_deals covers the fetchers themselves) ---------
     saved = (library.load_deals, library.fetch_trending, library.fetch_recently_played,

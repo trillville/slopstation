@@ -227,6 +227,30 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             if appid <= 0:
                 return {"ok": False, "error": "I need the game's store appid"}
             r = dispatch.nav("store", appid)
+        elif target == "collection":
+            # The grammar handles "show my roguelikes" when it hears the name
+            # right. When it MISHEARS ("neck" for "mech"), the miss falls here -
+            # and with no collection path this tool used to answer by navigating
+            # to the library, three times in a row, while the user repeated
+            # themselves (2026-08-14). So: resolve fuzzily, and on a miss hand
+            # back the real names, which is a thing the model can act on.
+            rows = library.load().get("collections", [])
+            if not rows:
+                return {"ok": False, "error": "no collections are synced yet - "
+                        "the PC has to be awake for that"}
+            cid = None
+            want = str(args.get("collection") or "").strip()
+            if want:
+                import titles
+                resolve = titles.build_collection_resolver(
+                    (voice or {}).get("fuzzyTitleThreshold", 87))
+                cid, _ = resolve(want) if resolve else (None, None)
+            if cid is None:
+                return {"ok": False,
+                        "error": f"no collection matches {want!r}" if want
+                                 else "which collection?",
+                        "collections": [r["name"] for r in rows]}
+            r = dispatch.nav("collection", cid)
         elif target in ("downloads", "library", "store"):
             r = dispatch.nav(target)
         else:
@@ -490,12 +514,17 @@ TOOL_DEFS = [
      "page with its Play button - for 'show me <game>', OWNED games only) and "
      "'store_page' (any game's store page, owned or not - for 'open the store "
      "page for <game>', and the way to put a game the user wants to BUY or "
-     "INSTALL on the TV so they can hit the button with the controller).",
+     "INSTALL on the TV so they can hit the button with the controller); "
+     "'collection' shows one of the user's own library collections by name "
+     "(pass it in `collection` - if the name doesn't match, the result lists "
+     "the real ones, so use those rather than guessing again).",
      {"target": {"type": "string",
                  "enum": ["downloads", "library", "store", "game_page",
-                          "store_page"]},
+                          "store_page", "collection"]},
       "appid": {"type": "integer", "description": "required for game_page (must "
-                "be owned) and store_page (any Steam appid)"}},
+                "be owned) and store_page (any Steam appid)"},
+      "collection": {"type": "string", "description": "collection name, for "
+                     "target=collection"}},
      ["target"]),
     ("install_game", "Start downloading a game the user owns but hasn't "
      "installed yet - use this for 'install <game>'. It either queues the "
