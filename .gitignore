@@ -35,6 +35,11 @@ __pycache__/
 k15/voice/models/*
 !k15/voice/models/*.onnx
 
+# Voice: room recordings for wake-word training - tens of MB of the TV, and
+# the gaming PC is where they are consumed, not here (bench/record_room.py)
+k15/voice/room.wav
+k15/voice/room_*.wav
+
 # Voice: Tier-3 worker scratch - the briefing + guardrails are committed,
 # everything a worker writes is runtime state
 k15/voice/worker_home/*

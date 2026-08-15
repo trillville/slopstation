@@ -372,36 +372,34 @@ sits, with the TV at real listening volume. That captures the room, the mic and
 the TV in one shot, which is exactly the distribution the model fails on.
 
 **On the K15.** Close the voice supervisor window first or two processes fight
-over the mic. Save as `k15\voice\record_room.py`, run it, play a
-dialogue-heavy film (not music) at your normal volume, and leave the room:
-
-```python
-import pyaudio, sys, wave
-secs = int(sys.argv[1]); pa = pyaudio.PyAudio()
-s = pa.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True,
-            frames_per_buffer=1280)
-w = wave.open("room.wav", "wb")
-w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
-for _ in range(int(16000 / 1280 * secs)):
-    w.writeframes(s.read(1280, exception_on_overflow=False))
-w.close()
-```
+over the mic. Play a dialogue-heavy film (not music) at your normal volume, and
+leave the room:
 
 ```
-.venv\Scripts\python record_room.py 2400
+.venv\Scripts\python bench\record_room.py 2400
 ```
 
-**One long file is fine** — no need to slice it. The augmenter collects
-backgrounds with a recursive `**/*.wav` glob and takes a random crop per clip,
-so a single 40-minute WAV becomes thousands of distinct backgrounds. It must be
-**16 kHz mono**, which is what the script above writes.
+It resolves the mic **named in `config.json`**, not PortAudio's default — the
+day those two diverge, recording the default captures a microphone the model
+will never run on, and nothing downstream says so.
 
-Copy it to the gaming PC alongside MUSAN, then delete it from the repo
-checkout — it is a big file and it is not repo material:
+**One long file is NOT enough — slice it.** The augmenter picks a background
+with `random.choice` over *files* and crops only after that, so weight is per
+file, not per second. `setup` fetches 774 MUSAN wavs, which makes a single
+40-minute recording one candidate in 775: it would reach ~0.1% of the mixes.
+`bench\slice_room.py` cuts it into ~600 four-second clips and the room lands in
+~45% of them instead. It must be **16 kHz mono**, which is what
+`record_room.py` writes.
+
+Copy `room.wav` to the gaming PC and slice it in — **after `setup` has run**,
+never before. `setup` skips the 1.1 GB MUSAN download outright if it finds any
+wav already under `data\backgrounds`, and it does not say so:
 
 ```
-copy room.wav %USERPROFILE%\wake\data\backgrounds\
+python bench\slice_room.py room.wav %USERPROFILE%\wake\data\backgrounds\room
 ```
+
+`room.wav` itself is gitignored: it is a big file and it is not repo material.
 
 No architecture choice, model size, or threshold tweak comes close to this. The
 model's failure mode is *your* room, so train against it.
