@@ -325,6 +325,16 @@ def check_voice(cfg):
         report(WARN, "voice config", f"inputs/navTargets overlap: {', '.join(sorted(clash))}",
                "rename one side - a shared spoken name double-matches in the grammar")
 
+    # Web search puts UNTRUSTED page text into the same turn that can quit a
+    # game or queue an install. Deliberate and defensible (the tools validate
+    # appids and quit confirms first), but it is the one config choice that
+    # weakens the "the lane reading the web cannot act" split - so it gets
+    # SAID, once, rather than living only in someone's memory. Not a WARN: it
+    # is a chosen setting, and a permanent nag is how warnings stop being read.
+    if v.get("assistantWebSearch"):
+        report(PASS, "voice web search", "on - page text reaches the "
+               "tool-calling turn (set assistantWebSearch false to split them)")
+
     # Account session (install-by-voice). WARN-only, and only speaks up when a
     # token IS present but unusable or nearing death - a re-scan is a HUMAN
     # action, so it earns a heads-up before movie night finds it, not after.
