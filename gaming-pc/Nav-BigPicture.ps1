@@ -29,7 +29,10 @@ try {
         'store'      { if ($arg -match '^\d{1,10}$') { "steam://store/$arg" }
                        elseif (-not $arg) { 'steam://store' } else { $null } }
         'details'    { if ($arg -match '^\d{1,10}$') { "steam://open/library/details/$arg" } else { $null } }
-        'collection' { if ($arg -match '^[A-Za-z0-9_.-]{1,64}$') { "steam://open/library/collection/$arg" } else { $null } }
+        # Charset mirrors Dispatch's nav-collection pattern - Steam's ids are
+        # base64-ish ("uc-mkD+r+pfQ1hu"), and the two must stay in step or a
+        # real collection passes the verb and dies here.
+        'collection' { if ($arg -match '^[A-Za-z0-9_.*+=-]{1,64}$') { "steam://open/library/collection/$arg" } else { $null } }
         default      { $null }
     }
     if (-not $url) { throw "unrecognized nav target: '$raw'" }

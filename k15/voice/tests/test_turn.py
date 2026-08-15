@@ -82,9 +82,14 @@ def main():
     # one, and each match must accept a good turn and reject EVERY hostile one.
     # A list (not a name->example dict) because nav's three patterns share the
     # 'nav' prefix and each needs its own example.
+    # The collection examples are REAL id shapes off the rig - Steam's are
+    # base64-ish, and a tighter reading of that charset silently DENIED 3 of
+    # this rig's 11 collections (2026-08-14). Drill what the PC emits, not a
+    # tidy invention.
     bases = ["enter", "exit", "launch 12345", "nav downloads",
-             "nav details 12345", "nav store 12345",
-             "nav collection uc-abc-123", "stop 12345"]
+             "nav details 12345", "nav store 12345", "nav collection favorite",
+             "nav collection uc-mkD+r+pfQ1hu", "nav collection uc-odwxN*+G1zDb*+",
+             "stop 12345"]
     for p in pats:
         rx = compile_ps(p)
         matched = [b for b in bases if rx.match(b)]

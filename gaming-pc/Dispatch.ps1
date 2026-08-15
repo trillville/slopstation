@@ -22,9 +22,13 @@
 # read and runs inline here. The nav 'store' kind is split across two patterns
 # on purpose - "store" is the front page, "store <appid>" a game page - and
 # they are disjoint (the second needs digits), so each switch case still breaks
-# cleanly. The collection-id charset is deliberately tight ([A-Za-z0-9_.-]):
-# it reaches a steam:// URL in the task, so it gets the same fail-closed
-# validation the appid and turn do.
+# cleanly. The collection-id charset ([A-Za-z0-9_.*+=-]) is fail-closed like
+# the appid and turn, because the value reaches a steam:// URL in the task -
+# but it has to cover what Steam actually generates: the ids are base64-ish
+# ("uc-mkD+r+pfQ1hu", "uc-odwxN*+G1zDb*+"), and a tighter [A-Za-z0-9_.-] read
+# of them DENIED 3 of this rig's 11 collections (2026-08-14, caught before a
+# couch test hit it). '/' stays OUT on purpose: everything here is one URL
+# path segment, and a slash is the one character that could leave it.
 $ready = 'C:\ProgramData\CouchGaming\ready'
 $turnFile = 'C:\ProgramData\CouchGaming\turn'
 
@@ -185,7 +189,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       Set-Content 'C:\ProgramData\CouchGaming\nav-target' "$($Matches[1]) $($Matches[2])"
       Start-CgTask 'Nav'
       break }
-  '^nav collection ([A-Za-z0-9_.-]{1,64})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+  '^nav collection ([A-Za-z0-9_.*+=-]{1,64})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       Set-Turn $Matches[3]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
       Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
