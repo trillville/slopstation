@@ -84,6 +84,15 @@ Time to READY, the number the whole system is judged on:
   not skew launch metrics. Drop the lane from a query to see every frame
   whoever sent it: `| json | event="exlink_send"`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat`
+  - `gate_match`/`gate_miss`/`stt_final` carry `confidence` (mean per-word, from
+    Flux) — the axis for "was that a bad transcript or a bad phrasing?", and
+    absent on turns where Flux sent no per-word data.
+  - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
+    session build, and whether the list was truncated to fit.
+  - `audio_device_wait` — the configured mic is not in the device table;
+    `waited_s` is how long the agent has been deaf waiting for it. A rebuild
+    never falls back to the system default, so this event standing still is
+    the outage.
 - **voice, assistant lane**: `tool_call` — **one per tool the assistant ran**,
   with `tool`, `ok` and truncated `args`; this is how you learn it called
   `search_store` with `tags:["Co-op","Rogue-like"]` rather than guessing from

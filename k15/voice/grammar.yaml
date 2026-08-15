@@ -105,10 +105,22 @@ intents:
   # LAST on purpose: {game} is a wildcard, so "start a session" must hit
   # StartSession above before "start {game}" can eat it. Title resolution is
   # the fuzzy resolver's job (titles.py), not this grammar's.
+  #
+  # The lead-ins are here because the couch does not speak in imperatives.
+  # "i wanna play armored core six" and "open armored core six" were the two
+  # commonest launch phrasings in the logs and BOTH fell through to the LLM -
+  # even after the STT heard the title perfectly, the slot came out empty.
+  # Widening PlayGame is safe in a way widening EndSession is not: it is the
+  # non-destructive verb, and every list-slot intent above already claims its
+  # own phrasing before this wildcard is reached ("open the downloads" is Nav,
+  # "open my mech collection" is ShowCollection).
   PlayGame:
     data:
       - sentences:
-          - "(play|launch|start|put on) [the game] {game}"
+          - "(play|launch|start|put on|open) [the game] {game}"
+          - "[i] (want to|wanna|would like to) (play|launch|start|put on|open) [the game] {game}"
+          - "let's (play|launch|start|put on) [the game] {game}"
+          - "can you (play|launch|start|put on|open) [the game] {game}"
 lists:
   level:
     range:

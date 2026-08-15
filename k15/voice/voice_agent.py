@@ -41,7 +41,7 @@ import earcons                                  # noqa: E402
 import events                                   # noqa: E402
 import library                                  # noqa: E402
 import tracing                                  # noqa: E402
-from audio import (WakeListener, build_audio, list_devices,  # noqa: E402
+from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
                    play_pcm, rebuild_audio)
 from grammar_gate import GrammarMatcher         # noqa: E402
 from preroll import WakeAck                     # noqa: E402  (pipecat
@@ -126,7 +126,7 @@ def main():
     earcons.set_gain(voice.get("earconGain", 1.0))
 
     if args.earcons:
-        pa, _, output_idx = build_audio(voice)
+        pa, _, output_idx = open_audio(voice)
         log("earcon_audition", gain=earcons.GAIN)
         for name in earcons.SPECS:
             log("earcon_play", earcon=name)
@@ -153,7 +153,9 @@ def main():
                     model=args.model, effort=args.effort)
 
     cglib.rotate_log()
-    pa, input_idx, output_idx = build_audio(voice)
+    # Waits for a configured mic that is still enumerating (a cold boot takes
+    # ~15 s to get there) instead of starting deaf on the system default.
+    pa, input_idx, output_idx = open_audio(voice)
 
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:

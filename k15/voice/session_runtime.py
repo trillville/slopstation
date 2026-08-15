@@ -20,11 +20,46 @@ import tracing
 log = cglib.make_log("voice")
 
 
+MAX_KEYTERMS = 100              # boost is finite, and so is the connect URL
+
+
 def load_titles(count):
-    """Installed titles by recency: Flux keyterms + fuzzy-resolution corpus."""
+    """Installed titles by recency, as Steam writes them: the source the
+    keyterm forms are built from, and the "is there a catalog at all" check."""
     rows = library.load().get("installed", [])
     rows.sort(key=lambda r: r.get("lastPlayed", 0), reverse=True)
-    return [r["name"] for r in rows if r.get("name")][:count]
+    return [r["name"] for r in rows
+            if r.get("name") and r.get("appid") not in library.NOT_GAMES][:count]
+
+
+def stt_keyterms(voice, wake_phrase):
+    """Everything Flux is told to expect, in the form it will hear it.
+
+    Three sources, because three different kinds of thing get said:
+    titles (what you launch), collection names (YOUR vocabulary - 'mech'
+    kept transcribing as 'neck' because tags/genres never contain it and
+    nothing else ever taught it), and tag/genre words (how you ask ABOUT
+    games). Ordered by how much each earns its boost, then capped: the
+    generic tail ('action', 'adventure') is words Flux already knows, so it
+    is what should fall off the end rather than a title.
+
+    Capped out loud - a silently truncated list reads as full coverage."""
+    terms = [wake_phrase]
+    for name in load_titles(voice["keytermCount"]):
+        terms += titles.keyterm_forms(name)
+    terms += [titles.spoken_form(c["name"])
+              for c in library.load().get("collections", []) if c.get("name")]
+    terms += library.query_terms()
+
+    seen, out = set(), []
+    for t in terms:
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    if len(out) > MAX_KEYTERMS:
+        log.warn("keyterms_capped", kept=MAX_KEYTERMS, dropped=len(out) - MAX_KEYTERMS)
+        out = out[:MAX_KEYTERMS]
+    return out
 
 
 CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
@@ -151,6 +186,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     # "hey_jarvis_v0.1" -> "hey jarvis"; keyterm-boosted so the pre-roll's wake
     # phrase transcribes canonically and strip_wake lands every time.
     wake_phrase = voice["wakeModel"].rsplit("_v", 1)[0].replace("_", " ")
+    keyterms = stt_keyterms(voice, wake_phrase)
+    log("stt_vocabulary", terms=len(keyterms), titles=len(game_terms))
 
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
@@ -168,10 +205,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
             eager_eot_threshold=(voice["eagerEotThreshold"]
                                  if voice.get("eagerEnabled", True) else None),
             numerals=True,
-            # Titles teach Flux the game names; query_terms teach it the
-            # words used to ask ABOUT them (tags/genres: "mech", "roguelike")
-            # - without them "mech games" transcribed as "met games".
-            keyterm=[wake_phrase] + game_terms + library.query_terms(),
+            # What Flux is taught to expect, in transcript form rather than
+            # store-page form - stt_keyterms owns why, and what it costs to
+            # get that wrong.
+            keyterm=keyterms,
         ),
     )
 

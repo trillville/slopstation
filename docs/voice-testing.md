@@ -303,11 +303,26 @@ that probe is the check — see below.
 .venv\Scripts\python bench\probe_intent.py     --provider openai
 .venv\Scripts\python bench\probe_task_brief.py --provider openai
 .venv\Scripts\python bench\probe_grounding.py  --provider openai
+.venv\Scripts\python bench\probe_stt.py
 ```
 
-Each calls the real model, so none is in the blind suite. Run all three after
-any change to `RULES` or a tool description, after a provider or model
+Each calls the real model, so none is in the blind suite. Run the first three
+after any change to `RULES` or a tool description, after a provider or model
 switch, and before trusting a new tool with a side effect.
+
+`probe_stt.py` is the odd one out — it probes **hearing**, not judgement.
+Windows SAPI speaks a table of launch phrasings, Flux transcribes them under
+the current keyterm list, and the bar is whether the grammar and the fuzzy
+resolver get an appid out of the result, because that is what decides whether
+the game starts. Run it after any change to the keyterm list, `grammar.yaml`'s
+`PlayGame`, or `fuzzyTitleThreshold`. `--raw-names` and `--no-keyterms` run
+the same audio through the older configs, which makes it an A/B rather than a
+number: that is how spoken-form keyterms plus the conversational `PlayGame`
+lead-ins were shown to take the same table from 7/10 to 8/10 on 2026-08-14.
+
+It measures the STT **config**, never the room — synthesized speech says
+nothing about whether the array is aimed. The couch drills in the mic-array
+section are still the only thing that answers that.
 
 **They are also the model A/B.** Section 10 above compares models by ear;
 these score them. Pass `--model` to pin one and run the same probes against

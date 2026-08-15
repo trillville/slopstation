@@ -17,13 +17,34 @@ from preroll import WakeCapture
 
 log = cglib.make_log("voice")
 
+RETRY_S = 5                                     # device-wait poll interval
+WAIT_QUIET_S = 30                               # re-log an ongoing wait this often
 
-def resolve_device(pa, fragment, want_input, log=log):
+
+class DeviceMissing(Exception):
+    """A device name-fragment IS configured but nothing matches it right now.
+    Distinct from "no fragment configured", which legitimately means the
+    system default - conflating those two is what went deaf for 5 minutes
+    (the incident is on open_audio)."""
+
+    def __init__(self, kind, wanted):
+        super().__init__(f"no {kind} device matching {wanted!r}")
+        self.kind = kind
+        self.wanted = wanted
+
+
+def resolve_device(pa, fragment, want_input, log=log, required=True):
     """Config name-fragment -> PyAudio device index; None = system default.
     Logs the bound NAME: after a rebuild the index alone says nothing about
     which physical mic/speaker is live, and the name is the only way to spot
     a wrong endpoint from couch.log. log=None resolves silently (the
-    announcer re-resolves per bulletin - a line each would be noise)."""
+    announcer re-resolves per bulletin - a line each would be noise).
+
+    None means system default and NOTHING ELSE: a configured device that is
+    absent raises DeviceMissing instead of quietly becoming the default,
+    because the two need opposite responses - one is the config working as
+    written, the other is "it is coming back, wait". required=False keeps the
+    lenient answer for the one caller that wants it (announce.py)."""
     kind = "input" if want_input else "output"
     if not fragment:
         if log:
@@ -39,6 +60,8 @@ def resolve_device(pa, fragment, want_input, log=log):
             return i
     if log:
         log.warn("audio_device_missing", kind=kind, wanted=fragment)
+    if required:
+        raise DeviceMissing(kind, fragment)
     return None
 
 
@@ -82,12 +105,58 @@ def build_audio(voice):
     """One PortAudio world: a fresh instance plus both devices resolved by
     name. PortAudio snapshots the device table at init, so a fresh instance
     is the ONLY way to see endpoints that (re)appeared since the last one -
-    never resolve against a pa that predates a device change."""
+    never resolve against a pa that predates a device change.
+
+    Raises DeviceMissing if a configured device is not in the table; callers
+    that must not run on the wrong endpoint go through open_audio instead.
+    The instance is torn down before that raise escapes - open_audio retries
+    every RETRY_S, so a leak here would strand a host handle per round for as
+    long as the outage lasts."""
     import pyaudio
     pa = pyaudio.PyAudio()
-    return (pa,
-            resolve_device(pa, voice["inputDeviceName"], want_input=True),
-            resolve_device(pa, voice["outputDeviceName"], want_input=False))
+    try:
+        return (pa,
+                resolve_device(pa, voice["inputDeviceName"], want_input=True),
+                resolve_device(pa, voice["outputDeviceName"], want_input=False))
+    except Exception:
+        try:
+            pa.terminate()
+        except Exception as e:
+            log.warn("audio_teardown_failed", err=str(e))
+        raise
+
+
+def open_audio(voice, log=log):
+    """build_audio, but WAITING for a configured device that isn't there yet
+    rather than settling for whatever Windows calls the default.
+
+    The wait is the whole point. resolve_device used to answer "not found"
+    with None, which build_audio passed on as "system default" and the caller
+    accepted as success - so a USB array that dropped off mid-evening was
+    replaced, silently, by an endpoint nobody chose. The wake loop then opened
+    THAT, got -9999, and asked for another rebuild: 62 rounds at 5 s each,
+    5 min 10 s deaf, every round logging a recovery that had not happened.
+    Same policy for startup and for recovery, because the situation is the
+    same one - the device is not here yet - and a single home for it is how
+    the startup path stops being the lenient one.
+
+    Loops until the real device answers: voice is not load-bearing, and
+    dormant-but-alive beats listening to the wrong room."""
+    waited = 0.0
+    while True:
+        try:
+            return build_audio(voice)
+        except DeviceMissing as e:
+            # First miss and then every WAIT_QUIET_S: an outage is one event
+            # with a duration on it, not a scroll of identical pairs. The
+            # 5-minute deafness was invisible because it read as normal churn.
+            if waited % WAIT_QUIET_S < RETRY_S:
+                log.error("audio_device_wait", kind=e.kind, wanted=e.wanted,
+                          waited_s=round(waited), retry_s=RETRY_S)
+        except Exception as e:
+            log.error("audio_rebuild_failed", err=str(e), retry_s=RETRY_S)
+        time.sleep(RETRY_S)
+        waited += RETRY_S
 
 
 def rebuild_audio(old_pa, voice, listener):
@@ -96,22 +165,15 @@ def rebuild_audio(old_pa, voice, listener):
     instance retries a stale index - a reconnected headset gets a NEW index
     the old snapshot can't see - so the reopen either fails forever or
     'succeeds' onto a dead endpoint and goes deaf - observed as 240 blind
-    reopens over 2.6 h, then a zombie stream, deaf until morning.
-    Loops until an audio host answers: voice is not load-bearing, and
-    dormant-but-alive beats crashed."""
+    reopens over 2.6 h, then a zombie stream, deaf until morning."""
     try:
         old_pa.terminate()
     except Exception as e:
         log.warn("audio_teardown_failed", err=str(e))
-    while True:
-        time.sleep(5)
-        try:
-            pa, input_idx, output_idx = build_audio(voice)
-        except Exception as e:
-            log.error("audio_rebuild_failed", err=str(e), retry_s=5)
-            continue
-        listener.rebind(pa, input_idx)
-        return pa, input_idx, output_idx
+    time.sleep(RETRY_S)                         # let the endpoint settle first
+    pa, input_idx, output_idx = open_audio(voice)
+    listener.rebind(pa, input_idx)
+    return pa, input_idx, output_idx
 
 
 def play_pcm(pa, pcm, device_index=None):
