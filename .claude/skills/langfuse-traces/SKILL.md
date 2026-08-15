@@ -89,7 +89,8 @@ Neither is the whole story.
    model, 2.0 s on TTS" is useful; "it was slow" is not.
 3. **Read `--io` before judging behaviour.** The assistant's context carries
    the whole game catalog and carried turns; a strange answer is usually a
-   context problem, not a model problem.
+   context problem, not a model problem. But `--io` shows what the model
+   **said**, never what it **called** — see the tool-call gotcha below.
 4. **Watch the prompt token count.** Around 60k per turn is normal here —
    catalog-in-context — and prompt caching is what keeps the cost near zero.
    A sudden jump means the catalog or the carry grew.
@@ -102,6 +103,26 @@ Neither is the whole story.
 
 ## Gotchas
 
+- **The assistant's tool calls are NOT in Langfuse.** Pipecat's `llm` spans
+  record the completion **text** only, so a turn that called a tool has
+  `output: null` and no arguments anywhere on the span — the tool NAMES you
+  see in `metadata.attributes.tools` are the schemas *sent* to the model, not
+  calls it made. `output: null` on an `llm` span with output tokens IS the
+  tell that it emitted a tool call. To see which tool ran and with what args,
+  read the local mirror the agent writes per session:
+  `k15\state\traces\<stamp>-voice.json` (`messages[].tool_calls`, provider
+  shape) — the `trace_saved` log event names the exact file. Loki's
+  `event="tool_call"` / `tool_refused` lines are the other half.
+  Worker tool calls (`WebSearch`, `Read`, …) DO get spans, because those are
+  parsed from the CLI's stream — only the assistant's own are missing.
+- **`couch.job.web_searches` under-reports.** Seen reading `0` on a job with
+  six `WebSearch` child spans (2026-08-14). Trust the spans, not the counter;
+  `couch.job.denials` may be absent entirely rather than zero.
+- **A trace can span several API pages.** `limit=100` is the hard maximum and
+  the ROOT observation is often on a later page. `query.py` paginates on
+  `meta.totalPages` and prints unreachable spans flat — if you ever hand-roll
+  a call and get an empty tree with a healthy-looking span count, that is
+  this (2026-08-14).
 - **No `/traces` endpoint.** Langfuse reads traces via
   `/api/public/v2/observations?isRootObservation=true` — the API mirrors the
   UI's "Is Root Observation" filter. The script handles this; do not go

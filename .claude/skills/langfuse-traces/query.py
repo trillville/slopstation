@@ -145,35 +145,64 @@ def _fmt_cost(o):
     return f"${v:.6f}" if isinstance(v, (int, float)) and v else ""
 
 
+MAX_PAGES = 12                  # ~1200 spans; a runaway-trace backstop, not a
+                                # real ceiling (the longest real session was 107)
+
+
+def _all_observations(trace_id):
+    """Every observation in the trace, following Langfuse's pagination.
+    Returns (rows, hit_cap).
+
+    WHY THIS PAGINATES (2026-08-14): limit=100 is the API's hard maximum, and
+    a 107-span session put the ROOT observation on page 2. Fetching only page
+    one printed an EMPTY TREE - the walker renders downward from the root, and
+    with no root every span was unreachable - while the header still printed a
+    span count and a cost, so it read as a sparse trace rather than a failed
+    render. Trust `meta.totalPages`, not the size of the first page.
+    """
+    rows, page = [], 1
+    while page <= MAX_PAGES:
+        r = get("observations", traceId=trace_id, limit=100, page=page)
+        rows += _f(r, "data", default=[])
+        total = _f(_f(r, "meta", default={}) or {}, "totalPages", default=1) or 1
+        if page >= total:
+            return rows, False
+        page += 1
+    return rows, True
+
+
 def cmd_trace(a):
-    # 100 is Langfuse's hard maximum; asking for more is a 400, not a clamp.
-    rows = _f(get("observations", traceId=a.trace_id, limit=100),
-              "data", default=[])
+    rows, hit_cap = _all_observations(a.trace_id)
     if not rows:
         sys.exit(f"no observations for trace {a.trace_id}")
     rows.sort(key=lambda o: str(_f(o, "startTime", "timestamp", default="")))
     by_parent = {}
     for o in rows:
         by_parent.setdefault(_f(o, "parentObservationId"), []).append(o)
+    shown = set()
+
+    def show(o, depth):
+        pad = "  " * depth
+        bits = [f"{pad}{_f(o,'name',default='?'):<14}",
+                f"{_fmt_lat(o):>7}", f"{_fmt_cost(o):>10}"]
+        usage = _f(o, "usage", "usageDetails", default={}) or {}
+        tin = _f(usage, "input", "promptTokens", "inputTokens")
+        tout = _f(usage, "output", "completionTokens", "outputTokens")
+        if tin or tout:
+            bits.append(f"  {tin or 0}->{tout or 0} tok")
+        if _f(o, "model"):
+            bits.append(f"  {_f(o,'model')}")
+        print(" ".join(bits))
+        for field in ("input", "output"):
+            val = _f(o, field)
+            if val and a.io:
+                text = json.dumps(val) if not isinstance(val, str) else val
+                print(f"{pad}    {field}: {text[:300]}")
 
     def walk(parent, depth):
         for o in by_parent.get(parent, []):
-            pad = "  " * depth
-            bits = [f"{pad}{_f(o,'name',default='?'):<14}",
-                    f"{_fmt_lat(o):>7}", f"{_fmt_cost(o):>10}"]
-            usage = _f(o, "usage", "usageDetails", default={}) or {}
-            tin = _f(usage, "input", "promptTokens", "inputTokens")
-            tout = _f(usage, "output", "completionTokens", "outputTokens")
-            if tin or tout:
-                bits.append(f"  {tin or 0}->{tout or 0} tok")
-            if _f(o, "model"):
-                bits.append(f"  {_f(o,'model')}")
-            print(" ".join(bits))
-            for field in ("input", "output"):
-                val = _f(o, field)
-                if val and a.io:
-                    text = json.dumps(val) if not isinstance(val, str) else val
-                    print(f"{pad}    {field}: {text[:300]}")
+            shown.add(_f(o, "id"))
+            show(o, depth)
             walk(_f(o, "id"), depth + 1)
 
     root = by_parent.get(None, [{}])[0]
@@ -201,10 +230,20 @@ def cmd_trace(a):
     share = f" ({cached / tin:.0%} cached)" if tin else ""
     print(f"  ${cost:.6f}   {tin:,} in{share} -> {tout:,} out   {len(rows)} spans\n")
     walk(None, 0)
-    if len(rows) == 100:
-        print("\n! 100 spans returned - Langfuse's page maximum, so this trace "
-              "may be truncated")
-    print("\n(pass --io to print prompts and completions)")
+    # Anything the walk could not reach - a parent that never shipped, or a
+    # trace still flushing. Print them FLAT rather than dropping them: a
+    # partial tree is an answer, a silently empty one is a lie (see
+    # _all_observations).
+    orphans = [o for o in rows if _f(o, "id") not in shown]
+    if orphans:
+        print(f"\n  {len(orphans)} span(s) with no reachable parent, flat:")
+        for o in orphans:
+            show(o, 1)
+    if hit_cap:
+        print(f"\n! stopped at {len(rows)} spans ({MAX_PAGES}-page cap) - "
+              "the tree above is incomplete")
+    if not a.io:
+        print("\n(pass --io to print prompts and completions)")
 
 
 def cmd_errors(a):
@@ -234,6 +273,10 @@ def cmd_session(a):
     for tid, obs in traces.items():
         print(f"  {tid}  {len(obs)} spans  "
               f"first {local(min(str(_f(o,'startTime','timestamp','')) for o in obs))}")
+    # Say when the page filled up: a truncated list that looks complete is how
+    # a missing trace gets read as "it was never traced" (see cmd_trace).
+    if len(rows) >= a.limit:
+        print(f"\n! hit the {a.limit}-row limit - pass --limit to see more")
 
 
 def main():
