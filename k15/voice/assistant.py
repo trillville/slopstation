@@ -161,9 +161,18 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         return {"ok": r.ok, "detail": r.detail}
 
     def install_game(args):
-        """Queue an install on the PC over the account session. Owned-but-not-
-        installed only - installing what's already there is a no-op, and an
-        appid outside the catalog is refused at the boundary like launch_game."""
+        """Get an owned-but-not-installed game downloading. TWO paths, tried in
+        order, so this tool works with or without a credential:
+
+        1. the account session queues it silently (nothing to press), when that
+           lane is enrolled AND actually minting;
+        2. otherwise put the game's Big Picture page on the TV and let the user
+           press Install with the controller they are already holding.
+
+        (2) is not a consolation prize - it is how anyone installs in Big
+        Picture, and it needs no token, never expires, and cannot break when
+        Valve changes an undocumented endpoint. It does need a live session,
+        which is exactly the situation someone asking for this is in."""
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
             log.warn("tool_refused", tool="install_game", reason="unknown_appid",
@@ -171,16 +180,23 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             return {"ok": False, "error": f"appid {appid} is not in the catalog"}
         if library.installed_name(appid) is not None:
             return {"ok": False, "error": "that game is already installed"}
-        try:
-            return steam.install(appid)         # steam is present (gated below)
-        except Exception as e:
-            # available() only checks the token is PRESENT, not that it still
-            # mints - an expired/revoked token raises here. Say what to do,
-            # don't break the turn (the function_schemas backstop would too, but
-            # with a less useful message).
-            log.error("install_error", appid=appid, err=str(e))
-            return {"ok": False, "error": "couldn't reach Steam - the account "
-                    "session may need re-enrolling"}
+        if steam is not None and steam.available():
+            try:
+                r = steam.install(appid)
+                if r.get("ok"):
+                    return r
+                log.warn("install_fallback", appid=appid, why=r.get("error"))
+            except Exception as e:
+                # available() proves the token is PRESENT, not that it still
+                # mints (a web-audience token never does - 2026-08-14). Don't
+                # break the turn and don't give up: fall through to the path
+                # that needs no credential at all.
+                log.error("install_error", appid=appid, err=str(e))
+        r = dispatch.nav("details", appid)
+        if r.ok:
+            return {"ok": True, "detail": "it's on the TV now - press Install "
+                    "and the download starts"}
+        return {"ok": False, "error": r.detail}
 
     def nav(args):
         """Big Picture navigation. downloads/library/store need no appid;
@@ -381,10 +397,11 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
             impls.pop(gated, None)
-    # install_game auto-gates on the account session: no token, no offer (it
-    # would only ever refuse, and an un-offered tool is one fewer to mis-select).
-    if steam is None or not steam.available():
-        impls.pop("install_game", None)
+    # install_game is ALWAYS offered now: without the account session it falls
+    # back to putting the game's page on the TV, so it always does something
+    # useful. (It used to be dropped whenever the token was absent - which also
+    # meant a PRESENT-but-dead token left it offered and broken, the exact state
+    # the couch hit on 2026-08-14.)
     return impls
 
 
@@ -477,12 +494,13 @@ TOOL_DEFS = [
       "appid": {"type": "integer", "description": "required for game_page (must "
                 "be owned) and store_page (any Steam appid)"}},
      ["target"]),
-    ("install_game", "Install a game the user owns but hasn't installed yet - "
-     "it queues the download on the gaming PC with no controller needed. Only "
-     "for owned-but-not-installed titles (installed ones are a no-op). Confirm "
-     "the title first if there's any doubt; downloads are large. After "
-     "queueing, tell them it's downloading; they can ask 'how far along' "
-     "(list_games downloading) later.",
+    ("install_game", "Start downloading a game the user owns but hasn't "
+     "installed yet - use this for 'install <game>'. It either queues the "
+     "download on the PC outright or puts the game's page up on the TV for "
+     "them to press Install; the result tells you which, so say what actually "
+     "happened rather than assuming. Only for owned-but-not-installed titles "
+     "(installed ones are a no-op). Confirm the title first if there's any "
+     "doubt; downloads are large.",
      {"appid": {"type": "integer", "description": "appid of an owned, not-yet-"
                 "installed game"}},
      ["appid"]),

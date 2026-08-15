@@ -112,15 +112,14 @@ def main():
     assert not r["ok"] and "unknown source" in r["error"], r
     r = impls["list_games"]({"source": "downloading"})     # no account session here
     assert not r["ok"] and "enrolled" in r["error"], r
-    # install_game auto-gates on the account session: absent here (steam=None),
-    # so it is not even offered. With a session it appears and validates.
-    assert "install_game" not in impls
+    # install_game is offered with OR without the account session: without one
+    # it navigates to the game's page so the controller can finish the job.
+    assert "install_game" in impls
     import types
     fake_steam = types.SimpleNamespace(available=lambda: True,
                                        install=lambda a: {"ok": True, "detail": "queued"},
                                        download_status=lambda: [])
     with_steam = assistant.tool_impls(d, log, steam=fake_steam)
-    assert "install_game" in with_steam
     rr = with_steam["install_game"]({"appid": 999999999})
     assert not rr["ok"] and "not in the catalog" in rr["error"], rr
     r = impls["search_store"]({})                           # neither term nor tags
@@ -130,7 +129,8 @@ def main():
     gated = assistant.tool_impls(d, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated   # action tools aren't gated
-    assert len(assistant.function_schemas(gated)) == 8, len(assistant.function_schemas(gated))
+    # 11 tools minus the two store ones the kill switch drops.
+    assert len(assistant.function_schemas(gated)) == 9, len(assistant.function_schemas(gated))
     # The facts-vs-judgment split is written into the descriptions the model reads.
     assert "not background_task" in str(assistant.TOOL_DEFS)
     print("  list_games/search_store: routed, refused cleanly, kill-switch gates")
@@ -143,11 +143,16 @@ def main():
         def install(self, a): raise RuntimeError("token revoked")
         def download_status(self): raise RuntimeError("token revoked")
     rimpls = assistant.tool_impls(d, log, steam=RaisingSteam())
-    _isn = library.installed_name
-    library.installed_name = lambda a: None            # force not-installed -> reaches steam.install
+    _isn, _nav = library.installed_name, d.nav
+    library.installed_name = lambda a: None      # not-installed -> reaches steam.install
+    navd = []
+    d.nav = lambda kind, arg=None: (navd.append((kind, arg)),
+                                    types.SimpleNamespace(ok=True, detail="showing"))[1]
     inst = rimpls["install_game"]({"appid": real_appid})
-    library.installed_name = _isn
-    assert not inst["ok"] and "re-enrolling" in inst["error"], inst
+    library.installed_name, d.nav = _isn, _nav
+    # A DEAD token must not end the request: it falls through to the TV path.
+    assert inst["ok"] and "press Install" in inst["detail"], inst
+    assert navd == [("details", real_appid)], navd
     dl = rimpls["list_games"]({"source": "downloading"})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())
@@ -311,7 +316,7 @@ def main():
     # pass a dict for `reasoning`, which the settings accept silently and only
     # live inference rejects.
     schemas = assistant.function_schemas(impls)
-    assert len(schemas) == 10
+    assert len(schemas) == 11       # the full surface; install_game is always on
     import session_runtime
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
