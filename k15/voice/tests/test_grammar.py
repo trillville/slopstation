@@ -11,7 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from grammar_gate import GrammarMatcher, strip_wake
 
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",
-                        "ps5": "hdmi2", "the pc": "hdmi4"}}
+                        "ps5": "hdmi2", "the pc": "hdmi4"},
+             "navTargets": {"downloads": "downloads", "the downloads": "downloads",
+                            "library": "library", "my library": "library",
+                            "store": "store", "the store": "store"}}
 
 # (utterance, expected intent or None, expected slots subset)
 TABLE = [
@@ -21,6 +24,13 @@ TABLE = [
     ("let's play", "StartSession", {}),
     ("end the session", "EndSession", {}),
     ("end session", "EndSession", {}),
+    # "exit ..." are statements of intent nobody says by accident. The
+    # mishears that showed up beside them in the logs ("end of session",
+    # "access session") are NOT phrasings and stay out - see grammar.yaml.
+    ("exit session", "EndSession", {}),
+    ("exit the gaming session", "EndSession", {}),
+    ("exit gaming mode", "EndSession", {}),
+    ("exit tv mode", "EndSession", {}),
     ("we're done", "EndSession", {}),
     ("we're done gaming", "EndSession", {}),
     ("volume up", "VolumeUp", {}),
@@ -39,6 +49,23 @@ TABLE = [
     ("go back to the playstation", "SwitchInput", {"input": "playstation"}),
     ("switch to ps5", "SwitchInput", {"input": "ps5"}),
     ("show the apple tv", "SwitchInput", {"input": "apple tv"}),
+    # Nav: {target}'s VALUE is the nav kind, and the vocabulary is disjoint from
+    # {input}, so these never cross ("show the apple tv" above stays SwitchInput).
+    ("show downloads", "Nav", {"target": "downloads"}),
+    ("show me the downloads", "Nav", {"target": "downloads"}),
+    ("open the store", "Nav", {"target": "store"}),
+    ("go to my library", "Nav", {"target": "library"}),
+    ("take me to downloads", "Nav", {"target": "downloads"}),
+    # Polite lead-in: nav is what gets asked politely, and it cannot widen
+    # anything because {target} is still an exact list.
+    ("can you show me the downloads", "Nav", {"target": "downloads"}),
+    ("could you open the store", "Nav", {"target": "store"}),
+    ("can you go to my library", "Nav", {"target": "library"}),
+    # ShowCollection: wildcard, resolved on the box; the "my"/"collection"
+    # marker keeps a bare "show me <game>" out (that falls through, below).
+    ("show my roguelikes", "ShowCollection", {"collection": "roguelikes"}),
+    ("show me the co-op collection", "ShowCollection", {"collection": "co op"}),
+    ("open my mech games collection", "ShowCollection", {"collection": "mech games"}),
     # {game} is a wildcard: the slot carries the (normalized) spoken text;
     # title->appid resolution is titles.py's job, tested in test_library.
     ("play armored core six", "PlayGame", {"game": "armored core 6"}),
@@ -46,10 +73,28 @@ TABLE = [
     ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),
     ("start elden ring", "PlayGame", {"game": "elden ring"}),
     ("play some music", "PlayGame", {"game": "some music"}),
+    # Conversational lead-ins. These were the two commonest launch phrasings
+    # in the logs and both fell through to the LLM with an empty slot, even on
+    # a transcript where the STT had heard the title perfectly.
+    ("i want to play armored core six", "PlayGame", {"game": "armored core 6"}),
+    ("i wanna play armored core six", "PlayGame", {"game": "armored core 6"}),
+    ("i would like to play elden ring", "PlayGame", {"game": "elden ring"}),
+    ("open armored core six", "PlayGame", {"game": "armored core 6"}),
+    ("let's play elden ring", "PlayGame", {"game": "elden ring"}),
+    ("can you play elden ring", "PlayGame", {"game": "elden ring"}),
+    ("wanna launch elden ring", "PlayGame", {"game": "elden ring"}),
+    # "can you START x" is deliberately NOT a PlayGame form: StartSession
+    # has no polite variant to claim it first, so this matched with
+    # game="the session" and logged a title_miss on its way to the LLM.
+    ("can you start the session", None, {}),
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
     ("cancel", "ExitSession", {}),          # bare cancel stays conversation-close
+    # Safe to widen where EndSession is not: closes the conversation, touches
+    # nothing in the room.
+    ("go away", "ExitSession", {}),
+    ("leave me alone", "ExitSession", {}),
     # Background-task surface - narrow by design.
     ("what did you find", "TaskResult", {}),
     ("what did you find out", "TaskResult", {}),
@@ -67,10 +112,17 @@ TABLE = [
     ("start", None, {}),
     ("play", None, {}),
     ("switch to the garage", None, {}),          # unknown input name
+    ("show me deadlock", None, {}),              # a game name: no nav/collection
+                                                 # marker -> assistant (game page)
+    ("show me the pictures", None, {}),          # not a nav target -> assistant
     # Risky-command narrowness: casual variants must NOT end a session.
     ("end it", None, {}),
     ("stop", None, {}),
     ("kill the session please maybe", None, {}),
+    ("exit", None, {}),                     # bare verb must not tear down the TV
+    ("exit the game", None, {}),            # quitting a GAME is not ending the session
+    ("end of session", None, {}),           # an STT mishear, deliberately not encoded
+    ("go", None, {}),
     # Conversational phrasings stay in the assistant lane.
     ("tell me more", None, {}),
     ("what did you find in the garage", None, {}),

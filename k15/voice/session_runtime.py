@@ -20,11 +20,66 @@ import tracing
 log = cglib.make_log("voice")
 
 
+# Deepgram's hard ceiling, MEASURED (2026-08-15) rather than documented: 100
+# keyterms connect, 110 are refused with HTTP 400 at the websocket handshake.
+# It is a COUNT limit and not a URL-length one - 100 short terms (1.4 kB of
+# query string) pass and 110 short terms (1.5 kB) do not, while 100 long terms
+# (4.7 kB) pass. Don't re-derive this; and don't raise it, because one term
+# too many is not a degraded transcript, it is a 400 on connect, which is
+# every session failing to open.
+MAX_KEYTERMS = 100
+
+
 def load_titles(count):
-    """Installed titles by recency: Flux keyterms + fuzzy-resolution corpus."""
+    """Installed titles by recency, as Steam writes them: the source the
+    keyterm forms are built from, and the "is there a catalog at all" check."""
     rows = library.load().get("installed", [])
     rows.sort(key=lambda r: r.get("lastPlayed", 0), reverse=True)
-    return [r["name"] for r in rows if r.get("name")][:count]
+    return [r["name"] for r in rows
+            if r.get("name") and r.get("appid") not in library.NOT_GAMES][:count]
+
+
+def stt_keyterms(voice, wake_phrase):
+    """Everything Flux is told to expect, in the form it will hear it.
+
+    Three sources, because three different kinds of thing get said:
+    titles (what you launch), collection names (YOUR vocabulary - 'mech'
+    kept transcribing as 'neck' because tags/genres never contain it and
+    nothing else ever taught it), and tag/genre words (how you ask ABOUT
+    games). Ordered by how much each earns its boost, then capped: the
+    generic tail ('action', 'adventure') is words Flux already knows, so it
+    is what should fall off the end rather than a title.
+
+    Ordering IS the budget policy. There are 100 slots and no more, and this
+    catalog already spends 92 of them (55 title forms from 39 games, 11
+    collections, 30 tag words), so the 162 owned-but-not-installed titles
+    simply do not fit - which is why keyterm_forms teaches 'hades' off Hades II
+    rather than the list carrying plain Hades. When the library grows past the
+    cap the generic tail is what falls off, and that is correct: those are
+    words Flux already knows, while a title it has never seen is the whole
+    point of the list.
+
+    Capped out loud - a silently truncated list reads as full coverage. How
+    close the list is to the cap rides on stt_vocabulary as a number, which is
+    what an alert should watch; a second event saying "getting close" would
+    fire on every session at today's 92 and be noise, not signal."""
+    terms = [wake_phrase]
+    for name in load_titles(voice["keytermCount"]):
+        terms += titles.keyterm_forms(name)
+    terms += [titles.spoken_form(c["name"])
+              for c in library.load().get("collections", []) if c.get("name")]
+    terms += library.query_terms()
+
+    seen, out = set(), []
+    for t in terms:
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    if len(out) > MAX_KEYTERMS:
+        log.warn("keyterms_capped", kept=MAX_KEYTERMS, dropped=len(out) - MAX_KEYTERMS,
+                 first_dropped=out[MAX_KEYTERMS])
+        out = out[:MAX_KEYTERMS]
+    return out
 
 
 CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
@@ -130,7 +185,7 @@ def _make_llm(voice, secrets, system_text):
 
 
 async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
-                      capture=None, jobs=None, ack=None):
+                      capture=None, jobs=None, ack=None, steam=None):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
                                        TranscriptionFrame, TTSSpeakFrame,
@@ -151,6 +206,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     # "hey_jarvis_v0.1" -> "hey jarvis"; keyterm-boosted so the pre-roll's wake
     # phrase transcribes canonically and strip_wake lands every time.
     wake_phrase = voice["wakeModel"].rsplit("_v", 1)[0].replace("_", " ")
+    keyterms = stt_keyterms(voice, wake_phrase)
+    log("stt_vocabulary", terms=len(keyterms), titles=len(game_terms),
+        headroom=MAX_KEYTERMS - len(keyterms))
 
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,
@@ -165,13 +223,26 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         settings=DeepgramFluxSTTService.Settings(
             model="flux-general-en",
             eot_threshold=voice["eotThreshold"],
+            # eagerEnabled is DORMANT, not broken - keep it set anyway. Flux
+            # does send EagerEndOfTurn, but pipecat 1.7 forwards it as an
+            # InterimTranscriptionFrame, which is not a TranscriptionFrame
+            # subclass, and GrammarGate only screens finals. So the eager
+            # transcript reaches nothing; its one live effect is resetting the
+            # idle clock, because interim frames are in idle_timeout_frames.
+            # Left on because the day pipecat implements the cancellable path
+            # (their own TODO) this starts paying latency back for free, and
+            # sending a threshold costs nothing today. Doing it OURSELVES is
+            # not a config change: it needs start-early/cancel-on-resume
+            # machinery, it is only ever safe for the assistant lane (a
+            # dispatch cannot be un-launched when the transcript is retracted),
+            # and it is the same missing piece as barge-in.
             eager_eot_threshold=(voice["eagerEotThreshold"]
                                  if voice.get("eagerEnabled", True) else None),
             numerals=True,
-            # Titles teach Flux the game names; query_terms teach it the
-            # words used to ask ABOUT them (tags/genres: "mech", "roguelike")
-            # - without them "mech games" transcribed as "met games".
-            keyterm=[wake_phrase] + game_terms + library.query_terms(),
+            # What Flux is taught to expect, in transcript form rather than
+            # store-page form - stt_keyterms owns why, and what it costs to
+            # get that wrong.
+            keyterm=keyterms,
         ),
     )
 
@@ -183,6 +254,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         matcher, dispatcher, log,
         resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])
                       if game_terms else None),
+        resolve_collection=titles.build_collection_resolver(
+            voice["fuzzyTitleThreshold"]),      # None when no collections synced
         assistant_enabled=assistant_live,
         wake_word=wake_phrase.split()[-1],      # "jarvis" - the strip anchor
         jobs=jobs,
@@ -225,7 +298,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
                     # here; why the tool ends a session that way is on the
                     # method itself.
                     tool_impls(dispatcher, log, jobs=jobs,
-                               on_stop_listening=gate.request_stop)),
+                               on_stop_listening=gate.request_stop,
+                               voice=voice, steam=steam),
+                    log),                   # -> one tool_call event per call
                 custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
         llm = _make_llm(voice, secrets, system_instruction(cfg))

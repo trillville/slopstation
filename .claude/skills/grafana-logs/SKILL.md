@@ -84,10 +84,35 @@ Time to READY, the number the whole system is judged on:
   not skew launch metrics. Drop the lane from a query to see every frame
   whoever sent it: `| json | event="exlink_send"`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat`
+  - `gate_match`/`gate_miss`/`stt_final` carry `confidence` (mean per-word, from
+    Flux) — the axis for "was that a bad transcript or a bad phrasing?", and
+    absent on turns where Flux sent no per-word data.
+  - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
+    session build. Deepgram's ceiling is 100 keyterms (measured; 110 is a 400
+    on connect) and `headroom` is what is left of it, so alert on
+    `headroom < 5` rather than waiting for `keyterms_capped`: by the time
+    truncation fires the room is already worse at game names.
+  - `audio_device_wait` — the configured mic is not in the device table;
+    `waited_s` is how long the agent has been deaf waiting for it. A rebuild
+    never falls back to the system default, so this event standing still is
+    the outage.
+- **voice, assistant lane**: `tool_call` — **one per tool the assistant ran**,
+  with `tool`, `ok` and truncated `args`; this is how you learn it called
+  `search_store` with `tags:["Co-op","Rogue-like"]` rather than guessing from
+  the reply. Nothing before 2026-08-14 has it. Also `tool_refused` (the
+  boundary rejecting a call, e.g. `reason=unknown_appid`), `job_requested`
+  (the background brief), `web_search` (provider-executed search).
+- **voice, couch verbs**: `nav_dispatched` `quit_dispatched` — both carry the
+  host's `answer`, and `FAILED:1` on either means the PC-side scheduled task
+  is not registered, not that the verb is broken. Plus `collection_resolved`
+  `collection_miss` `install_queued` `install_error` `download_status_error`
+- **library**: `sync_done` / `sync_skipped` (both carry `layer` — installed,
+  collections, owned, meta, deals), `deals_synced` `meta_fetched`
+  `store_fetch_failed` `hltb_failed`
 - **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **jobs**: `job_queued` `job_running` `job_done` `job_failed` `job_announced`
-- **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched`
+- **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.

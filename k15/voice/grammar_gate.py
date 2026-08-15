@@ -53,6 +53,24 @@ def strip_wake(text, anchor="jarvis"):
         return text
 
 
+def stt_confidence(frame):
+    """Mean per-word confidence off Flux's turn payload, or None when it did
+    not send words. Rounded to 2dp - this is a dashboard axis, not maths.
+
+    Recorded because nothing measured STT until now: every keyterm or
+    threshold change was judged by how the room felt that evening, and a bad
+    transcript ('thyroid core 6') and a good one were the same single log
+    line. Fail-soft like everything on an emit path - a shape change upstream
+    costs the field, never the turn."""
+    try:
+        words = (frame.result or {}).get("words")
+        scores = [w["confidence"] for w in words
+                  if isinstance(w, dict) and w.get("confidence") is not None]
+        return round(sum(scores) / len(scores), 2) if scores else None
+    except Exception:
+        return None
+
+
 def load_intents():
     return Intents.from_dict(yaml.safe_load(GRAMMAR.read_text(encoding="utf-8")))
 
@@ -62,11 +80,17 @@ class GrammarMatcher:
     Runtime slot lists: inputs from config, game titles from the library."""
 
     def __init__(self, voice_cfg):
-        # {game} is a wildcard - the fuzzy resolver owns title matching.
+        # {game}/{collection} are wildcards - the fuzzy resolvers own those.
+        # {input} and {target} are fixed runtime lists. {target}'s VALUE is the
+        # nav kind (downloads/library/store), so the gate gets the kind straight
+        # from the slot with no second mapping.
         self.intents = load_intents()
         self.slot_lists = {
             "input": TextSlotList.from_tuples(
                 (spoken, spoken) for spoken in voice_cfg["inputs"]),
+            "target": TextSlotList.from_tuples(
+                (spoken, kind) for spoken, kind
+                in voice_cfg.get("navTargets", {}).items()),
         }
 
     def match(self, text):
@@ -98,12 +122,13 @@ class GrammarGate(FrameProcessor):
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
                  assistant_enabled=False, wake_word=None, jobs=None,
-                 ack=None):
+                 ack=None, resolve_collection=None):
         super().__init__()
         self.matcher = matcher
         self.dispatch = dispatch
         self.log = log
         self.resolve_game = resolve_game        # fuzzy title -> appid (titles.py)
+        self.resolve_collection = resolve_collection  # fuzzy name -> collection id
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
         self.jobs = jobs                        # JobStore; None = worker lane off
@@ -197,12 +222,17 @@ class GrammarGate(FrameProcessor):
             "VolumeSet": lambda: d.volume_set(int(slots["level"])),
             "MuteToggle": d.mute_toggle,
             "SwitchInput": lambda: d.switch_input(str(slots["input"])),
+            "Nav": lambda: d.nav(str(slots["target"])),
         }
         self._dispatching += 1
         try:
             if intent == "PlayGame":
                 r = await self._play_game(str(slots["game"]))
                 if r is None:                   # unresolvable title -> Tier 2
+                    return False
+            elif intent == "ShowCollection":
+                r = await self._show_collection(str(slots["collection"]))
+                if r is None:                   # unresolvable collection -> Tier 2
                     return False
             elif intent in actions:
                 r = await asyncio.to_thread(actions[intent])
@@ -259,6 +289,24 @@ class GrammarGate(FrameProcessor):
         self.log("title_resolved", spoken=spoken, title=title, appid=appid)
         return await asyncio.to_thread(self.dispatch.play_game, appid)
 
+    async def _show_collection(self, spoken):
+        """Resolve a collection name -> id via titles; a miss goes to the
+        assistant (or a fail earcon with no assistant), exactly like a title
+        miss. On a hit, navigate Big Picture to that collection."""
+        cid, name = (self.resolve_collection(spoken) if self.resolve_collection
+                     else (None, None))
+        if cid is None:
+            if self.assistant_enabled:
+                self.log("collection_miss", spoken=spoken, fallback="assistant")
+                return None
+            self.log.warn("collection_miss", spoken=spoken,
+                          fallback="fail_earcon",
+                          reason=None if self.resolve_collection else "no_collections")
+            from dispatch import Result
+            return Result(False, "fail", f"no collection matching '{spoken}'")
+        self.log("collection_resolved", spoken=spoken, name=name, id=cid)
+        return await asyncio.to_thread(self.dispatch.nav, "collection", cid)
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, UserStartedSpeakingFrame):
@@ -293,6 +341,7 @@ class GrammarGate(FrameProcessor):
             await self._stop_if_armed("stop listening (answer failed)")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
+            conf = stt_confidence(frame)
             if text:
                 # A final transcript IS a user intent, so this is where the
                 # turn id is born. Everything it causes - the gate decision,
@@ -311,7 +360,8 @@ class GrammarGate(FrameProcessor):
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": not a command, not assistant material -
                     # swallow it and keep listening (no earcon, no LLM turn).
-                    self.log("stt_final", text=text, outcome="wake_only")
+                    self.log("stt_final", text=text, outcome="wake_only",
+                             confidence=conf)
                     return
                 if stripped != text:
                     self.log("wake_prefix_stripped", text=text, stripped=stripped)
@@ -328,14 +378,14 @@ class GrammarGate(FrameProcessor):
                     self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
                 if m is not None:
-                    self.log("gate_match", text=text, intent=m[0])
+                    self.log("gate_match", text=text, intent=m[0], confidence=conf)
                     if await self._run_intent(*m):
                         return                      # swallowed: Tier 1 handled it
                 if not self.assistant_enabled:
                     self.log.warn("gate_miss", text=text, fallback="none",
-                                  reason="assistant_disabled")
+                                  reason="assistant_disabled", confidence=conf)
                     await self._earcon("fail")
                     return
-                self.log("gate_miss", text=text, fallback="assistant")
+                self.log("gate_miss", text=text, fallback="assistant", confidence=conf)
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

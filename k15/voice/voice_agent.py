@@ -41,7 +41,7 @@ import earcons                                  # noqa: E402
 import events                                   # noqa: E402
 import library                                  # noqa: E402
 import tracing                                  # noqa: E402
-from audio import (WakeListener, build_audio, list_devices,  # noqa: E402
+from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
                    play_pcm, rebuild_audio)
 from grammar_gate import GrammarMatcher         # noqa: E402
 from preroll import WakeAck                     # noqa: E402  (pipecat
@@ -126,7 +126,7 @@ def main():
     earcons.set_gain(voice.get("earconGain", 1.0))
 
     if args.earcons:
-        pa, _, output_idx = build_audio(voice)
+        pa, _, output_idx = open_audio(voice)
         log("earcon_audition", gain=earcons.GAIN)
         for name in earcons.SPECS:
             log("earcon_play", earcon=name)
@@ -153,7 +153,9 @@ def main():
                     model=args.model, effort=args.effort)
 
     cglib.rotate_log()
-    pa, input_idx, output_idx = build_audio(voice)
+    # Waits for a configured mic that is still enumerating (a cold boot takes
+    # ~15 s to get there) instead of starting deaf on the system default.
+    pa, input_idx, output_idx = open_audio(voice)
 
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
@@ -227,6 +229,22 @@ def main():
         log("lane_up", what="worker", provider=wp, exe=adapter.exe,
             model=adapter.model or "(cli default)",
             effort=adapter.effort or "(cli default)", orphans=orphans or None)
+
+    # Account session: install-by-voice + download status over ClientComm.
+    # Self-gates on the refresh token exactly like the Steam key - no token,
+    # the lane is None and install_game is never offered. Never fatal.
+    import steam_session
+    steam = steam_session.SteamSession(secrets, log,
+                                       machine_name=cfg.get("steamMachineName"))
+    if steam.available():
+        exp = steam.token_expiry()
+        log("lane_up", what="steam_session", steamid=steam.steamid,
+            token_expires=(time.strftime("%Y-%m-%d", time.localtime(exp))
+                           if exp else None))
+    else:
+        steam = None
+        log("lane_disabled", what="steam_session",
+            reason="no refresh token - run steam_session.py enroll")
 
     # Agent traces. Before the wake loop so the first session is traced like
     # every later one, and fail-soft: no keys, or a venv that predates the
@@ -331,7 +349,7 @@ def main():
         try:
             asyncio.run(run_session(cfg, secrets, matcher, args,
                                     input_idx, output_idx, capture,
-                                    jobs=jobs, ack=ack))
+                                    jobs=jobs, ack=ack, steam=steam))
         except Exception as e:
             log.error("session_crashed", err=repr(e))
             ending = "fail"

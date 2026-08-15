@@ -196,10 +196,19 @@ def start(appid=None, turn=None):
         if appid:
             # Voice "play <title>" from cold: queue the game once the session
             # is READY. Best-effort - a failed game launch never fails the
-            # session; Big Picture being up is already a working outcome.
+            # session; Big Picture being up is a working outcome on its own.
+            #
+            # Except on ALREADY, which means the PC found this appid running
+            # from an EARLIER session - the one shape where landing on Big
+            # Picture is not a working outcome. Big Picture comes up and the
+            # couch cannot drive it (see the ready event's comment in
+            # Enter-TV.ps1 for what that looks like and what has been ruled
+            # out). Warn so the launch reads as degraded: 2026-08-13 turn
+            # 14852d looked flawless from here and was unusable on the couch.
             try:
-                log("game_launch", appid=appid,
-                    result=ssh_intent(f"launch {appid}"))
+                answer = ssh_intent(f"launch {appid}")
+                emit = log.warn if answer == "ALREADY" else log
+                emit("game_launch", appid=appid, result=answer)
             except Exception as e:
                 log.warn("game_launch_failed", appid=appid, err=str(e))
         log("session_gaming", dur_ms=ms()); watch(expected=turn)

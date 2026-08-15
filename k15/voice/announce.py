@@ -78,9 +78,14 @@ class Announcer:
 
     def _output_index(self, pa):
         """Output device index on a FRESH pa - resolving against an old
-        snapshot is the deafness bug audio.py exists for."""
+        snapshot is the deafness bug audio.py exists for.
+
+        required=False on purpose, and this is the only caller that gets it:
+        a bulletin is a one-shot with nothing to wait for, so a missing
+        speakerphone should still try the default rather than block the
+        worker lane. Input has the opposite answer - see audio.open_audio."""
         return audio.resolve_device(pa, self.voice.get("outputDeviceName"),
-                                    want_input=False, log=None)
+                                    want_input=False, log=None, required=False)
 
     def _play(self, pcm):
         """Own PyAudio world per announcement; chunked writes so abort and a

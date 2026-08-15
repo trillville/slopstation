@@ -143,12 +143,32 @@ def main():
     assert switches and all(i > ready_at for i in switches), (ev, switches)
     assert sent == ["power_on", "hdmi4", "power_off"], sent
     assert "game_launch" in ev and "session_ended" in ev and "session_idle" in ev
+    assert log.find("game_launch")[0]["level"] == "info"      # OK: a clean launch
     # A timestamp marker is the LEGACY shape (pre-turn-stamping PC): accepted
     # so either machine can deploy first, but flagged as unverified.
     assert log.find("host_ready")[0]["verified"] is False
     assert not cglib.LOCK.exists(), "session end must release the lock"
     assert not cglib.LAST_ERROR.exists(), "success must clear last_error"
     print("  start: input switch strictly after READY, appid queued, lock released")
+
+    # --- ALREADY is a degraded launch, not a clean one -----------------------
+    # The PC answers ALREADY when the appid is already up from an EARLIER
+    # session, which is the shape that leaves Big Picture on the TV and
+    # undrivable from the couch (2026-08-13, turn 14852d). It read as a
+    # flawless launch from here. Asserting on the LEVEL rather than the event
+    # is the exception the interface rule earns: renaming game_launch already
+    # breaks the happy path above, but sliding back to info would be silent,
+    # and info is exactly the bug.
+    fresh_state()
+    log, _ = wire([
+        ("enter", "OK"),
+        ("status", READY_TS),
+        ("launch 777", "ALREADY"),
+        ("status", "NOTREADY"),
+    ])
+    assert couch.start("777") == 0
+    assert log.find("game_launch")[0]["level"] == "warn", log.records
+    print("  start: ALREADY reads as degraded, not as a launch that worked")
 
     # --- READY generation identity: verified / foreign / converge -------------
     fresh_state()

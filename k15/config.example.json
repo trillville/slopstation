@@ -4,6 +4,8 @@
   "gamingPcMac": "74-56-3C-45-92-DD",
   "gamingPcIp":  "192.168.68.67",
   "sshHost":     "gamepc",
+  "steamMachineName": "",
+  "_steamMachineName": "OPTIONAL: the gaming PC's Steam client name (its Windows hostname). Only needed if you are ALSO signed into Steam on another PC that could be listed first - it pins install-by-voice/download-status to this box. Empty = use the first signed-in client.",
   "tvComPort":   "COM3",
   "tvGamingCmd": "hdmi4",
   "tvIdleCmd":   "hdmi1",
@@ -18,6 +20,7 @@
     "holdWindowS": 10,
     "followupCarryS": 60,
     "eotThreshold": 0.7,
+    "_eagerEot": "DORMANT on pipecat 1.7: Flux sends EagerEndOfTurn but it arrives as an interim frame that nothing downstream screens, so these two buy no latency today. Left on so a pipecat that implements the cancellable path pays it back for free - see session_runtime's note before changing them.",
     "eagerEotThreshold": 0.5,
     "eagerEnabled": true,
     "volumeStep": 5,
@@ -32,6 +35,7 @@
     "assistantReasoningEffort": "low",
     "assistantWebSearch": false,
     "assistantSearchMaxUses": 2,
+    "steamDataTools": true,
     "location": {"city": "", "region": "", "country": "US", "timezone": ""},
     "workerProvider": "anthropic",
     "workerModelAnthropic": "sonnet",
@@ -44,6 +48,14 @@
       "apple tv": "hdmi1", "appletv": "hdmi1", "the apple tv": "hdmi1",
       "playstation": "hdmi2", "ps5": "hdmi2", "the playstation": "hdmi2",
       "the pc": "hdmi4", "pc": "hdmi4", "gaming pc": "hdmi4"
+    },
+    "_navTargets": "Spoken form -> nav kind. List every determiner you'd say: the {target} slot is an exact list, so a form that is missing here does not fall back, it falls THROUGH to the wildcards below Nav in grammar.yaml - 'show me my downloads' was landing on ShowCollection and dying there because only 'my library' had been listed.",
+    "navTargets": {
+      "downloads": "downloads", "the downloads": "downloads",
+      "my downloads": "downloads",
+      "downloads queue": "downloads", "download queue": "downloads",
+      "library": "library", "my library": "library", "the library": "library",
+      "store": "store", "the store": "store", "store page": "store"
     }
   }
 }

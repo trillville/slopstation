@@ -216,6 +216,41 @@ def check_session_state():
         report(PASS, "last_error", "none")
 
 
+def _steam_mint_probe(tok, steamid, days):
+    """Can the refresh token actually MINT? Returns a report() tuple.
+
+    ASKS THE REAL CODE rather than re-implementing it: `steam_session.py token`
+    runs the actual mint the agent uses and exits 0 when it works. The mint is
+    a multipart transfer-login flow with cookies, so a stdlib re-do here would
+    be both long and free to drift - and drift is the failure being guarded
+    against. Doctor runs on SYSTEM python, so this shells out to the VOICE VENV.
+
+    Offline is not a verdict on the token, so anything that stops the check
+    from producing an answer stays a PASS with the caveat named.
+    """
+    import subprocess
+    vpy = cglib.BASE / "voice" / ".venv" / "Scripts" / "python.exe"
+    script = cglib.BASE / "voice" / "steam_session.py"
+    if not vpy.exists():
+        return (PASS, "steam session",
+                f"enrolled, token good for {days:.0f} days (venv absent, mint unchecked)")
+    try:
+        p = subprocess.run([str(vpy), str(script), "token"],
+                           capture_output=True, text=True, timeout=45)
+    except Exception as e:
+        return (PASS, "steam session",
+                f"enrolled, token good for {days:.0f} days "
+                f"(could not verify the mint: {e})")
+    if p.returncode == 0:
+        return (PASS, "steam session",
+                f"enrolled and minting, refresh token good for {days:.0f} days")
+    why = (p.stdout or p.stderr or "").strip().splitlines()
+    return (WARN, "steam session",
+            f"enrolled but CANNOT mint - {why[-1][:120] if why else 'unknown'}",
+            "install-by-voice falls back to opening the game's page; "
+            "re-run k15\\voice\\steam_session.py enroll to restore it")
+
+
 def check_voice(cfg):
     """Voice overlay health - WARN-only by design: voice is never load-bearing,
     so a broken voice lane must not turn the chain doctor red (exit code =
@@ -273,6 +308,73 @@ def check_voice(cfg):
     except Exception as e:
         report(WARN, "voice library", f"unreadable ({e})",
                "delete state\\library.json; the agent rebuilds it")
+
+    # Deals precompute (wishlist-on-sale + specials). The agent refreshes it
+    # every ~6h; a stale file when the agent is up means the store sync is
+    # failing, which silently serves empty "anything on sale?" answers. WARN
+    # only past 24h so a normally-sleeping rig doesn't nag; absent is silent
+    # (optional, keyless, fills on first sync).
+    deals = cglib.BASE / "state" / "deals.json"
+    if deals.exists():
+        age_h = (time.time() - deals.stat().st_mtime) / 3600
+        if age_h > 24:
+            report(WARN, "voice deals", f"stale ({age_h:.0f}h)",
+                   "store sync failing, or the agent is down (see 'voice agent')")
+        else:
+            report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
+
+    # Config sanity: a spoken name in BOTH inputs and navTargets would let
+    # "show <name>" double-match SwitchInput and Nav. Cheap to catch here (the
+    # grammar's disjointness is otherwise only vocabulary-enforced).
+    v = cfg.get("voice", {})
+    clash = set(map(str.lower, v.get("inputs", {}))) & set(map(str.lower, v.get("navTargets", {})))
+    if clash:
+        report(WARN, "voice config", f"inputs/navTargets overlap: {', '.join(sorted(clash))}",
+               "rename one side - a shared spoken name double-matches in the grammar")
+
+    # Web search puts UNTRUSTED page text into the same turn that can quit a
+    # game or queue an install. Deliberate and defensible (the tools validate
+    # appids and quit confirms first), but it is the one config choice that
+    # weakens the "the lane reading the web cannot act" split - so it gets
+    # SAID, once, rather than living only in someone's memory. Not a WARN: it
+    # is a chosen setting, and a permanent nag is how warnings stop being read.
+    if v.get("assistantWebSearch"):
+        report(PASS, "voice web search", "on - page text reaches the "
+               "tool-calling turn (set assistantWebSearch false to split them)")
+
+    # Account session (install-by-voice). WARN-only, and only speaks up when a
+    # token IS present but unusable or nearing death - a re-scan is a HUMAN
+    # action, so it earns a heads-up before movie night finds it, not after.
+    # Absent is silent (the lane is optional). Stdlib only, like the CLI.
+    secrets = cglib.load_secrets()
+    tok = secrets.get("steamRefreshToken")
+    if cglib.real_key(tok):
+        try:
+            import base64
+            payload = tok.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            exp = int(json.loads(base64.urlsafe_b64decode(payload)).get("exp", 0))
+            days = (exp - time.time()) / 86400 if exp else -1
+            if days < 0:
+                report(WARN, "steam session", "refresh token unreadable or expired",
+                       "re-run k15\\voice\\steam_session.py enroll")
+            elif days < 14:
+                report(WARN, "steam session", f"token expires in {days:.0f} days",
+                       "re-scan soon: steam_session.py enroll")
+            else:
+                # An unexpired token is NOT a working one. On 2026-08-14 this
+                # probe said "good for 211 days" while every mint came back
+                # AccessDenied, and the failure surfaced on the couch instead:
+                # the QR enrollment had produced a WEB-audience token
+                # (aud=[web,renew,derive]), which cannot derive a client-app
+                # token. A PASS that a live install contradicts is worse than
+                # no probe, so ask Steam rather than the clock.
+                report(*_steam_mint_probe(tok, str(secrets.get("steamId64", "")),
+                                          days))
+        except Exception as e:
+            report(WARN, "steam session", f"token unreadable ({e})",
+                   "re-run steam_session.py enroll")
+
     # Tier-3 worker lane - stdlib checks only, same WARN-only posture:
     # background tasks off must never redden the chain doctor.
     import shutil

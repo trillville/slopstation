@@ -23,11 +23,51 @@ HERE = Path(__file__).resolve().parent
 WORKER_HOME = HERE / "worker_home"
 
 PROMPT = (
-    "Background job from the couch voice assistant. Read AGENTS.md in this "
-    "directory first - it is the standing briefing and the output contract.\n"
+    "Background job from the couch voice assistant. AGENTS.md in this "
+    "directory is your standing briefing and output contract - your harness "
+    "has already loaded it, and you have no file tools to re-read it with.\n"
+    "{library}"
     "\nTASK: {task}\n\n"
     'Remember: reply with ONLY the JSON object {{"summary": ..., "detail": '
     "...}} the contract describes.")
+
+
+def _library_context():
+    """The user's catalog and today's Steam prices, INLINE in the prompt.
+
+    The worker has no file tools (ClaudeWorker.DENY), so the data it used to
+    Read is handed to it instead. That is the whole trade: `Read` served the
+    library AND `secrets.json`, cannot be path-scoped (drilled 2026-08-14 -
+    Read(**/x) is ignored), so the only way to keep one without the other is
+    to stop reading files and pass the data. Same move the assistant already
+    makes, and better input than the raw JSON it used to parse: these rows
+    carry tags and playtime.
+
+    Fail-soft: a job without the catalog is worse, a job that dies because
+    state was mid-write is unacceptable.
+    """
+    try:
+        import library
+        rows = library.catalog_lines()
+        deals = library.load_deals() or {}
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    out = ["\nThe user's STEAM CATALOG follows. Treat it as ground truth about "
+           "what they own and how long they have played - it is fresher than "
+           "anything you will find on the web.",
+           "appid|name|tags|genres|hours|lastPlayed|installed|controller",
+           "\n".join(rows)]
+    ws, sp = deals.get("wishlist_on_sale") or [], deals.get("specials") or []
+    if ws or sp:
+        out.append("\nSteam prices already fetched for you - use these rather "
+                   "than searching for prices:")
+        if ws:
+            out.append("wishlist items now discounted: " + json.dumps(ws[:12]))
+        if sp:
+            out.append("featured specials: " + json.dumps(sp[:12]))
+    return "\n".join(out) + "\n"
 
 
 def _argv_for(path):
@@ -81,7 +121,8 @@ class _CliWorker:
     def run(self, task, timeout):
         try:
             p = subprocess.run(
-                self._argv(), input=PROMPT.format(task=task),
+                self._argv(),
+                input=PROMPT.format(task=task, library=_library_context()),
                 cwd=str(WORKER_HOME), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=timeout,
                 env=self._env())
@@ -146,19 +187,31 @@ def result_meta(d):
 
 
 class ClaudeWorker(_CliWorker):
-    """claude -p. Research-only BY CONSTRUCTION: no Bash in --allowedTools,
-    so the boundary is the harness rather than a prompt rule - a shell reads
-    what the Read deny rules cannot, and this process ingests untrusted web
-    content on the account holding the gamepc key. Actions belong to Tier 2,
-    after the user asks. The injection canary drill (voice-testing 10c) proves
-    it on this machine.
+    """claude -p, restricted to research.
 
-    CodexWorker below cannot promise the same - its sandbox confines writes,
-    not reads or shell - so doctor warns whenever that lane is selected. If
-    that lane ever has to be real, the fix is NOT more prompt rules: run
-    workers as a separate low-privilege Windows account with a deny ACL on
-    secrets.json. That is the only mechanism here independent of model
-    judgment.
+    THE BOUNDARY IS --disallowedTools, NOT --allowedTools. That is the whole
+    lesson of 2026-08-14: --allowedTools is only an AUTO-APPROVE list in -p
+    mode, so listing six tools restricted nothing - a live job called Bash
+    (and TaskCreate, and ToolSearch), and `echo` ran when drilled directly.
+    This lane reads UNTRUSTED WEB CONTENT on the box holding secrets.json and
+    the gamepc key, so it ran for months on a promise the harness never made.
+
+    What the enumeration actually showed (ask the CLI, do not assume): 33
+    tools, including TWO shells, Cron* (persistence), Artifact /
+    PushNotification / SendMessage / RemoteTrigger (outbound channels that
+    need no shell), and Agent / Workflow (spawn more agents). Several are
+    recent additions - PowerShell sits right next to Bash - which is why DENY
+    below is written from a live enumeration and guarded by
+    bench/probe_worker_surface.py: a denylist against a list someone else
+    grows is only honest if something MEASURES it. Actions still belong to
+    Tier 2, after the user asks.
+
+    This is mitigation, not the endgame. The mechanism-independent fix is the
+    one that does not care how many tools ship: run this as a separate
+    low-privilege Windows account with a deny ACL on secrets.json, or own the
+    loop outright (an API agent whose tools we define). CodexWorker below is
+    weaker still - its sandbox confines writes, not reads or shell - so doctor
+    warns whenever that lane is selected.
 
     Output is stream-json so the TOOL CALLS are visible - with plain json the
     only artefact of three minutes of research is the final text. The stream
@@ -171,7 +224,26 @@ class ClaudeWorker(_CliWorker):
     to a whole-stdout parse, and a CLI that rejects the flags retries once in
     legacy mode (see run). Churn costs tool spans, never the job."""
     exe = "claude"
-    TOOLS = "WebSearch,WebFetch,Read,Glob,Grep,Write"
+    # The web, and nothing else. No file tools at all: `Read` served both
+    # library.json and secrets.json, and it CANNOT be path-scoped (drilled
+    # 2026-08-14: a Read(**/x) deny was ignored and the file read anyway), so
+    # the only way to keep the library without the secret is to stop reading
+    # files and pass the data in - see _library_context. Write goes for the
+    # same reason in reverse: it was unscoped too, so scratch space meant
+    # "overwrite anything on the box".
+    TOOLS = "WebSearch,WebFetch"
+    # Everything else the CLI offered on 2026-08-14, by name. Grouped by what
+    # each would BUY an injected instruction, so the next reader can judge an
+    # addition rather than pattern-match a list.
+    DENY = ("Bash,PowerShell,"                                   # execution
+            "Read,Glob,Grep,Write,"                              # the filesystem, at all
+            "Edit,NotebookEdit,"                                 # writes outside worker_home
+            "CronCreate,CronDelete,CronList,ScheduleWakeup,"     # persistence
+            "Artifact,PushNotification,SendMessage,RemoteTrigger,"   # exfiltration
+            "Agent,Workflow,TaskCreate,TaskGet,TaskList,"        # more agents
+            "TaskOutput,TaskStop,TaskUpdate,"
+            "Skill,ToolSearch,Monitor,DesignSync,"               # surface expansion
+            "EnterWorktree,ExitWorktree,ReportFindings")
 
     def __init__(self, model="", effort=""):
         super().__init__(model, effort)
@@ -181,7 +253,17 @@ class ClaudeWorker(_CliWorker):
         argv = _argv_for(self.path) + ["-p"]
         argv += (["--output-format", "stream-json", "--verbose"] if self.stream
                  else ["--output-format", "json"])
-        argv += ["--allowedTools", self.TOOLS]
+        # allowedTools auto-approves; disallowedTools is what actually removes
+        # the tool from the model's list. Both, so the intent reads either way.
+        argv += ["--allowedTools", self.TOOLS, "--disallowedTools", self.DENY]
+        # And NO MCP. The surface canary caught this on its first run: the
+        # subprocess inherits the desktop account's connectors, so the worker
+        # could read, overwrite, TRASH and publicly SHARE the user's Google
+        # Drive - from a lane whose whole input is untrusted web pages. Naming
+        # those eleven tools in DENY would fix Drive and miss the next
+        # connector, so cut it at the mechanism: an empty server set plus
+        # --strict-mcp-config means no config anywhere can add one back.
+        argv += ["--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config"]
         if self.model:
             argv += ["--model", self.model]
         return argv
@@ -251,6 +333,16 @@ class ClaudeWorker(_CliWorker):
             s["result"] = results.get(s.pop("id"), "")
         out = parse_reply(final.get("result", ""))
         out["meta"] = result_meta(final)
+        # Count the searches from the STEPS, not from usage.server_tool_use:
+        # that field counts the API's own server-executed web_search, while
+        # this CLI's WebSearch/WebFetch are harness tools, so it read 0 on a
+        # job with six real searches (2026-08-14) - and "0 web searches" reads
+        # as "the research lane did nothing", the opposite of what happened.
+        for field, tool in (("web_searches", "WebSearch"),
+                            ("web_fetches", "WebFetch")):
+            n = sum(1 for s in steps if s.get("tool") == tool)
+            if n:
+                out["meta"][field] = n
         out["steps"] = steps
         return out
 

@@ -19,13 +19,13 @@ function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = 
 }
 
 # 1. Deployed files
-$files = @('CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
+$files = @('CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
 $missing = $files | Where-Object { -not (Test-Path (Join-Path $CG.Root $_)) }
 if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 're-copy from repo gaming-pc/ (lnk files: recreate per guide Stage 6)' }
 else { Report PASS 'files' "$($files.Count)/$($files.Count) present" }
 
 # 2. Scheduled tasks
-foreach ($t in 'Enter','Exit','ForceOfficeAtLogon','WakeSafety','LaunchGame') {
+foreach ($t in 'Enter','Exit','ForceOfficeAtLogon','WakeSafety','LaunchGame','Nav','StopGame') {
     schtasks /Query /TN "\CouchGaming\$t" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Report PASS "task $t" 'registered' }
     else { Report FAIL "task $t" 'not registered' 'guide Stage 6/8 has the registration commands' }

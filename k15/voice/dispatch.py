@@ -58,6 +58,16 @@ def _fail(detail):
     return Result(False, "fail", detail)
 
 
+def _no_task(out):
+    """NOTASK:<name> - the PC says that scheduled task does not exist. A setup
+    step someone skipped, not a fault, so say the fix out loud: the raw
+    FAILED:1 this replaced taught nobody anything, and a whole couch test read
+    it as "nav is broken" (2026-08-14)."""
+    return _fail(f"the {out.split(':', 1)[1]} task isn't registered on the "
+                 "gaming PC - it needs the one-time Register-ScheduledTask "
+                 "from the setup guide")
+
+
 def _name(appid):
     """appid -> installed title, falling back to the bare id. Never raises:
     the index is a cache (empty on a fresh K15, stale after an install), and
@@ -181,16 +191,87 @@ class Dispatch:
         if out.startswith("BUSY:"):
             # Name the blocker: the assistant lane sees only `detail`, so a
             # bare appid leaves it saying "something else is running" with no
-            # way to say WHAT to quit. The raw code stays for the log.
+            # way to say WHAT to quit. The raw code stays for the log. Since
+            # quit_game landed, the blocker is now quittable by voice - the
+            # message offers it instead of the old "needs the controller".
             return _busy(f"{_name(out.split(':', 1)[1])} is already running - "
-                         f"it has to be quit with the controller first ({out})")
+                         f"it has to be quit first, which I can do if you ask ({out})")
         if out == "NOTREADY":
             # Lock fresh but host pre-READY: a launch is in flight.
             return _busy("the session is still starting")
         if out == "NOTINSTALLED":
             return _fail(f"{_name(appid)} is not installed - "
                          "installing it needs the controller")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
         return _fail(f"the launch failed (ssh launch: {out})")
+
+    def quit_game(self, appid):
+        """Quit the running game on the host. The appid MUST be the one running
+        - the host re-checks RunningAppID and refuses (BUSY) otherwise, the same
+        truthfulness play_game has, so a raced or wrong id never kills the wrong
+        game. This is the voice path out of the "a game left running steals the
+        next session" trap that play_game's BUSY message used only to describe."""
+        appid = int(appid)
+        if self.dry_run:
+            return self._would(f"ssh stop {appid}")
+        try:
+            out = couch.ssh_intent(f"stop {appid}", turn=self.utterance.turn)
+        except Exception as e:
+            self.log.error("quit_failed", appid=appid, err=str(e))
+            return _fail(f"couldn't reach the PC (ssh stop: {e})")
+        self.log("quit_dispatched", appid=appid, answer=out)
+        if out == "OK":
+            return _ok(f"quitting {_name(appid)}")
+        if out == "NOTRUNNING":
+            return _ok("nothing is running to quit")
+        if out.startswith("BUSY:"):
+            # A different game is up: name it, don't touch it. The user asked to
+            # quit one thing; quitting another is the wrong-game bug play_game's
+            # BUSY exists to avoid.
+            return _busy(f"{_name(out.split(':', 1)[1])} is what's running, not "
+                         f"{_name(appid)} - nothing was quit ({out})")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
+        return _fail(f"the quit failed (ssh stop: {out})")
+
+    # -- Big Picture navigation ------------------------------------------------
+
+    NAV_KINDS = {"downloads", "library", "store", "details", "collection"}
+
+    def nav(self, kind, arg=None):
+        """Fire a steam:// navigation into Big Picture via the host `nav` verb.
+        Low-level and shared: the assistant tool and the grammar both map a
+        spoken target to (kind, arg) and call here. Session-gated on the host
+        (NOTREADY with no session - nothing to navigate)."""
+        kind = str(kind).strip().lower()
+        if kind not in self.NAV_KINDS:
+            return _fail(f"there's no navigation target called '{kind}'")
+        cmd = f"nav {kind}" + (f" {arg}" if arg not in (None, "") else "")
+        if self.dry_run:
+            return self._would(f"ssh {cmd}")
+        try:
+            out = couch.ssh_intent(cmd, turn=self.utterance.turn)
+        except Exception as e:
+            self.log.error("nav_failed", kind=kind, err=str(e))
+            return _fail(f"couldn't reach the PC (ssh {cmd}: {e})")
+        self.log("nav_dispatched", kind=kind, arg=arg, answer=out)
+        if out == "OK":
+            return _ok(f"showing {self._nav_label(kind, arg)}")
+        if out == "NOTREADY":
+            return _busy("there's no session to navigate - start one first")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
+        return _fail(f"the navigation failed (ssh {cmd}: {out})")
+
+    def _nav_label(self, kind, arg):
+        """Spoken-friendly name for what we navigated to."""
+        if kind == "details" and arg:
+            return _name(arg)
+        if kind == "store" and arg:
+            return f"{_name(arg)} in the store"
+        return {"downloads": "downloads", "library": "your library",
+                "store": "the store", "collection": "that collection"}.get(kind, kind)
 
     # -- TV --------------------------------------------------------------------
 

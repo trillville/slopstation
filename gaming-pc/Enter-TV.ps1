@@ -141,7 +141,17 @@ try {
     # switches (a session rescuable with one click beats no session), but
     # this failure looks EXACTLY like success from here, so it must not log
     # as one. `ready focused=False` is the alert; `fg` says what to look at.
-    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused) { 'info' } else { 'warn' })
+    #
+    # ALSO warn when a game was already up, foreground won or not. Four
+    # sessions have started that way (2026-08-13: turns 2c7936, 457a79, 14852d,
+    # b01c9d) and all four were abandoned inside three minutes - Big Picture
+    # holds the foreground and answers the pad audibly while the TV shows a
+    # frame that never changes. At info that was indistinguishable from a
+    # perfect launch. It is NOT input routing: clearing Steam's forced binding
+    # here (steam://forceinputappid/0) changed nothing on b01c9d. The only cure
+    # known to work is the game not running - 8289e9 ran 90 clean minutes on
+    # this rig once AC6 was gone.
+    Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused -and -not $running) { 'info' } else { 'warn' })
 }
 catch {
     # The failure path obeys the same rules as the success path: kill

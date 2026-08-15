@@ -15,15 +15,17 @@ separate process and survives anything the voice stack does.
 
 ## Docs
 
-Four, and each is a thing you *do* — how to build it, how to bring voice up,
-how to fix it, and the one feature that isn't built. **Why** the code is
-shaped as it is lives in the code: the comments carry the incidents and
-constraints, so there is no design doc to drift away from them.
+Five, and each is a thing you *do* — how to build it, how to bring voice up,
+how to fix it, how to prove the newest voice features on the rig, and the one
+feature that isn't built. **Why** the code is shaped as it is lives in the code:
+the comments carry the incidents and constraints, so there is no design doc to
+drift away from them.
 
 | | |
 |---|---|
 | [couch-gaming-guide.md](docs/couch-gaming-guide.md) | **Start here to build one.** Physical install → TV settings → VirtualHere gate → display profiles → sshd + tasks → orchestrator → the chord. One-time commands, failure drills, acceptance checklist. |
 | [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. Also the ReSpeaker mic-array bring-up and its accept/reject bar. |
+| [voice-expansion-livetest.md](docs/voice-expansion-livetest.md) | Bring-up + live test for the expanded voice surface: deploy the new PC verbs, the Phase-0 on-hardware gates, then drills for store questions, Big Picture nav/quit/collections, and install-by-voice. |
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
 | [resume-game-design.md](docs/resume-game-design.md) | The one unbuilt feature — landing back *in* a game across sessions. Two attempts, why both failed, and the two-minute experiment that gates a third. |
 | [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops — launches, errors, liveness, both machines) and `langfuse-traces` (agent — what the assistant heard, said, cost). Each carries a stdlib-only query script. |
@@ -64,13 +66,15 @@ checkout runs without its local config/keys ever fighting `git pull`:
 
 | File | Role |
 |---|---|
-| `CouchGaming.common.ps1` | Shared library, dot-sourced by the four session scripts: `$CG` constants (the `2160` TV sentinel, Puck address/HW ID, paths), display probe, Puck claim/release, profile apply-verify, task guards, ready-marker ops. |
+| `CouchGaming.common.ps1` | Shared library, dot-sourced by the session/task scripts: `$CG` constants (the `2160` TV sentinel, Puck address/HW ID, paths), display probe, Puck claim/release, profile apply-verify, task guards, ready-marker ops, and the Steam library/install-dir/process resolvers `Stop-Game` uses. |
 | `Enter-TV.ps1` | Session setup: TV-GAMING profile, Puck claim, Big Picture, `READY` marker. Task `\CouchGaming\Enter`. |
 | `Exit-TV.ps1` | Teardown: close Big Picture, restore OFFICE, release Puck. Task `\CouchGaming\Exit`. Stops a mid-flight Enter first (teardown wins). |
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
 | `Wake-Safety.ps1` | Cleans up sessions abandoned before sleep; stands down for network wakes. Task `\CouchGaming\WakeSafety`. |
-| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `games` / `playing` / `launch <appid>` / `version`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
+| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `games` / `playing` / `launch <appid>` / `version` / `nav <kind> [arg]` / `stop <appid>` / `collections`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
 | `Launch-Game.ps1` | Task `\CouchGaming\LaunchGame`, fired by the `launch` verb: reads the appid marker, re-validates, `steam -applaunch` into the running Big Picture session. |
+| `Nav-BigPicture.ps1` | Task `\CouchGaming\Nav`, fired by the `nav` verb: reads the nav-target marker, re-validates, fires a `steam://` URL (downloads/library/store/game page/collection) into Big Picture. |
+| `Stop-Game.ps1` | Task `\CouchGaming\StopGame`, fired by the `stop` verb: quits the running game — `steam +app_stop`, then window-close, then a forced tree-kill only if both are ignored — and re-focuses Big Picture after. |
 | `Deploy.ps1` | The deploy: copies the script set from a checkout to `C:\CouchGaming\` and stamps `build-id` (what the `version` verb answers). Refuses a partial set; never touches the gitignored runtime pieces. |
 | `Doctor.ps1` | On-demand chain diagnosis: files, tasks, sshd/firewall/key ACL, VirtualHere, display probe, session state. Read-only; exit code = FAIL count. |
 
@@ -85,13 +89,13 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
 | `doctor.py` | On-demand chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (auto-skipped while the listener owns the Puck), ssh contract, session state, voice overlay (WARN-only). |
 | `exlink.py` | Manual Ex-Link TV control: power/inputs/volume/mute; COM port from config. |
-| `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), merged into `state/library.json`; auto-synced by the voice agent. |
+| `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json`; auto-synced by the voice agent. Also the layer-4 store-question fetchers (search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat) and the `state/deals.json` precompute the voice tools and the worker read. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping, voice tuning). |
 | `Start-TV-Gaming.bat` | Manual recovery launcher: runs `couch.py start` in a window that stays open. |
 | `Start-K15.bat` | **The** Startup-folder shortcut target, and the one thing to run after a `git pull` — both converge on "both lanes running current code". Per lane: supervisor down → start it; supervisor up → kill the *agent* so its supervisor relaunches it on new code. Never bounces a supervisor window, so a live session's watch loop (and `reconcile`) are untouched. |
 | `Start-Listener.bat` | Chord-lane supervisor: `reconcile` once, then the listener in a 10 s restart loop. Single-instance (a second launch bounces). |
-| `voice/` | The voice overlay: `voice_agent.py` (composition root + wake loop), `audio.py` (the PortAudio world: devices, recovery, wake listener), `session_runtime.py` (one session's Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane, + cross-session carry), `grammar.yaml` + `titles.py` (command grammar + fuzzy title resolution), `dispatch.py` (every voice side effect, shared by both lanes, + the per-utterance snapshot), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain, optional web search, + `--text` REPL), `workers.py`/`jobs.py`/`announce.py` + `worker_home/` (Tier-3 background tasks: claude/codex CLI adapters, job store, proactive spoken results), `tests/` (blind suite). Own venv, own pins. |
+| `voice/` | The voice overlay: `voice_agent.py` (composition root + wake loop), `audio.py` (the PortAudio world: devices, recovery, wake listener), `session_runtime.py` (one session's Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane, + cross-session carry), `grammar.yaml` + `titles.py` (command grammar + fuzzy title/collection resolution), `dispatch.py` (every voice side effect — session, TV, launch, quit, Big Picture nav — shared by both lanes, + the per-utterance snapshot), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain, the store-data + nav + quit + install tools, optional web search, + `--text` REPL), `steam_session.py` (optional signed-in account session: install-by-voice + download status over ClientComm, token-gated), `workers.py`/`jobs.py`/`announce.py` + `worker_home/` (Tier-3 background tasks: claude/codex CLI adapters, job store, proactive spoken results), `tests/` (blind suite). Own venv, own pins. |
 | `voice/Start-Voice.bat` | Voice-lane supervisor (launched by `Start-K15.bat`): creates the venv on first run, then supervises the agent (single-instance, 10 s crash restart). The dependency gate lives *inside* the restart loop and compares `requirements.txt` against a copy of itself, so a `git pull` that changes pins installs them on the next agent launch rather than needing a cold start. |
 
 ## Code architecture
@@ -148,6 +152,7 @@ with the reasoning; if the premise changes, reopen it deliberately.
 | **Tracing library sync and metadata crawls** | Those are logs. Nobody is waiting on them. |
 | **A custom status page** | Grafana and Langfuse are the web app. If one is ever wanted it reads their query APIs and stores nothing. |
 | **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. The `sys.path` inserts are the price and it is already paid. |
+| **Pausing/resuming downloads by voice** | Voice can *see* download progress (ClientComm `download_status`) and *start* installs, but not pause/resume. Deliberately cut: it is a rare want, and the couch is for playing, not managing a queue. The CDP `Downloads.*` verbs exist if this is ever revisited. |
 
 Still genuinely open: **clock skew** between the two machines — correlation is
 by `turn` rather than timestamp, so skew only misorders a merged view; measure
@@ -176,5 +181,5 @@ are in `voice/session_runtime.py`.
 | Ex-Link serial | `COM3` on the K15 · 9600 8N1 |
 | TV inputs | HDMI1 Apple TV · HDMI2 PS5 · HDMI3 eARC · HDMI4 PC |
 | TV EDID name | `QCQ90S` |
-| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>\|version` — nothing else exists |
+| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>\|version\|nav <kind> [arg]\|stop <appid>\|collections` — nothing else exists |
 | The one rule | Nothing switches the TV to HDMI 4 before the host writes `READY` |

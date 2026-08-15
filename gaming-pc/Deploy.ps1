@@ -15,6 +15,7 @@ param([string]$Dest = 'C:\CouchGaming')
 $scripts = @(
     'CouchGaming.common.ps1', 'Dispatch.ps1', 'Doctor.ps1',
     'Enter-TV.ps1', 'Exit-TV.ps1', 'Launch-Game.ps1',
+    'Nav-BigPicture.ps1', 'Stop-Game.ps1',
     'Office-Safety.ps1', 'Wake-Safety.ps1'
 )
 

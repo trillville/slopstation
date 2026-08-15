@@ -14,11 +14,20 @@ intents:
           - "start [a|the] [gaming] session"
           - "game time"
           - "let's play"
+  # Still narrow, and still no fuzz. "exit session" / "exit gaming mode" were
+  # the phrasings that actually turned up in the logs, and they are statements
+  # of intent nobody produces by accident - unlike the mishears that showed up
+  # alongside them ("end of session", "access session", "I'm the session"),
+  # which are NOT phrasings and are deliberately not encoded here. Teaching a
+  # risky command to answer to one specific STT error is how it starts firing
+  # on speech that was never the command.
   EndSession:
     data:
       - sentences:
           - "end [the] [gaming] session"
           - "stop [the] [gaming] session"
+          - "exit [the] [gaming] session"
+          - "exit (gaming|tv) mode"
           - "we're done [gaming|playing]"
   VolumeUp:
     data:
@@ -48,6 +57,24 @@ intents:
           - "switch [over] to [the] {input}"
           - "go [back] to [the] {input}"
           - "show [the] {input}"
+  # Big Picture navigation to a FIXED target (downloads/library/store). The
+  # {target} slot is a runtime list (config.navTargets, like {input}) whose
+  # value is the nav KIND, so it can't collide with {input} (disjoint vocab)
+  # or eat a game/collection (those are wildcards, matched later). Game-page
+  # and store-page nav are deliberately NOT here - they need title resolution
+  # and are the assistant lane's job.
+  #
+  # The optional "can you" is worth more here than anywhere else: nav is what
+  # gets asked politely ("can you show me my downloads"), and 4 of the logged
+  # misses were exactly that. It is a lead-in on a LIST-slot intent, so it
+  # cannot widen anything - {target} still has to be a configured phrase.
+  Nav:
+    data:
+      - sentences:
+          - "[(can|could) you] show [me] [the] {target}"
+          - "[(can|could) you] open [the] {target}"
+          - "[(can|could) you] go to [the] {target}"
+          - "[(can|could) you] take me to [the] {target}"
   ExitSession:
     data:
       - sentences:
@@ -59,6 +86,12 @@ intents:
           - "nevermind"
           - "cancel"
           - "go back to sleep"
+          # Safe to widen where EndSession is not: this closes the CONVERSATION
+          # and touches nothing in the room. The assistant already honours it
+          # through the stop_listening tool, so these only save the round trip.
+          - "go away"
+          - "leave me alone"
+          - "shut up"
   # Background-task surface. Deliberately narrow: "cancel" alone stays
   # ExitSession, and conversational phrasings ("tell me more") must keep
   # falling through to the assistant lane.
@@ -77,13 +110,43 @@ intents:
     data:
       - sentences:
           - "cancel the (task|research|job)"
+  # Collections by name ("show my roguelikes"). A wildcard like {game}, so it
+  # sits down here with PlayGame. Requiring "my" or the word "collection"
+  # keeps a bare "show me <game>" out of it - that falls through to the
+  # assistant, which can open the game's page. A collection MISS (the resolver
+  # returns nothing) also falls through, exactly as an unresolved title does.
+  ShowCollection:
+    data:
+      - sentences:
+          - "show [me] my {collection}"
+          - "show [me] [my|the] {collection} collection"
+          - "open [my|the] {collection} collection"
+          - "go to [my|the] {collection} collection"
   # LAST on purpose: {game} is a wildcard, so "start a session" must hit
   # StartSession above before "start {game}" can eat it. Title resolution is
   # the fuzzy resolver's job (titles.py), not this grammar's.
+  #
+  # The lead-ins are here because the couch does not speak in imperatives.
+  # "i wanna play armored core six" and "open armored core six" were the two
+  # commonest launch phrasings in the logs and BOTH fell through to the LLM -
+  # even after the STT heard the title perfectly, the slot came out empty.
+  # Widening PlayGame is safe in a way widening EndSession is not: it is the
+  # non-destructive verb, and every list-slot intent above already claims its
+  # own phrasing before this wildcard is reached ("open the downloads" is Nav,
+  # "open my mech collection" is ShowCollection).
   PlayGame:
     data:
       - sentences:
-          - "(play|launch|start|put on) [the game] {game}"
+          - "(play|launch|start|put on|open) [the game] {game}"
+          - "[i] (want to|wanna|would like to) (play|launch|start|put on|open) [the game] {game}"
+          - "let's (play|launch|start|put on) [the game] {game}"
+          # No "start" in the polite form. Bare "start {game}" is safe because
+          # StartSession's own phrasings sit above it and win first - but
+          # StartSession has no "can you" variant to win WITH, so "can you
+          # start the session" fell down here and matched with game="the
+          # session". Adding the lead-in to StartSession instead would be
+          # widening a risky command, which is the rule this file opens with.
+          - "can you (play|launch|put on|open) [the game] {game}"
 lists:
   level:
     range:
@@ -91,4 +154,6 @@ lists:
       from: 0
       to: 100
   game:
+    wildcard: true
+  collection:
     wildcard: true

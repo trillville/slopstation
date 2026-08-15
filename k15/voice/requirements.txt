@@ -12,6 +12,12 @@ hassil==3.11.0
 rapidfuzz==3.14.5
 pyserial==3.5
 pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
+# how-long-to-beat hours for the assistant's game-details facet. library.py
+# imports it LAZILY and fail-soft, so an install that skips it only loses that
+# one facet - never the lane. It drags in fake_useragent + beautifulsoup4 (and,
+# annoyingly, aiounittest) as NEW transitives; aiohttp/requests were already
+# here. Add those to constraints.txt on the next K15 freeze.
+howlongtobeatpy==1.0.22
 # Transitive versions are ENFORCED via constraints.txt (the supervisor
 # installs with `-c constraints.txt`) - see its header for the regeneration
 # rule. The as-built, for the record: pyaudio 0.2.14 (cp313 win_amd64 wheel

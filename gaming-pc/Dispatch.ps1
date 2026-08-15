@@ -1,5 +1,5 @@
 # The entire remote attack surface: forced command for the K15's SSH key
-# (administrators_authorized_keys). Seven verbs; everything else is DENIED.
+# (administrators_authorized_keys). Ten verbs; everything else is DENIED.
 # Deliberately dependency-free - no dot-sourcing in the sshd context.
 # The ready path mirrors $CG.ReadyMarker in CouchGaming.common.ps1.
 #
@@ -7,9 +7,28 @@
 # (RunningAppID), launch <appid> (READY-gated, BUSY/ALREADY-truthful; the appid
 # travels via marker file because schtasks /Run cannot pass arguments),
 # version (the build-id Deploy.ps1 stamped - doctor.py compares it against
-# the K15's checkout, so deploy skew is measured instead of assumed).
-# The three mutating verbs also take an optional ` --turn <hex>` correlation id
-# (see Set-Turn below); the read-only polls deliberately do not.
+# the K15's checkout, so deploy skew is measured instead of assumed),
+# nav <kind> [<appid>|<collection>] (fire a steam:// URL into Big Picture -
+# READY-gated, via the Nav task + marker for the same schtasks-can't-pass-args
+# reason), stop <appid> (quit the running game - refuses if that appid isn't
+# the one running, via the StopGame task), collections (the library
+# collections as {name,id} JSON, read from the cloud-storage file like games).
+# The FIVE mutating verbs (enter/exit/launch/nav/stop) also take an optional
+# ` --turn <hex>` correlation id (see Set-Turn below); the read-only polls
+# (status/version/playing/games/collections) deliberately do not.
+#
+# nav/stop run in the INTERACTIVE session (steam:// forwarding, window focus)
+# so they fire a scheduled task exactly as launch does; collections is a pure
+# read and runs inline here. The nav 'store' kind is split across two patterns
+# on purpose - "store" is the front page, "store <appid>" a game page - and
+# they are disjoint (the second needs digits), so each switch case still breaks
+# cleanly. The collection-id charset ([A-Za-z0-9_.*+=-]) is fail-closed like
+# the appid and turn, because the value reaches a steam:// URL in the task -
+# but it has to cover what Steam actually generates: the ids are base64-ish
+# ("uc-mkD+r+pfQ1hu", "uc-odwxN*+G1zDb*+"), and a tighter [A-Za-z0-9_.-] read
+# of them DENIED 3 of this rig's 11 collections (2026-08-14, caught before a
+# couch test hit it). '/' stays OUT on purpose: everything here is one URL
+# path segment, and a slash is the one character that could leave it.
 $ready = 'C:\ProgramData\CouchGaming\ready'
 $turnFile = 'C:\ProgramData\CouchGaming\turn'
 
@@ -46,16 +65,30 @@ function Set-Turn($t) {
   if ($t) { Set-Content $turnFile $t }
 }
 
+# Fire a scheduled task and say WHICH way it failed. schtasks /Run answers 1
+# both for "that task does not exist" and for a real failure, and those are
+# opposite problems: the first is a one-time registration someone skipped
+# (guide Stage 6/8), the second is the PC misbehaving. On 2026-08-14 every nav
+# in a couch test answered FAILED:1 and read as "nav is broken" when the Nav
+# task had simply never been registered - an hour to find, one command to fix.
+# The /Query only runs on the failure path, so the happy path is still one call.
+function Start-CgTask([string]$Name) {
+  schtasks /Run /TN "\CouchGaming\$Name" | Out-Null
+  if ($LASTEXITCODE -eq 0) { return 'OK' }
+  $code = $LASTEXITCODE
+  schtasks /Query /TN "\CouchGaming\$Name" 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { return "NOTASK:$Name" }
+  "FAILED:$code"
+}
+
 switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   '^enter( --turn ((?-i:[0-9a-f]{1,8})))?\z'
              { Set-Turn $Matches[2]
-               schtasks /Run /TN '\CouchGaming\Enter' | Out-Null
-               if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+               Start-CgTask 'Enter'
                break }
   '^exit( --turn ((?-i:[0-9a-f]{1,8})))?\z'
              { Set-Turn $Matches[2]
-               schtasks /Run /TN '\CouchGaming\Exit'  | Out-Null
-               if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+               Start-CgTask 'Exit'
                break }
   '^status\z' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
                break }
@@ -135,8 +168,83 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       # Launch-Game's own delete is best-effort.
       Remove-Item 'C:\ProgramData\CouchGaming\launch-app' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\launch-app' $id
-      schtasks /Run /TN '\CouchGaming\LaunchGame' | Out-Null
-      if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+      Start-CgTask 'LaunchGame'
+      break }
+  # nav: fire a steam:// URL into the running Big Picture session. READY-gated
+  # (no session, nothing to navigate). The (kind [arg]) travels via the
+  # nav-target marker for the same reason launch's appid does; the Nav task,
+  # unelevated, reads and maps it to a URL. Cleared here in the elevated
+  # context where the delete always succeeds (the task cannot delete it).
+  '^nav (downloads|library|store)( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      Set-Turn $Matches[3]
+      if (-not (Test-Path $ready)) { 'NOTREADY'; break }
+      Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
+      Set-Content 'C:\ProgramData\CouchGaming\nav-target' $Matches[1]
+      Start-CgTask 'Nav'
+      break }
+  '^nav (details|store) (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      Set-Turn $Matches[4]
+      if (-not (Test-Path $ready)) { 'NOTREADY'; break }
+      Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
+      Set-Content 'C:\ProgramData\CouchGaming\nav-target' "$($Matches[1]) $($Matches[2])"
+      Start-CgTask 'Nav'
+      break }
+  '^nav collection ([A-Za-z0-9_.*+=-]{1,64})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      Set-Turn $Matches[3]
+      if (-not (Test-Path $ready)) { 'NOTREADY'; break }
+      Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
+      Set-Content 'C:\ProgramData\CouchGaming\nav-target' "collection $($Matches[1])"
+      Start-CgTask 'Nav'
+      break }
+  # stop: quit the running game. The appid is REQUIRED and re-checked against
+  # RunningAppID here, so a raced/wrong id refuses (BUSY:<other>) instead of
+  # killing the wrong game - the same truthfulness launch has. NOTRUNNING when
+  # nothing is up. The StopGame task does the graceful-then-forceful work and
+  # re-focuses Big Picture after (the dead-controller lesson from Enter-TV).
+  '^stop (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $id = $Matches[1]
+      Set-Turn $Matches[3]
+      $run = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
+      if (-not $run -or $run -eq 0) { 'NOTRUNNING'; break }
+      if ("$run" -ne $id) { "BUSY:$run"; break }
+      Remove-Item 'C:\ProgramData\CouchGaming\stop-app' -Force -ErrorAction SilentlyContinue
+      Set-Content 'C:\ProgramData\CouchGaming\stop-app' $id
+      Start-CgTask 'StopGame'
+      break }
+  # collections: library collections as [{name,id}] JSON, from the per-user
+  # cloud-storage file. Same shape and encoding discipline as `games` (ASCII
+  # names, compact JSON). Best-effort per entry: the file format is
+  # community-reverse-engineered, so anything that doesn't parse is skipped
+  # rather than failing the verb - a keyless/empty answer beats a crash.
+  '^collections\z' {
+      $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
+      if (-not $steam) { '[]'; break }
+      $steam = $steam -replace '/', '\'
+      $out = @()
+      $seen = @{}
+      $userdata = Join-Path $steam 'userdata'
+      if (Test-Path $userdata) {
+        foreach ($udir in (Get-ChildItem $userdata -Directory -ErrorAction SilentlyContinue)) {
+          $cf = Join-Path $udir.FullName 'config\cloudstorage\cloud-storage-namespace-1.json'
+          if (-not (Test-Path $cf)) { continue }
+          try { $arr = Get-Content $cf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+          foreach ($entry in $arr) {
+            # Each entry is a [key, record] pair; user collections key on
+            # 'user-collections.<id>' and carry a JSON STRING in .value.
+            $k = "$($entry[0])"; $rec = $entry[1]
+            if ($k -notmatch '^user-collections\.') { continue }
+            if ($rec.is_deleted) { continue }
+            try { $v = $rec.value | ConvertFrom-Json } catch { continue }
+            if (-not ($v.name -and $v.id)) { continue }
+            $name = ($v.name -replace '[^\x20-\x7E]', '').Trim()
+            if ($name -and -not $seen.ContainsKey("$($v.id)")) {
+              $seen["$($v.id)"] = $true
+              $out += [pscustomobject]@{ name = $name; id = "$($v.id)" }
+            }
+          }
+        }
+      }
+      ConvertTo-Json -InputObject @($out) -Compress -Depth 3
       break }
   default    { 'DENIED'; exit 1 }
 }
