@@ -226,6 +226,19 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         settings=DeepgramFluxSTTService.Settings(
             model="flux-general-en",
             eot_threshold=voice["eotThreshold"],
+            # eagerEnabled is DORMANT, not broken - keep it set anyway. Flux
+            # does send EagerEndOfTurn, but pipecat 1.7 forwards it as an
+            # InterimTranscriptionFrame, which is not a TranscriptionFrame
+            # subclass, and GrammarGate only screens finals. So the eager
+            # transcript reaches nothing; its one live effect is resetting the
+            # idle clock, because interim frames are in idle_timeout_frames.
+            # Left on because the day pipecat implements the cancellable path
+            # (their own TODO) this starts paying latency back for free, and
+            # sending a threshold costs nothing today. Doing it OURSELVES is
+            # not a config change: it needs start-early/cancel-on-resume
+            # machinery, it is only ever safe for the assistant lane (a
+            # dispatch cannot be un-launched when the transcript is retracted),
+            # and it is the same missing piece as barge-in.
             eager_eot_threshold=(voice["eagerEotThreshold"]
                                  if voice.get("eagerEnabled", True) else None),
             numerals=True,

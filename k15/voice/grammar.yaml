@@ -14,11 +14,20 @@ intents:
           - "start [a|the] [gaming] session"
           - "game time"
           - "let's play"
+  # Still narrow, and still no fuzz. "exit session" / "exit gaming mode" were
+  # the phrasings that actually turned up in the logs, and they are statements
+  # of intent nobody produces by accident - unlike the mishears that showed up
+  # alongside them ("end of session", "access session", "I'm the session"),
+  # which are NOT phrasings and are deliberately not encoded here. Teaching a
+  # risky command to answer to one specific STT error is how it starts firing
+  # on speech that was never the command.
   EndSession:
     data:
       - sentences:
           - "end [the] [gaming] session"
           - "stop [the] [gaming] session"
+          - "exit [the] [gaming] session"
+          - "exit (gaming|tv) mode"
           - "we're done [gaming|playing]"
   VolumeUp:
     data:
@@ -54,13 +63,18 @@ intents:
   # or eat a game/collection (those are wildcards, matched later). Game-page
   # and store-page nav are deliberately NOT here - they need title resolution
   # and are the assistant lane's job.
+  #
+  # The optional "can you" is worth more here than anywhere else: nav is what
+  # gets asked politely ("can you show me my downloads"), and 4 of the logged
+  # misses were exactly that. It is a lead-in on a LIST-slot intent, so it
+  # cannot widen anything - {target} still has to be a configured phrase.
   Nav:
     data:
       - sentences:
-          - "show [me] [the] {target}"
-          - "open [the] {target}"
-          - "go to [the] {target}"
-          - "take me to [the] {target}"
+          - "[(can|could) you] show [me] [the] {target}"
+          - "[(can|could) you] open [the] {target}"
+          - "[(can|could) you] go to [the] {target}"
+          - "[(can|could) you] take me to [the] {target}"
   ExitSession:
     data:
       - sentences:
@@ -72,6 +86,12 @@ intents:
           - "nevermind"
           - "cancel"
           - "go back to sleep"
+          # Safe to widen where EndSession is not: this closes the CONVERSATION
+          # and touches nothing in the room. The assistant already honours it
+          # through the stop_listening tool, so these only save the round trip.
+          - "go away"
+          - "leave me alone"
+          - "shut up"
   # Background-task surface. Deliberately narrow: "cancel" alone stays
   # ExitSession, and conversational phrasings ("tell me more") must keep
   # falling through to the assistant lane.

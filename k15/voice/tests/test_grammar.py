@@ -24,6 +24,13 @@ TABLE = [
     ("let's play", "StartSession", {}),
     ("end the session", "EndSession", {}),
     ("end session", "EndSession", {}),
+    # "exit ..." are statements of intent nobody says by accident. The
+    # mishears that showed up beside them in the logs ("end of session",
+    # "access session") are NOT phrasings and stay out - see grammar.yaml.
+    ("exit session", "EndSession", {}),
+    ("exit the gaming session", "EndSession", {}),
+    ("exit gaming mode", "EndSession", {}),
+    ("exit tv mode", "EndSession", {}),
     ("we're done", "EndSession", {}),
     ("we're done gaming", "EndSession", {}),
     ("volume up", "VolumeUp", {}),
@@ -49,6 +56,11 @@ TABLE = [
     ("open the store", "Nav", {"target": "store"}),
     ("go to my library", "Nav", {"target": "library"}),
     ("take me to downloads", "Nav", {"target": "downloads"}),
+    # Polite lead-in: nav is what gets asked politely, and it cannot widen
+    # anything because {target} is still an exact list.
+    ("can you show me the downloads", "Nav", {"target": "downloads"}),
+    ("could you open the store", "Nav", {"target": "store"}),
+    ("can you go to my library", "Nav", {"target": "library"}),
     # ShowCollection: wildcard, resolved on the box; the "my"/"collection"
     # marker keeps a bare "show me <game>" out (that falls through, below).
     ("show my roguelikes", "ShowCollection", {"collection": "roguelikes"}),
@@ -79,6 +91,10 @@ TABLE = [
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
     ("cancel", "ExitSession", {}),          # bare cancel stays conversation-close
+    # Safe to widen where EndSession is not: closes the conversation, touches
+    # nothing in the room.
+    ("go away", "ExitSession", {}),
+    ("leave me alone", "ExitSession", {}),
     # Background-task surface - narrow by design.
     ("what did you find", "TaskResult", {}),
     ("what did you find out", "TaskResult", {}),
@@ -103,6 +119,10 @@ TABLE = [
     ("end it", None, {}),
     ("stop", None, {}),
     ("kill the session please maybe", None, {}),
+    ("exit", None, {}),                     # bare verb must not tear down the TV
+    ("exit the game", None, {}),            # quitting a GAME is not ending the session
+    ("end of session", None, {}),           # an STT mishear, deliberately not encoded
+    ("go", None, {}),
     # Conversational phrasings stay in the assistant lane.
     ("tell me more", None, {}),
     ("what did you find in the garage", None, {}),

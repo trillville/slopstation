@@ -20,6 +20,7 @@
     "holdWindowS": 10,
     "followupCarryS": 60,
     "eotThreshold": 0.7,
+    "_eagerEot": "DORMANT on pipecat 1.7: Flux sends EagerEndOfTurn but it arrives as an interim frame that nothing downstream screens, so these two buy no latency today. Left on so a pipecat that implements the cancellable path pays it back for free - see session_runtime's note before changing them.",
     "eagerEotThreshold": 0.5,
     "eagerEnabled": true,
     "volumeStep": 5,
