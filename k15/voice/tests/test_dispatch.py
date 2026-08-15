@@ -209,6 +209,20 @@ def main():
     couch.ssh = ssh_down
     assert Harness().d.nav("downloads").earcon == "fail"
 
+    # --- an UNREGISTERED task says so, on every verb that fires one ----------
+    # Every nav in the first couch test answered the old FAILED:1 and read as
+    # "nav is broken", when the fix was one Register-ScheduledTask
+    # (2026-08-14). The reply now names the task AND the fix.
+    h = Harness()
+    dp.library.installed_name = lambda a: None
+    with_temp_lock(5)          # a live session, so play_game takes the ssh path
+    for verb, task, call in (("nav", "Nav", lambda: h.d.nav("downloads")),
+                             ("stop", "StopGame", lambda: h.d.quit_game(1)),
+                             ("launch", "LaunchGame", lambda: h.d.play_game(1))):
+        couch.ssh = lambda cmd, _t=task, **kw: f"NOTASK:{_t}"
+        r = call()
+        assert not r.ok and task in r.detail and "registered" in r.detail, (verb, r)
+
     time.sleep = real_sleep
     print("OK - dispatch: lock arbiter, dry-run, spawn args, volume step/clamp, "
           "mute, retry, input map, gaming-input autostart/busy/READY, "

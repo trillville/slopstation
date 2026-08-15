@@ -61,16 +61,30 @@ function Set-Turn($t) {
   if ($t) { Set-Content $turnFile $t }
 }
 
+# Fire a scheduled task and say WHICH way it failed. schtasks /Run answers 1
+# both for "that task does not exist" and for a real failure, and those are
+# opposite problems: the first is a one-time registration someone skipped
+# (guide Stage 6/8), the second is the PC misbehaving. On 2026-08-14 every nav
+# in a couch test answered FAILED:1 and read as "nav is broken" when the Nav
+# task had simply never been registered - an hour to find, one command to fix.
+# The /Query only runs on the failure path, so the happy path is still one call.
+function Start-CgTask([string]$Name) {
+  schtasks /Run /TN "\CouchGaming\$Name" | Out-Null
+  if ($LASTEXITCODE -eq 0) { return 'OK' }
+  $code = $LASTEXITCODE
+  schtasks /Query /TN "\CouchGaming\$Name" 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { return "NOTASK:$Name" }
+  "FAILED:$code"
+}
+
 switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   '^enter( --turn ((?-i:[0-9a-f]{1,8})))?\z'
              { Set-Turn $Matches[2]
-               schtasks /Run /TN '\CouchGaming\Enter' | Out-Null
-               if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+               Start-CgTask 'Enter'
                break }
   '^exit( --turn ((?-i:[0-9a-f]{1,8})))?\z'
              { Set-Turn $Matches[2]
-               schtasks /Run /TN '\CouchGaming\Exit'  | Out-Null
-               if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+               Start-CgTask 'Exit'
                break }
   '^status\z' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
                break }
@@ -150,8 +164,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       # Launch-Game's own delete is best-effort.
       Remove-Item 'C:\ProgramData\CouchGaming\launch-app' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\launch-app' $id
-      schtasks /Run /TN '\CouchGaming\LaunchGame' | Out-Null
-      if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+      Start-CgTask 'LaunchGame'
       break }
   # nav: fire a steam:// URL into the running Big Picture session. READY-gated
   # (no session, nothing to navigate). The (kind [arg]) travels via the
@@ -163,24 +176,21 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
       Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\nav-target' $Matches[1]
-      schtasks /Run /TN '\CouchGaming\Nav' | Out-Null
-      if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+      Start-CgTask 'Nav'
       break }
   '^nav (details|store) (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       Set-Turn $Matches[4]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
       Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\nav-target' "$($Matches[1]) $($Matches[2])"
-      schtasks /Run /TN '\CouchGaming\Nav' | Out-Null
-      if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+      Start-CgTask 'Nav'
       break }
   '^nav collection ([A-Za-z0-9_.-]{1,64})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       Set-Turn $Matches[3]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
       Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\nav-target' "collection $($Matches[1])"
-      schtasks /Run /TN '\CouchGaming\Nav' | Out-Null
-      if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+      Start-CgTask 'Nav'
       break }
   # stop: quit the running game. The appid is REQUIRED and re-checked against
   # RunningAppID here, so a raced/wrong id refuses (BUSY:<other>) instead of
@@ -195,8 +205,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       if ("$run" -ne $id) { "BUSY:$run"; break }
       Remove-Item 'C:\ProgramData\CouchGaming\stop-app' -Force -ErrorAction SilentlyContinue
       Set-Content 'C:\ProgramData\CouchGaming\stop-app' $id
-      schtasks /Run /TN '\CouchGaming\StopGame' | Out-Null
-      if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" }
+      Start-CgTask 'StopGame'
       break }
   # collections: library collections as [{name,id}] JSON, from the per-user
   # cloud-storage file. Same shape and encoding discipline as `games` (ASCII

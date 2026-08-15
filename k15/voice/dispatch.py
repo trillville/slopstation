@@ -58,6 +58,16 @@ def _fail(detail):
     return Result(False, "fail", detail)
 
 
+def _no_task(out):
+    """NOTASK:<name> - the PC says that scheduled task does not exist. A setup
+    step someone skipped, not a fault, so say the fix out loud: the raw
+    FAILED:1 this replaced taught nobody anything, and a whole couch test read
+    it as "nav is broken" (2026-08-14)."""
+    return _fail(f"the {out.split(':', 1)[1]} task isn't registered on the "
+                 "gaming PC - it needs the one-time Register-ScheduledTask "
+                 "from the setup guide")
+
+
 def _name(appid):
     """appid -> installed title, falling back to the bare id. Never raises:
     the index is a cache (empty on a fresh K15, stale after an install), and
@@ -192,6 +202,8 @@ class Dispatch:
         if out == "NOTINSTALLED":
             return _fail(f"{_name(appid)} is not installed - "
                          "installing it needs the controller")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
         return _fail(f"the launch failed (ssh launch: {out})")
 
     def quit_game(self, appid):
@@ -219,6 +231,8 @@ class Dispatch:
             # BUSY exists to avoid.
             return _busy(f"{_name(out.split(':', 1)[1])} is what's running, not "
                          f"{_name(appid)} - nothing was quit ({out})")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
         return _fail(f"the quit failed (ssh stop: {out})")
 
     # -- Big Picture navigation ------------------------------------------------
@@ -246,6 +260,8 @@ class Dispatch:
             return _ok(f"showing {self._nav_label(kind, arg)}")
         if out == "NOTREADY":
             return _busy("there's no session to navigate - start one first")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
         return _fail(f"the navigation failed (ssh {cmd}: {out})")
 
     def _nav_label(self, kind, arg):
