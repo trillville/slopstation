@@ -50,6 +50,53 @@ def variants(title):
     return out
 
 
+def keyterm_forms(title):
+    """The forms of one title worth teaching the STT, most-specific first.
+
+    A keyterm is matched against what the model EMITS, so it has to look like
+    a transcript rather than a store page. Sending Steam's own string taught
+    Flux nothing about "armored core six": ARMORED CORE VI FIRES OF RUBICON
+    boosted a phrase nobody says, half-fired, and produced ARMORED CORSICS /
+    ARMORED COSTS / ARMOR CORE 6 - 11 of 12 launches missed. spoken_form is
+    the normalisation the grammar and the fuzzy resolver already agree on
+    (and it emits digits, which is what numerals=true makes Flux write), so
+    all three now describe a title the same way.
+
+    Derived here rather than taken from variants() because the two want
+    different things. variants() is the resolver's key space, where an extra
+    key is free (ambiguity gets culled downstream); a keyterm is not free, it
+    spends boost, and the set has to cover the SHORT name a person actually
+    says even when Steam never writes it:
+
+      a lone digit with title text after it ends the name proper, so
+      'armored core 6 fires of rubicon' also teaches 'armored core 6' - the
+      whole reason the launch kept missing. One digit only: 40,000 is a
+      number, not a sequel, and cutting it yields 'warhammer 40'.
+
+      the trailing-number strip ('hades 2' -> 'hades', which is also how the
+      plain Hades gets covered) is skipped when what remains still ends in a
+      digit, for the same reason."""
+    out = []
+
+    def add(v):
+        if v and v not in out:
+            out.append(v)
+
+    full = spoken_form(title)
+    add(full)
+    nosub = spoken_form(re.split(r"[:–—]| - ", title)[0])
+    add(nosub)
+    toks = full.split()
+    for i, t in enumerate(toks[:-1]):
+        if len(t) == 1 and t.isdigit():
+            add(" ".join(toks[:i + 1]))
+            break
+    nonum = re.sub(r"\s+\d+$", "", nosub).strip()
+    if not re.search(r"\d$", nonum):
+        add(nonum)
+    return out
+
+
 def variant_map(titles):
     """variant -> canonical title, two-pass: every title's FULL spoken form
     always claims its own key (Portal must not lose 'portal' to Portal 2's

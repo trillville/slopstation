@@ -15,6 +15,11 @@ MODULES = [K15 / n for n in
            ("cglib.py", "events.py", "couch.py", "library.py", "exlink.py",
             "chord_listener.py", "doctor.py", "calibrate.py")]
 MODULES += sorted((K15 / "voice").glob("*.py"))
+# bench/ too: a probe is the thing you reach for when something is already
+# wrong, so an undefined name in one costs you the diagnosis at the worst
+# moment. They were outside the sweep until a new probe went in and nothing
+# noticed it had never been checked.
+MODULES += sorted((K15 / "voice" / "bench").glob("*.py"))
 
 
 def main():

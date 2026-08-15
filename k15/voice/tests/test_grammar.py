@@ -61,6 +61,16 @@ TABLE = [
     ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),
     ("start elden ring", "PlayGame", {"game": "elden ring"}),
     ("play some music", "PlayGame", {"game": "some music"}),
+    # Conversational lead-ins. These were the two commonest launch phrasings
+    # in the logs and both fell through to the LLM with an empty slot, even on
+    # a transcript where the STT had heard the title perfectly.
+    ("i want to play armored core six", "PlayGame", {"game": "armored core 6"}),
+    ("i wanna play armored core six", "PlayGame", {"game": "armored core 6"}),
+    ("i would like to play elden ring", "PlayGame", {"game": "elden ring"}),
+    ("open armored core six", "PlayGame", {"game": "armored core 6"}),
+    ("let's play elden ring", "PlayGame", {"game": "elden ring"}),
+    ("can you play elden ring", "PlayGame", {"game": "elden ring"}),
+    ("wanna launch elden ring", "PlayGame", {"game": "elden ring"}),
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),

@@ -53,6 +53,24 @@ def strip_wake(text, anchor="jarvis"):
         return text
 
 
+def stt_confidence(frame):
+    """Mean per-word confidence off Flux's turn payload, or None when it did
+    not send words. Rounded to 2dp - this is a dashboard axis, not maths.
+
+    Recorded because nothing measured STT until now: every keyterm or
+    threshold change was judged by how the room felt that evening, and a bad
+    transcript ('thyroid core 6') and a good one were the same single log
+    line. Fail-soft like everything on an emit path - a shape change upstream
+    costs the field, never the turn."""
+    try:
+        words = (frame.result or {}).get("words")
+        scores = [w["confidence"] for w in words
+                  if isinstance(w, dict) and w.get("confidence") is not None]
+        return round(sum(scores) / len(scores), 2) if scores else None
+    except Exception:
+        return None
+
+
 def load_intents():
     return Intents.from_dict(yaml.safe_load(GRAMMAR.read_text(encoding="utf-8")))
 
@@ -323,6 +341,7 @@ class GrammarGate(FrameProcessor):
             await self._stop_if_armed("stop listening (answer failed)")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
+            conf = stt_confidence(frame)
             if text:
                 # A final transcript IS a user intent, so this is where the
                 # turn id is born. Everything it causes - the gate decision,
@@ -341,7 +360,8 @@ class GrammarGate(FrameProcessor):
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": not a command, not assistant material -
                     # swallow it and keep listening (no earcon, no LLM turn).
-                    self.log("stt_final", text=text, outcome="wake_only")
+                    self.log("stt_final", text=text, outcome="wake_only",
+                             confidence=conf)
                     return
                 if stripped != text:
                     self.log("wake_prefix_stripped", text=text, stripped=stripped)
@@ -358,14 +378,14 @@ class GrammarGate(FrameProcessor):
                     self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
                 if m is not None:
-                    self.log("gate_match", text=text, intent=m[0])
+                    self.log("gate_match", text=text, intent=m[0], confidence=conf)
                     if await self._run_intent(*m):
                         return                      # swallowed: Tier 1 handled it
                 if not self.assistant_enabled:
                     self.log.warn("gate_miss", text=text, fallback="none",
-                                  reason="assistant_disabled")
+                                  reason="assistant_disabled", confidence=conf)
                     await self._earcon("fail")
                     return
-                self.log("gate_miss", text=text, fallback="assistant")
+                self.log("gate_miss", text=text, fallback="assistant", confidence=conf)
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)
