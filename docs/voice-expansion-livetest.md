@@ -247,9 +247,15 @@ approve. On approval the refresh token is written to `secrets.json`.
   compromised, because the mobile app is the scanner, never the target). You do
   not need to do anything for this; it is baked in. It is also exactly what the
   Steam store website's own "install on my computer" uses.
-- `python doctor.py` should now show `steam session: enrolled, token good for N
-  days`. Re-enrol only when it warns (a password change, a "deauthorize all
-  devices", or ~200 days) — the same 30-second scan.
+- `python doctor.py` should now show `steam session: enrolled and minting,
+  refresh token good for N days`. That probe runs a **real mint** (via
+  `steam_session.py token`), not just a JWT-expiry read — an unexpired token is
+  not necessarily a usable one, and believing otherwise cost a whole test
+  session once. Re-enrol when it warns: a password change, a "deauthorize all
+  devices", a public-IP change, or ~200 days — the same 30-second scan.
+- **A dead account lane costs one button press, not the feature.** `install_game`
+  falls back to opening the game's page on the TV for you to press Install, so
+  the couch keeps working while you get around to re-enrolling.
 - Quick check, same directory: `.venv\Scripts\python steam_session.py sessions`
   lists every signed-in client — the gaming PC should be there with its
   `machine_name`. Signed in on another PC too? Set `"steamMachineName"` in

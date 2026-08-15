@@ -25,10 +25,13 @@ it queued, so success is confirmed by re-reading GetClientAppList, and failures
 surface as an X-eresult response HEADER, not a JSON body. Verification over
 reports, the house rule.
 
-Shapes marked LIVE below are confirmed only on the rig (a keyless checkout
-can't see them); the bring-up guide's enrollment + install drill is where they
-are proven. All the parsing here reads defensively so a shape drift degrades to
-a spoken "couldn't reach Steam", never a crash.
+CONFIRMED LIVE 2026-08-14 against the real account: the mint, the session list
+(the gaming PC comes back by machine_name) and the app list with download
+progress all work from this box, driven by a WEB-audience token - which settles
+the one question the design rested on. The app-list field names were guessed
+wrong before that (see app_list); everything here now matches what Steam
+actually sends. All the parsing still reads defensively so a shape drift
+degrades to a spoken "couldn't reach Steam", never a crash.
 """
 import base64
 import json
@@ -44,6 +47,13 @@ sys.path.insert(0, str(HERE.parent))
 import cglib                                        # noqa: E402
 
 API = "https://api.steampowered.com"
+LOGIN = "https://login.steampowered.com"        # the transfer-login host
+COMMUNITY = "https://steamcommunity.com"
+STORE = "https://store.steampowered.com"
+# ClientComm GETs carry origin= like the store site's own calls do. Steam
+# inspects it (node-steam-session 1.9.4 added the mobile equivalent for exactly
+# this reason), and our traffic should look like the sanctioned feature it is.
+ORIGIN = STORE
 # A realistic desktop-Chrome UA - the point is NOT to look like a bot library's
 # default (the flagged fingerprint). Bump occasionally; it only needs to read as
 # an ordinary browser.
@@ -113,11 +123,26 @@ class SteamSession:
         r = self._retry_401(r, method, "data", data, timeout)
         return self._parse(r)
 
+    def _login_post(self, url, fields, headers=None):
+        """POST multipart to the login/transfer hosts, returning
+        (json_or_None, cookies). The transfer responses carry nothing useful in
+        the BODY - the Set-Cookie is the payload - so cookies are a first-class
+        return value here, unlike _post. One seam, so a test drives the whole
+        transfer flow offline (this module's testing contract)."""
+        r = self._session().post(
+            url, files={k: (None, str(v)) for k, v in fields.items()},
+            headers=headers or {}, timeout=20)
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        return body, r.cookies.get_dict()
+
     def _retry_401(self, r, method, key, payload, timeout):
         """access_token() re-mints on TIME (exp check); this covers the other
         case - a mid-life server-side revocation 401s a token that hasn't hit
         its exp. Re-mint once and retry. Skipped when the call carried no token
-        (the auth endpoints), so GenerateAccessTokenForApp can't recurse."""
+        (the auth endpoints), so the mint itself can't recurse."""
         if getattr(r, "status_code", 200) != 401 or "access_token" not in payload:
             return r
         self._access = None
@@ -145,15 +170,68 @@ class SteamSession:
             raise RuntimeError("no Steam refresh token - run: python steam_session.py enroll")
         if self._access and time.time() < self._access_exp - 120:
             return self._access
-        body, _ = self._post("IAuthenticationService/GenerateAccessTokenForApp/v1",
-                             {"refresh_token": self._refresh, "steamid": self.steamid})
-        tok = ((body or {}).get("response", {}) or {}).get("access_token")
+        tok = self._mint()
         if not tok:
             raise RuntimeError("could not mint an access token - the refresh "
-                               "token may be expired; re-enroll")
+                               "token may be expired or revoked; re-enroll")
         self._access = tok
         self._access_exp = _jwt_exp(tok) or (time.time() + 23 * 3600)
         return tok
+
+    def _mint(self):
+        """Refresh token -> ~24h access token, via the web TRANSFER-LOGIN flow.
+        Returns None when it cannot (never raises on a bad answer).
+
+        NOT GenerateAccessTokenForApp, which is the obvious call and the wrong
+        one: Valve gated it to MOBILE-audience tokens, so our WebBrowser
+        enrollment (aud=[web,renew,derive]) gets a 200 with an empty body and
+        X-eresult 15 AccessDenied - measured 2026-08-14, and node-steam-session
+        documents the same as of 2025-04-30. This is what the store website
+        itself does instead: hand the refresh token to /jwt/finalizelogin as a
+        nonce, POST each transfer_info URL it names, and the steamLoginSecure
+        cookie that comes back IS the access token, as "<steamid>||<token>".
+
+        Repeatable with the SAME stored refresh token and NON-ROTATING - that
+        is what makes it safe to run unattended. (renewRefreshToken rotates and
+        invalidates the old token; a partial failure there would strand a
+        headless box until someone re-scanned a QR. We never call it.)
+        """
+        import secrets as _secrets
+        from urllib.parse import unquote
+        try:
+            body, _ = self._login_post(
+                f"{LOGIN}/jwt/finalizelogin",
+                {"nonce": self._refresh,
+                 "sessionid": _secrets.token_hex(12),   # 24 hex, as the site sends
+                 "redir": f"{COMMUNITY}/login/home/?goto="},
+                headers={"Origin": COMMUNITY, "Referer": COMMUNITY + "/"})
+        except Exception as e:
+            self.log.warn("token_mint_failed", stage="finalizelogin", err=str(e))
+            return None
+        transfers = ((body or {}).get("transfer_info") or [])
+        if not transfers:
+            self.log.warn("token_mint_failed", stage="finalizelogin",
+                          err="no transfer_info (refresh token rejected?)")
+            return None
+        # Any ONE transfer host that answers with the cookie is enough; they are
+        # the same session on different Steam domains. Keep trying on failure -
+        # a single unreachable host must not cost the whole mint.
+        for t in transfers:
+            url = t.get("url")
+            if not url:
+                continue
+            try:
+                _, cookies = self._login_post(
+                    url, {"steamID": self.steamid, **(t.get("params") or {})})
+            except Exception as e:
+                self.log.warn("token_transfer_failed", url=str(url)[:60], err=str(e))
+                continue
+            raw = cookies.get("steamLoginSecure")
+            if raw and "||" in unquote(raw):
+                return unquote(raw).split("||", 1)[1]
+        self.log.warn("token_mint_failed", stage="transfer",
+                      err="no steamLoginSecure cookie from any transfer host")
+        return None
 
     def token_expiry(self):
         """Unix seconds the REFRESH token dies (0 if none/unreadable) - doctor
@@ -169,7 +247,7 @@ class SteamSession:
         Instanceids CHURN on every client login, so callers re-fetch before
         acting rather than caching one."""
         body, _ = self._get("IClientCommService/GetAllClientLogonInfo/v1",
-                           {"access_token": self.access_token()})
+                           {"access_token": self.access_token(), "origin": ORIGIN})
         out = []
         for s in ((body or {}).get("response", {}) or {}).get("sessions", []) or []:
             iid = s.get("client_instanceid")
@@ -198,11 +276,20 @@ class SteamSession:
     def app_list(self, changing_only=False):
         """GetClientAppList for the target client, normalized to
         {appid: {name, installed, changing, paused, downloaded, total, queue}}.
-        The truth source that VERIFIES a queued install actually took."""
+        The truth source that VERIFIES a queued install actually took.
+
+        SHAPE, confirmed live 2026-08-14 (it was guessed before, and guessed
+        wrong): the name is 'app', NOT 'app_name'. Byte counts arrive as
+        STRINGS. queue_position is -1 for "not queued", not absent. And the two
+        calls answer differently - the plain list is every known app with only
+        {app, app_type, appid, bytes_required, changing, queue_position,
+        running}, while filters=changing adds the progress fields
+        (bytes_downloaded/bytes_to_download, installed, bytes_staged). So
+        anything needing progress must pass changing_only."""
         tgt = self._target()
         if not tgt:
             return {}
-        params = {"access_token": self.access_token(),
+        params = {"access_token": self.access_token(), "origin": ORIGIN,
                   "client_instanceid": tgt["instanceid"],
                   "fields": "games", "include_client_info": "true"}
         if changing_only:
@@ -215,13 +302,15 @@ class SteamSession:
                 continue
             total = int(a.get("bytes_to_download", 0) or 0)
             done = int(a.get("bytes_downloaded", 0) or 0)
+            queue = a.get("queue_position")
             out[int(appid)] = {
-                "name": a.get("app_name") or a.get("name") or "",
+                "name": a.get("app") or a.get("app_name") or "",
                 "installed": bool(a.get("installed")),
                 "changing": bool(a.get("changing")),
                 "paused": bool(a.get("download_paused")),
                 "downloaded": done, "total": total,
-                "queue": a.get("queue_position")}
+                # -1 is Steam's "not in the queue"; None speaks better.
+                "queue": None if queue in (None, -1) else queue}
         return out
 
     def install(self, appid, machine_name=None):
@@ -250,16 +339,17 @@ class SteamSession:
                 return {"ok": False, "error": f"Steam refused the install (code {eresult})"}
             # Confirm it really queued - the empty 200 is not proof.
             time.sleep(1.5)
-            app = self.app_list().get(appid, {})
+            app = self.app_list(changing_only=True).get(appid, {})
         except Exception as e:
             self.log.error("install_error", appid=appid, err=str(e))
             return {"ok": False, "error": "couldn't reach Steam - the account "
                     "session may need re-enrolling"}
-        queued = app.get("changing") or (app.get("total", 0) > app.get("downloaded", 0))
+        # Appearing in the CHANGING list at all is the proof: that filter is
+        # exactly "apps mid-install/update", so presence beats any byte
+        # arithmetic (a just-queued app has no bytes_downloaded yet).
+        queued = bool(app)
         self.log("install_queued", appid=appid, machine=tgt["machine_name"],
-                 verified=bool(queued))
-        if app.get("installed") and not queued:
-            return {"ok": True, "detail": "that's already installed on the PC"}
+                 verified=queued)
         return {"ok": True, "detail": "queued the install on the gaming PC",
                 "verified": bool(queued)}
 
@@ -369,6 +459,19 @@ def _cli(argv):
     if not s.available():
         print("no Steam session - set steamId64 and run: python steam_session.py enroll")
         return 1
+    if cmd == "token":
+        # The one-line health answer, for doctor: can this refresh token
+        # actually MINT? An unexpired token is not a working one - the whole
+        # lane was green-on-paper and dead in practice for a day because the
+        # only check was a JWT exp read (2026-08-14). Exit 0 == usable.
+        try:
+            t = s.access_token()
+            hours = (_jwt_exp(t) - time.time()) / 3600
+            print(f"OK access token minted, good for {hours:.0f}h")
+            return 0
+        except Exception as e:
+            print(f"FAIL {e}")
+            return 1
     if cmd == "sessions":
         print(json.dumps(s.sessions(), indent=2))
     elif cmd == "downloads":
@@ -376,7 +479,8 @@ def _cli(argv):
     elif cmd == "install" and len(argv) > 1:
         print(json.dumps(s.install(int(argv[1])), indent=2))
     else:
-        print("usage: steam_session.py enroll | sessions | downloads | install <appid>")
+        print("usage: steam_session.py enroll | token | sessions | downloads "
+              "| install <appid>")
         return 2
     return 0
 

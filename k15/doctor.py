@@ -219,48 +219,36 @@ def check_session_state():
 def _steam_mint_probe(tok, steamid, days):
     """Can the refresh token actually MINT? Returns a report() tuple.
 
-    The mint answers with an empty JSON body and puts the outcome in the
-    X-eresult HEADER, so the header is the error message. 15 (AccessDenied) is
-    the one seen in the field: a WebBrowser/QR enrollment yields an
-    aud=[web,renew,derive] token, and deriving a client-app token from it is
-    refused - the lane looks enrolled and installs nothing.
+    ASKS THE REAL CODE rather than re-implementing it: `steam_session.py token`
+    runs the actual mint the agent uses and exits 0 when it works. The mint is
+    a multipart transfer-login flow with cookies, so a stdlib re-do here would
+    be both long and free to drift - and drift is the failure being guarded
+    against. Doctor runs on SYSTEM python, so this shells out to the VOICE VENV.
 
-    Stdlib urllib, not requests: doctor runs on SYSTEM python and requests
-    lives in the voice venv. Offline is not a verdict on the token, so an
-    unreachable API stays a PASS with the caveat named.
+    Offline is not a verdict on the token, so anything that stops the check
+    from producing an answer stays a PASS with the caveat named.
     """
-    import urllib.parse
-    import urllib.request
-    try:                                        # one home for the browser UA
-        sys.path.insert(0, str(cglib.BASE / "voice"))
-        from steam_session import UA
-    except Exception:
-        UA = "Mozilla/5.0"
-    req = urllib.request.Request(
-        "https://api.steampowered.com/IAuthenticationService/"
-        "GenerateAccessTokenForApp/v1/",
-        data=urllib.parse.urlencode({"refresh_token": tok,
-                                     "steamid": steamid}).encode(),
-        headers={"User-Agent": UA})
+    import subprocess
+    vpy = cglib.BASE / "voice" / ".venv" / "Scripts" / "python.exe"
+    script = cglib.BASE / "voice" / "steam_session.py"
+    if not vpy.exists():
+        return (PASS, "steam session",
+                f"enrolled, token good for {days:.0f} days (venv absent, mint unchecked)")
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            eresult = r.headers.get("X-eresult") or "?"
-            minted = ((json.loads(r.read() or b"{}").get("response") or {})
-                      .get("access_token"))
-    except Exception as e:                      # offline/DNS/TLS - not a verdict
+        p = subprocess.run([str(vpy), str(script), "token"],
+                           capture_output=True, text=True, timeout=45)
+    except Exception as e:
         return (PASS, "steam session",
                 f"enrolled, token good for {days:.0f} days "
                 f"(could not verify the mint: {e})")
-    if minted:
+    if p.returncode == 0:
         return (PASS, "steam session",
-                f"enrolled and minting, token good for {days:.0f} days")
-    why = {"15": "AccessDenied - the token cannot derive a client access "
-                 "token (a web-audience enrollment)",
-           "84": "RateLimitExceeded - wait before retrying"}.get(
-               str(eresult), f"eresult {eresult}")
-    return (WARN, "steam session", f"enrolled but CANNOT mint - {why}",
-            "install-by-voice will refuse every call; see "
-            "docs/voice-expansion-livetest.md Stage 5")
+                f"enrolled and minting, refresh token good for {days:.0f} days")
+    why = (p.stdout or p.stderr or "").strip().splitlines()
+    return (WARN, "steam session",
+            f"enrolled but CANNOT mint - {why[-1][:120] if why else 'unknown'}",
+            "install-by-voice falls back to opening the game's page; "
+            "re-run k15\\voice\\steam_session.py enroll to restore it")
 
 
 def check_voice(cfg):

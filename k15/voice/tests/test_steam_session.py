@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -40,12 +41,21 @@ def main():
     # --- seams: route by method; state the tests can turn ---------------------
     minted = [make_jwt(time.time() + 24 * 3600), make_jwt(time.time() + 25 * 3600)]
     state = {"sessions": [], "apps": [], "install_eresult": "1"}
-    posts, gets = [], []
+    posts, gets, logins = [], [], []
+
+    def fake_login_post(url, fields, headers=None):
+        """The mint, as it really works: finalizelogin hands back transfer
+        hosts, and each host answers with the steamLoginSecure cookie that IS
+        the access token, shaped '<steamid>||<token>'."""
+        logins.append((url, dict(fields)))
+        if "finalizelogin" in url:
+            return {"transfer_info": [
+                {"url": "https://store.steampowered.com/login/settoken",
+                 "params": {"nonce": "n1", "auth": "a1"}}]}, {}
+        return None, {"steamLoginSecure": quote(f"76561190000||{minted.pop(0)}")}
 
     def fake_post(method, data, timeout=20):
         posts.append((method, dict(data)))
-        if "GenerateAccessTokenForApp" in method:
-            return {"response": {"access_token": minted.pop(0)}}, "1"
         if "InstallClientApp" in method:
             return {}, state["install_eresult"]        # the empty 200
         if "BeginAuthSessionViaQR" in method:
@@ -60,21 +70,35 @@ def main():
         if "GetAllClientLogonInfo" in method:
             return {"response": {"sessions": state["sessions"]}}, "1"
         if "GetClientAppList" in method:
-            return {"response": {"apps": state["apps"]}}, "1"
+            apps = state["apps"]
+            # Honour filters=changing like the real service: it is what the
+            # install VERIFY leans on, and only that call carries the progress
+            # fields at all (see app_list's shape note).
+            if params.get("filters") == "changing":
+                apps = [a for a in apps if a.get("changing")]
+            return {"response": {"apps": apps}}, "1"
         return None, None
 
     s._post = fake_post
     s._get = fake_get
+    s._login_post = fake_login_post
     real_sleep = time.sleep
     time.sleep = lambda n: None
 
     # --- token mint + cache + re-mint on expiry ------------------------------
+    # The mint is the TRANSFER-LOGIN flow, not GenerateAccessTokenForApp: that
+    # endpoint is gated to mobile-audience tokens and answers our web-audience
+    # one with eresult 15 AccessDenied (measured 2026-08-14).
     t1 = s.access_token()
     s.access_token()                                        # cached, no 2nd mint
-    assert sum("GenerateAccessTokenForApp" in m for m, _ in posts) == 1, posts
+    def n_mints(): return sum("finalizelogin" in u for u, _ in logins)
+    assert n_mints() == 1, logins
+    assert s._refresh == logins[0][1]["nonce"], "the refresh token rides as nonce"
     s._access_exp = time.time()                             # force expiry
     t2 = s.access_token()
-    assert t2 != t1 and sum("GenerateAccessTokenForApp" in m for m, _ in posts) == 2
+    assert t2 != t1 and n_mints() == 2, logins
+    assert "GenerateAccessTokenForApp" not in json.dumps(posts), \
+        "the gated endpoint must never be called again"
 
     # --- sessions + target pick by machine name ------------------------------
     state["sessions"] = [
@@ -115,19 +139,21 @@ def main():
     assert body is not None
 
     # --- install: verified via GetClientAppList, right instanceid on the wire -
-    state["apps"] = [{"appid": 570, "app_name": "Dota", "changing": True,
-                      "bytes_to_download": 100, "bytes_downloaded": 10}]
+    state["apps"] = [{"appid": 570, "app": "Dota", "changing": True,
+                      "bytes_to_download": "100", "bytes_downloaded": "10"}]
     r = s.install(570, machine_name="TILLMAN-DESKTOP")
     assert r["ok"] and r["verified"] is True, r
     inst = [d for m, d in posts if "InstallClientApp" in m][-1]
     assert inst["appid"] == 570 and inst["client_instanceid"] == "111", inst
     assert "install_queued" in log.events()
 
-    # --- install already-installed (no change) -> truthful no-op -------------
-    state["apps"] = [{"appid": 570, "app_name": "Dota", "installed": True,
-                      "changing": False, "bytes_to_download": 0, "bytes_downloaded": 0}]
+    # --- install that never showed up as changing -> ok but NOT verified -----
+    # The empty 200 is not proof, so "it did not appear in the changing list"
+    # is reported as verified=False rather than claimed as success.
+    state["apps"] = [{"appid": 570, "app": "Dota", "installed": True,
+                      "changing": False, "bytes_to_download": "0", "bytes_downloaded": "0"}]
     r = s.install(570)
-    assert r["ok"] and "already installed" in r["detail"], r
+    assert r["ok"] and r["verified"] is False, r
 
     # --- install refused: an X-eresult != 1 is surfaced, not swallowed -------
     state["install_eresult"] = "15"                         # e.g. AccessDenied
@@ -145,12 +171,12 @@ def main():
     # --- download_status: only changing apps, most complete first ------------
     state["sessions"] = [{"client_instanceid": "111", "machine_name": "pc"}]
     state["apps"] = [
-        {"appid": 570, "app_name": "Dota", "changing": True,
-         "bytes_to_download": 100, "bytes_downloaded": 50, "download_paused": False},
-        {"appid": 20, "app_name": "Nearly", "changing": True,
-         "bytes_to_download": 100, "bytes_downloaded": 90, "download_paused": False},
-        {"appid": 730, "app_name": "Idle", "changing": False,
-         "bytes_to_download": 0, "bytes_downloaded": 0}]
+        {"appid": 570, "app": "Dota", "changing": True,
+         "bytes_to_download": "100", "bytes_downloaded": "50", "download_paused": False},
+        {"appid": 20, "app": "Nearly", "changing": True,
+         "bytes_to_download": "100", "bytes_downloaded": "90", "download_paused": False},
+        {"appid": 730, "app": "Idle", "changing": False,
+         "bytes_to_download": "0", "bytes_downloaded": "0"}]
     ds = s.download_status()
     assert [d["appid"] for d in ds] == [20, 570], ds        # 90% before 50%; idle dropped
     assert ds[0] == {"appid": 20, "name": "Nearly", "percent": 90,
