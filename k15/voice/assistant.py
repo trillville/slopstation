@@ -184,17 +184,30 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
 
     def nav(args):
         """Big Picture navigation. downloads/library/store need no appid;
-        game_page/store_page take one from the catalog. Collections are a
+        game_page needs an OWNED one, store_page any. Collections are a
         voice-grammar concept (they resolve by name on the box), not here."""
         target = args.get("target")
         appid = args.get("appid")
-        if target in ("game_page", "store_page"):
+        if target == "game_page":
+            # The LIBRARY page. Only a game they own has one, so the catalog
+            # check is the right guard here.
             appid = int(appid or 0)
             if appid not in known_appids():
                 log.warn("tool_refused", tool="nav", reason="unknown_appid",
                          appid=appid)
                 return {"ok": False, "error": f"appid {appid} is not in the catalog"}
-            r = dispatch.nav("details" if target == "game_page" else "store", appid)
+            r = dispatch.nav("details", appid)
+        elif target == "store_page":
+            # NO catalog check, deliberately: a store page is exactly where you
+            # send someone for a game they do NOT own. "Open the store page for
+            # Big Walk" was refused on the couch for that reason (2026-08-14).
+            # A wrong appid costs one dud page on the TV; refusing costs the
+            # feature - and this is now the hands-free path to installing,
+            # since the install dialog needs a button press either way.
+            appid = int(appid or 0)
+            if appid <= 0:
+                return {"ok": False, "error": "I need the game's store appid"}
+            r = dispatch.nav("store", appid)
         elif target in ("downloads", "library", "store"):
             r = dispatch.nav(target)
         else:
@@ -454,14 +467,15 @@ TOOL_DEFS = [
     ("nav", "Navigate the Big Picture UI on the TV during a live session. "
      "target: 'downloads' (download queue), 'library' (library home), 'store' "
      "(store front page) - none need an appid; 'game_page' (a game's library "
-     "page with its Play button - for 'show me <game>') and 'store_page' (a "
-     "game's store page - for 'open the store page for <game>') both take an "
-     "appid from the catalog.",
+     "page with its Play button - for 'show me <game>', OWNED games only) and "
+     "'store_page' (any game's store page, owned or not - for 'open the store "
+     "page for <game>', and the way to put a game the user wants to BUY or "
+     "INSTALL on the TV so they can hit the button with the controller).",
      {"target": {"type": "string",
                  "enum": ["downloads", "library", "store", "game_page",
                           "store_page"]},
-      "appid": {"type": "integer", "description": "required for game_page and "
-                "store_page"}},
+      "appid": {"type": "integer", "description": "required for game_page (must "
+                "be owned) and store_page (any Steam appid)"}},
      ["target"]),
     ("install_game", "Install a game the user owns but hasn't installed yet - "
      "it queues the download on the gaming PC with no controller needed. Only "

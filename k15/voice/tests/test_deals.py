@@ -23,6 +23,9 @@ ITEMS = {10: ("Wish One", 50, 500, "$5.00"),
          201: ("Search B", 10, 2500, "$25.00")}
 
 
+SEARCH_PARAMS = []          # every /search/results query, for the tag assertions
+
+
 def fake_get(url, params=None, timeout=20):
     p = params or {}
     if "featuredcategories" in url:
@@ -43,6 +46,7 @@ def fake_get(url, params=None, timeout=20):
     if "GetMostPlayedGames" in url:
         return {"response": {"ranks": [{"appid": 100}, {"appid": 101}]}}
     if "search/results" in url:
+        SEARCH_PARAMS.append(p)
         return {"results_html": '<a data-ds-appid="200"></a>'
                                 '<a data-ds-appid="201"></a>'
                                 '<a data-ds-appid="200"></a>'}  # dupe ignored
@@ -124,6 +128,17 @@ def main():
     tmap = library._tag_map()
     assert tmap.get("roguelike") == 1716 and tmap.get("co-op") == 3843, tmap
     assert library.TAGMAP.exists()                          # cached to disk
+
+    # Tag matching ignores punctuation and case, in BOTH directions: the model
+    # says what a person says ("Rogue-like", "Co op"), Steam's vocabulary is
+    # "Roguelike"/"Co-op". An exact lookup dropped "Rogue-like" and silently
+    # widened the search to co-op-anything - which is how "a co-op roguelike
+    # under $20" came back Dead by Daylight and Total War (2026-08-14). A
+    # dropped filter is invisible in the results, so it gets a test.
+    library.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
+    assert SEARCH_PARAMS[-1].get("tags") == "1716,3843", SEARCH_PARAMS[-1]
+    library.fetch_store_search(term="x", tags=["Not A Real Tag"])
+    assert "tags" not in SEARCH_PARAMS[-1], "unknown tags must drop, not 404"
 
     # --- hltb: fail-soft when the optional lib is absent, then cache hit -----
     # Force the import to FAIL regardless of the venv (requirements.txt pins

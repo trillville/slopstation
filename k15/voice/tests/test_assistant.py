@@ -201,8 +201,16 @@ def main():
     assert navimpls["nav"]({"target": "store_page", "appid": real_appid})["ok"]
     assert navimpls["nav"]({"target": "downloads"})["ok"]
     assert seen == [("details", real_appid), ("store", real_appid), ("downloads", None)], seen
-    assert not navimpls["nav"]({"target": "game_page", "appid": 999999999})["ok"]
     assert not navimpls["nav"]({"target": "bogus"})["ok"]
+    # An UNOWNED appid: the LIBRARY page is refused (they have no such page),
+    # the STORE page is NOT - that is exactly who a store page is for. The
+    # couch refused "open the store page for Big Walk" over this, and with the
+    # install dialog needing a button press either way, this IS the install
+    # path (2026-08-14).
+    assert not navimpls["nav"]({"target": "game_page", "appid": 999999999})["ok"]
+    assert navimpls["nav"]({"target": "store_page", "appid": 1478500})["ok"]
+    assert seen[-1] == ("store", 1478500), seen[-1]
+    assert not navimpls["nav"]({"target": "store_page", "appid": 0})["ok"]
 
     # --- list_games success routing + get_game_details hltb-fallback (offline
     # via mocked fetchers; test_deals covers the fetchers themselves) ---------

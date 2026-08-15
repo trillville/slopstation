@@ -315,6 +315,12 @@ def _ascii(s):
     return re.sub(r"[^\x20-\x7E]", "", s or "").strip()
 
 
+def _tagkey(s):
+    """A store tag reduced to letters and digits, so spoken/model spellings
+    meet Steam's: rogue-like == Roguelike, 'co op' == Co-op."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
 def _store_items(appids, cc=None):
     """IStoreBrowseService/GetItems - the batch name/price/discount workhorse,
     keyless. {appid: {name, price, discount, final}} for the appids it could
@@ -441,8 +447,13 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
     """"Find me a co-op roguelike under $20 [on sale]". Keyless /search/results
     for the filtered appid list, then GetItems for names/prices. Tag names ->
     tagids via the cached map; unknown tags are dropped (term still applies)."""
-    tmap = _tag_map()
-    tagids = [str(tmap[t.lower()]) for t in (tags or []) if t.lower() in tmap]
+    # Match tags on letters and digits only. The model says what a person says
+    # ("Rogue-like", "Co op"); Steam's vocabulary is "Roguelike", "Co-op". An
+    # exact lookup dropped "Rogue-like" silently, leaving a co-op-only search
+    # that answered "a co-op roguelike under $20" with Dead by Daylight and
+    # Total War (2026-08-14) - a dropped filter is invisible in the result.
+    tmap = {_tagkey(k): v for k, v in _tag_map().items()}
+    tagids = [str(tmap[_tagkey(t)]) for t in (tags or []) if _tagkey(t) in tmap]
     params = {"term": term or "", "cc": cc or _cc(), "l": "english",
               "count": 50, "infinite": 1, "json": 1}
     if tagids:
