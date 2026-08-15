@@ -24,6 +24,13 @@ assistant queued this job; the user is probably watching that TV right now.
   (`installed` rows: appid/name/lastPlayed; `owned`: appid → name, playtime,
   tags). Per-game tags/genres/descriptions live beside it in
   `..\..\state\metadata-cache.json`.
+- `..\..\state\deals.json` — current Steam prices the voice assistant already
+  fetched: `specials` (today's featured sales) and `wishlist_on_sale` (the
+  user's wishlist items now discounted), each `{appid, name, discount, final}`.
+  Read it for price/discount FACTS instead of re-scraping the store. The web is
+  for JUDGMENT — reviews, opinions, "which is actually good", comparisons —
+  which is exactly what this lane is for; the store's own numbers are already
+  on disk.
 - The web — searching and reading pages is the whole point of this lane.
 - Scratch space: this directory. Write freely here, nowhere else.
 

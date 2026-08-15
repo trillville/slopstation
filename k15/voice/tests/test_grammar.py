@@ -11,7 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from grammar_gate import GrammarMatcher, strip_wake
 
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",
-                        "ps5": "hdmi2", "the pc": "hdmi4"}}
+                        "ps5": "hdmi2", "the pc": "hdmi4"},
+             "navTargets": {"downloads": "downloads", "the downloads": "downloads",
+                            "library": "library", "my library": "library",
+                            "store": "store", "the store": "store"}}
 
 # (utterance, expected intent or None, expected slots subset)
 TABLE = [
@@ -39,6 +42,18 @@ TABLE = [
     ("go back to the playstation", "SwitchInput", {"input": "playstation"}),
     ("switch to ps5", "SwitchInput", {"input": "ps5"}),
     ("show the apple tv", "SwitchInput", {"input": "apple tv"}),
+    # Nav: {target}'s VALUE is the nav kind, and the vocabulary is disjoint from
+    # {input}, so these never cross ("show the apple tv" above stays SwitchInput).
+    ("show downloads", "Nav", {"target": "downloads"}),
+    ("show me the downloads", "Nav", {"target": "downloads"}),
+    ("open the store", "Nav", {"target": "store"}),
+    ("go to my library", "Nav", {"target": "library"}),
+    ("take me to downloads", "Nav", {"target": "downloads"}),
+    # ShowCollection: wildcard, resolved on the box; the "my"/"collection"
+    # marker keeps a bare "show me <game>" out (that falls through, below).
+    ("show my roguelikes", "ShowCollection", {"collection": "roguelikes"}),
+    ("show me the co-op collection", "ShowCollection", {"collection": "co op"}),
+    ("open my mech games collection", "ShowCollection", {"collection": "mech games"}),
     # {game} is a wildcard: the slot carries the (normalized) spoken text;
     # title->appid resolution is titles.py's job, tested in test_library.
     ("play armored core six", "PlayGame", {"game": "armored core 6"}),
@@ -67,6 +82,9 @@ TABLE = [
     ("start", None, {}),
     ("play", None, {}),
     ("switch to the garage", None, {}),          # unknown input name
+    ("show me deadlock", None, {}),              # a game name: no nav/collection
+                                                 # marker -> assistant (game page)
+    ("show me the pictures", None, {}),          # not a nav target -> assistant
     # Risky-command narrowness: casual variants must NOT end a session.
     ("end it", None, {}),
     ("stop", None, {}),

@@ -48,6 +48,19 @@ intents:
           - "switch [over] to [the] {input}"
           - "go [back] to [the] {input}"
           - "show [the] {input}"
+  # Big Picture navigation to a FIXED target (downloads/library/store). The
+  # {target} slot is a runtime list (config.navTargets, like {input}) whose
+  # value is the nav KIND, so it can't collide with {input} (disjoint vocab)
+  # or eat a game/collection (those are wildcards, matched later). Game-page
+  # and store-page nav are deliberately NOT here - they need title resolution
+  # and are the assistant lane's job.
+  Nav:
+    data:
+      - sentences:
+          - "show [me] [the] {target}"
+          - "open [the] {target}"
+          - "go to [the] {target}"
+          - "take me to [the] {target}"
   ExitSession:
     data:
       - sentences:
@@ -77,6 +90,18 @@ intents:
     data:
       - sentences:
           - "cancel the (task|research|job)"
+  # Collections by name ("show my roguelikes"). A wildcard like {game}, so it
+  # sits down here with PlayGame. Requiring "my" or the word "collection"
+  # keeps a bare "show me <game>" out of it - that falls through to the
+  # assistant, which can open the game's page. A collection MISS (the resolver
+  # returns nothing) also falls through, exactly as an unresolved title does.
+  ShowCollection:
+    data:
+      - sentences:
+          - "show [me] my {collection}"
+          - "show [me] [my|the] {collection} collection"
+          - "open [my|the] {collection} collection"
+          - "go to [my|the] {collection} collection"
   # LAST on purpose: {game} is a wildcard, so "start a session" must hit
   # StartSession above before "start {game}" can eat it. Title resolution is
   # the fuzzy resolver's job (titles.py), not this grammar's.
@@ -91,4 +116,6 @@ lists:
       from: 0
       to: 100
   game:
+    wildcard: true
+  collection:
     wildcard: true

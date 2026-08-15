@@ -106,6 +106,100 @@ def main():
     print("  control/stop_listening/get_now_playing/get_game_details: "
           "routed and validated")
 
+    # --- data lane: list_games / search_store routing + the kill switch ------
+    assert "list_games" in impls and "search_store" in impls
+    r = impls["list_games"]({"source": "nope"})
+    assert not r["ok"] and "unknown source" in r["error"], r
+    r = impls["list_games"]({"source": "downloading"})     # no account session here
+    assert not r["ok"] and "enrolled" in r["error"], r
+    # install_game auto-gates on the account session: absent here (steam=None),
+    # so it is not even offered. With a session it appears and validates.
+    assert "install_game" not in impls
+    import types
+    fake_steam = types.SimpleNamespace(available=lambda: True,
+                                       install=lambda a: {"ok": True, "detail": "queued"},
+                                       download_status=lambda: [])
+    with_steam = assistant.tool_impls(d, log, steam=fake_steam)
+    assert "install_game" in with_steam
+    rr = with_steam["install_game"]({"appid": 999999999})
+    assert not rr["ok"] and "not in the catalog" in rr["error"], rr
+    r = impls["search_store"]({})                           # neither term nor tags
+    assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
+    # steamDataTools off -> the two store tools vanish from impls AND schemas,
+    # so the model stops SEEING them (selection pressure), not just calling them.
+    gated = assistant.tool_impls(d, log, voice={"steamDataTools": False})
+    assert "list_games" not in gated and "search_store" not in gated
+    assert "quit_game" in gated and "nav" in gated   # action tools aren't gated
+    assert len(assistant.function_schemas(gated)) == 8, len(assistant.function_schemas(gated))
+    # The facts-vs-judgment split is written into the descriptions the model reads.
+    assert "not background_task" in str(assistant.TOOL_DEFS)
+    print("  list_games/search_store: routed, refused cleanly, kill-switch gates")
+
+    # --- fail-soft: an impl that RAISES must return an error, never propagate -
+    # (the audit's HIGH: an expired/revoked token has available()==True, then
+    # the steam call raises; the tool must answer, not break the turn.)
+    class RaisingSteam:
+        def available(self): return True
+        def install(self, a): raise RuntimeError("token revoked")
+        def download_status(self): raise RuntimeError("token revoked")
+    rimpls = assistant.tool_impls(d, log, steam=RaisingSteam())
+    _isn = library.installed_name
+    library.installed_name = lambda a: None            # force not-installed -> reaches steam.install
+    inst = rimpls["install_game"]({"appid": real_appid})
+    library.installed_name = _isn
+    assert not inst["ok"] and "re-enrolling" in inst["error"], inst
+    dl = rimpls["list_games"]({"source": "downloading"})
+    assert not dl["ok"] and "Steam" in dl["error"], dl
+    assert {"install_error", "download_status_error"} <= set(log.events())
+    # And the function_schemas backstop: a handler whose impl raises still calls
+    # result_callback (with an error) instead of leaving the turn hung.
+    import asyncio as _a
+    def boom(_): raise ValueError("kaboom")
+    sch = assistant.function_schemas({"get_now_playing": boom})[0]
+    got = []
+    class P:
+        arguments = {}
+        async def result_callback(self, out): got.append(out)
+    _a.run(sch.handler(P()))
+    assert got and got[0]["ok"] is False, got
+
+    # --- nav tool: target->kind remap + catalog guard (only dispatch.nav was
+    # covered before, in test_dispatch) --------------------------------------
+    seen = []
+    d.nav = lambda kind, arg=None: (seen.append((kind, arg)),
+                                    types.SimpleNamespace(ok=True, detail="showing"))[1]
+    navimpls = assistant.tool_impls(d, log)
+    assert navimpls["nav"]({"target": "game_page", "appid": real_appid})["ok"]
+    assert navimpls["nav"]({"target": "store_page", "appid": real_appid})["ok"]
+    assert navimpls["nav"]({"target": "downloads"})["ok"]
+    assert seen == [("details", real_appid), ("store", real_appid), ("downloads", None)], seen
+    assert not navimpls["nav"]({"target": "game_page", "appid": 999999999})["ok"]
+    assert not navimpls["nav"]({"target": "bogus"})["ok"]
+
+    # --- list_games success routing + get_game_details hltb-fallback (offline
+    # via mocked fetchers; test_deals covers the fetchers themselves) ---------
+    saved = (library.load_deals, library.fetch_trending, library.fetch_recently_played,
+             library._store_items, library.fetch_hltb)
+    library.load_deals = lambda: {"specials": [{"appid": 1, "name": "S"}],
+                                  "wishlist_on_sale": [{"appid": 2, "name": "W"}]}
+    library.fetch_trending = lambda: [{"appid": 3, "name": "T", "rank": 1}]
+    library.fetch_recently_played = lambda: [{"appid": 4, "name": "R", "hours2w": 2.0}]
+    fresh = assistant.tool_impls(d, log)
+    assert fresh["list_games"]({"source": "specials"})["games"][0]["name"] == "S"
+    assert fresh["list_games"]({"source": "wishlist_on_sale"})["games"][0]["name"] == "W"
+    assert fresh["list_games"]({"source": "trending"})["games"][0]["name"] == "T"
+    assert fresh["list_games"]({"source": "recently_played"})["games"][0]["name"] == "R"
+    # hltb for a game with no catalog name resolves the name from the store,
+    # instead of the old "unknown appid" dead end.
+    hltb_calls = []
+    library._store_items = lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}}
+    library.fetch_hltb = lambda name: hltb_calls.append(name) or {"main": 20}
+    r = fresh["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
+    assert r["ok"] and r.get("hltb") == {"main": 20} and hltb_calls == ["Some Unowned Game"], r
+    (library.load_deals, library.fetch_trending, library.fetch_recently_played,
+     library._store_items, library.fetch_hltb) = saved
+    print("  fail-soft backstop, nav remap+guard, list_games routing, hltb name-fallback")
+
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
     names = {n for n, *_ in assistant.TOOL_DEFS}
     assert {t["name"] for t in at} == names
@@ -181,7 +275,7 @@ def main():
     # pass a dict for `reasoning`, which the settings accept silently and only
     # live inference rejects.
     schemas = assistant.function_schemas(impls)
-    assert len(schemas) == 6
+    assert len(schemas) == 10
     import session_runtime
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (

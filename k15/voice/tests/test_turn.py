@@ -61,31 +61,42 @@ def main():
     print(f"  validate: rejected all {len(HOSTILE)} hostile strings")
 
     # -- Dispatch.ps1 is the real boundary -------------------------------------
+    # 12 PATTERNS across 10 verbs: nav alone is three (a front-page/library
+    # form, a game-page form with an appid, and a collection form), which is
+    # why this counts patterns, not verbs.
     allpats = dispatch_patterns()
-    assert len(allpats) == 7, f"expected 7 verbs, got {allpats}"
+    assert len(allpats) == 12, f"expected 12 patterns, got {len(allpats)}: {allpats}"
     for p in allpats:
         # \z, not $: in .NET '$' also matches before a trailing newline, and
         # this file is the whole remote attack surface - read-only verbs too.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
 
     pats = [p for p in allpats if "--turn" in p]
-    assert len(pats) == 3, f"expected enter/exit/launch to take a turn, got {pats}"
+    # The FIVE mutating verbs take a turn - and nav is three of the patterns,
+    # so seven patterns carry one: enter, exit, launch, nav x3, stop.
+    assert len(pats) == 7, f"expected 7 turn-bearing patterns, got {pats}"
     for p in pats:
         assert "[0-9a-f]{1,8}" in p, f"pattern does not bound the turn: {p}"
 
-    verbs = {"enter": "enter", "exit": "exit", "launch": "launch 12345"}
+    # One bare example per turn-bearing form; each pattern must match at least
+    # one, and each match must accept a good turn and reject EVERY hostile one.
+    # A list (not a name->example dict) because nav's three patterns share the
+    # 'nav' prefix and each needs its own example.
+    bases = ["enter", "exit", "launch 12345", "nav downloads",
+             "nav details 12345", "nav store 12345",
+             "nav collection uc-abc-123", "stop 12345"]
     for p in pats:
-        verb = next(v for v in verbs if p.lstrip("^").startswith(v))
-        base = verbs[verb]
         rx = compile_ps(p)
-        assert rx.match(base), f"{p} no longer matches the bare verb {base!r}"
-        assert rx.match(f"{base} --turn 9f2c1a"), f"{p} rejects a good turn"
-        # And every hostile string fails to match AT ALL, so Dispatch falls
-        # through to DENIED rather than passing it on. Fail closed.
-        for bad in HOSTILE:
-            assert not rx.match(f"{base} --turn {bad}"), \
-                f"{p} MATCHED hostile turn {bad!r} - path traversal reachable"
-    print(f"  dispatch: {len(allpats)} verbs \\z-anchored, {len(pats)} hex-bounded, "
+        matched = [b for b in bases if rx.match(b)]
+        assert matched, f"{p} matches none of the example bases"
+        for base in matched:
+            assert rx.match(f"{base} --turn 9f2c1a"), f"{p} rejects a good turn on {base!r}"
+            # Every hostile string fails to match AT ALL, so Dispatch falls
+            # through to DENIED rather than passing it on. Fail closed.
+            for bad in HOSTILE:
+                assert not rx.match(f"{base} --turn {bad}"), \
+                    f"{p} MATCHED hostile turn {bad!r} on {base!r} - path traversal reachable"
+    print(f"  dispatch: {len(allpats)} patterns \\z-anchored, {len(pats)} hex-bounded, "
           f"{len(HOSTILE)} hostile turns all DENIED")
 
     # -- the wire: uncorrelated beats refused ----------------------------------

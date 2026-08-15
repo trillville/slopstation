@@ -72,15 +72,15 @@ def variant_map(titles):
     return out
 
 
-def build_resolver(threshold, margin=5):
-    """spoken -> (appid, canonical title) or (None, None). Fuzzy over the
-    culled variant space; a near-tie between DIFFERENT games (token_set_ratio
-    scores subsets at 100, so 'warhammer' ties every 40K title) resolves to
-    nothing rather than a coin flip - saying no beats launching wrong."""
-    rows = library.load().get("installed", [])
-    if not rows:
+def _resolver_from(by_name, threshold, margin=5):
+    """The fuzzy resolver over any {name: id} map. Fuzzy over the culled variant
+    space; a near-tie between DIFFERENT entries (token_set_ratio scores subsets
+    at 100, so 'warhammer' ties every 40K title) resolves to nothing rather than
+    a coin flip - saying no beats picking wrong. Shared by installed-title and
+    collection-name resolution: the machinery is identical, only the map's ids
+    differ (appid vs collection id)."""
+    if not by_name:
         return None
-    by_name = {r["name"]: r["appid"] for r in rows if r.get("name")}
     vmap = {fuzzy_norm(v): canon
             for v, canon in variant_map(list(by_name)).items() if fuzzy_norm(v)}
     keys = list(vmap)
@@ -92,7 +92,7 @@ def build_resolver(threshold, margin=5):
             canon = vmap[q]                     # ambiguity ('hades 2' must
             return by_name[canon], canon        # never lose to 'hades')
         # A bare pronoun/stopword ("it", "the") is a token-subset of some
-        # title and would score 100 on token_set_ratio - refuse short
+        # name and would score 100 on token_set_ratio - refuse short
         # single-token queries so "play it" falls through to the assistant.
         if len(q.split()) == 1 and len(q) <= 3:
             return None, None
@@ -102,7 +102,23 @@ def build_resolver(threshold, margin=5):
         canon = vmap[hits[0][0]]
         for key, score, _ in hits[1:]:
             if vmap[key] != canon and score > hits[0][1] - margin:
-                return None, None               # ambiguous across games
+                return None, None               # ambiguous across entries
         return by_name[canon], canon
 
     return resolve
+
+
+def build_resolver(threshold, margin=5):
+    """spoken -> (appid, canonical title) or (None, None), over installed games."""
+    rows = library.load().get("installed", [])
+    return _resolver_from({r["name"]: r["appid"] for r in rows if r.get("name")},
+                          threshold, margin)
+
+
+def build_collection_resolver(threshold, margin=5):
+    """spoken -> (collection id, canonical name) or (None, None), over the
+    library's Big Picture collections (synced from the PC's `collections` verb).
+    None when there are no collections yet (asleep PC, or none created)."""
+    rows = library.load().get("collections", [])
+    return _resolver_from({r["name"]: r["id"] for r in rows
+                           if r.get("name") and r.get("id")}, threshold, margin)

@@ -573,6 +573,20 @@ $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 Register-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'LaunchGame' -Action $a -Settings $s
 ```
 
+And the voice-navigation tasks, used by the `nav`/`stop` verbs (same interactive
+session, same 5-minute limit — `nav` forwards a `steam://` URL into Big Picture,
+`stop` quits the running game and re-focuses Big Picture):
+
+```powershell
+$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Nav-BigPicture.ps1'
+$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'Nav' -Action $a -Settings $s
+
+$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Stop-Game.ps1'
+$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'StopGame' -Action $a -Settings $s
+```
+
 The 5-minute execution limit is load-bearing: Task Scheduler ignores start
 requests for a task that is "currently running," so any hung instance would
 otherwise silently kill every future run — the tile keeps reporting success while

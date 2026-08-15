@@ -148,7 +148,7 @@ def main():
     dp.library.installed_name = lambda a: {42: "Baldur's Gate 3"}.get(a)
     r = h.d.play_game(1)
     assert "Baldur's Gate 3 is already running" in r.detail, r
-    assert "controller" in r.detail, r          # and what to do about it
+    assert "quit" in r.detail, r                 # the BUSY message now OFFERS the quit
     dp.library.installed_name = lambda a: None
     assert "app 42 is already running" in h.d.play_game(1).detail
     couch.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
@@ -166,10 +166,53 @@ def main():
     i = spawned[0].index("start")
     assert r.ok and spawned[0][i:i + 2] == ["start", "777"], spawned
 
+    # --- quit_game: correlated wire command, ssh outcomes, wrong-game refusal -
+    h = Harness()
+    wire = []
+    couch.ssh = lambda cmd, **kw: wire.append(cmd) or "OK"
+    h.d.begin_utterance("9f2c1a", "quit the game")
+    r = h.d.quit_game(1888160)
+    assert r.ok and "quitting" in r.detail, r
+    # The appid rides the verb AND the turn tags it - a stop is a mutating verb.
+    assert wire[-1] == "stop 1888160 --turn 9f2c1a", wire[-1]
+    assert "quit_dispatched" in h.log.events()
+    couch.ssh = lambda cmd, **kw: "NOTRUNNING"
+    r = h.d.quit_game(1)
+    assert r.ok and "nothing is running" in r.detail, r
+    couch.ssh = lambda cmd, **kw: "BUSY:42"          # a DIFFERENT game is up
+    dp.library.installed_name = lambda a: {42: "Baldur's Gate 3"}.get(a)
+    r = h.d.quit_game(1)
+    assert not r.ok and r.earcon == "busy" and "Baldur's Gate 3" in r.detail, r
+    dp.library.installed_name = lambda a: None
+    couch.ssh = ssh_down
+    assert Harness().d.quit_game(1).earcon == "fail"
+
+    # --- nav: correlated wire per kind, NOTREADY, unknown-kind refusal --------
+    h = Harness()
+    wire = []
+    couch.ssh = lambda cmd, **kw: wire.append(cmd) or "OK"
+    h.d.begin_utterance("4c1d0e", "show downloads")
+    assert h.d.nav("downloads").ok and wire[-1] == "nav downloads --turn 4c1d0e", wire
+    assert "nav_dispatched" in h.log.events()
+    assert h.d.nav("details", 400).ok and wire[-1] == "nav details 400 --turn 4c1d0e", wire
+    assert h.d.nav("store", 400).ok and wire[-1] == "nav store 400 --turn 4c1d0e", wire
+    assert h.d.nav("collection", "uc-abc").ok \
+        and wire[-1] == "nav collection uc-abc --turn 4c1d0e", wire
+    couch.ssh = lambda cmd, **kw: "NOTREADY"
+    r = h.d.nav("downloads")
+    assert not r.ok and r.earcon == "busy", r
+    # An unknown kind is refused HERE and never reaches the wire.
+    wire2 = []
+    couch.ssh = lambda cmd, **kw: wire2.append(cmd) or "OK"
+    r = h.d.nav("bogus")
+    assert not r.ok and r.earcon == "fail" and not wire2, (r, wire2)
+    couch.ssh = ssh_down
+    assert Harness().d.nav("downloads").earcon == "fail"
+
     time.sleep = real_sleep
     print("OK - dispatch: lock arbiter, dry-run, spawn args, volume step/clamp, "
           "mute, retry, input map, gaming-input autostart/busy/READY, "
-          "ssh outcomes, play_game paths")
+          "ssh outcomes, play_game paths, quit_game, nav")
 
 
 if __name__ == "__main__":

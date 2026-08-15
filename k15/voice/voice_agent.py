@@ -228,6 +228,22 @@ def main():
             model=adapter.model or "(cli default)",
             effort=adapter.effort or "(cli default)", orphans=orphans or None)
 
+    # Account session: install-by-voice + download status over ClientComm.
+    # Self-gates on the refresh token exactly like the Steam key - no token,
+    # the lane is None and install_game is never offered. Never fatal.
+    import steam_session
+    steam = steam_session.SteamSession(secrets, log,
+                                       machine_name=cfg.get("steamMachineName"))
+    if steam.available():
+        exp = steam.token_expiry()
+        log("lane_up", what="steam_session", steamid=steam.steamid,
+            token_expires=(time.strftime("%Y-%m-%d", time.localtime(exp))
+                           if exp else None))
+    else:
+        steam = None
+        log("lane_disabled", what="steam_session",
+            reason="no refresh token - run steam_session.py enroll")
+
     # Agent traces. Before the wake loop so the first session is traced like
     # every later one, and fail-soft: no keys, or a venv that predates the
     # OTel pins, disables the lane with a message and changes nothing else.
@@ -320,7 +336,7 @@ def main():
         try:
             asyncio.run(run_session(cfg, secrets, matcher, args,
                                     input_idx, output_idx, capture,
-                                    jobs=jobs, ack=ack))
+                                    jobs=jobs, ack=ack, steam=steam))
         except Exception as e:
             log.error("session_crashed", err=repr(e))
             ending = "fail"

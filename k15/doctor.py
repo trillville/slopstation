@@ -266,6 +266,54 @@ def check_voice(cfg):
     except Exception as e:
         report(WARN, "voice library", f"unreadable ({e})",
                "delete state\\library.json; the agent rebuilds it")
+
+    # Deals precompute (wishlist-on-sale + specials). The agent refreshes it
+    # every ~6h; a stale file when the agent is up means the store sync is
+    # failing, which silently serves empty "anything on sale?" answers. WARN
+    # only past 24h so a normally-sleeping rig doesn't nag; absent is silent
+    # (optional, keyless, fills on first sync).
+    deals = cglib.BASE / "state" / "deals.json"
+    if deals.exists():
+        age_h = (time.time() - deals.stat().st_mtime) / 3600
+        if age_h > 24:
+            report(WARN, "voice deals", f"stale ({age_h:.0f}h)",
+                   "store sync failing, or the agent is down (see 'voice agent')")
+        else:
+            report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
+
+    # Config sanity: a spoken name in BOTH inputs and navTargets would let
+    # "show <name>" double-match SwitchInput and Nav. Cheap to catch here (the
+    # grammar's disjointness is otherwise only vocabulary-enforced).
+    v = cfg.get("voice", {})
+    clash = set(map(str.lower, v.get("inputs", {}))) & set(map(str.lower, v.get("navTargets", {})))
+    if clash:
+        report(WARN, "voice config", f"inputs/navTargets overlap: {', '.join(sorted(clash))}",
+               "rename one side - a shared spoken name double-matches in the grammar")
+
+    # Account session (install-by-voice). WARN-only, and only speaks up when a
+    # token IS present but nearing death - a re-scan is a HUMAN action, so it
+    # earns a heads-up before movie night finds it, not after. Absent is silent
+    # (the lane is optional). Decode the JWT exp with stdlib only, like the CLI.
+    tok = cglib.load_secrets().get("steamRefreshToken")
+    if cglib.real_key(tok):
+        try:
+            import base64
+            payload = tok.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            exp = int(json.loads(base64.urlsafe_b64decode(payload)).get("exp", 0))
+            days = (exp - time.time()) / 86400 if exp else -1
+            if days < 0:
+                report(WARN, "steam session", "refresh token unreadable or expired",
+                       "re-run k15\\voice\\steam_session.py enroll")
+            elif days < 14:
+                report(WARN, "steam session", f"token expires in {days:.0f} days",
+                       "re-scan soon: steam_session.py enroll")
+            else:
+                report(PASS, "steam session", f"enrolled, token good for {days:.0f} days")
+        except Exception as e:
+            report(WARN, "steam session", f"token unreadable ({e})",
+                   "re-run steam_session.py enroll")
+
     # Tier-3 worker lane - stdlib checks only, same WARN-only posture:
     # background tasks off must never redden the chain doctor.
     import shutil

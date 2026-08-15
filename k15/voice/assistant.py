@@ -28,7 +28,13 @@ RULES = (
     "library - what they ALREADY own. Questions about games they do not own "
     "(what to buy, what's new, what's like this one) are normal and among "
     "the most useful things you do: look them up and answer NOW, in the "
-    "same breath - that is a normal answer, not a research project. Name "
+    "same breath - that is a normal answer, not a research project. For those "
+    "look-ups you have tools: search_store to find a kind of game by genre and "
+    "price, list_games for what's on sale or trending or what you've been "
+    "playing, and get_game_details facets for a game's price, reviews, patch "
+    "news, or how long it takes to beat. Those answer FACTS now; the background "
+    "task is only for judgment across sources, not for something one call "
+    "settles. Name "
     "titles from the catalog or from a tool result rather than from memory, "
     "and when the ask is for something NEW, never offer a game that is "
     "already in the catalog. And if you are asked "
@@ -114,12 +120,23 @@ def known_appids():
     return ids
 
 
-def tool_impls(dispatch, log, jobs=None, on_stop_listening=None):
+def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
+               steam=None):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL. jobs is
     the Tier-3 JobStore; None (REPL, or worker CLI missing) makes
     background_task refuse truthfully instead of pretending.
     on_stop_listening is GrammarGate.request_stop, and None refuses the same
-    way: only a live voice session has a mic to close."""
+    way: only a live voice session has a mic to close.
+
+    voice=cfg["voice"] lets the store data lane be switched OFF: when
+    steamDataTools is false, list_games/search_store are simply absent from the
+    returned dict, and function_schemas renders only what's present - so the
+    kill switch removes them from what the MODEL sees (selection pressure), not
+    just from what it can call. None (REPL/bench) keeps every tool.
+
+    steam=a SteamSession gates install_game and the download-status source the
+    same way: absent or un-enrolled -> install_game is not offered at all,
+    which is the token auto-gate (no config bool)."""
     def launch_game(args):
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
@@ -130,6 +147,56 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None):
             return {"ok": False, "error": "that game is owned but not "
                     "installed - installing needs the controller"}
         r = dispatch.play_game(appid)
+        return {"ok": r.ok, "detail": r.detail}
+
+    def quit_game(args):
+        appid = int(args.get("appid", 0))
+        if appid not in known_appids():
+            log.warn("tool_refused", tool="quit_game", reason="unknown_appid",
+                     appid=appid)
+            return {"ok": False, "error": f"appid {appid} is not in the catalog"}
+        r = dispatch.quit_game(appid)
+        return {"ok": r.ok, "detail": r.detail}
+
+    def install_game(args):
+        """Queue an install on the PC over the account session. Owned-but-not-
+        installed only - installing what's already there is a no-op, and an
+        appid outside the catalog is refused at the boundary like launch_game."""
+        appid = int(args.get("appid", 0))
+        if appid not in known_appids():
+            log.warn("tool_refused", tool="install_game", reason="unknown_appid",
+                     appid=appid)
+            return {"ok": False, "error": f"appid {appid} is not in the catalog"}
+        if library.installed_name(appid) is not None:
+            return {"ok": False, "error": "that game is already installed"}
+        try:
+            return steam.install(appid)         # steam is present (gated below)
+        except Exception as e:
+            # available() only checks the token is PRESENT, not that it still
+            # mints - an expired/revoked token raises here. Say what to do,
+            # don't break the turn (the function_schemas backstop would too, but
+            # with a less useful message).
+            log.error("install_error", appid=appid, err=str(e))
+            return {"ok": False, "error": "couldn't reach Steam - the account "
+                    "session may need re-enrolling"}
+
+    def nav(args):
+        """Big Picture navigation. downloads/library/store need no appid;
+        game_page/store_page take one from the catalog. Collections are a
+        voice-grammar concept (they resolve by name on the box), not here."""
+        target = args.get("target")
+        appid = args.get("appid")
+        if target in ("game_page", "store_page"):
+            appid = int(appid or 0)
+            if appid not in known_appids():
+                log.warn("tool_refused", tool="nav", reason="unknown_appid",
+                         appid=appid)
+                return {"ok": False, "error": f"appid {appid} is not in the catalog"}
+            r = dispatch.nav("details" if target == "game_page" else "store", appid)
+        elif target in ("downloads", "library", "store"):
+            r = dispatch.nav(target)
+        else:
+            return {"ok": False, "error": f"unknown nav target {target}"}
         return {"ok": r.ok, "detail": r.detail}
 
     plain = {"end_session": dispatch.end_session,
@@ -180,10 +247,98 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None):
         if not installed:
             o = library.load().get("owned", {}).get(str(appid))
             name = o.get("name") if o else None
-        if not (meta or name):
+        # Facets are opt-in and for ANY appid (not just owned) - a store name
+        # comes from GetItems when the catalog can't supply one, so "tell me
+        # about <a game I don't own>" works. The independent ones run CONCURRENTLY
+        # (a multi-facet ask shouldn't serialize store round-trips into one
+        # spoken turn); hltb runs after, since it needs a name that price - or a
+        # fallback GetItems lookup - supplies. Each facet is INDEPENDENTLY
+        # fail-soft: one that raises drops to None, it never sinks the call.
+        # Facets are live store calls, so the steamDataTools kill switch gates
+        # them too (same lane as list_games/search_store).
+        store_on = voice is None or voice.get("steamDataTools", True)
+        want = (args.get("facets") or []) if store_on else []
+        tasks = {}
+        if "price" in want:
+            tasks["price"] = lambda: library._store_items([appid]).get(appid)
+        if "reviews" in want:
+            tasks["reviews"] = lambda: library.fetch_reviews(appid)
+        if "news" in want:
+            tasks["news"] = lambda: library.fetch_news(appid)
+        facets = {}
+        if tasks:
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+                futs = {k: ex.submit(fn) for k, fn in tasks.items()}
+                for k, f in futs.items():
+                    try:
+                        facets[k] = f.result()
+                    except Exception as e:
+                        log.warn("facet_failed", facet=k, appid=appid, err=str(e))
+                        facets[k] = None
+        if not name:
+            name = (facets.get("price") or {}).get("name")
+        if "hltb" in want and not name:
+            # hltb needs a name and neither the catalog nor a requested price
+            # facet gave one - resolve it from the store so "how long to beat
+            # <a game I don't own>" still answers instead of "unknown appid".
+            name = (library._store_items([appid]).get(appid) or {}).get("name")
+        if "hltb" in want and name:
+            facets["hltb"] = library.fetch_hltb(name)
+        if not (meta or name or any(facets.values())):
             return {"ok": False, "error": "unknown appid"}
         return {"ok": True, "name": name, "installed": installed,
-                **(meta or {})}
+                **(meta or {}), **{k: v for k, v in facets.items() if v}}
+
+    def list_games(args):
+        """The feed reader: sale/trending/recent lists. wishlist_on_sale and
+        specials come from the precomputed state/deals.json (~0 ms); trending
+        and recently_played are cheap live calls. downloading is the account
+        session (Phase 3) and refuses truthfully until that lane exists."""
+        source = args.get("source")
+        if source == "wishlist_on_sale":
+            rows = library.load_deals().get("wishlist_on_sale")
+            if rows is None:
+                # Two honest causes for a missing key, don't guess between them:
+                # no steamId64 (refresh_deals never writes the key), or the
+                # first deals sync simply hasn't run yet.
+                return {"ok": False, "error": "no wishlist data - either the "
+                        "steamId64 isn't set, or the store sync hasn't run yet"}
+            return {"ok": True, "source": source, "games": rows[:10]}
+        if source == "specials":
+            return {"ok": True, "source": source,
+                    "games": library.load_deals().get("specials", [])[:10]}
+        if source == "trending":
+            return {"ok": True, "source": source, "games": library.fetch_trending()[:10]}
+        if source == "recently_played":
+            rows = library.fetch_recently_played()
+            return {"ok": True, "source": source, "games": rows[:10]}
+        if source == "downloading":
+            if steam is None or not steam.available():
+                return {"ok": False, "error": "download status isn't set up - the "
+                        "account session hasn't been enrolled"}
+            try:
+                return {"ok": True, "source": source,
+                        "games": steam.download_status()}
+            except Exception as e:
+                log.error("download_status_error", err=str(e))
+                return {"ok": False, "error": "couldn't reach Steam for the "
+                        "download status - the session may need re-enrolling"}
+        return {"ok": False, "error": f"unknown source {source}"}
+
+    def search_store(args):
+        """Steam's own filtered search - facts, in the same breath. NOT the
+        research worker (that's background_task, for judgment). Tag names come
+        from the caller (spoken genres); unknown ones are dropped, term still
+        applies."""
+        term = str(args.get("term", "")).strip()
+        tags = args.get("tags") or []
+        if not term and not tags:
+            return {"ok": False, "error": "search needs a term or a genre tag"}
+        rows = library.fetch_store_search(
+            term=term, tags=tags, max_price=args.get("max_price"),
+            on_sale=bool(args.get("on_sale")))
+        return {"ok": True, "count": len(rows), "games": rows}
 
     def background_task(args):
         task = str(args.get("task", "")).strip()
@@ -197,11 +352,22 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None):
         log("tool_call", tool="background_task", ok=ok, task=task[:200])
         return {"ok": ok, "detail" if ok else "error": detail}
 
-    return {"launch_game": launch_game, "control": control,
-            "stop_listening": stop_listening,
-            "get_now_playing": get_now_playing,
-            "get_game_details": get_game_details,
-            "background_task": background_task}
+    impls = {"launch_game": launch_game, "control": control,
+             "stop_listening": stop_listening,
+             "get_now_playing": get_now_playing,
+             "get_game_details": get_game_details,
+             "background_task": background_task,
+             "list_games": list_games, "search_store": search_store,
+             "quit_game": quit_game, "nav": nav,
+             "install_game": install_game}
+    if voice is not None and not voice.get("steamDataTools", True):
+        for gated in ("list_games", "search_store"):
+            impls.pop(gated, None)
+    # install_game auto-gates on the account session: no token, no offer (it
+    # would only ever refuse, and an un-offered tool is one fewer to mis-select).
+    if steam is None or not steam.available():
+        impls.pop("install_game", None)
+    return impls
 
 
 TOOL_DEFS = [
@@ -230,19 +396,91 @@ TOOL_DEFS = [
      "same turn - it is spoken first, and only then does the mic close. The "
      "wake word reopens it, so this costs the user nothing.", {}, []),
     ("get_now_playing", "What game is currently running, if any.", {}, []),
-    ("get_game_details", "Details (tags, description, score) for one appid.",
-     {"appid": {"type": "integer"}}, ["appid"]),
+    ("get_game_details", "Details for one appid: tags/description/score from "
+     "the catalog, plus any live facets you ask for. Request facets only when "
+     "the question needs them - each is a live store call. 'price' = current "
+     "price and discount; 'reviews' = review score and a few recent comments "
+     "(for 'what are people saying', pass the DLC's own appid); 'news' = recent "
+     "patch/update notes; 'hltb' = how many hours to beat. Works for games the "
+     "user does NOT own too.",
+     {"appid": {"type": "integer", "description": "appid (catalog, or a store "
+                "appid for a game the user doesn't own)"},
+      "facets": {"type": "array", "items": {"type": "string",
+                 "enum": ["price", "reviews", "news", "hltb"]},
+                 "description": "which live facets to fetch; omit for catalog "
+                 "details only"}},
+     ["appid"]),
+    ("list_games", "Read a ready-made list of games. source: 'wishlist_on_sale' "
+     "(the user's wishlist items currently discounted), 'specials' (today's "
+     "featured store sales), 'trending' (most-played right now), "
+     "'recently_played' (what the user played in the last two weeks), "
+     "'downloading' (what's installing on the PC and how far along). Use this "
+     "for 'anything on sale', 'what's on my wishlist', 'what's popular', 'what "
+     "have I been playing', 'how far along is the download'. Leads with names "
+     "and prices - not a research task.",
+     {"source": {"type": "string",
+                 "enum": ["wishlist_on_sale", "specials", "trending",
+                          "recently_played", "downloading"]}},
+     ["source"]),
+    ("search_store", "Search the Steam store with filters and get back names + "
+     "prices immediately - this is the fast, factual path for 'find me a <kind "
+     "of> game [under $N] [on sale]'. Pass genres/features as tags (e.g. "
+     "'Roguelike', 'Co-op'), a title fragment as term, a dollar cap as "
+     "max_price. Use THIS, not background_task, when Steam's own filters can "
+     "answer - only escalate to background_task when the user wants judgment "
+     "about which is actually good.",
+     {"term": {"type": "string", "description": "title words, or empty when "
+               "searching purely by genre tags"},
+      "tags": {"type": "array", "items": {"type": "string"},
+               "description": "genre/feature tag names, e.g. ['Roguelike','Co-op']"},
+      "max_price": {"type": "integer", "description": "dollar price ceiling"},
+      "on_sale": {"type": "boolean", "description": "restrict to discounted"}},
+     []),
+    ("quit_game", "Quit the game that is currently running. This ENDS the game "
+     "and can lose unsaved progress, so treat it as destructive: call it only "
+     "when the user clearly tells you to quit or close the game now, and if "
+     "there is ANY doubt, confirm first ('Quit Elden Ring?') and act only on a "
+     "yes - never on a guess. The appid must be the running game "
+     "(get_now_playing tells you which). This is NOT end_session and NOT the "
+     "TV - only the game closes; Big Picture stays up. It also clears the way "
+     "when a different game is blocking a launch.",
+     {"appid": {"type": "integer", "description": "appid of the running game"}},
+     ["appid"]),
+    ("nav", "Navigate the Big Picture UI on the TV during a live session. "
+     "target: 'downloads' (download queue), 'library' (library home), 'store' "
+     "(store front page) - none need an appid; 'game_page' (a game's library "
+     "page with its Play button - for 'show me <game>') and 'store_page' (a "
+     "game's store page - for 'open the store page for <game>') both take an "
+     "appid from the catalog.",
+     {"target": {"type": "string",
+                 "enum": ["downloads", "library", "store", "game_page",
+                          "store_page"]},
+      "appid": {"type": "integer", "description": "required for game_page and "
+                "store_page"}},
+     ["target"]),
+    ("install_game", "Install a game the user owns but hasn't installed yet - "
+     "it queues the download on the gaming PC with no controller needed. Only "
+     "for owned-but-not-installed titles (installed ones are a no-op). Confirm "
+     "the title first if there's any doubt; downloads are large. After "
+     "queueing, tell them it's downloading; they can ask 'how far along' "
+     "(list_games downloading) later.",
+     {"appid": {"type": "integer", "description": "appid of an owned, not-yet-"
+                "installed game"}},
+     ["appid"]),
     ("background_task", "Queue the background research agent ONLY when the "
      "user asks you to go away and report back later, or when the work "
      "truly takes many steps (compare reviews across sources, dig into "
      "something) - minutes, not seconds. A recommendation or a what's-new "
-     "question is NOT this: look it up and answer in the same breath "
-     "instead. It is a full agent with web access and its own copy of the "
-     "library, and it is NOT restricted to the library the way you are - "
-     "open-ended questions about games the user does not own are exactly "
-     "what it is for. The result is announced aloud later. After queueing, "
-     "tell the user you'll get back to them. Never use it for anything the "
-     "catalog or a quick search already answers.",
+     "question is NOT this: use search_store / list_games / get_game_details "
+     "and answer in the same breath instead. The split is facts vs judgment: "
+     "if Steam's own filters or a review summary answer it, that's search_store "
+     "or get_game_details, now; only 'which of these is actually good' or a "
+     "cross-source comparison is background_task. When you DO escalate after a "
+     "search, put the shortlist you already found INTO the task text so the "
+     "agent deepens it rather than starting over. It is a full agent with web "
+     "access and its own copy of the library, NOT restricted to the library "
+     "the way you are. The result is announced aloud later. After queueing, "
+     "tell the user you'll get back to them.",
      {"task": {"type": "string",
                "description": "A self-contained brief: what the user "
                "actually wants, plus any constraint THEY stated. Do not add "
@@ -266,27 +504,44 @@ def function_schemas(impls):
 
     def wrap(fn):
         async def handler(params):
-            out = await asyncio.to_thread(fn, dict(params.arguments))
+            try:
+                out = await asyncio.to_thread(fn, dict(params.arguments))
+            except Exception as e:
+                # The fail-soft backstop for the whole tool surface: an impl
+                # that raises (a store shape drift, an expired-token mint
+                # failure) must never leave result_callback uncalled - that
+                # breaks the turn instead of answering. Log it and hand back a
+                # spoken error so the assistant says something.
+                print(f"  [tool-error] {getattr(fn, '__name__', 'tool')}: {e!r}")
+                out = {"ok": False, "error": "that didn't go through - "
+                       "something upstream failed"}
             await params.result_callback(out)
         return handler
 
+    # Render only tools present in `impls` - the schema half of the gating
+    # tool_impls' docstring describes (a dropped tool leaves the model's view,
+    # not just its reach).
     return [FunctionSchema(name=n, description=d, properties=p, required=r,
                            handler=wrap(impls[n]))
-            for n, d, p, r in TOOL_DEFS]
+            for n, d, p, r in TOOL_DEFS if n in impls]
 
 
-def anthropic_tools():
+# `names` filters to the tools actually present in a given impls set, so the
+# REPL/bench renderers can't offer a tool that isn't callable (steam=None drops
+# install_game; steamDataTools=false drops the store tools) - a bare call
+# renders every TOOL_DEF, which is what the schema-shape tests check.
+def anthropic_tools(names=None):
     return [{"name": n, "description": d,
              "input_schema": {"type": "object", "properties": p, "required": r}}
-            for n, d, p, r in TOOL_DEFS]
+            for n, d, p, r in TOOL_DEFS if names is None or n in names]
 
 
-def openai_tools():
+def openai_tools(names=None):
     # Responses API tool shape is FLAT (name/parameters at top level) - the
     # nested {"function": {...}} form is chat-completions only.
     return [{"type": "function", "name": n, "description": d,
              "parameters": {"type": "object", "properties": p, "required": r}}
-            for n, d, p, r in TOOL_DEFS]
+            for n, d, p, r in TOOL_DEFS if names is None or n in names]
 
 
 def _user_location(voice):
@@ -347,7 +602,7 @@ class AnthropicBackend:
             resp = self.client.messages.create(
                 model=self.model, max_tokens=400, system=system,
                 messages=self.messages,
-                tools=anthropic_tools() + self.server_tools)
+                tools=anthropic_tools(set(impls)) + self.server_tools)
             u = resp.usage
             self.cache_note = (
                 f"cache w{getattr(u, 'cache_creation_input_tokens', 0) or 0}"
@@ -398,7 +653,7 @@ class OpenAIBackend:
         while True:
             resp = self.client.responses.create(
                 model=self.model, instructions=system_text, input=pending,
-                tools=openai_tools() + self.server_tools,
+                tools=openai_tools(set(impls)) + self.server_tools,
                 reasoning={"effort": self.effort},
                 max_output_tokens=1500, previous_response_id=self.prev)
             self.prev = resp.id

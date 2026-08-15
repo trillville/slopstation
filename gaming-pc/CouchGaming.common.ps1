@@ -274,6 +274,60 @@ function Get-SteamExe {
     $exe
 }
 
+# Every steamapps library root: SteamPath plus each "path" in libraryfolders.vdf
+# (games live on any drive). The Dispatch `games`/`launch` verbs parse the same
+# vdf inline because Dispatch is deliberately dependency-free; this is the home
+# for the DOT-SOURCED consumers (Stop-Game), which is the "one home" rule as far
+# as it can reach across that boundary.
+function Get-SteamLibraryRoots {
+    $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
+    if (-not $steam) { return @() }
+    $steam = $steam -replace '/', '\'
+    $roots = @($steam)
+    $lf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+    if (Test-Path $lf) {
+        foreach ($line in (Get-Content $lf)) {
+            if ($line -match '^\s*"path"\s+"(.+)"\s*$') { $roots += ($Matches[1] -replace '\\\\', '\') }
+        }
+    }
+    $roots | Select-Object -Unique
+}
+
+# appid -> its full install directory (…\steamapps\common\<installdir>), from the
+# ACF, or $null. The `installdir` field is what nothing else here reads - the
+# games verb takes name/state, not this - so Stop-Game owns the need and this is
+# where the reader lives.
+function Get-AppInstallDir([int]$AppId) {
+    foreach ($root in (Get-SteamLibraryRoots)) {
+        $acf = Join-Path $root "steamapps\appmanifest_$AppId.acf"
+        if (Test-Path $acf) {
+            $t = Get-Content $acf -Raw -Encoding UTF8
+            if ($t -match '"installdir"\s+"([^"]+)"') {
+                return (Join-Path $root ("steamapps\common\" + $Matches[1]))
+            }
+        }
+    }
+    $null
+}
+
+# The running processes that belong to a game: those whose image path sits under
+# its install dir. Steam exposes no appid->pid map, so the install dir is the
+# most robust join. .Path throws for processes this (unelevated) task can't open,
+# but the game runs as the same user, so it is reachable - guard and skip the
+# rest. Empty when the dir can't be resolved or nothing matches.
+function Get-GameProcess([int]$AppId) {
+    $dir = Get-AppInstallDir $AppId
+    if (-not $dir) { return @() }
+    # Match on the dir PLUS a trailing separator, so a sibling whose folder name
+    # is a string prefix of this one ("Half-Life 2" vs "Half-Life 2 Deathmatch",
+    # both in one library) can never cross-match and get force-killed with it.
+    $prefix = $dir.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    Get-Process | Where-Object {
+        try { $_.Path -and $_.Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) }
+        catch { $false }
+    }
+}
+
 # NOTE: there is deliberately no Resume-Game here. One existed briefly and was
 # reverted - see docs/troubleshooting.md and the plan in the same commit. It
 # ran `-applaunch` on the already-running game just before the ready marker,

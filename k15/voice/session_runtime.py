@@ -130,7 +130,7 @@ def _make_llm(voice, secrets, system_text):
 
 
 async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
-                      capture=None, jobs=None, ack=None):
+                      capture=None, jobs=None, ack=None, steam=None):
     from pipecat.frames.frames import (BotSpeakingFrame,
                                        InterimTranscriptionFrame,
                                        TranscriptionFrame, TTSSpeakFrame,
@@ -183,6 +183,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         matcher, dispatcher, log,
         resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])
                       if game_terms else None),
+        resolve_collection=titles.build_collection_resolver(
+            voice["fuzzyTitleThreshold"]),      # None when no collections synced
         assistant_enabled=assistant_live,
         wake_word=wake_phrase.split()[-1],      # "jarvis" - the strip anchor
         jobs=jobs,
@@ -225,7 +227,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
                     # here; why the tool ends a session that way is on the
                     # method itself.
                     tool_impls(dispatcher, log, jobs=jobs,
-                               on_stop_listening=gate.request_stop)),
+                               on_stop_listening=gate.request_stop,
+                               voice=voice, steam=steam)),
                 custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(context)
         llm = _make_llm(voice, secrets, system_instruction(cfg))
