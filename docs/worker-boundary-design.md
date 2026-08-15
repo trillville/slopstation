@@ -60,7 +60,7 @@ Six tools, no MCP, `probe_worker_surface.py` as the canary.
 release; the canary makes that loud rather than silent, but it is still a list
 someone else grows.
 
-### B. No file tools + injected catalog  ← *cheapest real fix*
+### B. No file tools + injected catalog  ← **SHIPPED 2026-08-14**
 Deny `Read`/`Glob`/`Grep`/`Write` too; put the catalog (and `deals.json`) in the
 prompt, exactly as the assistant already gets it. **Measured working**, with the
 model quoting playtime straight from the injected rows.
@@ -117,9 +117,12 @@ same structured tools the assistant uses instead of raw JSON the worker parses.
 
 ## Recommendation
 
-1. **Ship B now.** It closes the `secrets.json` path — the only *proven*
-   exposure — for ~30 lines and no quality loss (measured). Everything else is
-   an improvement on top of a lane that is then genuinely research-only.
+1. ~~**Ship B now.**~~ **DONE.** The worker's surface is now `WebSearch,
+   WebFetch` and nothing else — verified by the canary — with the catalog and
+   prices in the prompt. A live job still fused both sources: "Hades II is the
+   best-reviewed roguelike you own, 94 on Metacritic, already installed with 69
+   hours on it." The `secrets.json` path is closed: there is no file tool to
+   read it with.
 2. **Fix the assistant's-mouth channel separately**, because no option above
    touches it. Cheapest credible mitigation: seed job results as a `user`-role
    quote attributed to the worker, or mark them as untrusted data in the text

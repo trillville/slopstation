@@ -23,11 +23,51 @@ HERE = Path(__file__).resolve().parent
 WORKER_HOME = HERE / "worker_home"
 
 PROMPT = (
-    "Background job from the couch voice assistant. Read AGENTS.md in this "
-    "directory first - it is the standing briefing and the output contract.\n"
+    "Background job from the couch voice assistant. AGENTS.md in this "
+    "directory is your standing briefing and output contract - your harness "
+    "has already loaded it, and you have no file tools to re-read it with.\n"
+    "{library}"
     "\nTASK: {task}\n\n"
     'Remember: reply with ONLY the JSON object {{"summary": ..., "detail": '
     "...}} the contract describes.")
+
+
+def _library_context():
+    """The user's catalog and today's Steam prices, INLINE in the prompt.
+
+    The worker has no file tools (ClaudeWorker.DENY), so the data it used to
+    Read is handed to it instead. That is the whole trade: `Read` served the
+    library AND `secrets.json`, cannot be path-scoped (drilled 2026-08-14 -
+    Read(**/x) is ignored), so the only way to keep one without the other is
+    to stop reading files and pass the data. Same move the assistant already
+    makes, and better input than the raw JSON it used to parse: these rows
+    carry tags and playtime.
+
+    Fail-soft: a job without the catalog is worse, a job that dies because
+    state was mid-write is unacceptable.
+    """
+    try:
+        import library
+        rows = library.catalog_lines()
+        deals = library.load_deals() or {}
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    out = ["\nThe user's STEAM CATALOG follows. Treat it as ground truth about "
+           "what they own and how long they have played - it is fresher than "
+           "anything you will find on the web.",
+           "appid|name|tags|genres|hours|lastPlayed|installed|controller",
+           "\n".join(rows)]
+    ws, sp = deals.get("wishlist_on_sale") or [], deals.get("specials") or []
+    if ws or sp:
+        out.append("\nSteam prices already fetched for you - use these rather "
+                   "than searching for prices:")
+        if ws:
+            out.append("wishlist items now discounted: " + json.dumps(ws[:12]))
+        if sp:
+            out.append("featured specials: " + json.dumps(sp[:12]))
+    return "\n".join(out) + "\n"
 
 
 def _argv_for(path):
@@ -81,7 +121,8 @@ class _CliWorker:
     def run(self, task, timeout):
         try:
             p = subprocess.run(
-                self._argv(), input=PROMPT.format(task=task),
+                self._argv(),
+                input=PROMPT.format(task=task, library=_library_context()),
                 cwd=str(WORKER_HOME), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=timeout,
                 env=self._env())
@@ -183,11 +224,19 @@ class ClaudeWorker(_CliWorker):
     to a whole-stdout parse, and a CLI that rejects the flags retries once in
     legacy mode (see run). Churn costs tool spans, never the job."""
     exe = "claude"
-    TOOLS = "WebSearch,WebFetch,Read,Glob,Grep,Write"
+    # The web, and nothing else. No file tools at all: `Read` served both
+    # library.json and secrets.json, and it CANNOT be path-scoped (drilled
+    # 2026-08-14: a Read(**/x) deny was ignored and the file read anyway), so
+    # the only way to keep the library without the secret is to stop reading
+    # files and pass the data in - see _library_context. Write goes for the
+    # same reason in reverse: it was unscoped too, so scratch space meant
+    # "overwrite anything on the box".
+    TOOLS = "WebSearch,WebFetch"
     # Everything else the CLI offered on 2026-08-14, by name. Grouped by what
     # each would BUY an injected instruction, so the next reader can judge an
     # addition rather than pattern-match a list.
     DENY = ("Bash,PowerShell,"                                   # execution
+            "Read,Glob,Grep,Write,"                              # the filesystem, at all
             "Edit,NotebookEdit,"                                 # writes outside worker_home
             "CronCreate,CronDelete,CronList,ScheduleWakeup,"     # persistence
             "Artifact,PushNotification,SendMessage,RemoteTrigger,"   # exfiltration
