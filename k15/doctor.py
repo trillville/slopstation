@@ -216,6 +216,53 @@ def check_session_state():
         report(PASS, "last_error", "none")
 
 
+def _steam_mint_probe(tok, steamid, days):
+    """Can the refresh token actually MINT? Returns a report() tuple.
+
+    The mint answers with an empty JSON body and puts the outcome in the
+    X-eresult HEADER, so the header is the error message. 15 (AccessDenied) is
+    the one seen in the field: a WebBrowser/QR enrollment yields an
+    aud=[web,renew,derive] token, and deriving a client-app token from it is
+    refused - the lane looks enrolled and installs nothing.
+
+    Stdlib urllib, not requests: doctor runs on SYSTEM python and requests
+    lives in the voice venv. Offline is not a verdict on the token, so an
+    unreachable API stays a PASS with the caveat named.
+    """
+    import urllib.parse
+    import urllib.request
+    try:                                        # one home for the browser UA
+        sys.path.insert(0, str(cglib.BASE / "voice"))
+        from steam_session import UA
+    except Exception:
+        UA = "Mozilla/5.0"
+    req = urllib.request.Request(
+        "https://api.steampowered.com/IAuthenticationService/"
+        "GenerateAccessTokenForApp/v1/",
+        data=urllib.parse.urlencode({"refresh_token": tok,
+                                     "steamid": steamid}).encode(),
+        headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            eresult = r.headers.get("X-eresult") or "?"
+            minted = ((json.loads(r.read() or b"{}").get("response") or {})
+                      .get("access_token"))
+    except Exception as e:                      # offline/DNS/TLS - not a verdict
+        return (PASS, "steam session",
+                f"enrolled, token good for {days:.0f} days "
+                f"(could not verify the mint: {e})")
+    if minted:
+        return (PASS, "steam session",
+                f"enrolled and minting, token good for {days:.0f} days")
+    why = {"15": "AccessDenied - the token cannot derive a client access "
+                 "token (a web-audience enrollment)",
+           "84": "RateLimitExceeded - wait before retrying"}.get(
+               str(eresult), f"eresult {eresult}")
+    return (WARN, "steam session", f"enrolled but CANNOT mint - {why}",
+            "install-by-voice will refuse every call; see "
+            "docs/voice-expansion-livetest.md Stage 5")
+
+
 def check_voice(cfg):
     """Voice overlay health - WARN-only by design: voice is never load-bearing,
     so a broken voice lane must not turn the chain doctor red (exit code =
@@ -291,10 +338,11 @@ def check_voice(cfg):
                "rename one side - a shared spoken name double-matches in the grammar")
 
     # Account session (install-by-voice). WARN-only, and only speaks up when a
-    # token IS present but nearing death - a re-scan is a HUMAN action, so it
-    # earns a heads-up before movie night finds it, not after. Absent is silent
-    # (the lane is optional). Decode the JWT exp with stdlib only, like the CLI.
-    tok = cglib.load_secrets().get("steamRefreshToken")
+    # token IS present but unusable or nearing death - a re-scan is a HUMAN
+    # action, so it earns a heads-up before movie night finds it, not after.
+    # Absent is silent (the lane is optional). Stdlib only, like the CLI.
+    secrets = cglib.load_secrets()
+    tok = secrets.get("steamRefreshToken")
     if cglib.real_key(tok):
         try:
             import base64
@@ -309,7 +357,15 @@ def check_voice(cfg):
                 report(WARN, "steam session", f"token expires in {days:.0f} days",
                        "re-scan soon: steam_session.py enroll")
             else:
-                report(PASS, "steam session", f"enrolled, token good for {days:.0f} days")
+                # An unexpired token is NOT a working one. On 2026-08-14 this
+                # probe said "good for 211 days" while every mint came back
+                # AccessDenied, and the failure surfaced on the couch instead:
+                # the QR enrollment had produced a WEB-audience token
+                # (aud=[web,renew,derive]), which cannot derive a client-app
+                # token. A PASS that a live install contradicts is worse than
+                # no probe, so ask Steam rather than the clock.
+                report(*_steam_mint_probe(tok, str(secrets.get("steamId64", "")),
+                                          days))
         except Exception as e:
             report(WARN, "steam session", f"token unreadable ({e})",
                    "re-run steam_session.py enroll")
