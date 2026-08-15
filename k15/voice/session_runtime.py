@@ -28,7 +28,6 @@ log = cglib.make_log("voice")
 # too many is not a degraded transcript, it is a 400 on connect, which is
 # every session failing to open.
 MAX_KEYTERMS = 100
-LOW_HEADROOM = 10               # warn before the library grows into the cap
 
 
 def load_titles(count):
@@ -60,9 +59,10 @@ def stt_keyterms(voice, wake_phrase):
     words Flux already knows, while a title it has never seen is the whole
     point of the list.
 
-    Capped out loud - a silently truncated list reads as full coverage - and
-    warned BEFORE the cap, because the day it starts truncating is a day the
-    room quietly gets worse at hearing game names."""
+    Capped out loud - a silently truncated list reads as full coverage. How
+    close the list is to the cap rides on stt_vocabulary as a number, which is
+    what an alert should watch; a second event saying "getting close" would
+    fire on every session at today's 92 and be noise, not signal."""
     terms = [wake_phrase]
     for name in load_titles(voice["keytermCount"]):
         terms += titles.keyterm_forms(name)
@@ -79,9 +79,6 @@ def stt_keyterms(voice, wake_phrase):
         log.warn("keyterms_capped", kept=MAX_KEYTERMS, dropped=len(out) - MAX_KEYTERMS,
                  first_dropped=out[MAX_KEYTERMS])
         out = out[:MAX_KEYTERMS]
-    elif MAX_KEYTERMS - len(out) < LOW_HEADROOM:
-        log.warn("keyterms_low_headroom", terms=len(out), cap=MAX_KEYTERMS,
-                 headroom=MAX_KEYTERMS - len(out))
     return out
 
 

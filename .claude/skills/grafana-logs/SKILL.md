@@ -87,11 +87,11 @@ Time to READY, the number the whole system is judged on:
   - `gate_match`/`gate_miss`/`stt_final` carry `confidence` (mean per-word, from
     Flux) — the axis for "was that a bad transcript or a bad phrasing?", and
     absent on turns where Flux sent no per-word data.
-  - `stt_vocabulary` `keyterms_capped` `keyterms_low_headroom` — what the STT
-    was told to expect at session build. Deepgram's ceiling is 100 keyterms
-    (measured; 110 is a 400 on connect), `headroom` is what is left, and the
-    low-headroom warning fires before anything is actually dropped — the day
-    truncation starts is the day the room quietly gets worse at game names.
+  - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
+    session build. Deepgram's ceiling is 100 keyterms (measured; 110 is a 400
+    on connect) and `headroom` is what is left of it, so alert on
+    `headroom < 5` rather than waiting for `keyterms_capped`: by the time
+    truncation fires the room is already worse at game names.
   - `audio_device_wait` — the configured mic is not in the device table;
     `waited_s` is how long the agent has been deaf waiting for it. A rebuild
     never falls back to the system default, so this event standing still is
