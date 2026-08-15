@@ -146,19 +146,31 @@ def result_meta(d):
 
 
 class ClaudeWorker(_CliWorker):
-    """claude -p. Research-only BY CONSTRUCTION: no Bash in --allowedTools,
-    so the boundary is the harness rather than a prompt rule - a shell reads
-    what the Read deny rules cannot, and this process ingests untrusted web
-    content on the account holding the gamepc key. Actions belong to Tier 2,
-    after the user asks. The injection canary drill (voice-testing 10c) proves
-    it on this machine.
+    """claude -p, restricted to research.
 
-    CodexWorker below cannot promise the same - its sandbox confines writes,
-    not reads or shell - so doctor warns whenever that lane is selected. If
-    that lane ever has to be real, the fix is NOT more prompt rules: run
-    workers as a separate low-privilege Windows account with a deny ACL on
-    secrets.json. That is the only mechanism here independent of model
-    judgment.
+    THE BOUNDARY IS --disallowedTools, NOT --allowedTools. That is the whole
+    lesson of 2026-08-14: --allowedTools is only an AUTO-APPROVE list in -p
+    mode, so listing six tools restricted nothing - a live job called Bash
+    (and TaskCreate, and ToolSearch), and `echo` ran when drilled directly.
+    This lane reads UNTRUSTED WEB CONTENT on the box holding secrets.json and
+    the gamepc key, so it ran for months on a promise the harness never made.
+
+    What the enumeration actually showed (ask the CLI, do not assume): 33
+    tools, including TWO shells, Cron* (persistence), Artifact /
+    PushNotification / SendMessage / RemoteTrigger (outbound channels that
+    need no shell), and Agent / Workflow (spawn more agents). Several are
+    recent additions - PowerShell sits right next to Bash - which is why DENY
+    below is written from a live enumeration and guarded by
+    bench/probe_worker_surface.py: a denylist against a list someone else
+    grows is only honest if something MEASURES it. Actions still belong to
+    Tier 2, after the user asks.
+
+    This is mitigation, not the endgame. The mechanism-independent fix is the
+    one that does not care how many tools ship: run this as a separate
+    low-privilege Windows account with a deny ACL on secrets.json, or own the
+    loop outright (an API agent whose tools we define). CodexWorker below is
+    weaker still - its sandbox confines writes, not reads or shell - so doctor
+    warns whenever that lane is selected.
 
     Output is stream-json so the TOOL CALLS are visible - with plain json the
     only artefact of three minutes of research is the final text. The stream
@@ -172,6 +184,17 @@ class ClaudeWorker(_CliWorker):
     legacy mode (see run). Churn costs tool spans, never the job."""
     exe = "claude"
     TOOLS = "WebSearch,WebFetch,Read,Glob,Grep,Write"
+    # Everything else the CLI offered on 2026-08-14, by name. Grouped by what
+    # each would BUY an injected instruction, so the next reader can judge an
+    # addition rather than pattern-match a list.
+    DENY = ("Bash,PowerShell,"                                   # execution
+            "Edit,NotebookEdit,"                                 # writes outside worker_home
+            "CronCreate,CronDelete,CronList,ScheduleWakeup,"     # persistence
+            "Artifact,PushNotification,SendMessage,RemoteTrigger,"   # exfiltration
+            "Agent,Workflow,TaskCreate,TaskGet,TaskList,"        # more agents
+            "TaskOutput,TaskStop,TaskUpdate,"
+            "Skill,ToolSearch,Monitor,DesignSync,"               # surface expansion
+            "EnterWorktree,ExitWorktree,ReportFindings")
 
     def __init__(self, model="", effort=""):
         super().__init__(model, effort)
@@ -181,7 +204,17 @@ class ClaudeWorker(_CliWorker):
         argv = _argv_for(self.path) + ["-p"]
         argv += (["--output-format", "stream-json", "--verbose"] if self.stream
                  else ["--output-format", "json"])
-        argv += ["--allowedTools", self.TOOLS]
+        # allowedTools auto-approves; disallowedTools is what actually removes
+        # the tool from the model's list. Both, so the intent reads either way.
+        argv += ["--allowedTools", self.TOOLS, "--disallowedTools", self.DENY]
+        # And NO MCP. The surface canary caught this on its first run: the
+        # subprocess inherits the desktop account's connectors, so the worker
+        # could read, overwrite, TRASH and publicly SHARE the user's Google
+        # Drive - from a lane whose whole input is untrusted web pages. Naming
+        # those eleven tools in DENY would fix Drive and miss the next
+        # connector, so cut it at the mechanism: an empty server set plus
+        # --strict-mcp-config means no config anywhere can add one back.
+        argv += ["--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config"]
         if self.model:
             argv += ["--model", self.model]
         return argv
