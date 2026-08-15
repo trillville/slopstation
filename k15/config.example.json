@@ -48,8 +48,10 @@
       "playstation": "hdmi2", "ps5": "hdmi2", "the playstation": "hdmi2",
       "the pc": "hdmi4", "pc": "hdmi4", "gaming pc": "hdmi4"
     },
+    "_navTargets": "Spoken form -> nav kind. List every determiner you'd say: the {target} slot is an exact list, so a form that is missing here does not fall back, it falls THROUGH to the wildcards below Nav in grammar.yaml - 'show me my downloads' was landing on ShowCollection and dying there because only 'my library' had been listed.",
     "navTargets": {
       "downloads": "downloads", "the downloads": "downloads",
+      "my downloads": "downloads",
       "downloads queue": "downloads", "download queue": "downloads",
       "library": "library", "my library": "library", "the library": "library",
       "store": "store", "the store": "store", "store page": "store"

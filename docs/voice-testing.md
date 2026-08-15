@@ -311,14 +311,25 @@ after any change to `RULES` or a tool description, after a provider or model
 switch, and before trusting a new tool with a side effect.
 
 `probe_stt.py` is the odd one out — it probes **hearing**, not judgement.
-Windows SAPI speaks a table of launch phrasings, Flux transcribes them under
-the current keyterm list, and the bar is whether the grammar and the fuzzy
-resolver get an appid out of the result, because that is what decides whether
-the game starts. Run it after any change to the keyterm list, `grammar.yaml`'s
-`PlayGame`, or `fuzzyTitleThreshold`. `--raw-names` and `--no-keyterms` run
-the same audio through the older configs, which makes it an A/B rather than a
-number: that is how spoken-form keyterms plus the conversational `PlayGame`
-lead-ins were shown to take the same table from 7/10 to 8/10 on 2026-08-14.
+Windows SAPI speaks a table of commands, Flux transcribes them under the
+current keyterm list, and the bar is whether the gate's own path (grammar →
+slot → resolver) produces the thing that changes the room: an appid, a
+collection id, a nav kind. Launch, collection and nav cases all sit in one
+table. Run it after any change to the keyterm list, `grammar.yaml`, or
+`fuzzyTitleThreshold`.
+
+`--raw-names` and `--no-keyterms` replay the same audio through the older
+configs, which makes it an A/B rather than a number: that is how spoken-form
+keyterms plus the conversational `PlayGame` lead-ins were shown to take the
+launch table from 7/10 to 8/10 on 2026-08-14.
+
+`--sweep` varies `fuzzyTitleThreshold` over transcripts it captured **once**,
+so only the resolver changes. Read the FALSE MATCH column first: the table's
+negatives are titles you own but have not installed, and the failure mode of a
+loose threshold is not a miss, it is launching the wrong game. That column is
+why 87 survived a challenge on 2026-08-15 — dropping to 78 bought two
+resolutions and made nine owned titles falsely match, `Civilization V` and
+`VI` both landing on `Civilization VII`.
 
 It measures the STT **config**, never the room — synthesized speech says
 nothing about whether the array is aimed. The couch drills in the mic-array

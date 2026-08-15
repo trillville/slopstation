@@ -20,7 +20,15 @@ import tracing
 log = cglib.make_log("voice")
 
 
-MAX_KEYTERMS = 100              # boost is finite, and so is the connect URL
+# Deepgram's hard ceiling, MEASURED (2026-08-15) rather than documented: 100
+# keyterms connect, 110 are refused with HTTP 400 at the websocket handshake.
+# It is a COUNT limit and not a URL-length one - 100 short terms (1.4 kB of
+# query string) pass and 110 short terms (1.5 kB) do not, while 100 long terms
+# (4.7 kB) pass. Don't re-derive this; and don't raise it, because one term
+# too many is not a degraded transcript, it is a 400 on connect, which is
+# every session failing to open.
+MAX_KEYTERMS = 100
+LOW_HEADROOM = 10               # warn before the library grows into the cap
 
 
 def load_titles(count):
@@ -43,7 +51,18 @@ def stt_keyterms(voice, wake_phrase):
     generic tail ('action', 'adventure') is words Flux already knows, so it
     is what should fall off the end rather than a title.
 
-    Capped out loud - a silently truncated list reads as full coverage."""
+    Ordering IS the budget policy. There are 100 slots and no more, and this
+    catalog already spends 92 of them (55 title forms from 39 games, 11
+    collections, 30 tag words), so the 162 owned-but-not-installed titles
+    simply do not fit - which is why keyterm_forms teaches 'hades' off Hades II
+    rather than the list carrying plain Hades. When the library grows past the
+    cap the generic tail is what falls off, and that is correct: those are
+    words Flux already knows, while a title it has never seen is the whole
+    point of the list.
+
+    Capped out loud - a silently truncated list reads as full coverage - and
+    warned BEFORE the cap, because the day it starts truncating is a day the
+    room quietly gets worse at hearing game names."""
     terms = [wake_phrase]
     for name in load_titles(voice["keytermCount"]):
         terms += titles.keyterm_forms(name)
@@ -57,8 +76,12 @@ def stt_keyterms(voice, wake_phrase):
             seen.add(t)
             out.append(t)
     if len(out) > MAX_KEYTERMS:
-        log.warn("keyterms_capped", kept=MAX_KEYTERMS, dropped=len(out) - MAX_KEYTERMS)
+        log.warn("keyterms_capped", kept=MAX_KEYTERMS, dropped=len(out) - MAX_KEYTERMS,
+                 first_dropped=out[MAX_KEYTERMS])
         out = out[:MAX_KEYTERMS]
+    elif MAX_KEYTERMS - len(out) < LOW_HEADROOM:
+        log.warn("keyterms_low_headroom", terms=len(out), cap=MAX_KEYTERMS,
+                 headroom=MAX_KEYTERMS - len(out))
     return out
 
 
@@ -187,7 +210,8 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     # phrase transcribes canonically and strip_wake lands every time.
     wake_phrase = voice["wakeModel"].rsplit("_v", 1)[0].replace("_", " ")
     keyterms = stt_keyterms(voice, wake_phrase)
-    log("stt_vocabulary", terms=len(keyterms), titles=len(game_terms))
+    log("stt_vocabulary", terms=len(keyterms), titles=len(game_terms),
+        headroom=MAX_KEYTERMS - len(keyterms))
 
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_in_sample_rate=16000,

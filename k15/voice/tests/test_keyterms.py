@@ -86,6 +86,33 @@ def test_the_cap_is_announced_not_silent():
     print("  OK  truncation logs what it dropped")
 
 
+def test_the_cap_never_exceeds_deepgram_s_measured_ceiling():
+    """100 connect, 110 are refused with HTTP 400 at the handshake (measured
+    2026-08-15). One term over is not a worse transcript, it is every session
+    failing to open - so this is a ceiling, not a tuning knob."""
+    assert session_runtime.MAX_KEYTERMS <= 100, session_runtime.MAX_KEYTERMS
+    print("  OK  cap stays at or under the measured hard limit of 100")
+
+
+def test_low_headroom_warns_before_it_truncates():
+    import cglib
+    real = session_runtime.MAX_KEYTERMS
+    # 11 terms come out of FAKE_INDEX; a cap of 12 leaves 1 slot.
+    session_runtime.MAX_KEYTERMS = 12
+    log = cglib.CapturingLog()
+    session_runtime.log, saved = log, session_runtime.log
+    try:
+        session_runtime.stt_keyterms(VOICE, "hey jarvis")
+    finally:
+        session_runtime.log = saved
+        session_runtime.MAX_KEYTERMS = real
+    warned = log.find("keyterms_low_headroom")
+    assert warned, f"grew into the cap silently: {log.events()}"
+    assert warned[0]["headroom"] == 1, warned[0]
+    assert not log.find("keyterms_capped"), "warned AND truncated - it fit"
+    print("  OK  approaching the cap warns before anything is dropped")
+
+
 def test_confidence_is_read_and_never_raises():
     assert stt_confidence(Frame({"words": [{"confidence": 0.9},
                                            {"confidence": 0.7}]})) == 0.8
@@ -109,6 +136,8 @@ def main():
         test_trailing_sequel_number_yields_the_bare_name()
         test_vocabulary_covers_all_three_sources_and_drops_non_games()
         test_the_cap_is_announced_not_silent()
+        test_the_cap_never_exceeds_deepgram_s_measured_ceiling()
+        test_low_headroom_warns_before_it_truncates()
         test_confidence_is_read_and_never_raises()
     finally:
         library.load, library.query_terms = real_load, real_terms
