@@ -27,8 +27,18 @@ config.alloy
 .venv/
 __pycache__/
 
-# Voice: wake-word model binaries - fetched on first run, not vendored
-k15/voice/models/
+# Voice: wake-word model binaries. The PRETRAINED set is fetched on first run
+# into the venv and stays out of here; a hand-trained model has no upstream to
+# re-fetch from, so it is vendored and travels with the repo. Contents are
+# ignored rather than the directory itself - git cannot re-include a file whose
+# parent directory is excluded, so `k15/voice/models/` would beat the negation.
+k15/voice/models/*
+!k15/voice/models/*.onnx
+
+# Voice: room recordings for wake-word training - tens of MB of the TV, and
+# the gaming PC is where they are consumed, not here (bench/record_room.py)
+k15/voice/room.wav
+k15/voice/room_*.wav
 
 # Voice: Tier-3 worker scratch - the briefing + guardrails are committed,
 # everything a worker writes is runtime state

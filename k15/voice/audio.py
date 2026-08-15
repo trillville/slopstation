@@ -221,6 +221,11 @@ class WakeListener:
     PREROLL_CHUNKS = 25                         # 2 s ring kept ahead of detection
     SILENT_CHUNKS = 375                         # 30 s of literal zeros = dead stream
 
+    # Hand-trained models live in the repo and travel by `git pull`: unlike the
+    # pretrained set there is no upstream to re-fetch them from, so losing one
+    # to a venv rebuild would mean retraining it.
+    MODELS_DIR = Path(__file__).resolve().parent / "models"
+
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np
         from openwakeword.model import Model
@@ -229,20 +234,59 @@ class WakeListener:
         self.device_index = input_device_index
         self.model_name = voice_cfg["wakeModel"]          # e.g. hey_jarvis_v0.1
         self.key = self.model_name.rsplit("_v", 1)[0]     # e.g. hey_jarvis
-        self._ensure_model()
-        self.model = Model(wakeword_models=[self.key], inference_framework="onnx")
+        self.model_path = self._resolve_model()
+        self.model = Model(wakeword_models=[str(self.model_path)],
+                           inference_framework="onnx")
 
-    def _ensure_model(self):
-        # Models must land in openwakeword's OWN package dir: it resolves the
-        # bundled feature extractors (melspectrogram, embedding) relative to
-        # that path, so pointing downloads at a custom directory strands them
-        # and the model loads against nothing.
+    def _resolve_model(self):
+        """Vendored model first, then openWakeWord's own resources dir
+        (fetching a pretrained name on first run). Returns a PATH.
+
+        The path matters: Model() resolves a bare NAME only against
+        openWakeWord's six official models and raises ValueError on anything
+        else - which behind the supervisor is a crash loop every 10 s rather
+        than a message. A path it just loads, taking the model's name from the
+        basename, which is why the naming convention is the whole interface.
+
+        Downloads still target openwakeword's OWN package dir: it resolves the
+        bundled feature extractors (melspectrogram, embedding) relative to that
+        path, so pointing downloads at a custom directory strands them and the
+        model loads against nothing. LOADING from elsewhere is unaffected - the
+        extractors resolve from the package dir no matter where the wake model
+        came from (measured 2026-08-13, both dirs, identical scores).
+        """
         import openwakeword
         from openwakeword.utils import download_models
         res = Path(openwakeword.__file__).parent / "resources" / "models"
-        if not (res / f"{self.model_name}.onnx").exists():
-            log("wake_model_download", model=self.model_name)
+        vendored = self.MODELS_DIR / f"{self.model_name}.onnx"
+        pretrained = res / f"{self.model_name}.onnx"
+
+        # The mel + embedding extractors are shared by every wake model and
+        # ship OUTSIDE the wheel, so they have to be fetched even when the
+        # model itself is vendored - a rebuilt venv would otherwise load a
+        # perfectly good custom model against nothing. download_models tops
+        # them up whatever else it is asked for, and no-ops on a name it does
+        # not recognise, so a custom key costs one stat call.
+        if not (res / "embedding_model.onnx").exists() or not (
+                vendored.exists() or pretrained.exists()):
+            log("wake_model_download", model=self.model_name,
+                vendored=vendored.exists() or None)
             download_models([self.key])
+
+        if vendored.exists():
+            self.model_source = "vendored"
+            return vendored
+        self.model_source = "pretrained"
+        if not pretrained.exists():
+            # download_models silently no-ops on a name it does not know, so a
+            # custom model that never landed (gitignored away, bad wakeModel)
+            # arrives here rather than as an opaque ValueError from Model().
+            log.error("wake_model_missing", model=self.model_name,
+                      looked_in=[str(self.MODELS_DIR), str(res)])
+            raise FileNotFoundError(f"{self.model_name}.onnx: not vendored in "
+                                    f"{self.MODELS_DIR} and not a pretrained "
+                                    f"openWakeWord model")
+        return pretrained
 
     def rebind(self, pa, device_index):
         """Adopt a fresh PyAudio instance + re-resolved mic after an audio

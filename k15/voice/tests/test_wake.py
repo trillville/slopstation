@@ -1,9 +1,20 @@
 """Blind test: the wake model detects SYNTHESIZED speech - no mic,
-no human. Windows SAPI speaks "hey jarvis" in two different voices (oWW was
-trained on synthetic TTS, so this is a legitimate detection test), plus
-negative phrases that must NOT fire. Downloads the oWW models on first run.
+no human. Windows SAPI speaks the CONFIGURED wake phrase in two different
+voices (oWW was trained on synthetic TTS, so this is a legitimate detection
+test), plus negative phrases that must NOT fire. Downloads the oWW models on
+first run.
     .venv\\Scripts\\python tests\\test_wake.py
+
+It follows config.json rather than pinning hey_jarvis, because the model is
+the one piece that arrives from another machine entirely (trained on the
+gaming PC, shipped by git) and a custom wake word nothing blind-tests is
+coverage in name only.
+
+Caveat for an invented phrase: SAPI may pronounce it nothing like a person
+would, so a low score here with good live trials is the test's limit rather
+than the model's - see docs/custom-wakeword-design.md.
 """
+import json
 import subprocess
 import sys
 import tempfile
@@ -14,14 +25,31 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import cglib
 from audio import WakeListener
 
-VOICE_CFG = {"wakeModel": "hey_jarvis_v0.1"}
+
+def deployed_model():
+    """config.example.json is the fallback so a fresh checkout - no
+    config.json yet - still runs the suite instead of erroring."""
+    for path in (cglib.BASE / "config.json", cglib.BASE / "config.example.json"):
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig"))["voice"]["wakeModel"]
+        except (OSError, ValueError, KeyError):
+            continue
+    return "hey_jarvis_v0.1"
+
+
+MODEL = deployed_model()
+# The same derivation the agent uses (session_runtime.py): the filename IS
+# the phrase, so this breaks loudly if a model is named off-convention.
+PHRASE = MODEL.rsplit("_v", 1)[0].replace("_", " ")
+VOICE_CFG = {"wakeModel": MODEL}
 CHUNK = WakeListener.CHUNK
 
 CASES = [
-    ("Microsoft David Desktop", "hey jarvis", True),
-    ("Microsoft Zira Desktop", "hey jarvis", True),
+    ("Microsoft David Desktop", PHRASE, True),
+    ("Microsoft Zira Desktop", PHRASE, True),
     ("Microsoft David Desktop", "hello world", False),
     ("Microsoft Zira Desktop", "what time is it", False),
     ("Microsoft David Desktop", "start the session now please", False),
@@ -57,6 +85,7 @@ def max_score(listener, path):
 
 def main():
     listener = WakeListener(None, VOICE_CFG, None)   # model only; no mic
+    print(f"  model: {MODEL} ({listener.model_source}) -> phrase '{PHRASE}'")
     tmp = Path(tempfile.mkdtemp())
     pos, neg = [], []
     for i, (voice, text, is_wake) in enumerate(CASES):

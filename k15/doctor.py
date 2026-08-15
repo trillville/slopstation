@@ -279,13 +279,20 @@ def check_voice(cfg):
     if (voice_dir / ".venv" / "deps-ok").exists():
         report(PASS, "voice venv", "bootstrapped (deps-ok sentinel present)")
         model = cfg["voice"].get("wakeModel", "")
+        # Same order the agent resolves in (audio.py _resolve_model), so this
+        # answers which copy WOULD load rather than whether one exists.
+        vendored = voice_dir / "models" / f"{model}.onnx"
         onnx = (voice_dir / ".venv" / "Lib" / "site-packages" / "openwakeword"
                 / "resources" / "models" / f"{model}.onnx")
-        if onnx.exists():
-            report(PASS, "wake model", f"{model}.onnx in the venv")
+        if vendored.exists():
+            report(PASS, "wake model", f"{model}.onnx vendored in voice\\models")
+        elif onnx.exists():
+            report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
         else:
-            report(WARN, "wake model", f"{model}.onnx not downloaded yet",
-                   "auto-fetched on the agent's first run")
+            report(WARN, "wake model", f"{model}.onnx not present",
+                   "a pretrained name is auto-fetched on the agent's first "
+                   "run; a custom one has no upstream and must be committed "
+                   "to voice\\models")
     else:
         report(WARN, "voice venv", "not bootstrapped (no .venv\\deps-ok)",
                "run voice\\Start-Voice.bat once (~2 min with network)")
