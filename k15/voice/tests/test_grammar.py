@@ -71,6 +71,10 @@ TABLE = [
     ("let's play elden ring", "PlayGame", {"game": "elden ring"}),
     ("can you play elden ring", "PlayGame", {"game": "elden ring"}),
     ("wanna launch elden ring", "PlayGame", {"game": "elden ring"}),
+    # "can you START x" is deliberately NOT a PlayGame form: StartSession
+    # has no polite variant to claim it first, so this matched with
+    # game="the session" and logged a title_miss on its way to the LLM.
+    ("can you start the session", None, {}),
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),

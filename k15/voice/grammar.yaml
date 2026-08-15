@@ -120,7 +120,13 @@ intents:
           - "(play|launch|start|put on|open) [the game] {game}"
           - "[i] (want to|wanna|would like to) (play|launch|start|put on|open) [the game] {game}"
           - "let's (play|launch|start|put on) [the game] {game}"
-          - "can you (play|launch|start|put on|open) [the game] {game}"
+          # No "start" in the polite form. Bare "start {game}" is safe because
+          # StartSession's own phrasings sit above it and win first - but
+          # StartSession has no "can you" variant to win WITH, so "can you
+          # start the session" fell down here and matched with game="the
+          # session". Adding the lead-in to StartSession instead would be
+          # widening a risky command, which is the rule this file opens with.
+          - "can you (play|launch|put on|open) [the game] {game}"
 lists:
   level:
     range:
