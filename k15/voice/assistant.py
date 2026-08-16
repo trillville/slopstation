@@ -450,7 +450,9 @@ TOOL_DEFS = [
      ["appid"]),
     ("control", "Control the system: end_session, start_session, volume_up, "
      "volume_down, mute, set_volume (with level), switch_input "
-     "(with input name).",
+     "(with input name). start_session returns while the session is still "
+     "coming up - don't call nav in the same turn; say it's starting and "
+     "let the user ask again.",
      {"action": {"type": "string",
                  "enum": ["end_session", "start_session", "volume_up",
                           "volume_down", "mute", "set_volume", "switch_input"]},

@@ -201,6 +201,13 @@ def main():
     couch.ssh = lambda cmd, **kw: "NOTREADY"
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy", r
+    assert "start one first" in r.detail, r
+    # Mid-start (fresh lock), the busy names the situation: "start one first"
+    # told the model to start the session it had JUST started (2026-08-15).
+    with_temp_lock(10)
+    r = h.d.nav("downloads")
+    assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
+    with_temp_lock(None)
     # An unknown kind is refused HERE and never reaches the wire.
     wire2 = []
     couch.ssh = lambda cmd, **kw: wire2.append(cmd) or "OK"
