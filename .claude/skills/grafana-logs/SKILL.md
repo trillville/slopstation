@@ -26,8 +26,8 @@ allowed in `{...}`:
 | Label | Values |
 |---|---|
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
-| `lane` | k15: `voice`, `launch`, `listener`, `library`, `jobs`, `supervisor`, `traces`, `manual` — gamepc: `enter`, `exit`, `launchgame`, `wake-safety`, `office-safety`, `pc-transcript` |
-| `level` | `debug`, `info`, `warn`, `error` |
+| `lane` | k15: `voice`, `launch`, `listener`, `library`, `steam`, `traces`, `supervisor`, `manual` — gamepc: `enter`, `exit`, `launchgame`, `nav`, `stopgame`, `wake-safety`, `office-safety`, `pc-transcript` |
+| `level` | `info`, `warn`, `error` — the whole set; there is no `debug` |
 | `env` | `prod`, `test` — **always filter `env="prod"`** unless investigating the blind suite |
 
 Everything else is a **field inside the JSON line** and needs `| json |`
@@ -111,7 +111,16 @@ Time to READY, the number the whole system is judged on:
   `store_fetch_failed` `hltb_failed`
 - **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
-- **jobs**: `job_queued` `job_running` `job_done` `job_failed` `job_announced`
+- **background jobs**: `job_queued` `job_running` `job_done` `job_failed`
+  `job_announced` `job_orphaned` — these are on `lane="voice"`, not a lane of
+  their own: the JobStore logs through the voice agent's logger. Select them by
+  `event`, and `job_done` carries `cost_usd` / `turns` / `web_searches`.
+- **steam**: `enrolled` `token_mint_failed` `token_transfer_failed`
+  `install_queued` `install_failed` — the account session. The lane label means
+  **hand-run**, exactly like `manual` does for `exlink.py`: the agent passes its
+  own logger in, so a session driven by voice files these under `lane="voice"`
+  and only `python steam_session.py …` at the console lands on `lane="steam"`.
+  Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
 
 Event names are a closed vocabulary and never contain variable data — an

@@ -291,8 +291,6 @@ def tool_span(kind, query, status=None):
 
 
 @contextlib.contextmanager
-
-
 def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
     """Span for one background job, re-parented onto the conversation.
 

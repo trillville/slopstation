@@ -9,15 +9,21 @@ Output: state/library.json  {"refreshed": iso-utc, "installed": [rows]}
 written atomically (tmp + os.replace). Consumers: Flux keyterms, the grammar's
 {game} slot, fuzzy launch resolution, and the assistant's catalog.
 
+Layer 4 (the store questions - deals, search, reviews, news, how-long-to-beat)
+is live Steam data rather than the catalog, and has its own section below.
+
 The voice agent calls sync() on a background thread at startup and after each
-session - installed refreshes when the PC is awake, owned/metadata whenever a
-Steam key is present. The CLI verbs below are for manual/dev use.
+session - installed refreshes when the PC is awake, deals are keyless, and
+owned/metadata run whenever a Steam key is present. The CLI verbs below are for
+manual/dev use.
 
 CLI:
-    python library.py sync                        (all three, as the agent does)
+    python library.py sync                        (every layer, as the agent does)
     python library.py refresh [--local-steam] [--owned] [--meta [N]]
     python library.py show
     python library.py catalog
+    python library.py probe <deals|search ...|reviews <appid>|news <appid>
+                             |hltb <name>|trending|recent>
 """
 import glob
 import json
@@ -252,7 +258,6 @@ def refresh_owned():
     index["owned"] = fetch_owned(s["steamApiKey"], s["steamId64"])
     index["ownedRefreshed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     save(index)
-    _snapshot_playtime(index["owned"])
     log("sync_done", layer="owned", games=len(index["owned"]))
     return 0
 
@@ -280,7 +285,6 @@ DEALS_MAX_AGE_S = 6 * 3600                  # prices move at sale boundaries
 FACET_CACHE = STATE / "facet-cache.json"    # per-game how-long-to-beat (stable)
 TAGMAP = STATE / "store-tags.json"          # {tag_name_lower: tagid}, weekly
 TAGMAP_MAX_AGE_S = 7 * 24 * 3600
-PLAYHIST = STATE / "playtime-history.json"  # {date: {appid: hours}} for "last month"
 NOT_GAMES = {228980}                        # Steamworks Common Redistributables
 
 
@@ -404,8 +408,9 @@ def fetch_trending(cc=None):
 
 def fetch_recently_played():
     """GetRecentlyPlayedGames (last two weeks) - the honest "what have I been
-    playing". Own key only; empty without it. 'Last month' is a separate,
-    harder question the playtime snapshot below accrues for."""
+    playing". Own key only; empty without it. Two weeks is the whole window
+    Steam offers; a longer one would need daily playtime snapshots kept here,
+    which is a real feature and not a line to leave lying around unused."""
     s = cglib.load_secrets()
     if not (cglib.real_key(s.get("steamApiKey")) and str(s.get("steamId64", "")).isdigit()):
         return []
@@ -571,22 +576,6 @@ def load_deals():
         return json.loads(DEALS.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-
-
-def _snapshot_playtime(owned):
-    """One row per day of {appid: hours_forever}, kept ~60 days. The raw
-    material for "what did I play last month" (a diff of two snapshots);
-    GetRecentlyPlayedGames answers the two-week window on its own."""
-    try:
-        hist = json.loads(PLAYHIST.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        hist = {}
-    today = time.strftime("%Y-%m-%d")
-    hist[today] = {a: o.get("hours", 0) for a, o in owned.items()
-                   if o.get("hours")}
-    for day in sorted(hist)[:-60]:          # keep the most recent 60 days
-        hist.pop(day, None)
-    _atomic_write(PLAYHIST, hist)
 
 
 def refresh_deals():

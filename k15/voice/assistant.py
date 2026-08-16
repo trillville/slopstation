@@ -351,8 +351,10 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
     def list_games(args):
         """The feed reader: sale/trending/recent lists. wishlist_on_sale and
         specials come from the precomputed state/deals.json (~0 ms); trending
-        and recently_played are cheap live calls. downloading is the account
-        session (Phase 3) and refuses truthfully until that lane exists."""
+        and recently_played are cheap live calls. downloading goes over the
+        account session (steam_session.py), which is optional and self-gates on
+        its refresh token - so it refuses truthfully rather than erroring when
+        that lane was never enrolled."""
         source = args.get("source")
         if source == "wishlist_on_sale":
             rows = library.load_deals().get("wishlist_on_sale")

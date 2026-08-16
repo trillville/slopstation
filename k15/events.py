@@ -44,7 +44,10 @@ TTL_DAYS = 14
 ARCHIVE_NAME = "archive"
 ARCHIVE_DAYS = 2        # out of Alloy's glob; see _prune
 
-DEBUG, INFO, WARN, ERROR = "debug", "info", "warn", "error"
+# The whole level vocabulary. It is a Loki label and alerts group on it, so it
+# stays small and every value has an emitter - see cglib._Log on why there is
+# no `debug`.
+INFO, WARN, ERROR = "info", "warn", "error"
 
 # Keys the EMITTER owns (emit builds them in order, so a raw line reads
 # left-to-right like a sentence). A caller field of the same name would

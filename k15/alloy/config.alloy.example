@@ -1,4 +1,5 @@
-// Grafana Alloy - K15 log shipper.  (docs/observability-design.md, phase E2)
+// Grafana Alloy - K15 log shipper. What it ships is read by the grafana-logs
+// skill (.claude/skills/grafana-logs/), which documents the label set below.
 //
 // Copy to the install dir and restart the service:
 //   copy k15\alloy\config.alloy.example "%PROGRAMFILES%\GrafanaLabs\Alloy\config.alloy"

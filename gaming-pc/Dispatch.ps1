@@ -33,7 +33,7 @@ $ready = 'C:\ProgramData\CouchGaming\ready'
 $turnFile = 'C:\ProgramData\CouchGaming\turn'
 
 # Correlation id for one user intent, minted on the K15 and travelling with
-# the three MUTATING verbs so this machine's transcript and events join that
+# the five MUTATING verbs so this machine's transcript and events join that
 # story. Like the appid it rides a marker file, because schtasks /Run cannot
 # pass arguments.
 #

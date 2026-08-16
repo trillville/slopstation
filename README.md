@@ -15,19 +15,19 @@ separate process and survives anything the voice stack does.
 
 ## Docs
 
-Five, and each is a thing you *do* — how to build it, how to bring voice up,
-how to fix it, how to prove the newest voice features on the rig, and the one
-feature that isn't built. **Why** the code is shaped as it is lives in the code:
-the comments carry the incidents and constraints, so there is no design doc to
+Three that are a thing you *do* — how to build it, how to bring voice up, how
+to fix it — plus a note per piece of unfinished work, each deleted the day its
+feature lands. **Why** the code is shaped as it is lives in the code: the
+comments carry the incidents and constraints, so there is no design doc to
 drift away from them.
 
 | | |
 |---|---|
 | [couch-gaming-guide.md](docs/couch-gaming-guide.md) | **Start here to build one.** Physical install → TV settings → VirtualHere gate → display profiles → sshd + tasks → orchestrator → the chord. One-time commands, failure drills, acceptance checklist. |
 | [voice-testing.md](docs/voice-testing.md) | Voice bring-up: keys, venv, devices, then escalating drills from a safe dry run to live dispatch. Also the ReSpeaker mic-array bring-up and its accept/reject bar. |
-| [voice-expansion-livetest.md](docs/voice-expansion-livetest.md) | Bring-up + live test for the expanded voice surface: deploy the new PC verbs, the Phase-0 on-hardware gates, then drills for store questions, Big Picture nav/quit/collections, and install-by-voice. |
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
-| [resume-game-design.md](docs/resume-game-design.md) | The one unbuilt feature — landing back *in* a game across sessions. Two attempts, why both failed, and the two-minute experiment that gates a third. |
+| [custom-wakeword-design.md](docs/custom-wakeword-design.md) | Unfinished: a bespoke wake model is trained and vendored but inert. The two config values that deploy it, and the couch ladder that has to pass before it stays. |
+| [resume-game-design.md](docs/resume-game-design.md) | Unbuilt: landing back *in* a game across sessions. Two attempts, why both failed, and the one question that gates a third. |
 | [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops — launches, errors, liveness, both machines) and `langfuse-traces` (agent — what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
@@ -146,7 +146,7 @@ with the reasoning; if the premise changes, reopen it deliberately.
 | **Services, a database, or merging the voice and chord lanes** | The process split *is* the failure isolation. File-backed state a human can inspect and delete at 2am is the feature. |
 | **Session phases/snapshots on disk** | Optimistic software state. The probes — display, PnP, Steam registry, ready marker — already answer every phase question truthfully. The lock got atomicity and identity, not a state machine. |
 | **A typed config layer, a `pc_client`/`tv` extraction, splitting `cglib.py`** | The verb responses mean different things per call site; presence-checks plus `config_suspect` warnings catch the failure that actually occurs. Revisit only when size hurts. |
-| **JSON envelopes for the PC marker files** | Six verbs. The launch path re-validates downstream and a lost turn costs a log label. |
+| **JSON envelopes for the PC marker files** | Four one-line files (`launch-app`, `nav-target`, `stop-app`, `turn`), each written and read by code that sits either side of one `schtasks` call. Every one of them is re-validated downstream anyway, and a lost turn costs a log label. |
 | **Self-hosting telemetry on the K15** | It is the thing being observed, and it runs a latency-sensitive audio pipeline. A dashboard that dies with its subject is not a dashboard. |
 | **Sentry, a metrics SDK, span sampling, session replay, audio upload** | This code catches almost everything by design, so Sentry would receive very little; the rest do not earn their complexity at one household's volume. Revisit Sentry if unhandled `voice_agent` crashes become a theme. |
 | **Tracing library sync and metadata crawls** | Those are logs. Nobody is waiting on them. |
@@ -154,13 +154,27 @@ with the reasoning; if the premise changes, reopen it deliberately.
 | **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. The `sys.path` inserts are the price and it is already paid. |
 | **Pausing/resuming downloads by voice** | Voice can *see* download progress (ClientComm `download_status`) and *start* installs, but not pause/resume. Deliberately cut: it is a rare want, and the couch is for playing, not managing a queue. The CDP `Downloads.*` verbs exist if this is ever revisited. |
 
-Still genuinely open: **clock skew** between the two machines — correlation is
-by `turn` rather than timestamp, so skew only misorders a merged view; measure
-it by running `(Get-Date).ToUniversalTime().ToString('o')` on both within a
-few seconds and close the question if it is under a second. Also **Tempo
-dual-export** (`TODO(E5b)` in `voice/tracing.py`) and **barge-in**, which
-pipecat 1.7 does not give us for free — the mechanism and the revival recipe
-are in `voice/session_runtime.py`.
+Still genuinely open, worst first:
+
+- **The worker's output reaches the assistant as the assistant's own words.**
+  Text derived from untrusted web pages is seeded into the next conversation as
+  `role: "assistant"`, in a context that can quit a game or queue an install.
+  Hardening the worker's *tools* (done) does not touch this, because the channel
+  is its *output*. Bounded — quit confirms first, install validates ownership,
+  `bench/probe_intent.py` measures that a question never becomes an action — but
+  not closed. The mitigation and the measurement that would prove it are on
+  `voice/session_runtime.py`'s `job_messages`.
+- **Whether the `codex` worker lane earns its keep.** It is not the configured
+  provider, it has none of the claude lane's isolation (its sandbox confines
+  writes, not reads or shell — `doctor.py` warns whenever it is selected), and
+  dropping it would delete a risk nobody is using. Kept only as the A/B arm.
+- **Clock skew** between the two machines — correlation is by `turn` rather than
+  timestamp, so skew only misorders a merged view; measure it by running
+  `(Get-Date).ToUniversalTime().ToString('o')` on both within a few seconds and
+  close the question if it is under a second.
+- **Tempo dual-export** (`TODO(E5b)` in `voice/tracing.py`) and **barge-in**,
+  which pipecat 1.7 does not give us for free — the mechanism and the revival
+  recipe are in `voice/session_runtime.py`.
 
 ## Deliberately not in the repo
 

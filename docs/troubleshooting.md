@@ -94,3 +94,19 @@ Get-WinEvent -LogName Application -MaxEvents 60 | Where-Object { $_.ProviderName
 | Launch says OK but no game starts | Big Picture up, game never asked for | Read the newest `C:\CouchGaming\logs\launchgame-*.log`. A `Remove-Item … Access denied` there means the marker/token fix isn't deployed — re-deploy `Dispatch.ps1` + `Launch-Game.ps1` |
 | TV command silently does nothing | `exlink … FAILED` in the log (acks are validated: `030cf1` or it didn't land) | TV off/asleep, or COM contention. `python exlink.py vol_up` to test the port directly |
 | Mute state feels backwards | Mute is a **blind toggle** — the S90C acks its status query but answers with a constant canned echo, byte-identical muted or not, so there is no state to read | Say a volume number ("volume 20") — an absolute set is the resync |
+
+### Turning one voice lane off
+
+Every lane above Tier 1 is additive and has its own switch, so a misbehaving
+one can be cut without touching the rest — and never the chord lane, which none
+of this reaches. After any of these, `.\Start-K15.bat`.
+
+| Lane | Off switch |
+|---|---|
+| Store questions (search / sale / reviews / hltb) | `config.json` → `"steamDataTools": false` — the tools vanish from what the model *sees*, not just from what it can call |
+| Install-by-voice + download status | delete `steamRefreshToken` from `secrets.json`; the lane self-gates off and `install_game` falls back to putting the game's page on the TV |
+| Background research tasks | `config.json` → `"workerProvider": ""` (unknown provider = lane off with a startup line), or just uninstall the CLI |
+| Nav / collection *grammar* | remove `navTargets` from `config.json` — the Tier-1 phrases stop firing; the assistant's `nav` tool still works |
+| Nav / quit / collections entirely | leave the PC's `Nav` / `StopGame` tasks unregistered — the verbs then answer `NOTASK:` and dispatch says so out loud |
+| Web search in the assistant | `config.json` → `"assistantWebSearch": false` (the key must exist either way — the agent refuses to start without it) |
+| The whole voice overlay | close the voice supervisor window. The chord is untouched |

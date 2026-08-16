@@ -89,7 +89,25 @@ def job_messages(jobs):
     """Recent background results as prior conversation - the worker's answer
     in the assistant's mouth, so a follow-up needs no re-explaining. Task and
     result both go in: "which one was cheapest?" needs the findings, "why did
-    you look that up?" needs the ask."""
+    you look that up?" needs the ask.
+
+    THE OPEN RISK, and the reason this docstring is longer than the function.
+    The worker's text is DERIVED FROM UNTRUSTED WEB PAGES, and seeding it as
+    role:"assistant" presents it to the model as its own prior words - the
+    highest-trust position there is - in a context that holds quit_game,
+    install_game, nav and control. Hardening the worker (2026-08-14: its tool
+    surface is now WebSearch/WebFetch and nothing else) does NOT close this:
+    the channel is the worker's OUTPUT, not its tools.
+
+    Bounded, not fixed: quit_game is confirm-first, install_game validates
+    ownership, nav only accepts validated kinds, and bench/probe_intent.py
+    measures that a question never becomes an action. The cheapest credible
+    mitigation is to seed results as a user-role quote ATTRIBUTED to the
+    worker, or to mark them as untrusted data in the text itself, so an
+    instruction inside a summary is not read as the assistant's own intent -
+    and then to prove with a probe_intent-style measurement that the model
+    does treat it as data. Not done, and it is the one thing here worth doing
+    next."""
     if jobs is None:
         return []
     import jobs as jobs_mod
