@@ -85,21 +85,31 @@ def stt_keyterms(voice, wake_phrase):
 CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
 
 
-def job_messages(jobs):
+def job_messages(jobs, before_t):
     """Recent background results as prior conversation - the worker's answer
     in the assistant's mouth, so a follow-up needs no re-explaining. Task and
     result both go in: "which one was cheapest?" needs the findings, "why did
-    you look that up?" needs the ask."""
+    you look that up?" needs the ask. Returns (pre, post), split on whether
+    the job finished before before_t (the carry snapshot): the caller places
+    each side around the carried turns so history stays in clock order."""
     if jobs is None:
-        return []
+        return [], []
     import jobs as jobs_mod
-    msgs = []
+    pre, post = [], []
     for j in jobs.for_context():
         said = j["summary"]
-        detail = (j.get("detail") or "")[:jobs_mod.CONTEXT_DETAIL_CHARS]
+        detail = j.get("detail") or ""
+        if len(detail) > jobs_mod.CONTEXT_DETAIL_CHARS:
+            # Cut on a word and say so: a silent mid-word cut reads as the
+            # whole report ("...despite some su" rode into sessions as-is,
+            # 2026-08-15) - the model can't know there was more.
+            cut = detail[:jobs_mod.CONTEXT_DETAIL_CHARS]
+            sp = cut.rfind(" ")
+            detail = (cut[:sp] if sp > 0 else cut) + " [truncated]"
         if detail and detail != j["summary"]:
             said += " " + detail
         asked = (j.get("asked") or "").strip()
+        msgs = pre if j.get("finished", 0) <= before_t else post
         if asked:
             # A true exchange: what the user said, then what came back.
             msgs += [{"role": "user", "content": asked},
@@ -112,7 +122,7 @@ def job_messages(jobs):
             msgs += [{"role": "system",
                       "content": f"(earlier background task: {j['task']}) "
                                  f"You reported: {said}"}]
-    return msgs
+    return pre, post
 
 
 def _trim_carry(messages):
@@ -265,7 +275,7 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     feeder = PrerollFeeder(log)
     stages = [transport.input(), feeder, stt, gate]
     context = None
-    seeded = []                                 # job results at the front
+    seeded = (0, 0, 0)          # (jobs-before, carried, jobs-after) counts
     if assistant_live:
         from assistant import (function_schemas, server_tools,
                                system_instruction, tool_impls)
@@ -282,8 +292,15 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
         # found. History, not system prompt: the system block stays
         # byte-identical session to session, which is what the prompt cache
         # keys on (a volatile tail would cost the catalog's cache read).
-        seeded = job_messages(jobs)
-        carry = seeded + carry
+        # Lead - but in CLOCK order against the carry: a job that finished
+        # after the last session ended goes AFTER the carried turns. Seeding
+        # the finished report above the carried turn that queued it read as
+        # answered-then-asked, and the model honestly denied having the
+        # result it had just delivered ("you checked every single item?" ->
+        # "No - I haven't completed that check yet", 2026-08-15).
+        pre, post = job_messages(jobs, CARRY["t"])
+        seeded = (len(pre), len(carry), len(post))
+        carry = pre + carry + post
         # Native (provider-executed) tools ride custom_tools - the adapter
         # appends them verbatim after the function tools. Only the OpenAI
         # adapter has this passthrough in pipecat 1.7 (AdapterType has no
@@ -400,6 +417,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
                     {"provider": provider, "dry_run": args.dry_run})
         # Drop the seeded job results before carrying: the next session seeds
         # them again from jobs.json, and carrying them too would double the
-        # findings in context on every session until they aged out.
-        CARRY["messages"] = _trim_carry(msgs[len(seeded):][-8:])
+        # findings in context on every session until they aged out. They sit
+        # around the carried block (clock order, see the seeding above), so
+        # cut both sides by the counts recorded when the context was built.
+        n_pre, n_carry, n_post = seeded
+        kept = msgs[n_pre:n_pre + n_carry] + msgs[n_pre + n_carry + n_post:]
+        CARRY["messages"] = _trim_carry(kept[-8:])
         CARRY["t"] = time.time()
