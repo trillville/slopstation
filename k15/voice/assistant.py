@@ -113,7 +113,7 @@ def system_instruction(cfg):
             "parenthetical references of any kind - a bracketed source "
             "would be spoken letter by letter.")
     return (RULES + " " + " ".join(tail) + "\n\n"
-            "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM or "
+            "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
             "never|inst/notinst|controller full/partial/none/?):\n"
             + "\n".join(library.catalog_lines()))
 
