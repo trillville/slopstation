@@ -89,6 +89,20 @@ def main():
     sent.clear()
     assert h.d.mute_toggle().ok and sent == [cglib.EXLINK_FRAMES["mute_toggle"]]
 
+    # --- duck/unduck: symmetric, and independent of volumeStep ---------------
+    # Symmetry IS the contract: Ex-Link is send-only, so the level to restore
+    # cannot be read and the only thing that puts the room back is sending
+    # exactly as many vol_up as vol_down. A duck that borrowed volumeStep (3)
+    # for one leg and duckSteps for the other would drift every session.
+    h = Harness(); sent.clear()
+    assert h.d.duck(8).ok
+    assert sent == [cglib.EXLINK_FRAMES["vol_down"]] * 8, sent
+    sent.clear()
+    assert h.d.unduck(8).ok
+    assert sent == [cglib.EXLINK_FRAMES["vol_up"]] * 8, sent
+    sent.clear()
+    assert h.d.volume_up().ok and len(sent) == 3, sent  # volumeStep untouched
+
     # --- serial send raises -> fail earcon (COM retry now lives in cglib) ----
     def always_down(frame, port): raise OSError("dead")
     cglib.exlink_send_hex = always_down

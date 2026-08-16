@@ -43,6 +43,7 @@ import library                                  # noqa: E402
 import tracing                                  # noqa: E402
 from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
                    play_pcm, rebuild_audio)
+from dispatch import Dispatch                   # noqa: E402
 from grammar_gate import GrammarMatcher         # noqa: E402
 from preroll import WakeAck                     # noqa: E402  (pipecat
 # frames are already loaded via grammar_gate, so this adds no startup cost)
@@ -277,9 +278,14 @@ def main():
         log("wake_trials_start")
         n = 0
         while True:
-            score = listener.wait_for_wake(voice["wakeThreshold"])
+            # peak, not score, is the number a threshold gets set from: score
+            # is wherever the ramp happened to cross and clusters just above
+            # the threshold whatever the model actually thought. Affordable
+            # here because nothing follows the detection - see _scan_peak.
+            score, peak = listener.wait_for_wake(
+                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
             n += 1
-            log("wake_trial", n=n, score=round(score, 2))
+            log("wake_trial", n=n, score=round(score, 2), peak=round(peak, 3))
             play_pcm(pa, earcons.pcm("wake"), output_idx)
             time.sleep(1.0)                     # refractory: one hit per attempt
 
@@ -287,12 +293,52 @@ def main():
         log("false_accept_soak_start")
         t0, n = time.time(), 0
         while True:
-            listener.wait_for_wake(voice["wakeThreshold"])
+            # The peak matters even more on this side: it says how far ABOVE
+            # the threshold the room can push the model, which is the margin
+            # a real wake has to beat.
+            _score, peak = listener.wait_for_wake(
+                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
             n += 1
             hrs = (time.time() - t0) / 3600
             log.warn("wake_false", n=n, hours=round(hrs, 2),
+                     peak=round(peak, 3),
                      per_hour=round(n / max(hrs, 0.01), 1))
             time.sleep(1.0)
+
+    # TV ducking for the length of a session (Dispatch.duck has the why and
+    # the one asymmetry it accepts). OFF unless duckSteps is configured: this
+    # moves something in the room, so it does not arrive switched on with a
+    # git pull. Its own Dispatch because the per-session one does not exist
+    # yet at wake time - Dispatch owns no resources, so a second is free.
+    duck_steps = int(voice.get("duckSteps", 0) or 0)
+    ducker = Dispatch(cfg, log, dry_run=args.dry_run) if duck_steps else None
+    duck_lock = threading.Lock()
+
+    def duck(restore):
+        """Fire duck/unduck without making the session wait for the serial.
+
+        Threaded because the steps cost duck_steps * ~60 ms of Ex-Link and the
+        session build is what the user is actually waiting on. The LOCK is
+        what makes it correct rather than the thread: a session that ends
+        quickly would otherwise start the unduck while the duck is still
+        stepping, and the two would interleave into an arbitrary final volume.
+
+        A hard process death between the two leaves the TV quiet - the
+        supervisor's restart cannot know to undo it. Every ordinary ending,
+        crash included, restores it from the session's finally."""
+        if ducker is None:
+            return
+
+        def run():
+            with duck_lock:
+                try:
+                    r = (ducker.unduck if restore else ducker.duck)(duck_steps)
+                    log("tv_unducked" if restore else "tv_ducked",
+                        steps=duck_steps, ok=r.ok)
+                except Exception as e:
+                    log.warn("tv_duck_failed", restore=restore, err=str(e))
+
+        threading.Thread(target=run, daemon=True).start()
 
     while True:
         # The wake chime is armed, not played: whoever first hears the user
@@ -347,6 +393,13 @@ def main():
             announcer.session_active.set()
         ending = "close"
         try:
+            # INSIDE the try so the unduck in the finally is unconditionally
+            # paired with it; anything between the two that could raise would
+            # otherwise leave the room quiet. It still lands before the
+            # pipeline is up, which is what matters - the command arrives in
+            # the seconds after this, and the 2 s pre-roll only covers what
+            # was said BEFORE the wake word.
+            duck(restore=False)
             asyncio.run(run_session(cfg, secrets, matcher, args,
                                     input_idx, output_idx, capture,
                                     jobs=jobs, ack=ack, steam=steam))
@@ -358,6 +411,8 @@ def main():
                 capture.stop()                  # idempotent; frees the mic if the build crashed
             if announcer:
                 announcer.session_active.clear()
+            duck(restore=True)                  # in the finally: a crashed
+            # session must never be the reason the room stays quiet
         refresh_library_bg()                    # pick up installs between sessions
         # Going-to-sleep chime, after teardown so it marks the moment the mic
         # actually goes dormant - and every ending sounds the same, whether it

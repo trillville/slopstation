@@ -283,8 +283,8 @@ class Dispatch:
 
     # -- TV --------------------------------------------------------------------
 
-    def _vol_steps(self, name):
-        step = int(self.voice["volumeStep"])
+    def _vol_steps(self, name, steps=None):
+        step = int(self.voice["volumeStep"]) if steps is None else int(steps)
         if self.dry_run:
             return self._would(f"{name} x{step}")
         for _ in range(step):
@@ -299,6 +299,31 @@ class Dispatch:
 
     def volume_down(self):
         return self._vol_steps("vol_down")
+
+    def duck(self, steps):
+        """Drop the TV for the length of a session; unduck puts it back.
+
+        Ducking is the one lever that attacks the actual problem - a talker on
+        the couch reaches the mic 10-20 dB BELOW dialogue from the TV, and no
+        wake model or threshold recovers a signal that far under. It cannot
+        help the wake word itself (nothing knows to duck until the wake word
+        has already fired) but it hands the STT a quiet room for every command
+        after it, which is the half that a session can still act on.
+
+        RELATIVE steps rather than vol_set, and that is forced rather than
+        chosen: Ex-Link here is send-only and the S90C's status query is a
+        canned echo (mute_toggle has the long version), so the level we would
+        have to restore cannot be read. Stepping down N and back up N needs no
+        state and survives the user working the remote in between.
+
+        The asymmetry it accepts: from a TV already quieter than `steps`,
+        vol_down clamps at 0 and the matching vol_up lands on `steps` - louder
+        than it started, by at most that many. Only reachable from a
+        near-silent TV, which is the case that had nothing worth ducking."""
+        return self._vol_steps("vol_down", steps)
+
+    def unduck(self, steps):
+        return self._vol_steps("vol_up", steps)
 
     def volume_set(self, level):
         """Absolute set, clamped to volumeMax - a misheard number must never

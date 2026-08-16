@@ -155,6 +155,23 @@ STRIP_ALFRED = [
     ("all for one", "all for one"),                      # joined "allfor" ~67
 ]
 
+# The two-token join, both directions: (text, anchor, want). It has to
+# ASSEMBLE a split anchor, and it must never swallow a real word standing in
+# front of an INTACT one. The second group is the half that only _WHOLE_ANCHOR
+# holds back - every one of them joins high enough to strip on its own
+# ("a jarvis" 92.3, "my jarvis" and "is jarvis" 85.7, "the jarvis" exactly
+# 80.0), and stripping any of them deletes a word the user actually said.
+STRIP_JOIN = [
+    ("hey al fred play hades", "alfred", "play hades"),
+    ("al fred volume up", "alfred", "volume up"),
+    ("hey al fred hey al fred stop", "alfred", "stop"),   # stutter, both split
+    ("all frenzy games", "alfred", "all frenzy games"),   # joined ~67
+    ("a jarvis skin for my avatar", "jarvis", "a jarvis skin for my avatar"),
+    ("my jarvis mug broke", "jarvis", "my jarvis mug broke"),
+    ("the jarvis file is missing", "jarvis", "the jarvis file is missing"),
+    ("is jarvis working", "jarvis", "is jarvis working"),
+]
+
 
 def main():
     m = GrammarMatcher(VOICE_CFG)
@@ -189,6 +206,11 @@ def main():
         got = strip_wake(text, "alfred")
         if got != want:
             failures.append(f"strip '{text}': got {got!r}, want {want!r}")
+
+    for text, anchor, want in STRIP_JOIN:
+        got = strip_wake(text, anchor)
+        if got != want:
+            failures.append(f"strip[{anchor}] '{text}': got {got!r}, want {want!r}")
     # Strip output must still match the grammar.
     stripped = strip_wake("hey jarvis volume up")
     if m.match(stripped) is None or m.match(stripped)[0] != "VolumeUp":
@@ -265,8 +287,9 @@ def main():
         print("FAIL", f)
     assert not failures, f"{len(failures)} grammar failures"
     print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
-          f"risky-command narrowness; {len(STRIP) + len(STRIP_ALFRED)} "
-          "wake-strip cases; "
+          f"risky-command narrowness; "
+          f"{len(STRIP) + len(STRIP_ALFRED) + len(STRIP_JOIN)} wake-strip "
+          f"cases ({len(STRIP_JOIN)} two-token join); "
           f"is_busy defers for in-flight assistant turns; an armed stop ends "
           f"the session after the goodbye, never before")
 

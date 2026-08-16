@@ -34,6 +34,16 @@ GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
 GREETINGS = {"hey", "hi", "ok", "okay"}
 _PUNCT = ",.!?"
 
+# A joined pair is only a SPLIT anchor if its second half is a fragment. When
+# that half already IS the whole anchor, the first token is a real word sitting
+# in front of it and the anchor is not leading at all - "a jarvis" joins to
+# 92.3, "my jarvis" and "is jarvis" to 85.7, "the jarvis" to exactly 80.0, and
+# every one of them would eat the word in front. A genuine split cannot look
+# like this: its second half only ever scores as a fragment ("fred" is 80
+# against "alfred"), which is why the bar sits above 80 and not at it.
+# Measured with rapidfuzz 2026-08-16; "fred" at exactly 80 is what decides it.
+_WHOLE_ANCHOR = 90
+
 
 def strip_wake(text, anchor="jarvis"):
     """Remove a leading wake phrase ("hey jarvis", "jarvis", mishears like
@@ -48,16 +58,21 @@ def strip_wake(text, anchor="jarvis"):
     "Hey, all. Fred," (2026-08-15) and neither half clears 80 alone ("all"
     ~67; "fred" is 80 but sits unreachable behind it). So the two leading
     tokens are also tried JOINED - "allfred" ~92 against "alfred", while
-    non-wake pairs stay under the bar ("all for" ~67, "play jarvis" ~75)."""
+    non-wake pairs stay under the bar ("all for" ~67, "play jarvis" ~75) -
+    guarded by _WHOLE_ANCHOR so the join can only ever assemble a split
+    anchor, never swallow a real word standing in front of an intact one."""
     while True:
         toks = text.split()
         i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
         if i < len(toks) and fuzz.ratio(toks[i].strip(_PUNCT).lower(), anchor) >= 80:
             text = " ".join(toks[i + 1:])
             continue
-        if i + 1 < len(toks) and fuzz.ratio(
-                (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(),
-                anchor) >= 80:
+        if (i + 1 < len(toks)
+                and fuzz.ratio(toks[i + 1].strip(_PUNCT).lower(),
+                               anchor) < _WHOLE_ANCHOR
+                and fuzz.ratio(
+                    (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(),
+                    anchor) >= 80):
             text = " ".join(toks[i + 2:])
             continue
         return text
