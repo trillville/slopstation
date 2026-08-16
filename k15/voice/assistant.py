@@ -336,10 +336,16 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                         facets[k] = None
         if not name:
             name = (facets.get("price") or {}).get("name")
-        if "hltb" in want and not name:
-            # hltb needs a name and neither the catalog nor a requested price
-            # facet gave one - resolve it from the store so "how long to beat
-            # <a game I don't own>" still answers instead of "unknown appid".
+        if want and not name:
+            # Neither the catalog nor a requested price facet gave a name -
+            # resolve it from the store. hltb NEEDS one ("how long to beat
+            # <a game I don't own>" used to die as "unknown appid"), and
+            # every facet WANTS one: four nameless review payloads in one
+            # turn left the model matching results to titles from its own
+            # bookkeeping, and it misattributed a superlative (2026-08-15).
+            # A facet ask is already a live-store conversation, so one more
+            # GetItems call is in kind - and the kill switch already zeroed
+            # `want` if store calls are off.
             name = (library._store_items([appid]).get(appid) or {}).get("name")
         if "hltb" in want and name:
             facets["hltb"] = library.fetch_hltb(name)
