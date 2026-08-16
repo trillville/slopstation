@@ -34,6 +34,10 @@ __pycache__/
 # parent directory is excluded, so `k15/voice/models/` would beat the negation.
 k15/voice/models/*
 !k15/voice/models/*.onnx
+# The custom verifier (bench/train_verifier.py) travels for the same reason:
+# it is fitted against ONE .onnx from clips off this couch, so losing it means
+# re-labelling the clips, not re-downloading anything.
+!k15/voice/models/*.pkl
 
 # Voice: room recordings for wake-word training - tens of MB of the TV, and
 # the gaming PC is where they are consumed, not here (bench/record_room.py)

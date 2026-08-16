@@ -20,6 +20,12 @@ MODULES += sorted((K15 / "voice").glob("*.py"))
 # moment. They were outside the sweep until a new probe went in and nothing
 # noticed it had never been checked.
 MODULES += sorted((K15 / "voice" / "bench").glob("*.py"))
+# wake-training/ for the same reason, only more so: those scripts run for HOURS
+# on the gaming PC before they reach the code an undefined name would break, so
+# the cheapest possible check is worth having. They import livekit-wakeword,
+# which is not in this venv - harmless, because pyflakes parses rather than
+# imports, and undefined names are what it is being asked about.
+MODULES += sorted((K15.parent / "wake-training").glob("*.py"))
 
 
 def main():

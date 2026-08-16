@@ -305,8 +305,43 @@ class WakeListener:
         self.model_path = self._resolve_model()
         self.model = Model(wakeword_models=[str(self.model_path)],
                            inference_framework="onnx",
-                           vad_threshold=self.vad_threshold)
+                           vad_threshold=self.vad_threshold,
+                           custom_verifier_models=self._verifier(voice_cfg),
+                           custom_verifier_threshold=float(
+                               voice_cfg.get("wakeVerifierThreshold", 0.1) or 0.1))
         self.patience, self.patience_threshold = self._patience(voice_cfg)
+
+    def _verifier(self, voice_cfg):
+        """{model_key: path} for openWakeWord's second stage, or {} for off.
+
+        The second stage exists because a threshold cannot separate what the
+        2026-08-15 logs showed: three false accepts at 0.25/0.26/0.28 against a
+        median genuine wake of 0.255. The verifier is a logistic regression
+        over the SAME embeddings the wake model already computed, so it costs a
+        dot product, and it can use the one thing the score cannot express -
+        whose voice this is. bench/train_verifier.py builds it.
+
+        Named by FILE and resolved beside the model, because the two travel
+        together: a verifier is fitted against one specific .onnx and pairing
+        it with another is a silent mismatch. openWakeWord raises when a key
+        matches no loaded model, so a typo fails at startup rather than quietly
+        running unverified - and a NAMED-but-missing file is fatal here for the
+        same reason: the threshold in config was calibrated with the verifier
+        in the path, so running without it is running at the wrong one.
+
+        It REPLACES the base score above custom_verifier_threshold rather than
+        gating it, so enabling this voids every wakeThreshold ever measured
+        without it."""
+        name = voice_cfg.get("wakeVerifier")
+        if not name:
+            return {}
+        path = self.MODELS_DIR / name
+        if not path.exists():
+            log.error("wake_verifier_missing", verifier=name,
+                      looked_in=str(self.MODELS_DIR))
+            raise FileNotFoundError(f"{name}: not vendored in {self.MODELS_DIR}")
+        log("wake_verifier", verifier=name, model=self.model_path.stem)
+        return {self.model_path.stem: str(path)}
 
     def _patience(self, voice_cfg):
         """openWakeWord's N-of-last-N gate, as the (patience, threshold) pair
