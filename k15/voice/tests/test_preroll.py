@@ -142,7 +142,11 @@ def test_zombie_stream_trips_silence_watchdog():
             pass
 
     class FakeModel:
-        def predict(self, chunk):
+        # **kw so this stub tracks openWakeWord's real predict(), which also
+        # takes patience/threshold/debounce_time - score_chunk passes the
+        # first two on every hop and a positional-only fake would fail here
+        # for a reason that has nothing to do with the watchdog being drilled.
+        def predict(self, chunk, **kw):
             return {"hey_jarvis": 0.0}
 
     lst = audio.WakeListener.__new__(audio.WakeListener)
@@ -158,6 +162,108 @@ def test_zombie_stream_trips_silence_watchdog():
     assert stream.n == want, f"tripped after {stream.n} chunks, want {want}"
     print(f"OK - zombie stream: watchdog trips after {want} chunks, "
           f"real audio resets the count")
+
+
+def test_near_miss_reports_one_event_per_run_with_its_peak():
+    """Recall's only trace. A wake word that does not fire emits nothing, so
+    every missed "hey alfred" on 2026-08-15 was invisible and the threshold
+    argument could not be settled either way. One event per contiguous run
+    above the floor, carrying that run's high-water mark - per-hop events
+    would bury the one number worth reading."""
+    import numpy as np
+
+    import audio
+
+    # floor = threshold 0.5 * factor 0.2 = 0.10. Two runs, then a crossing.
+    scores = [0.02, 0.12, 0.28, 0.19, 0.03,     # run A, peak 0.28
+              0.41, 0.07,                       # run B, peak 0.41
+              0.55]                             # crosses
+
+    class ScriptedModel:
+        def __init__(self):
+            self.i = 0
+            self.reset_calls = 0
+
+        def predict(self, chunk, **kw):
+            self.i += 1
+            return {"hey_jarvis": scores[self.i - 1]}
+
+        def reset(self):
+            self.reset_calls += 1
+
+    class LiveStream:
+        def read(self, n, exception_on_overflow=True):
+            return b"\x01\x00" * n              # non-zero: watchdog stays quiet
+
+    lst = audio.WakeListener.__new__(audio.WakeListener)
+    lst.np = np
+    lst.model = ScriptedModel()
+    lst.near_miss_factor = 0.2
+
+    real_log = audio.log
+    audio.log = cglib.CapturingLog()
+    try:
+        score, peak = lst._listen(LiveStream(), 0.5, None, None)
+        misses = audio.log.find("wake_near_miss")
+    finally:
+        audio.log = real_log
+
+    assert (score, peak) == (0.55, 0.55), (score, peak)
+    assert len(misses) == 2, f"want one event per run, got {len(misses)}"
+    assert [m["peak"] for m in misses] == [0.28, 0.41], misses
+    assert misses[0]["shortfall"] == 0.22, misses[0]
+    assert lst.model.reset_calls == 1, lst.model.reset_calls
+    print("  OK  near miss: one event per run, carrying that run's peak")
+
+
+def test_clip_dump_writes_prunes_and_never_raises():
+    """The false-activation corpus openWakeWord's custom verifier trains its
+    negatives on. Capped because this writes on every single fire, and
+    fail-soft because a session is already being built behind the call - a
+    full disk owes us a log line, not a dead wake path."""
+    import tempfile
+    import wave
+
+    import audio
+
+    ring = [b"\x01\x00" * CHUNK_SAMPLES] * 3
+    tmp = Path(tempfile.mkdtemp())
+    real_dir, real_log = audio.CLIPS_DIR, audio.log
+    audio.CLIPS_DIR = tmp / "wake"
+    audio.log = cglib.CapturingLog()
+    try:
+        for i in range(5):
+            audio.dump_clip(ring, 0.20 + i / 100, keep=3)
+        kept = sorted(audio.CLIPS_DIR.glob("wake-*.wav"))
+        written = audio.log.find("wake_clip")
+
+        # keep=0 is the off switch, and it must not even make the directory.
+        audio.CLIPS_DIR = tmp / "off"
+        audio.dump_clip(ring, 0.5, keep=0)
+        off_made = (tmp / "off").exists()
+
+        # Fail-soft: a CLIPS_DIR that cannot be created (here: under a FILE)
+        # must log and return, never raise into the wake path.
+        blocker = tmp / "blocker"
+        blocker.write_bytes(b"")
+        audio.CLIPS_DIR = blocker / "wake"
+        audio.dump_clip(ring, 0.5, keep=3)
+        failures = audio.log.find("wake_clip_failed")
+    finally:
+        audio.CLIPS_DIR, audio.log = real_dir, real_log
+
+    assert len(written) == 5, f"5 fires must log 5 clips, got {len(written)}"
+    assert len(kept) == 3, f"keep=3 must prune to 3, got {len(kept)}"
+    # Pruning keeps the NEWEST, and names sort chronologically - so the three
+    # survivors are the last three scores written.
+    assert [p.name.split("-")[-1] for p in kept] == ["0.220.wav", "0.230.wav",
+                                                     "0.240.wav"], kept
+    with wave.open(str(kept[0]), "rb") as w:
+        assert w.getframerate() == 16000 and w.getnchannels() == 1
+        assert w.getnframes() == 3 * CHUNK_SAMPLES, w.getnframes()
+    assert not off_made, "keep=0 must not create the directory"
+    assert len(failures) == 1 and failures[0]["level"] == "warn", failures
+    print("  OK  wake clips: written, pruned to the cap, fail-soft on a bad dir")
 
 
 def test_wake_chime_waits_for_the_end_of_speech():
@@ -304,6 +410,8 @@ def main():
     test_capture_runaway_cap()
     test_dead_wake_stream_surfaces_original_error()
     test_zombie_stream_trips_silence_watchdog()
+    test_near_miss_reports_one_event_per_run_with_its_peak()
+    test_clip_dump_writes_prunes_and_never_raises()
     test_wake_chime_waits_for_the_end_of_speech()
     test_wake_ack_is_claimed_exactly_once()
     test_feeder_chunking()

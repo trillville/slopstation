@@ -9,6 +9,7 @@ output here rather than keeping its own copy of the resolver.
 """
 import collections
 import time
+import wave
 from pathlib import Path
 
 import cglib
@@ -19,6 +20,10 @@ log = cglib.make_log("voice")
 
 RETRY_S = 5                                     # device-wait poll interval
 WAIT_QUIET_S = 30                               # re-log an ongoing wait this often
+
+# Fired pre-roll, kept on disk. Under logs/ so .gitignore already covers it and
+# it prunes from the same folder a human already knows to open.
+CLIPS_DIR = cglib.BASE / "logs" / "wake"
 
 
 class DeviceMissing(Exception):
@@ -201,6 +206,48 @@ def play_pcm(pa, pcm, device_index=None):
                 log.warn("earcon_failed", err=str(e))
 
 
+def dump_clip(ring, score, keep):
+    """Write the pre-roll that fired to a wav, oldest pruned past `keep`.
+
+    The corpus is the point. openWakeWord's custom verifier takes real
+    false activations as its negative examples, and on 2026-08-15 the only
+    record of three of them was the transcript the STT happened to make of
+    whatever the TV said next - the audio itself was gone. Nothing can be
+    re-scored, re-thresholded or trained against a transcript.
+
+    This is the PRE-detection window, so replaying it reproduces the score up
+    to the crossing and NOT the peak, which comes from audio after it (see
+    _scan_peak). Local only, never uploaded - README's "Deliberately not
+    doing" closes audio upload and this does not reopen it.
+
+    Fail-soft to the point of silence: a full disk must cost a log line, not
+    the session that is already building behind this call."""
+    if keep <= 0 or not ring:
+        return
+    try:
+        CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+        # Milliseconds are load-bearing, not decoration: pruning below trusts
+        # names to sort chronologically, and two fires inside one second (a
+        # retry burst, a stuttered phrase) would otherwise collide on the name
+        # and silently overwrite. Taken from the same `now` as the seconds
+        # field so the tiebreaker cannot wrap past its own second.
+        now = time.time()
+        name = (f"wake-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}"
+                f"-{int(now * 1000) % 1000:03d}-{score:.3f}.wav")
+        with wave.open(str(CLIPS_DIR / name), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"".join(ring))
+        # Timestamped names sort chronologically, so the oldest are the head
+        # of the sorted list and no stat() per file is needed to find them.
+        for old in sorted(CLIPS_DIR.glob("wake-*.wav"))[:-keep]:
+            old.unlink(missing_ok=True)
+        log("wake_clip", clip=name, secs=round(len(ring) * 0.08, 1))
+    except Exception as e:
+        log.warn("wake_clip_failed", err=str(e))
+
+
 def close_stream_quietly(stream):
     """Best-effort close for a possibly-dead stream: after a -9999 host error
     (BT profile flap, device yanked) the stream is already torn down and
@@ -220,11 +267,23 @@ class WakeListener:
     CHUNK = 1280                                # oWW's native 80 ms hop
     PREROLL_CHUNKS = 25                         # 2 s ring kept ahead of detection
     SILENT_CHUNKS = 375                         # 30 s of literal zeros = dead stream
+    PEAK_HOPS = 15                              # 1.2 s of peak search, bench only
 
     # Hand-trained models live in the repo and travel by `git pull`: unlike the
     # pretrained set there is no upstream to re-fetch them from, so losing one
     # to a venv rebuild would mean retraining it.
     MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+    # Every tuning knob also as a CLASS default, all inert. __init__ replaces
+    # each one, so these exist for the listener built by __new__ with no
+    # config at all - test_preroll stubs one to drill stream death, and that
+    # test has no business knowing which knobs the wake path happens to read.
+    # The two dicts are read-only here; _patience always assigns fresh ones.
+    vad_threshold = 0.0
+    near_miss_factor = 0.0
+    clips_keep = 0
+    patience = {}
+    patience_threshold = {}
 
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np
@@ -234,9 +293,43 @@ class WakeListener:
         self.device_index = input_device_index
         self.model_name = voice_cfg["wakeModel"]          # e.g. hey_jarvis_v0.1
         self.key = self.model_name.rsplit("_v", 1)[0]     # e.g. hey_jarvis
+        # EVERY tuning key below is optional with an off-or-inert default, and
+        # none may join REQUIRED_VOICE: the K15's config.json is per-machine
+        # and gitignored, so a key that is mandatory here is an agent that
+        # will not start after a git pull until someone edits it by hand.
+        # The two that change WHAT fires (vad, patience) default to off; the
+        # two that only observe (near-miss, clips) default to on.
+        self.vad_threshold = float(voice_cfg.get("wakeVadThreshold", 0) or 0)
+        self.near_miss_factor = float(voice_cfg.get("wakeNearMissFactor", 0.5) or 0)
+        self.clips_keep = int(voice_cfg.get("wakeClipsKeep", 200) or 0)
         self.model_path = self._resolve_model()
         self.model = Model(wakeword_models=[str(self.model_path)],
-                           inference_framework="onnx")
+                           inference_framework="onnx",
+                           vad_threshold=self.vad_threshold)
+        self.patience, self.patience_threshold = self._patience(voice_cfg)
+
+    def _patience(self, voice_cfg):
+        """openWakeWord's N-of-last-N gate, as the (patience, threshold) pair
+        predict() wants. Empty dicts mean the gate is off, which is also
+        exactly what predict() expects for "behave as before".
+
+        Three upstream rules the config cannot express. predict() RAISES
+        unless a threshold dict accompanies patience. A patience of 1 is a
+        no-op, since one frame trivially satisfies one. And the keys are
+        openWakeWord's own names for the models - the ONNX basename - so they
+        are read back off the loaded model rather than re-derived from
+        wakeModel here; a key that does not match is not an error upstream,
+        it silently skips the gate, which is the worst of both outcomes.
+
+        Costs (n-1) hops of added latency, 80 ms each, on every detection.
+        Capped at 30 because that is prediction_buffer's maxlen - a larger
+        patience could never be satisfied."""
+        n = min(int(voice_cfg.get("wakePatience", 0) or 0), 30)
+        if n < 2:
+            return {}, {}
+        thr = float(voice_cfg["wakeThreshold"])
+        return ({k: n for k in self.model.models},
+                {k: thr for k in self.model.models})
 
     def _resolve_model(self):
         """Vendored model first, then openWakeWord's own resources dir
@@ -266,9 +359,12 @@ class WakeListener:
         # model itself is vendored - a rebuilt venv would otherwise load a
         # perfectly good custom model against nothing. download_models tops
         # them up whatever else it is asked for, and no-ops on a name it does
-        # not recognise, so a custom key costs one stat call.
+        # not recognise, so a custom key costs one stat call. silero_vad.onnx
+        # rides the same fetch and is only REQUIRED when wakeVadThreshold is
+        # on, because Model() loads the VAD eagerly then and dies without it.
         if not (res / "embedding_model.onnx").exists() or not (
-                vendored.exists() or pretrained.exists()):
+                vendored.exists() or pretrained.exists()) or (
+                self.vad_threshold > 0 and not (res / "silero_vad.onnx").exists()):
             log("wake_model_download", model=self.model_name,
                 vendored=vendored.exists() or None)
             download_models([self.key])
@@ -295,8 +391,34 @@ class WakeListener:
         self.device_index = device_index
 
     def score_chunk(self, chunk_int16):
-        scores = self.model.predict(chunk_int16)
+        # max() over the dict because the KEY is openWakeWord's basename for
+        # the model and this only ever loads one; patience/threshold are the
+        # one place the key does matter, and _patience derives them from the
+        # loaded model rather than from wakeModel. Both empty = stock predict.
+        scores = self.model.predict(chunk_int16, patience=self.patience,
+                                    threshold=self.patience_threshold)
         return max(scores.values())
+
+    def _scan_peak(self, stream, score, hops):
+        """Keep scoring past the crossing to find the peak. Bench paths ONLY.
+
+        The score at the crossing is a first-crossing value, not a peak: it
+        says how far up the ramp the threshold happened to sit. On 2026-08-15
+        that made 15 genuine wakes (median 0.255) indistinguishable in the log
+        from 3 false accepts (0.25 / 0.26 / 0.28) - the peak is the number
+        that separates them, and it lands AFTER the crossing.
+
+        So measuring it costs hops*80 ms. That is free in --wake-trials and
+        --false-accept-soak, where nothing follows the detection, and
+        unaffordable in the live loop, where a session is already being built
+        and the user is mid-sentence. Hence peak_hops=0 there, and no peak
+        field on the `wake` event."""
+        peak = score
+        for _ in range(hops):
+            data = stream.read(self.CHUNK, exception_on_overflow=False)
+            peak = max(peak, self.score_chunk(
+                self.np.frombuffer(data, self.np.int16)))
+        return peak
 
     def _open_stream(self):
         import pyaudio
@@ -304,15 +426,25 @@ class WakeListener:
                             input=True, frames_per_buffer=self.CHUNK,
                             input_device_index=self.device_index)
 
-    def _listen(self, stream, threshold, on_score, ring, interrupt=None):
+    def _listen(self, stream, threshold, on_score, ring, interrupt=None,
+                peak_hops=0):
+        """Blocks until the score crosses `threshold`; returns (score, peak),
+        or (None, None) when `interrupt` asked to stop. peak == score unless
+        peak_hops bought a real one (_scan_peak)."""
         silent = 0
+        # A near miss is one contiguous run above the floor that never
+        # crossed. Reported at the END of the run with the run's high-water
+        # mark, so a single "hey alfred" that didn't take is one event and not
+        # a dozen - and so the number in it is the one worth arguing about.
+        floor = threshold * self.near_miss_factor
+        episode = 0.0
         while True:
             data = stream.read(self.CHUNK, exception_on_overflow=False)
             # Something other than a wake word wants the session (today: an
             # announcement just finished and the follow-up window opens).
             # Checked per chunk, so it costs one 80 ms hop.
             if interrupt is not None and interrupt():
-                return None
+                return None, None
             chunk = self.np.frombuffer(data, self.np.int16)
             # Zombie watchdog: a WASAPI stream can outlive its endpoint (BT
             # profile flap) and keep delivering exact zeros forever - no error
@@ -331,15 +463,28 @@ class WakeListener:
             if on_score:
                 on_score(score)
             if score >= threshold:
+                peak = self._scan_peak(stream, score, peak_hops)
                 self.model.reset()
-                return score
+                return score, peak
+            if floor and score >= floor:
+                episode = max(episode, score)
+            elif episode:
+                # Recall's only trace. A wake word that does not fire emits
+                # nothing at all, so every missed "hey alfred" on 2026-08-15
+                # was invisible and the threshold argument was unfalsifiable.
+                log("wake_near_miss", peak=round(episode, 3),
+                    threshold=threshold,
+                    shortfall=round(threshold - episode, 3))
+                episode = 0.0
 
-    def wait_for_wake(self, threshold, on_score=None):
-        """Blocks until the wake word fires; returns the score. The stream is
-        closed before returning (trials/soak modes - no session follows)."""
+    def wait_for_wake(self, threshold, on_score=None, peak_hops=0):
+        """Blocks until the wake word fires; returns (score, peak). The stream
+        is closed before returning (trials/soak modes - no session follows),
+        which is also why these are the paths that can afford peak_hops."""
         stream = self._open_stream()
         try:
-            return self._listen(stream, threshold, on_score, None)
+            return self._listen(stream, threshold, on_score, None,
+                                peak_hops=peak_hops)
         finally:
             close_stream_quietly(stream)
 
@@ -356,11 +501,15 @@ class WakeListener:
         stream = self._open_stream()
         ring = collections.deque(maxlen=self.PREROLL_CHUNKS)
         try:
-            score = self._listen(stream, threshold, None, ring, interrupt)
+            score, _peak = self._listen(stream, threshold, None, ring, interrupt)
         except Exception:
             close_stream_quietly(stream)
             raise
         if score is None:
             close_stream_quietly(stream)
             return None, None
+        # Before WakeCapture, which is about to start consuming the stream -
+        # but the ring itself is only READ here, so the capture still gets the
+        # full pre-roll it seeds the session with.
+        dump_clip(ring, score, self.clips_keep)
         return score, WakeCapture(stream, ring, on_quiet)

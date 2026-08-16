@@ -131,6 +131,25 @@ is vendored but not yet deployed — see
 [custom-wakeword-design.md](custom-wakeword-design.md) for the two config
 values and the ladder it has to clear first.
 
+**Read `peak`, not `score`.** `wake_trial` carries both and they answer
+different questions. `score` is wherever the rising curve happened to cross the
+threshold, so it clusters just above whatever the threshold is set to and says
+almost nothing about how confident the model was — on 2026-08-15 that made 15
+genuine wakes (median 0.255) indistinguishable in the log from 3 false accepts
+(0.25 / 0.26 / 0.28). `peak` is the model's actual high-water mark for the
+utterance, measured over the 1.2 s after the crossing, and it is the number a
+threshold should be set from. It exists only in `--wake-trials` and
+`--false-accept-soak`, where nothing is waiting on the detection; the live path
+cannot afford the extra 1.2 s and so logs no peak.
+
+Two things also worth reading while tuning, both live-path and both on by
+default (`wakeNearMissFactor`, `wakeClipsKeep` in config):
+`wake_near_miss` is emitted for a run of scores that got close and never
+crossed — the *only* trace a failed wake leaves, since one that doesn't fire
+logs nothing at all. And every fire writes its 2 s pre-roll to
+`k15\logs\wake\*.wav`, which is both a listen-back for "what set it off" and
+the negative corpus a custom verifier model trains on.
+
 ## 5. Dry-run full pipeline — the big one (no side effects)
 
 Needs the Deepgram key. `--dry-run` runs the *entire* pipeline — wake → Flux STT
