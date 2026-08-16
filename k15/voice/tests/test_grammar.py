@@ -143,6 +143,16 @@ STRIP = [
     ("travis strikes again", "travis strikes again"),   # real word ~67, kept
     ("hey volume up", "hey volume up"),                 # no anchor, untouched
     ("play jarvis game", "play jarvis game"),           # mid-text is content
+    ("hey jar vis volume up", "volume up"),             # split anchor, joined
+]
+
+# Same stripper, "alfred" anchor - the split-mishear incident (2026-08-15)
+# and the join staying under 80 for real phrases.
+STRIP_ALFRED = [
+    ("hey alfred volume up", "volume up"),
+    ("Hey, all. Fred, take me home.", "take me home."),  # joined "allfred" ~92
+    ("alfred play hades", "play hades"),
+    ("all for one", "all for one"),                      # joined "allfor" ~67
 ]
 
 
@@ -173,6 +183,10 @@ def main():
 
     for text, want in STRIP:
         got = strip_wake(text)
+        if got != want:
+            failures.append(f"strip '{text}': got {got!r}, want {want!r}")
+    for text, want in STRIP_ALFRED:
+        got = strip_wake(text, "alfred")
         if got != want:
             failures.append(f"strip '{text}': got {got!r}, want {want!r}")
     # Strip output must still match the grammar.
@@ -251,7 +265,8 @@ def main():
         print("FAIL", f)
     assert not failures, f"{len(failures)} grammar failures"
     print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
-          f"risky-command narrowness; {len(STRIP)} wake-strip cases; "
+          f"risky-command narrowness; {len(STRIP) + len(STRIP_ALFRED)} "
+          "wake-strip cases; "
           f"is_busy defers for in-flight assistant turns; an armed stop ends "
           f"the session after the goodbye, never before")
 
