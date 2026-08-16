@@ -259,6 +259,14 @@ class Dispatch:
         if out == "OK":
             return _ok(f"showing {self._nav_label(kind, arg)}")
         if out == "NOTREADY":
+            # start_session is fire-and-forget (Popen), so "start a session
+            # and open X" chains into nav while couch.py is still coming up -
+            # and "start one first" told the model to start the session it
+            # had JUST started, which it relayed as a shrug and the user had
+            # to re-ask (2026-08-15). A fresh lock means starting, not absent.
+            if cglib.session_active():
+                return _busy("the session is still starting - "
+                             "try again in a moment")
             return _busy("there's no session to navigate - start one first")
         if out.startswith("NOTASK:"):
             return _no_task(out)

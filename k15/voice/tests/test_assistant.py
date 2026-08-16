@@ -250,9 +250,17 @@ def main():
     library.fetch_hltb = lambda name: hltb_calls.append(name) or {"main": 20}
     r = fresh["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
     assert r["ok"] and r.get("hltb") == {"main": 20} and hltb_calls == ["Some Unowned Game"], r
+    # EVERY facet ask resolves a missing name now, not just hltb: nameless
+    # review payloads made the model match results to titles from memory
+    # (2026-08-15).
+    _fr = library.fetch_reviews
+    library.fetch_reviews = lambda a: {"desc": "Very Positive"}
+    r = fresh["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
+    assert r["ok"] and r["name"] == "Some Unowned Game", r
+    library.fetch_reviews = _fr
     (library.load_deals, library.fetch_trending, library.fetch_recently_played,
      library._store_items, library.fetch_hltb) = saved
-    print("  fail-soft backstop, nav remap+guard, list_games routing, hltb name-fallback")
+    print("  fail-soft backstop, nav remap+guard, list_games routing, facet name-fallback")
 
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
     names = {n for n, *_ in assistant.TOOL_DEFS}

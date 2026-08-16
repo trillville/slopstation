@@ -46,7 +46,11 @@ RULES = (
     "later where an answer came from, do not reconstruct your own process "
     "from guesswork: you cannot reliably tell afterwards whether you looked "
     "something up, so say that plainly rather than inventing a source or "
-    "disowning a good one. "
+    "disowning a good one. A superlative needs the numbers: never call one "
+    "game the best, highest-rated, or most recent of a set unless you have "
+    "the figure for every candidate from this conversation - one lookup "
+    "cannot rank a list, so fetch the rest or name the one you actually "
+    "checked. "
     "Use tools for every action; appids come only from the catalog. "
     "Tell a QUESTION ABOUT an action apart from an INSTRUCTION to take it. "
     "'What's the command to end the session', 'what happens if I say that', "
@@ -113,7 +117,7 @@ def system_instruction(cfg):
             "parenthetical references of any kind - a bracketed source "
             "would be spoken letter by letter.")
     return (RULES + " " + " ".join(tail) + "\n\n"
-            "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM or "
+            "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
             "never|inst/notinst|controller full/partial/none/?):\n"
             + "\n".join(library.catalog_lines()))
 
@@ -336,10 +340,16 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                         facets[k] = None
         if not name:
             name = (facets.get("price") or {}).get("name")
-        if "hltb" in want and not name:
-            # hltb needs a name and neither the catalog nor a requested price
-            # facet gave one - resolve it from the store so "how long to beat
-            # <a game I don't own>" still answers instead of "unknown appid".
+        if want and not name:
+            # Neither the catalog nor a requested price facet gave a name -
+            # resolve it from the store. hltb NEEDS one ("how long to beat
+            # <a game I don't own>" used to die as "unknown appid"), and
+            # every facet WANTS one: four nameless review payloads in one
+            # turn left the model matching results to titles from its own
+            # bookkeeping, and it misattributed a superlative (2026-08-15).
+            # A facet ask is already a live-store conversation, so one more
+            # GetItems call is in kind - and the kill switch already zeroed
+            # `want` if store calls are off.
             name = (library._store_items([appid]).get(appid) or {}).get("name")
         if "hltb" in want and name:
             facets["hltb"] = library.fetch_hltb(name)
@@ -442,7 +452,9 @@ TOOL_DEFS = [
      ["appid"]),
     ("control", "Control the system: end_session, start_session, volume_up, "
      "volume_down, mute, set_volume (with level), switch_input "
-     "(with input name).",
+     "(with input name). start_session returns while the session is still "
+     "coming up - don't call nav in the same turn; say it's starting and "
+     "let the user ask again.",
      {"action": {"type": "string",
                  "enum": ["end_session", "start_session", "volume_up",
                           "volume_down", "mute", "set_volume", "switch_input"]},

@@ -43,12 +43,22 @@ def strip_wake(text, anchor="jarvis"):
     word only, >=80 (mishears like "jervis" score ~83; real words like
     "travis" ~67); greeting optional; repeated, so a stuttered "hey jarvis
     hey jarvis volume up" still cleans up. Leading only - a mid-sentence
-    "jarvis" is content."""
+    "jarvis" is content.
+    STT can also split the anchor across two tokens: "hey alfred" arrived as
+    "Hey, all. Fred," (2026-08-15) and neither half clears 80 alone ("all"
+    ~67; "fred" is 80 but sits unreachable behind it). So the two leading
+    tokens are also tried JOINED - "allfred" ~92 against "alfred", while
+    non-wake pairs stay under the bar ("all for" ~67, "play jarvis" ~75)."""
     while True:
         toks = text.split()
         i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
         if i < len(toks) and fuzz.ratio(toks[i].strip(_PUNCT).lower(), anchor) >= 80:
             text = " ".join(toks[i + 1:])
+            continue
+        if i + 1 < len(toks) and fuzz.ratio(
+                (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(),
+                anchor) >= 80:
+            text = " ".join(toks[i + 2:])
             continue
         return text
 

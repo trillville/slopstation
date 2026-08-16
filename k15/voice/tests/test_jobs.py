@@ -293,14 +293,15 @@ def main():
     import session_runtime
     # The replay must never put the MODEL's words in the USER's mouth: a brief
     # attributed to the user is a standing instruction for CONTEXT_AGE_S.
-    msgs = session_runtime.job_messages(store)
+    pre, post = session_runtime.job_messages(store, 0)       # 0 = all post
+    msgs = pre + post
     assert msgs and len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
     brief = store.for_context()[0]["task"]
     for m in msgs:
         if m["role"] == "user":
             assert brief not in m["content"], \
                 "the model's own brief is being replayed as the user's words"
-    assert session_runtime.job_messages(None) == []          # worker lane off
+    assert session_runtime.job_messages(None, 0) == ([], [])  # worker lane off
 
     # With a transcript: a true exchange, quoting the person. `asked` is an
     # argument (dispatch's utterance snapshot), not store state.
@@ -310,7 +311,8 @@ def main():
     store._update(job["id"], status=jobs_mod.DONE, read=True,
                   finished=int(time.time()), summary="Found three.",
                   detail="The long form.")
-    msgs = session_runtime.job_messages(store)
+    pre, post = session_runtime.job_messages(store, 0)
+    msgs = pre + post
     pair = [m for m in msgs if m["role"] in ("user", "assistant")][-2:]
     assert pair[0] == {"role": "user",
                        "content": "find me some couch co-op games"}, pair
@@ -322,13 +324,50 @@ def main():
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
     store._update(job["id"], status=jobs_mod.DONE, read=True,
                   finished=int(time.time()), summary="Done.", detail="")
-    msgs = session_runtime.job_messages(store)
+    pre, post = session_runtime.job_messages(store, 0)
+    msgs = pre + post
     assert not any("Some brief nobody spoke aloud." in m["content"]
                    for m in msgs if m["role"] == "user")
     assert any(m["role"] == "system" and "Some brief nobody spoke aloud."
                in m["content"] for m in msgs), msgs
     print("  job_messages: the user is quoted, the model's brief never is")
     print("  announcer: defers for sessions, marks read only after full playback")
+
+    # Clock order: a job finished BEFORE the carry snapshot seeds ahead of the
+    # carried turns, one finished AFTER seeds behind them. The old
+    # everything-first order put a finished report above the carried turn that
+    # queued it, and the model denied a result it had delivered (2026-08-15).
+    # Also drilled here: the detail cut lands on a word and says it cut.
+    t_now = time.time()
+    seed_base = {"task": "t", "status": jobs_mod.DONE, "provider": "fake",
+                 "created": 0, "read": True}
+    jobs_mod.JOBS_FILE.write_text(json.dumps([
+        {**seed_base, "id": "j-old", "finished": t_now - 10,
+         "summary": "Old answer.", "detail": "", "asked": "the old ask"},
+        {**seed_base, "id": "j-new", "finished": t_now - 2,
+         "summary": "New answer.", "detail": "word " * 400,
+         "asked": "the new ask"},
+    ]), encoding="utf-8")
+    pre, post = session_runtime.job_messages(store, t_now - 5)
+    assert any("Old answer." in m["content"] for m in pre), pre
+    assert any("New answer." in m["content"] for m in post), post
+    said = post[-1]["content"]
+    assert said.endswith("word [truncated]"), said[-40:]
+    assert len(said) < len("word " * 400)
+    print("  job_messages: clock-ordered against the carry; cuts on a word")
+
+    # A READ result ages out of context fast; an UNREAD one holds the full
+    # window - "what did you find" hours later is the announcement contract.
+    stale = t_now - jobs_mod.CONTEXT_READ_AGE_S - 60
+    jobs_mod.JOBS_FILE.write_text(json.dumps([
+        {**seed_base, "id": "j-heard", "finished": stale,
+         "summary": "Heard.", "detail": "", "asked": "a?"},
+        {**seed_base, "id": "j-unheard", "read": False, "finished": stale,
+         "summary": "Unheard.", "detail": "", "asked": "b?"},
+    ]), encoding="utf-8")
+    got = [j["summary"] for j in store.for_context()]
+    assert got == ["Unheard."], got
+    print("  for_context: heard results age out fast, unheard ones hold")
 
     # latest_result orders by COMPLETION time, not file position: _save
     # regroups live-then-done, so a job that finished last can sit earlier in

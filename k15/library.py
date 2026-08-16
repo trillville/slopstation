@@ -692,7 +692,12 @@ def catalog_lines():
     for appid, name in rows.items():
         o = owned.get(str(appid), {})
         m = meta.get(str(appid), {})
-        last = (time.strftime("%Y-%m", time.localtime(o["last"]))
+        # Day precision, not month: with two games both reading "2026-08"
+        # the model guessed at "what did I play last" and guessed wrong,
+        # then had to disown the answer as month-only data (2026-08-15).
+        # The store timestamp is exact; three more chars per row buy the
+        # question back.
+        last = (time.strftime("%Y-%m-%d", time.localtime(o["last"]))
                 if o.get("last") else "never")
         lines.append((appid in installed_ids, o.get("hours", 0), (
             f"{appid}|{name}|{','.join(m.get('tags', [])[:5])}"

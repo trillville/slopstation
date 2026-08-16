@@ -28,7 +28,13 @@ QUEUE_CAP = 3                   # queued-or-running ceiling; beyond = busy
 # all three axes because it rides in every LLM turn of that session: only
 # results fresh enough that "which one was cheapest?" plausibly means THEM,
 # only the last couple, and only the readable head of a long report.
-CONTEXT_AGE_S = 6 * 3600
+# Freshness splits on read: an UNREAD result must survive until it is heard
+# ("what did you find" hours later is the announcement contract), but a HEARD
+# one has a conversational horizon - under one flat 6 h window, a report heard
+# at 18:21 was still opening every session at 20:37, never referenced again
+# (2026-08-15).
+CONTEXT_AGE_S = 6 * 3600        # unread
+CONTEXT_READ_AGE_S = 15 * 60    # read (heard, or retrieved by asking)
 CONTEXT_JOBS = 2
 CONTEXT_DETAIL_CHARS = 1200
 
@@ -231,14 +237,16 @@ class JobStore:
 
     def for_context(self):
         """Recent finished jobs, oldest first - what the assistant should
-        already know when you follow up on an announcement. Read/unread is
-        irrelevant here: hearing a result is exactly when you're most likely
-        to ask about it."""
+        already know when you follow up on an announcement. Read jobs still
+        belong here - hearing a result is exactly when you're most likely to
+        ask about it - they just age out on the shorter window (the constants
+        up top carry the story)."""
         now = time.time()
         with self._lock:
             done = [j for j in self._load()
                     if j["status"] in (DONE, FAILED)
-                    and now - j.get("finished", 0) < CONTEXT_AGE_S]
+                    and now - j.get("finished", 0) < (
+                        CONTEXT_READ_AGE_S if j.get("read") else CONTEXT_AGE_S)]
         done.sort(key=lambda j: j.get("finished", 0))
         return done[-CONTEXT_JOBS:]
 
