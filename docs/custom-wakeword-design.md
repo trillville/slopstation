@@ -1,101 +1,129 @@
-# Custom wake word — what is left to do
+# Custom wake word — attempt two
 
-**Status: trained and vendored, NOT live.** `k15/voice/models/hey_alfred_v1.0.onnx`
-is in the repo and inert — `config.json` still points `voice.wakeModel` at
-`hey_jarvis_v0.1`, so resolution ends where it always did. The inference-side
-code has landed (`audio.py` `_resolve_model`, `doctor.py`, `test_wake.py`,
-`bench/probe_wake_model.py`); those files carry their own reasoning. What
-remains is the deploy and the couch verification below. **Delete this note once
-the soak passes** — at that point the model is just what the rig runs.
+**Status: `hey_alfred_v1.0` is live and is a measured regression.** It is fine
+in a quiet room and worse than the stock `hey_jarvis` it replaced once the TV
+is on. This note is the plan to fix that. **Delete it once the new model
+passes its soak** — at that point the code and its comments are the record.
 
-Everything about how it was trained (livekit-wakeword on the gaming PC, why
-openWakeWord runs it, the eval numbers, the size bake-off) is in commit
-`133cb6f`'s message. That is the record; it is not repeated here.
+## What the telemetry actually showed (2026-08-15)
 
-## Deploy
+| | `hey_jarvis` @ 0.5 | `hey_alfred` @ 0.2 |
+|---|---|---|
+| wakes logged | 38 | 18 |
+| median first-crossing | 0.97 | 0.255 |
+| crossings ≥ 0.90 | 27 of 38 | 0 of 18 |
+| confirmed false accepts | none seen | 3 |
 
-Two values in `k15\config.json`, on the K15:
+The three false accepts scored **0.25 / 0.26 / 0.28** against a median genuine
+wake of **0.255**. They are not near the real wakes, they are *among* them —
+so no threshold separates them, and moving the dial only chooses which failure
+you get. That is the whole diagnosis; everything below follows from it.
 
-```json
-"wakeModel": "hey_alfred_v1.0",
-"wakeThreshold": 0.45
-```
+Two supporting facts. Jarvis crossed at 0.97 against a 0.5 gate, i.e. its score
+leapt past 0.9 in one 80 ms hop, while Alfred's crossings hug its threshold —
+so Alfred's response is genuinely shallow, not merely measured lower. And a
+talker on the couch reaches the mic 10–20 dB *below* TV dialogue, which is the
+condition the model was never trained on.
 
-Then `.\Start-K15.bat`. Rollback is those two values back and one more
-`Start-K15.bat` — `hey_jarvis_v0.1` stays in the venv until the soak passes, on
-a machine that is otherwise deaf while a bad model is live.
+## Why it came out this way
 
-**0.45 is measured, not eval's number.** livekit's `evaluate.py` hardcodes its
-printed `Threshold=` to 0.5 "for consistent comparison" — it is a fixed
-comparison point and never a tuned value. 0.45 comes from openWakeWord
-measurements on this rig: a 0.87 detection peak on augmented positives against a
-0.095 floor over 40 minutes of the actual living room, ~9x separation.
+**The training SNR never covered the room.** livekit hardcodes background
+mixing at `+5..+15 dB` (`data/augment.py`, `snr_db_range` default, no config
+key) applied to 100% of clips. So every positive had the speaker *louder* than
+the interference. openWakeWord's own recipe is `-10..+15 dB` at `p=0.75` — a
+25 dB span with a quarter left clean, against a 10 dB span with none.
 
-## Verify on the K15, in this order
+**The eval could not rank candidates.** All three sizes scored identically —
+3 false positives in 17.85 h, ~99.3% recall, AUT 0.0000 — while on real couch
+audio their medians were 0.083 / 0.892 / 0.585. The validation set was
+livekit's synthetic negatives; 100% of the room recording was training data and
+none of it was validation data.
 
-Each step gates the next.
+**The threshold came from contaminated audio.** The 0.0353 "noise ceiling" that
+justified 0.25 was measured on the 40-minute room recording — which was *in the
+training set*. Game audio was never represented at all.
 
-0. **It loads, costs ~2%, and means the same thing here.** The training box runs
-   onnxruntime 1.28.0 and the K15 pins 1.24.4, so this is the one comparison
-   the gaming PC could not make against itself:
+**The phrase is weak.** `AE1 L F R AH0 D` has no sibilant and no released
+plosive; everything but /f/ is a sonorant, which is what broadband game audio
+masks best. Compare `jarvis` (`JH ... S`) — an affricate and a sibilant.
+Not being changed now, but it is the reason the ceiling is lower than it
+looks. See § Constraints on any future phrase.
 
-   ```
-   .venv\Scripts\python bench\probe_wake_model.py models\hey_alfred_v1.0.onnx --wav speech.wav --dump k15.json
-   ```
+## Item 7 — retrain
 
-   Expect `always-on cost  ~2-3% of one core`. A FAIL against the gaming PC's
-   oww dump is an onnxruntime version disagreement, not a bad model.
+Four changes, one run. `wake-training/` holds all of it; the CLI's six
+hand-run steps and the old `sweep.py` are superseded by `pipeline.py`.
 
-   **Known and accepted: the cross-runtime compare against LIVEKIT fails for
-   every size.** Not a broken export (all three fire at 0.92-0.98 under
-   openWakeWord), not an alignment lag (best-fit shift is +0 hops), not
-   different feature models (the mel/embedding ONNX are byte-identical), not a
-   normalisation mismatch. It is streaming-vs-whole-window mel framing, at
-   0.021-0.075 mean per-hop. The consequence is why the threshold above came
-   from measurement: **livekit's eval numbers do not transfer to this runtime.**
+1. **Widen the SNR to `0..+20 dB` with 25% left clean.** `patch_augmentation()`
+   monkeypatches `mix_with_background`; it cannot be a config change because
+   livekit exposes no key. Do **not** also raise `augmentation.rounds` — rounds
+   compound, and three rounds of a widened mix lands near −18 dB.
+2. **Game audio in the backgrounds.** Games are spectrally unlike the
+   dialogue-heavy film already in `backgrounds/room/`: percussive transients,
+   compressed VO, a music bed. Recorded with the existing
+   `k15/voice/bench/record_room.py`, sliced by `slice_room.py`.
+3. **Hold out room + game audio as *validation*.** `make_validation.py` writes
+   `validation_set_features.npy`, which the trainer concatenates into its
+   validation negatives — so both the reported FPPH and `find_best_threshold`
+   start describing this living room. This is the change that makes the eval
+   able to rank candidates at all.
+4. **Scale up.** `n_samples` 10k→25k, `steps` 50k→100k, `n_background_samples`
+   200→2000, `max_negative_weight` 1500→3000, plus `custom_negative_phrases`
+   led by the bare `"alfred"`. Medium took 12 min at 50k steps, so this is
+   ~25 min — the cost is recording time, not compute.
 
-1. **Blind detection** — `tests\test_wake.py`. It reads `wakeModel` from config
-   and derives the spoken phrase, so it follows the deployment. SAPI may
-   mispronounce an invented name; a low score here with good live trials is the
-   test's limit, not the model's.
-2. **`--wake-trials`**, 20x per condition, {movie volume, loud movie} x
-   {couch-left, couch-right}. **Pass: >=18/20 in every condition.**
-3. **`--false-accept-soak`** through one full ~2 h movie. **Pass: <=1 false
-   accept.** This is where a home-trained model fails; it is not optional.
-4. **`--dry-run`**, one flowing sentence: confirm the `wake prefix stripped`
-   line appears. That proves the keyterm and anchor derivations, not the model.
+Expected gain is real but partial. Amazon's playback-interference work reports
+30–45% relative false-reject reduction from mixing TV/music into training at a
+chosen SIR. It does not close a 20–40 dB gap on its own, which is why item 6
+and the already-shipped ducking exist.
 
-Steps 2-3 are the existing gate from [voice-testing.md](voice-testing.md) —
-same numbers, deliberately, so a new wake word is held to the standard the mic
-array was.
+## Item 6 — the verifier
 
-## If the soak fails
+A second stage, because the first one has no axis left. openWakeWord's
+`custom_verifier_models` is a logistic regression over the **same embeddings**
+the wake model already computed — inference is a dot product — and it can use
+what the score cannot express: whose voice this is. Google's cascade paper is
+the precedent: a *loose* stage 1 plus a verifier beat a single tight stage on
+**both** axes at once (0.02 FA/hr at 3.5% FRR, against 0.5 FA/hr at 4.1%).
 
-The levers are all free and all in the runtime already installed:
-`vad_threshold` (Silero gate), `patience`/`debounce_time` (N consecutive
-frames), openWakeWord's `custom_verifier_models` (a second-stage filter trained
-on a few household recordings, addable without retraining anything), and
-threshold tuning. Try those before another training run.
+Its negatives are the harvested false activations that `audio.py` now writes to
+`k15/logs/wake/*.wav` on every fire — which the openWakeWord docs call one of
+the most effective options. `bench/train_verifier.py` builds it on the K15,
+where the clips already are.
 
-If a retrain IS needed, add more living-room negatives first — that is the one
-input that moves this model, and `bench/record_room.py` (on the K15) plus
-`bench/slice_room.py` (on the gaming PC, after `livekit-wakeword setup`) are
-the tools. Both carry the why in their own docstrings. Re-run step 0's parity
-probe on every retrain: an exported `.onnx` cannot break underneath you, but a
-future livekit release could change the export, and step 0 is the only thing
-between that and a crash-looping agent.
+**It depends on real-world clips, so it cannot be built the same day.** Run the
+new model for a few evenings first, then sort the clips by ear.
 
-## Two constraints on any future phrase
+Two properties to design around, both documented upstream. It **replaces** the
+score above `custom_verifier_threshold` rather than gating it, so enabling it
+voids every `wakeThreshold` ever measured without it. And it is
+speaker-specific by design — train it on everyone who uses the room.
 
-Both come from this repo, not from the library, and both are easy to trip:
+## Order, and why
 
-- **The filename is the interface.** `voice.wakeModel` is parsed by
-  `rsplit("_v", 1)[0].replace("_", " ")` in two places
-  ([audio.py](../k15/voice/audio.py), [session_runtime.py](../k15/voice/session_runtime.py)),
-  so the file must be `word_word_vX.Y.onnx`.
-- **The last word is the strip anchor.** `strip_wake` fuzzy-matches it at >=80,
-  leading-only, so it must not collide with a word a command can start with:
-  `any, cancel, end, game, go, let, louder, mute, never, quieter, show, softer,
-  start, stop, switch, task, thank, that, turn, unmute, what`. ("alfred" vs
-  those scores clear; "steam" would score 91 against "stream" and eat a real
-  command's first word.)
+Item 7 first and alone. It needs only a recording session, and its result
+changes what item 6 is trained against — a verifier fitted to a model that is
+about to be replaced is wasted labelling. Ducking (shipped) is already helping
+the STT half in the meantime.
+
+## Gates
+
+The new model replaces the current one only if, on the K15:
+
+- `--wake-trials` from the couch, TV at movie volume: **≥18/20**, and the
+  logged `peak` values clear the false-accept ceiling by 3× or more. Peak, not
+  `score` — see `bench/probe_wake_model.py` and `WakeListener._scan_peak`.
+- `--false-accept-soak` through a full film **and** an hour of a game: **≤1**.
+- `wake_near_miss` shows margin rather than a cluster just under the threshold.
+
+If it fails all three, the phrase is the next variable, not the recipe.
+
+## Constraints on any future phrase
+
+Both learned the expensive way, both still binding:
+
+- **The first word must be a greeting in `GREETINGS`** (`hey`/`hi`/`ok`/`okay`)
+  or `strip_wake` cannot remove the phrase from the transcript.
+- **Prefer a sibilant or an affricate.** Non-sibilant fricatives account for
+  over half of consonant confusions at 12 dB SNR; sibilants are seldom confused
+  at the same level. `alfred` has neither.

@@ -43,6 +43,7 @@ exits with the FAIL count.
 |---|---|---|---|
 | `gaming-pc/` | `C:\CouchGaming\` | `TILLMAN-DESKTOP` (gaming PC) | `Deploy.ps1` (copies the script set, stamps `build-id`) |
 | `k15/` | a clone on the Desktop | `K15` (orchestrator mini PC) | `git pull` in place |
+| `wake-training/` | in place, from a checkout | `TILLMAN-DESKTOP` (needs the GPU) | `Train.bat` (its venv and 16 GB of data live outside the repo, under `--root`) |
 
 Every script derives its sibling paths from its own location, so a folder is a
 relocatable unit and runs fine straight from a checkout. The **K15 runs from a
