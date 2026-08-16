@@ -216,7 +216,7 @@ def check_session_state():
         report(PASS, "last_error", "none")
 
 
-def _steam_mint_probe(tok, steamid, days):
+def _steam_mint_probe(days):
     """Can the refresh token actually MINT? Returns a report() tuple.
 
     ASKS THE REAL CODE rather than re-implementing it: `steam_session.py token`
@@ -228,7 +228,6 @@ def _steam_mint_probe(tok, steamid, days):
     Offline is not a verdict on the token, so anything that stops the check
     from producing an answer stays a PASS with the caveat named.
     """
-    import subprocess
     vpy = cglib.BASE / "voice" / ".venv" / "Scripts" / "python.exe"
     script = cglib.BASE / "voice" / "steam_session.py"
     if not vpy.exists():
@@ -369,8 +368,7 @@ def check_voice(cfg):
                 # (aud=[web,renew,derive]), which cannot derive a client-app
                 # token. A PASS that a live install contradicts is worse than
                 # no probe, so ask Steam rather than the clock.
-                report(*_steam_mint_probe(tok, str(secrets.get("steamId64", "")),
-                                          days))
+                report(*_steam_mint_probe(days))
         except Exception as e:
             report(WARN, "steam session", f"token unreadable ({e})",
                    "re-run steam_session.py enroll")

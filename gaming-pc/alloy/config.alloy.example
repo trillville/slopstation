@@ -1,4 +1,4 @@
-// Grafana Alloy - gaming PC log shipper. (docs/observability-design.md, E4)
+// Grafana Alloy - gaming PC log shipper.
 //
 // Same install and same two environment variables as the K15 copy
 // (k15/alloy/config.alloy.example has the full setup notes); only the paths

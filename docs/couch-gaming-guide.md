@@ -486,10 +486,12 @@ icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r `
 ```
 
 [`gaming-pc/Dispatch.ps1`](../gaming-pc/Dispatch.ps1) is **the entire remote
-attack surface**: seven verbs — `enter` / `exit` / `status` / `games` /
-`playing` / `launch <appid>` / `version` — and everything else answers
-`DENIED`. It is deliberately dependency-free (no dot-sourcing in the sshd
-context).
+attack surface**: ten verbs — `enter` / `exit` / `status` / `games` /
+`playing` / `launch <appid>` / `version` / `nav <kind> [arg]` / `stop <appid>` /
+`collections` — and everything else answers `DENIED`. It is deliberately
+dependency-free (no dot-sourcing in the sshd context). The last three are the
+voice surface and need the extra tasks in 8.4; the first seven are all the
+chord lane ever uses, so a build can stop there.
 
 On the K15, `%USERPROFILE%\.ssh\config`:
 
@@ -872,7 +874,7 @@ process and survives anything the voice stack does.
 |---|---|
 | Ex-Link frames | `08 22 c1 c2 c3 val + (0x100 − Σ)&0xFF`, 9600 8N1 · on `D4` / off `D5` / HDMI4 `08220A000503C4` · ack `030cf1` |
 | VirtualHere claim/release | `vhui64.exe -t "USE,K15.5"` / `"STOP USING,K15.5"` |
-| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>\|version` — nothing else exists |
+| Remote surface | `ssh gamepc enter\|exit\|status\|games\|playing\|launch <appid>\|version\|nav <kind> [arg]\|stop <appid>\|collections` — nothing else exists |
 | Fail-safe | `\CouchGaming\ForceOfficeAtLogon` — unconditional, sends no TV commands |
 | Diagnosis | `python doctor.py` on the K15 · `Doctor.ps1` on the PC |
 | The one rule | Nothing switches the TV to HDMI 4 before the host writes READY |

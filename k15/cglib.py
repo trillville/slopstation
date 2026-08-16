@@ -361,9 +361,12 @@ class _Log:
     def __call__(self, event, /, **fields):
         self._write(events.INFO, event, fields)
 
-    def debug(self, event, /, **fields):
-        self._write(events.DEBUG, event, fields)
-
+    # Three levels, not four. `info` is the spelled-out form of __call__, for a
+    # call site where the level should be visible next to a warn/error sibling.
+    # There is deliberately no `debug`: `level` is a Loki LABEL and alerts key
+    # on it, so a level nothing ever emits is a value in the dashboards that
+    # can only ever be empty. If a debug lane is ever wanted, add the emitter
+    # and the level together.
     def info(self, event, /, **fields):
         self._write(events.INFO, event, fields)
 

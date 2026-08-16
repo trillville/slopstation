@@ -73,7 +73,6 @@ def main():
     library.DEALS = tmp / "deals.json"
     library.FACET_CACHE = tmp / "facet-cache.json"
     library.TAGMAP = tmp / "store-tags.json"
-    library.PLAYHIST = tmp / "playtime-history.json"
     library._get = fake_get
     # Pin the secrets BEFORE anything runs: several fetchers reach for a key
     # (fetch_store_search -> _tag_map does). On a checkout that HAS a real
@@ -157,19 +156,12 @@ def main():
     assert [g["appid"] for g in deals["wishlist_on_sale"]] == [12, 10], deals
     assert "refreshed" in deals
 
-    # --- playtime snapshot: one dated row, hours-only ------------------------
-    library._snapshot_playtime({"1": {"hours": 10.5}, "2": {"hours": 0}})
-    import time as _t
-    hist = json.loads(library.PLAYHIST.read_text())
-    today = _t.strftime("%Y-%m-%d")
-    assert hist[today] == {"1": 10.5}, hist                 # 0-hour game omitted
-
     # --- recently played: needs a key; parsed 2-week hours -------------------
     rec = library.fetch_recently_played()
     assert rec == [{"appid": 55, "name": "Recent X", "hours2w": 5.0}], rec
 
     print("OK - layer 4: specials/wishlist/trending/search/reviews/news/tags/"
-          "hltb-cache/refresh_deals/playtime/recent parsers")
+          "hltb-cache/refresh_deals/recent parsers")
 
 
 if __name__ == "__main__":

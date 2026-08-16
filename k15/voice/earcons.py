@@ -10,7 +10,7 @@ cue on top since it alone has to carry across the room unasked.
 
 Everything is a bell: a few light partials with exponential decay. A decaying
 note reads far softer than a flat one of the same peak, so these are quieter
-than their amplitudes suggest (decay=None still gives a flat tone).
+than their amplitudes suggest.
 
 Tier-1 acks must be instant: never synthesize speech for them, never wait on
 anything - pcm() is a dict lookup after first use.
@@ -41,8 +41,8 @@ def _seq(bursts, gap_ms=GAP_MS):
     return notes
 
 
-# name -> (peak amplitude, decay tau as a fraction of note duration - None for
-#          a flat tone -, [(freq_hz, start_ms, dur_ms), ...])
+# name -> (peak amplitude, decay tau as a fraction of note duration,
+#          [(freq_hz, start_ms, dur_ms), ...])
 SPECS = {
     # Bookends: an ascending fifth to open, the same fifth descending to
     # close - the sleep sound is the wake sound backwards, so it needs no
@@ -76,17 +76,16 @@ def set_gain(gain):
 
 
 def _note(freq, dur_ms, decay):
-    """One note as a float array peaking near 1.0, silent at both ends."""
+    """One note as a float array peaking near 1.0, silent at both ends. `decay`
+    is the tau as a fraction of the duration - every SPEC sets one, and a flat
+    tone is not an option the vocabulary wants (it reads as an alarm)."""
     n = int(SAMPLE_RATE * dur_ms / 1000)
     t = np.arange(n) / SAMPLE_RATE
-    if decay is None:
-        wave = np.sin(2 * np.pi * freq * t)
-    else:
-        tau = decay * dur_ms / 1000
-        wave = np.zeros(n)
-        for k, amp in PARTIALS:
-            if freq * k < SAMPLE_RATE / 2:      # above Nyquist it aliases down
-                wave += amp * np.sin(2 * np.pi * freq * k * t) * np.exp(-t * k / tau)
+    tau = decay * dur_ms / 1000
+    wave = np.zeros(n)
+    for k, amp in PARTIALS:
+        if freq * k < SAMPLE_RATE / 2:          # above Nyquist it aliases down
+            wave += amp * np.sin(2 * np.pi * freq * k * t) * np.exp(-t * k / tau)
     a = min(int(SAMPLE_RATE * ATTACK_MS / 1000), n // 2)
     r = min(int(SAMPLE_RATE * RELEASE_MS / 1000), n // 2)
     if a:

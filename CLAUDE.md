@@ -75,7 +75,16 @@ devices) only run on the K15.
 ## Design notes
 
 A design doc is written for work that is NOT yet built and is deleted once it
-is — the code and its comments become the record. `docs/resume-game-design.md`
-is the surviving example and the genre: what was tried, what the logs showed,
-what gates the next attempt. README § Deliberately not doing carries the
-standing "don't re-litigate this" list.
+is — the code and its comments become the record. Two survive, and they are the
+genre: what was tried, what the measurements showed, what gates the next step.
+`docs/resume-game-design.md` (nothing built, two designs refuted, one open
+question) and `docs/custom-wakeword-design.md` (built and vendored, not
+deployed — so what is left is a deploy and a couch ladder). Each names its own
+delete condition; honour it. README § Deliberately not doing carries the
+standing "don't re-litigate this" list, and § Still genuinely open the short
+list of things that are neither shipped nor closed.
+
+When a doc's work ships, the doc goes and its live residue moves into the code
+it describes — not into a second doc. That is why `workers.py` carries the
+worker-boundary reasoning and `session_runtime.job_messages` carries the part
+of it that is still open.
