@@ -1,10 +1,51 @@
 # TV power detection
 
-**Status:** nothing built. One approach measured and refuted, two leads open.
+**Status:** nothing built, but the question is ANSWERED — the set reports its
+own power state over the network, measured end to end on 2026-08-19. What is
+left is wiring it into `couch.py`, not finding it.
 
-**Delete this doc when** TV power becomes observable to the K15 (the mechanism
-and its residue move into `couch.py` alongside `exlink()`), or when the idea is
-abandoned and the standing retry in `couch.py` is accepted as the whole answer.
+**Delete this doc when** that wiring lands (the mechanism and its residue move
+into `couch.py` alongside `exlink()`).
+
+## The answer, first
+
+The S90C runs an unauthenticated HTTP endpoint that reports its own power
+state, **and it answers from standby**:
+
+```
+GET http://<tv>:8001/api/v2/   ->   .device.PowerState  ==  "on" | "standby"
+```
+
+Measured on this rig, TV at `192.168.68.51`, MAC `68:FC:CA:B4:02:22`,
+`QN77S90CAFXZA`, `networkType: wireless`:
+
+```
+before power_on : PowerState=standby   (33 ms)
+Ex-Link power_on -> ack 030cf1
+  t+1s..t+4s     : PowerState=standby
+  t+5s           : PowerState=on
+```
+
+So the K15 can ask, in ~30 ms and with no new hardware, the one question the
+whole launch path has been guessing at. Notes for whoever wires it up:
+
+- **~5 s of lag** between the frame landing and the state flipping. Poll, don't
+  read once. Irrelevant against a 120 s window and vastly better than learning
+  it from Enter at 60-90 s.
+- **No pairing.** `/api/v2/` needs no token; it is the same endpoint the TV
+  serves for discovery. The websocket remote on 8001/8002 *does* need pairing —
+  don't reach for it, nothing here needs to send anything over IP.
+- **The address must not drift.** Give the TV a DHCP reservation, or resolve it
+  by MAC, before anything depends on the IP.
+- **It is on Wi-Fi.** Fine for reading state; a wired drop would matter if the
+  WoL wake channel below is ever built.
+- **Unknown, and the thing to watch:** whether the IP server stays up in
+  *every* standby depth. Samsung's own worksheet says the TV goes offline to IP
+  about a minute after power-off and needs WoL after that — this set plainly
+  does not, but if a deeper standby exists, that is where the refusals live.
+  Which makes the endpoint a possible **predictor** and not merely a detector:
+  log the state at `launch_start` and see whether unreachable-then predicts
+  refused-wake. That correlation is the next measurement, and it is free.
 
 ## The problem
 
@@ -62,7 +103,24 @@ Two things it did establish, both useful:
   weak (the system never sees the TV being watched normally), but nothing
   clean is there.
 
-## Open lead 1: a status/query command class
+## Closed: HDMI-CEC, and the Ex-Link status hunt
+
+Both were the plan before the endpoint above turned up. Neither is worth doing
+now, recorded so nobody re-opens them:
+
+- **CEC** would have meant a USB-CEC adapter (Pulse-Eight, ~$50) on the gaming
+  PC — that is the machine with HDMI to the TV — plus libcec, plus a new
+  Dispatch verb to relay the answer to the K15. It reads power state correctly,
+  but it is hardware and a dependency to buy an answer that is already free
+  over the LAN. Worse, Samsung's IP-control worksheet reports that some control
+  partners ask for **Anynet+/CEC to be OFF** because it disrupts IP control —
+  so adopting CEC could cost the very channel that solved this.
+- **An Ex-Link status frame.** Still unknown whether the S90C has one, and now
+  moot. Third-party integrators describe Ex-Link power feedback as unreliable
+  in general ("no way of knowing, when first powered up, what the current state
+  of the display is"), which matches the measurement below.
+
+## Refuted earlier: a status/query command class
 
 The frame table is entirely commands. Samsung's Ex-Link worksheet defines
 status reads on many models; whether the S90C honours one is unknown. The
@@ -92,9 +150,25 @@ setting (network wake). Two separate consequences, neither measured:
   config and one more call. Two independent wake channels beat one retried
   channel, and unlike lead 1 it needs no protocol archaeology.
 
-Neither gives *detection* — both make the wake more likely rather than
-observable. Only lead 1 or HDMI-CEC (a USB adapter answering `<Give Device
-Power Status>`, ~$50) closes the hole properly.
+Neither gives *detection* — the endpoint at the top of this page does that.
+These make the wake more likely, which is the other half.
+
+Samsung's Consumer IP Control Worksheet is the source for both, and it is
+specific: **"Samsung TVs use WoL for Power On"**, the TV drops off IP roughly a
+minute after power-off, and it therefore advises sending *both* an IP power-on
+and a WoL frame. `wol()` already builds and broadcasts magic packets for the
+gaming PC, so a second target is a MAC in `config.json` and one more call —
+`68:FC:CA:B4:02:22` here, though note that is the **wireless** MAC and WoL over
+Wi-Fi is the weaker case.
+
+The same worksheet names two settings that bear directly on the refusals:
+
+- **Eco settings** "may affect timing and reliable expected behaviors from the
+  TV", with control vendors asking for specific ones off.
+- **Keep Bixby in Standby** (`Settings > General > Voice > Voice Assistant >
+  Bixby Wake-up Options`) is described as keeping the TV's **IP server open in
+  standby**, explicitly to make Power On more reliable. That is a direct lever
+  on standby depth — the leading suspect for a wake that is acked and refused.
 
 ## What shipped instead, and why this doc still exists
 
@@ -104,5 +178,13 @@ dead task for the rest of its 120 s window. That converts "the set refused the
 first wake" from a hard failure into a slower success **whenever a later frame
 lands** — which is the common case, and it needed no knowledge of TV power.
 
-It does not fix a set that refuses every frame. That still needs detection,
-which is what this page is for.
+It does not fix a set that refuses every frame, and it still guesses about the
+TV. The endpoint at the top of this page is what replaces the guess; the shape
+it wants in `couch.py` is roughly:
+
+    power_on  ->  poll PowerState until "on"  ->  only THEN dispatch Enter
+
+which spends the budget on the thing that actually has to happen, and makes
+`enter_died` rare rather than the primary signal. Re-poke while polling, fail
+early and honestly if the set never reports on — at that point the launch knows
+the TV is the problem, which no version of this has ever been able to say.
