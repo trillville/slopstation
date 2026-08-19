@@ -29,12 +29,15 @@ ENTER_REDISPATCH = 1   # extra Enter dispatches after a DETECTED death (not a
                        # Enter's abort path leaves OFFICE topology behind, which
                        # is exactly the clean state a fresh Enter wants.
                        #
-                       # The budget this buys, worst case: Enter dies at ~60-90 s
-                       # and the retry gets a fresh READY_WAIT_S, so a launch
-                       # that is going to fail twice now takes ~180 s instead of
-                       # 121 s. That is the deliberate trade - a minute longer on
-                       # the launches that were already lost, in exchange for the
-                       # ones where the set simply needed asking twice.
+                       # The budget this buys, worst case: 08-19's Enter died at
+                       # 48.3 s (gamepc enter_failed, turn 7402df) and the K15
+                       # then waited another 71 s on a task already gone. So
+                       # detection lands ~50 s in, the retry gets a fresh
+                       # READY_WAIT_S, and a launch that is going to fail twice
+                       # takes ~170 s instead of 121 s. That is the deliberate
+                       # trade - a minute longer on the launches that were
+                       # already lost, for the ones that just needed asking
+                       # twice.
 ENTER_SETTLE_S = 25    # how long a NOTREADY stays UNremarkable. Two jobs: it
                        # outlasts the gap between schtasks /Run returning (the
                        # task is only TRIGGERED) and the task actually reading
