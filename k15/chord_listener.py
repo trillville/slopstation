@@ -17,6 +17,8 @@ COUCH    = cglib.BASE / "couch.py"
 HAPTIC_GAIN     = 0     # s8 dB-ish; 0 = natural level, 120 = clamped max
 BUSY_COOLDOWN_S = 5.0   # a held chord re-validates every ~2s; don't machine-gun the busy buzz
 FAIL_CHECK_S    = 2.0   # how often to look for couch.py's last_error marker
+PARTIAL_COOLDOWN_S = 10.0  # rate limit for chord_partial - someone idly holding
+                        # the controller must not be able to flood the lane
 ERR_STALE_S     = 600   # failures older than this are history, not news
 STANDOFF_POLL_S = 0.5   # how often to ask the lock whether the Puck is spoken for
 
@@ -113,6 +115,7 @@ def main():
 
     puck, held, armed = Puck(), None, False
     last_busy = 0.0
+    last_partial = 0.0
     last_err_check = 0.0
     last_session_check = 0.0
     standoff = False
@@ -184,6 +187,21 @@ def main():
                         time.sleep(20); held, armed = None, False
             else:
                 held = None
+                # Between `armed` and a COMPLETED chord this loop used to say
+                # nothing at all, and those are the two states a diagnosis
+                # actually has to separate: a Puck nobody touched looks exactly
+                # like one that enumerates, rumbles and never reports a button
+                # (the failure main() describes above). On 2026-08-19 a chord
+                # that produced no launch and no buzz could not be told apart
+                # from a short hold without stopping this lane and running
+                # calibrate.py - from the couch, at the time, that is the whole
+                # evening. The BYTE is the answer, not the count: it says
+                # whether buttons arrive at all and whether they still land
+                # where CHORD expects them after a firmware update.
+                b = r[BTN_BYTE] if len(r) > BTN_BYTE else 0
+                if b and time.time() - last_partial >= PARTIAL_COOLDOWN_S:
+                    log("chord_partial", btn=f"{b:02x}", want=f"{CHORD:02x}")
+                    last_partial = time.time()
             if armed and time.time() - last_err_check >= FAIL_CHECK_S:
                 last_err_check = time.time()
                 signal_last_error(puck.active)

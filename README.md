@@ -28,6 +28,7 @@ drift away from them.
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
 | [custom-wakeword-design.md](docs/custom-wakeword-design.md) | Unfinished: a bespoke wake model is trained and vendored but inert. The two config values that deploy it, and the couch ladder that has to pass before it stays. |
 | [resume-game-design.md](docs/resume-game-design.md) | Unbuilt: landing back *in* a game across sessions. Two attempts, why both failed, and the one question that gates a third. |
+| [tv-power-detection-design.md](docs/tv-power-detection-design.md) | Unbuilt: knowing whether the TV actually came on. The Ex-Link probe that refuted the cheap answer, and the two leads left. |
 | [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops — launches, errors, liveness, both machines) and `langfuse-traces` (agent — what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
@@ -72,7 +73,7 @@ checkout runs without its local config/keys ever fighting `git pull`:
 | `Exit-TV.ps1` | Teardown: close Big Picture, restore OFFICE, release Puck. Task `\CouchGaming\Exit`. Stops a mid-flight Enter first (teardown wins). |
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
 | `Wake-Safety.ps1` | Cleans up sessions abandoned before sleep; stands down for network wakes. Task `\CouchGaming\WakeSafety`. |
-| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `games` / `playing` / `launch <appid>` / `version` / `nav <kind> [arg]` / `stop <appid>` / `collections`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
+| `Dispatch.ps1` | Entire SSH attack surface: `enter` / `exit` / `status` / `enterstate` / `games` / `playing` / `launch <appid>` / `version` / `nav <kind> [arg]` / `stop <appid>` / `collections`, everything else `DENIED`. Forced command in `administrators_authorized_keys`; deliberately dependency-free. |
 | `Launch-Game.ps1` | Task `\CouchGaming\LaunchGame`, fired by the `launch` verb: reads the appid marker, re-validates, `steam -applaunch` into the running Big Picture session. |
 | `Nav-BigPicture.ps1` | Task `\CouchGaming\Nav`, fired by the `nav` verb: reads the nav-target marker, re-validates, fires a `steam://` URL (downloads/library/store/game page/collection) into Big Picture. |
 | `Stop-Game.ps1` | Task `\CouchGaming\StopGame`, fired by the `stop` verb: quits the running game — `steam +app_stop`, then window-close, then a forced tree-kill only if both are ignored — and re-focuses Big Picture after. |

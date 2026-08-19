@@ -78,8 +78,18 @@ Time to READY, the number the whole system is judged on:
 
 ## Event vocabulary
 
-- **launch**: `launch_start` `wol_sent` `ssh_up` `enter_dispatched` `host_ready` `launch_failed` `session_ended` `session_idle` `exlink_send` `exlink_nak`
-- **manual**: `exlink_send` `exlink_nak` — the same two events from a hand-run
+- **launch**: `launch_start` `wol_sent` `ssh_up` `enter_dispatched` `host_ready` `launch_failed` `launch_aborted` `session_ended` `session_idle` `exlink_send` `exlink_nak` `enter_died` `enter_redispatched`
+  - `enter_died` means the PC's Enter task exited WITHOUT writing the marker —
+    the launch was lost at that moment, where before this event existed the
+    K15 just polled a dead task for the rest of its READY wait.
+    `enter_redispatched` is the rescue that follows it: another `power_on`,
+    another Enter. A turn carrying both and then `host_ready` is one the TV
+    refused to wake for on the first ask, so **`enter_died` counts the TV**,
+    not the PC — it is the closest thing to a TV-power metric that exists
+    (`docs/tv-power-detection-design.md` explains why a real one does not).
+  - `launch_aborted` is Ctrl-C in the launch console, not a failure: no
+    `last_error`, and the Puck is deliberately not buzzed.
+- **manual**: `exlink_send` `exlink_nak` `exlink_probe` — the same events from a hand-run
   `python exlink.py <cmd>`, kept off the launch lane so operator probing does
   not skew launch metrics. Drop the lane from a query to see every frame
   whoever sent it: `| json | event="exlink_send"`
@@ -109,7 +119,13 @@ Time to READY, the number the whole system is judged on:
 - **library**: `sync_done` / `sync_skipped` (both carry `layer` — installed,
   collections, owned, meta, deals), `deals_synced` `meta_fetched`
   `store_fetch_failed` `hltb_failed`
-- **listener**: `chord` `chord_busy` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
+- **listener**: `chord` `chord_busy` `chord_partial` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
+  - `chord_partial` carries the button byte actually seen (`btn`) against the
+    one the chord needs (`want`), rate-limited to one per 10 s. It is the
+    answer to "the chord did nothing and the Puck never buzzed": partials
+    present means buttons ARE arriving and the press was wrong or too short;
+    `armed` with no partials at all means the Puck enumerates and rumbles but
+    reports nothing, which is a claim/firmware problem, not a hold problem.
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **background jobs**: `job_queued` `job_running` `job_done` `job_failed`
   `job_announced` `job_orphaned` — these are on `lane="voice"`, not a lane of

@@ -9,6 +9,12 @@ stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
     failure path, which also leaves last_error for the listener;
   * the TV-asleep rescue: exactly one extra power_on inside the READY wait,
     and it never becomes an input switch;
+  * the Enter-died rescue: two idle reads (never one - that is the
+    write-then-exit race) buy one re-poke and one re-dispatch, a second death
+    fails immediately rather than waiting out the window, and a PC that cannot
+    answer `enterstate` at all falls back to exactly the old timeout;
+  * Ctrl-C is a BaseException: it still releases the lock, and deliberately
+    does NOT leave last_error for the listener to buzz;
   * watch() rides out ssh blips and dies honestly on a run of them;
   * reconcile resumes a live session and clears a dead one, TV untouched.
 
@@ -73,7 +79,10 @@ def wire(script, default=None):
             reply = default(cmd)
         else:
             raise AssertionError(f"unscripted ssh call: {cmd!r}")
-        if isinstance(reply, Exception):
+        # BaseException, not Exception: KeyboardInterrupt is the one this
+        # harness most needs to be able to express, and it is not an Exception
+        # - the narrower check quietly RETURNED it as a status string instead.
+        if isinstance(reply, BaseException):
             raise reply
         return reply
 
@@ -249,6 +258,110 @@ def main():
     assert log.find("exlink_send")[1]["again"] is True, log.records
     couch.WAKE_RETRY_S = 10                # leave no trap for the next case
     print("  wake retry: one extra power_on inside the READY wait, input alone")
+
+    # --- Enter dies mid-wait: detected, re-poked, re-dispatched ---------------
+    # The failure this exists for: on 2026-08-13, 08-16 and 08-19 the TV acked
+    # power_on, stayed dark, Enter gave up on the profile, and the K15 spent
+    # the rest of its 120 s polling a task that had already exited. Two
+    # (NOTREADY, IDLE) pairs are the evidence of death; a second power_on and a
+    # second Enter are the rescue.
+    fresh_state()
+    couch.ENTER_SETTLE_S = 0
+    couch.READY_WAIT_S = 5
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),   # twice = really dead
+        ("enter", "OK"),                                  # so run it again
+        ("status", "ab12cd"),                             # the TV woke this time
+        ("status", "NOTREADY"),                           # watch(): session ends
+    ])
+    assert couch.start(turn="ab12cd") == 0
+    ev = log.events()
+    assert "enter_died" in ev and "enter_redispatched" in ev, ev
+    assert log.find("host_ready")[0]["verified"] is True
+    assert sent[:2] == ["power_on", "power_on"], f"re-poke must precede the retry: {sent}"
+    assert log.find("exlink_send")[1]["again"] is True, log.records
+    assert "hdmi4" in sent, "a rescued launch still switches the input"
+    print("  enter died: two idle reads -> re-poke + re-dispatch -> launch rescued")
+
+    # --- the retry dies too: fail NOW, do not sit out the window --------------
+    # The bound on the whole scheme. Once the rescue Enter is also proven gone
+    # there is nothing left to wait for, and the fail buzz should reach the
+    # couch while whoever pressed the chord is still holding the controller.
+    fresh_state()
+    couch.READY_WAIT_S = 30                # long enough that only the raise ends it
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),
+        ("enter", "OK"),                                  # the one rescue
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),   # gone again
+    ])
+    t0 = time.time()
+    assert couch.start() == 1
+    assert time.time() - t0 < 5, "a proven-dead Enter must not wait out the window"
+    ev = log.events()
+    assert ev.count("enter_died") == 2, ev
+    assert ev.count("enter_redispatched") == 1, ev
+    assert "launch_failed" in ev
+    assert sent == ["power_on", "power_on"], f"input untouched on failure: {sent}"
+    assert not cglib.LOCK.exists() and "READY" in cglib.LAST_ERROR.read_text()
+    print("  retry dies too: one rescue, then an immediate honest failure")
+
+    # --- the write-then-exit race: one idle read is not death -----------------
+    # Enter writes the marker and THEN exits, so a lone (NOTREADY, IDLE) pair
+    # can be those two instants seen in the wrong order. Re-dispatching there
+    # would tear down the session that had just come up.
+    fresh_state()
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),   # looks dead...
+        ("status", "ab12cd"),                             # ...but the marker landed
+        ("status", "NOTREADY"),
+    ])
+    assert couch.start(turn="ab12cd") == 0
+    ev = log.events()
+    assert "enter_died" not in ev and "enter_redispatched" not in ev, ev
+    assert log.find("host_ready")[0]["verified"] is True
+    assert sent.count("power_on") == 1, f"no rescue was needed: {sent}"
+    print("  enter idle once: race re-read wins, no re-dispatch over a live session")
+
+    # --- a PC that predates the verb: no information is not death -------------
+    # enterstate answers DENIED on an un-deployed gaming PC, and an ssh blip
+    # raises. Both must leave the old timeout behaviour exactly as it was -
+    # reading either as "Enter is dead" would fight a healthy launch.
+    couch.READY_WAIT_S = 0.3               # back to the short window: this case
+                                           # must time out, not be rescued
+    for label, reply in (("DENIED", "DENIED"), ("blip", RuntimeError("blip"))):
+        fresh_state()
+        log, sent = wire([("enter", "OK")], default=lambda cmd, r=reply:
+                         r if cmd.startswith("enterstate") else "NOTREADY")
+        assert couch.start() == 1
+        ev = log.events()
+        assert "enter_died" not in ev and "enter_redispatched" not in ev, (label, ev)
+        assert "launch_failed" in ev, (label, ev)
+        assert sent == ["power_on"], (label, sent)
+        assert not cglib.LOCK.exists(), label
+    couch.ENTER_SETTLE_S = 10              # leave no trap for the next case
+    couch.READY_WAIT_S = 0.3
+    print("  enterstate unknown (old PC, ssh blip): no re-dispatch, timeout unchanged")
+
+    # --- Ctrl-C in the launch console is not an Exception ----------------------
+    # 2026-08-16 turn b43b74: dispatched Enter, then emitted nothing ever again
+    # - no terminal event, no fail buzz, and a lock left for staleness to
+    # recycle. KeyboardInterrupt is a BaseException, so `except Exception`
+    # never saw it. No last_error on purpose: whoever pressed the key knows.
+    fresh_state()
+    log, sent = wire([("enter", "OK"), ("status", KeyboardInterrupt())])
+    assert couch.start() == 1
+    ev = log.events()
+    assert "launch_aborted" in ev and "launch_failed" not in ev, ev
+    assert not cglib.LOCK.exists(), "an aborted launch still releases the lock"
+    assert not cglib.LAST_ERROR.exists(), "a deliberate abort must not buzz the Puck"
+    assert sent == ["power_on"], f"an abort must never switch the input: {sent}"
+    print("  ctrl-C: launch_aborted, lock released, no fail buzz, TV alone")
 
     # --- watch: blips forgiven, a run of failures dies honestly ---------------
     fresh_state()

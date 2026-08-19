@@ -1,9 +1,12 @@
 # The entire remote attack surface: forced command for the K15's SSH key
-# (administrators_authorized_keys). Ten verbs; everything else is DENIED.
+# (administrators_authorized_keys). Eleven verbs; everything else is DENIED.
 # Deliberately dependency-free - no dot-sourcing in the sshd context.
 # The ready path mirrors $CG.ReadyMarker in CouchGaming.common.ps1.
 #
-# Verbs: enter/exit/status (session), games (installed-library JSON), playing
+# Verbs: enter/exit/status (session), enterstate (whether the Enter task is
+# still running - the difference between a launch that is working and one that
+# has already lost, which status alone cannot express), games (installed-library
+# JSON), playing
 # (RunningAppID), launch <appid> (READY-gated, BUSY/ALREADY-truthful; the appid
 # travels via marker file because schtasks /Run cannot pass arguments),
 # version (the build-id Deploy.ps1 stamped - doctor.py compares it against
@@ -15,7 +18,7 @@
 # collections as {name,id} JSON, read from the cloud-storage file like games).
 # The FIVE mutating verbs (enter/exit/launch/nav/stop) also take an optional
 # ` --turn <hex>` correlation id (see Set-Turn below); the read-only polls
-# (status/version/playing/games/collections) deliberately do not.
+# (status/enterstate/version/playing/games/collections) deliberately do not.
 #
 # nav/stop run in the INTERACTIVE session (steam:// forwarding, window focus)
 # so they fire a scheduled task exactly as launch does; collections is a pure
@@ -92,6 +95,21 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
                break }
   '^status\z' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
                break }
+  # Is the Enter task still running? `status` cannot answer that: a launch
+  # that is mid-Enter and one whose Enter has already died both read NOTREADY,
+  # so the K15 used to sit out its entire READY window polling a task that had
+  # exited (three times, most recently 2026-08-19 01:18). Windows' own task
+  # state is the authority and no marker is written, so this adds no
+  # distributed state and owes no reconciler.
+  #
+  # Get-ScheduledTask, not schtasks /Query: .State is an enum, where /FO LIST
+  # prints a LOCALISED string - and a non-English install would read Running
+  # as idle, which is the direction that re-dispatches Enter on top of a
+  # healthy launch. Read-only, so no turn (see the header).
+  '^enterstate\z' {
+      $t = Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName 'Enter' -ErrorAction SilentlyContinue
+      if (-not $t) { 'NOTASK' } elseif ($t.State -eq 'Running') { 'RUNNING' } else { 'IDLE' }
+      break }
   '^version\z' {
       $bid = Join-Path $PSScriptRoot 'build-id'
       if (Test-Path $bid) { Get-Content $bid -TotalCount 1 } else { 'UNKNOWN' }

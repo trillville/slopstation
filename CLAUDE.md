@@ -75,12 +75,14 @@ devices) only run on the K15.
 ## Design notes
 
 A design doc is written for work that is NOT yet built and is deleted once it
-is — the code and its comments become the record. Two survive, and they are the
-genre: what was tried, what the measurements showed, what gates the next step.
-`docs/resume-game-design.md` (nothing built, two designs refuted, one open
-question) and `docs/custom-wakeword-design.md` (built and vendored, not
-deployed — so what is left is a deploy and a couch ladder). Each names its own
-delete condition; honour it. README § Deliberately not doing carries the
+is — the code and its comments become the record. Three survive, and they are
+the genre: what was tried, what the measurements showed, what gates the next
+step. `docs/resume-game-design.md` (nothing built, two designs refuted, one
+open question), `docs/custom-wakeword-design.md` (built and vendored, not
+deployed — so what is left is a deploy and a couch ladder), and
+`docs/tv-power-detection-design.md` (one approach refuted on the wire, two
+leads open, and a shipped mitigation that is explicitly not the fix). Each
+names its own delete condition; honour it. README § Deliberately not doing carries the
 standing "don't re-litigate this" list, and § Still genuinely open the short
 list of things that are neither shipped nor closed.
 

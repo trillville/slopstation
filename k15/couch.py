@@ -18,6 +18,29 @@ WAKE_RETRY_S   = 30    # this far into the READY wait, re-send power_on once
                        # envelope on purpose: launches reach READY in ~9-20 s, so
                        # at 10 s the frame fired on most of them and `again` gave
                        # a count of slow launches instead of stuck ones.
+ENTER_REDISPATCH = 1   # extra Enter dispatches after a DETECTED death (not a
+                       # timeout). Every launch that ever reached READY did so
+                       # in 9-20 s, while all three recorded failures burned the
+                       # full READY_WAIT_S waiting on an Enter that had already
+                       # exited - 2026-08-13 17:20, 08-16 17:56, 08-19 01:18,
+                       # every one of them a TV that acked power_on and stayed
+                       # dark. One re-dispatch is the whole rescue: the set that
+                       # refuses the first wake usually takes a later one, and
+                       # Enter's abort path leaves OFFICE topology behind, which
+                       # is exactly the clean state a fresh Enter wants.
+                       #
+                       # The budget this buys, worst case: Enter dies at ~60-90 s
+                       # and the retry gets a fresh READY_WAIT_S, so a launch
+                       # that is going to fail twice now takes ~180 s instead of
+                       # 121 s. That is the deliberate trade - a minute longer on
+                       # the launches that were already lost, in exchange for the
+                       # ones where the set simply needed asking twice.
+ENTER_SETTLE_S = 25    # how long a NOTREADY stays UNremarkable. Two jobs: it
+                       # outlasts the gap between schtasks /Run returning (the
+                       # task is only TRIGGERED) and the task actually reading
+                       # as running, and it sits past the slowest launch that
+                       # ever worked (19.8 s), so a HEALTHY launch never spends
+                       # a single extra ssh round-trip asking about Enter.
 WATCH_POLL_S   = 5
 WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
                        # dead. Deliberately low: a true sleep restores the TV in
@@ -82,6 +105,33 @@ def ssh_intent(cmd, turn=None, **kw):
     return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd, **kw)
 
 
+def enter_running():
+    """True/False if the gaming PC could tell us whether its Enter task is
+    still running; None if it could not.
+
+    Windows' own task state is the authority - deliberately NOT a marker file,
+    which would be one more piece of distributed state owing a reconciler
+    (README § Code architecture). There is nothing here to leave behind.
+
+    The None is the load-bearing part. A PC deployed before the `enterstate`
+    verb existed answers DENIED, and an ssh blip raises; both mean "no
+    information", which must never read as "Enter is dead" - a launch that
+    re-dispatched on a blip would fight a healthy Enter. Only an explicit
+    False moves anything, and the fallback for everything else is the
+    READY_WAIT_S timeout that has always been here."""
+    try:
+        ans = ssh("enterstate")
+    except Exception:
+        return None
+    if ans == "RUNNING":
+        return True
+    # NOTASK is unreachable in practice (dispatch_enter would never have got
+    # its OK) but it is still definitely-not-running, so say so.
+    if ans in ("IDLE", "NOTASK"):
+        return False
+    return None
+
+
 def wait_port(timeout=PORT_WAIT_S):
     end = time.time() + timeout
     while time.time() < end:
@@ -123,18 +173,34 @@ def start(appid=None, turn=None):
         wol()
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
-        for _ in range(ENTER_ATTEMPTS):
-            cglib.touch_lock()
-            try:
-                if ssh_intent("enter") == "OK":
-                    log("enter_dispatched", dur_ms=ms()); break
-            except Exception as e:
-                log.warn("enter_retry", err=str(e))
-            time.sleep(1)
-        else: raise RuntimeError("could not trigger Enter task")
+
+        def dispatch_enter(event, attempts=ENTER_ATTEMPTS):
+            """Trigger the Enter task; True once Dispatch answered OK. Called
+            again on the re-dispatch path, which is why it is a function.
+
+            `attempts` is per-call because the two callers want opposite
+            things: the first dispatch spends ENTER_ATTEMPTS partly to wait out
+            logon after a cold boot, while a re-dispatch already knows the PC
+            is up and answering - burning a minute there would spend the whole
+            READY window on retries of a call that is not the problem."""
+            for _ in range(attempts):
+                cglib.touch_lock()
+                try:
+                    if ssh_intent("enter") == "OK":
+                        log(event, dur_ms=ms()); return True
+                except Exception as e:
+                    log.warn("enter_retry", err=str(e))
+                time.sleep(1)
+            return False
+
+        if not dispatch_enter("enter_dispatched"):
+            raise RuntimeError("could not trigger Enter task")
         end = time.time() + READY_WAIT_S
         ready = False
         foreign_seen = None
+        redispatches = ENTER_REDISPATCH
+        idle_seen = 0
+        settle_at = time.time() + ENTER_SETTLE_S
         repoke_at = time.time() + WAKE_RETRY_S
         while time.time() < end:
             cglib.touch_lock()
@@ -146,8 +212,13 @@ def start(appid=None, turn=None):
             # the frame after Enter's first profile check has failed and before
             # its retry apply, which is the only window where a set that wakes
             # now still rescues this launch: Enter runs to ~66 s (20 s check,
-            # then an OFFICE restore and a retry at up to 20 s each), and once
-            # it dies nothing re-runs it, so a later wake buys nothing.
+            # then an OFFICE restore and a retry at up to 20 s each).
+            #
+            # It used to be true that "once it dies nothing re-runs it, so a
+            # later wake buys nothing" - that is what ENTER_REDISPATCH below
+            # changed, and it is why this frame is no longer the only rescue.
+            # The blind poke stays because it is free and it is the ONLY thing
+            # that can help a set which wakes while Enter is still running.
             #
             # Safe to repeat: EXLINK_FRAMES holds DISCRETE power_on/power_off
             # values, so this is a no-op on a set already on - mute is the only
@@ -189,6 +260,46 @@ def start(appid=None, turn=None):
                         ready = True; break
             except Exception as e:
                 log.warn("status_poll_failed", err=str(e))
+                time.sleep(1); continue
+            # Still NOTREADY. An Enter that is no longer running will never
+            # write the marker, so the rest of the READY window is dead time -
+            # 121 s of it on each of the three recorded failures, every second
+            # of which someone spent on the couch watching a dark TV. Re-poke
+            # and re-dispatch instead: the TV gets another chance to wake, and
+            # Enter gets another chance to see it.
+            if (st == "NOTREADY" and time.time() >= settle_at
+                    and enter_running() is False):
+                # Enter writes the marker and THEN exits, so a single
+                # (NOTREADY, task-idle) pair can be those two instants read in
+                # the wrong order. Demand it twice: the next poll re-reads
+                # status, so a marker that landed in between is picked up by
+                # the normal path above and this never fires on a launch that
+                # had just succeeded - re-dispatching onto a live session
+                # would tear down the very thing we were waiting for.
+                idle_seen += 1
+                if idle_seen >= 2:
+                    log.warn("enter_died", dur_ms=ms())
+                    # Out of retries: say so NOW. Sitting out the rest of the
+                    # window on a task we have just proved is gone is exactly
+                    # the dead time this whole change exists to delete - and
+                    # the fail buzz should reach the couch while whoever
+                    # pressed the chord is still holding the controller.
+                    if not redispatches:
+                        raise RuntimeError("Enter exited without READY")
+                    exlink("power_on", again=True)
+                    if not dispatch_enter("enter_redispatched", attempts=5):
+                        raise RuntimeError("Enter died and could not be re-triggered")
+                    redispatches -= 1
+                    idle_seen = 0
+                    settle_at = time.time() + ENTER_SETTLE_S
+                    # The retry gets a full window of its own. Without this it
+                    # would inherit whatever seconds the first Enter had not
+                    # already spent, which on the failures this targets is
+                    # nowhere near enough to finish - a rescue that cannot
+                    # reach READY is just a slower way to fail.
+                    end = time.time() + READY_WAIT_S
+            else:
+                idle_seen = 0
             time.sleep(1)
         if not ready: raise RuntimeError("host never reported READY")
         cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
@@ -219,6 +330,19 @@ def start(appid=None, turn=None):
             cglib.LAST_ERROR.write_text(str(e))
         except OSError:
             pass
+        cglib.release_lock(); return 1
+    except BaseException as e:
+        # Ctrl-C in the launch console is a KeyboardInterrupt, which is NOT an
+        # Exception - so the handler above never saw it and this lane had one
+        # silent death: 2026-08-16 turn b43b74 dispatched Enter and then
+        # emitted nothing at all. No terminal event, no fail buzz, and a lock
+        # released only later by staleness recycling. The cost was a launch
+        # that looked, in Grafana, like it was still running forever.
+        #
+        # Deliberately no LAST_ERROR: whoever pressed Ctrl-C already knows,
+        # and buzzing the Puck three times to tell them would be noise. The
+        # lock still has to go, which is the whole reason this clause exists.
+        log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms())
         cglib.release_lock(); return 1
     return 0
 

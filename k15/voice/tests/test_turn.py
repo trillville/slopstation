@@ -61,11 +61,11 @@ def main():
     print(f"  validate: rejected all {len(HOSTILE)} hostile strings")
 
     # -- Dispatch.ps1 is the real boundary -------------------------------------
-    # 12 PATTERNS across 10 verbs: nav alone is three (a front-page/library
+    # 13 PATTERNS across 11 verbs: nav alone is three (a front-page/library
     # form, a game-page form with an appid, and a collection form), which is
     # why this counts patterns, not verbs.
     allpats = dispatch_patterns()
-    assert len(allpats) == 12, f"expected 12 patterns, got {len(allpats)}: {allpats}"
+    assert len(allpats) == 13, f"expected 13 patterns, got {len(allpats)}: {allpats}"
     for p in allpats:
         # \z, not $: in .NET '$' also matches before a trailing newline, and
         # this file is the whole remote attack surface - read-only verbs too.
