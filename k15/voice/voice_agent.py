@@ -316,13 +316,20 @@ def main():
     # blind. First use on a machine needs the one-time WS pairing:
     # `.venv\Scripts\python tv_remote.py pair`, accept on the TV.
     duck_steps = int(voice.get("duckSteps", 0) or 0)
+    duck_to_pct = int(voice.get("duckToPct", 0) or 0)
+    if duck_to_pct and not 0 < duck_to_pct < 100:
+        log.warn("config_suspect", setting="duckToPct", value=duck_to_pct,
+                 reason="duckToPct means duck TO that percent of the pre-duck "
+                        "level, so only 1-99 makes sense - ignoring it")
+        duck_to_pct = 0
     tv_ip = cfg.get("tvIp")
-    if duck_steps and not tv_ip:
+    if (duck_steps or duck_to_pct) and not tv_ip:
         log.warn("config_suspect", setting="duckSteps", value=duck_steps,
-                 reason="duckSteps is set but tvIp is not - ducking stays off "
+                 reason="ducking is configured but tvIp is not - it stays off "
                         "(gate, keys and readback all need the TV's address)")
-    ducker = (TvDucker(duck_steps, tv_ip, log, dry_run=args.dry_run)
-              if duck_steps and tv_ip else None)
+    ducker = (TvDucker(duck_steps, tv_ip, log, dry_run=args.dry_run,
+                       to_pct=duck_to_pct or None)
+              if (duck_steps or duck_to_pct) and tv_ip else None)
     duck_lock = threading.Lock()
 
     def duck(restore):

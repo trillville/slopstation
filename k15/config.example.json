@@ -29,6 +29,8 @@
     "wakeVerifierThreshold": 0.1,
     "_duckSteps":"SOUNDBAR volume points dropped for the length of a session and restored on close (TvDucker). 0 = off, and it needs tvIp plus the one-time WS pairing (.venv\\Scripts\\python tv_remote.py pair). The duck fires only when the set reports itself ON (2026-08-16: blind bursts at a standby set) and moves volume via remote-key relay verified against the TV's readback - NOT Ex-Link or UPnP SetVolume, which eARC audio refuses with an ack and an on-screen 'Not Available' (2026-08-21). Ducking cannot help the wake word - nothing knows to duck until it has already fired - but it hands the STT a quiet room for every command after it, which is the half that measurably fails: a talker on the couch reaches the mic 10-20 dB below TV dialogue. 10 is a starting point, not a measurement - tune it against how loud you actually watch.",
     "duckSteps": 10,
+    "_duckToPct": "Alternative depth knob, wins over duckSteps when both are set. 0 = off; 1-99 = duck TO this percent of the pre-duck level (50 halves it, 25 is a deep duck), so the drop scales with how loud you are actually watching instead of being a flat count. Only possible because the readback exists - a blind channel cannot take a fraction of a level it cannot read.",
+    "duckToPct": 0,
     "earconGain": 1.0,
     "holdWindowS": 10,
     "followupCarryS": 60,

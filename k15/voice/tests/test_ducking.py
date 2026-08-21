@@ -141,6 +141,23 @@ def main():
     dk.unduck()                                       # one close pays it all off
     assert room.vol == 14 and dk.out == 0, (room.vol, dk.out)
 
+    # --- percentage mode: the drop scales with the pre-duck level ------------
+    dk, room, log = ducker(steps=0, room=FakeRoom(vol=20), to_pct=50)
+    dk.duck()
+    assert room.vol == 10 and dk.out == 10
+    d0 = log.find("tv_ducked")[0]
+    assert d0["asked"] == 10 and d0["ok"] is True, d0
+    dk.unduck()
+    assert room.vol == 20 and dk.out == 0
+
+    dk, room, log = ducker(steps=0, room=FakeRoom(vol=8), to_pct=50)
+    dk.duck()                                         # same knob, quieter room
+    assert room.vol == 4 and log.find("tv_ducked")[0]["asked"] == 4
+
+    dk, room, log = ducker(steps=3, room=FakeRoom(vol=20), to_pct=50)
+    dk.duck()                                         # pct wins over steps
+    assert room.vol == 10, room.vol
+
     # --- dry run: books balance, nothing is pressed --------------------------
     dk, room, log = ducker(dry_run=True)
     dk.duck()
@@ -152,7 +169,8 @@ def main():
     time.sleep = real_sleep
     print("OK - ducking: on-gate (standby/unknown/no-readback skip), verified "
           "ledger, clamp honesty, key-loss top-up, dead-relay zero-debt, "
-          "user-takeover stand-down, deficit debt + exact self-heal, dry run")
+          "user-takeover stand-down, deficit debt + exact self-heal, "
+          "percentage mode (scales, wins over steps), dry run")
 
 
 if __name__ == "__main__":

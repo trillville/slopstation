@@ -398,9 +398,15 @@ class TvDucker:
     POLLS = 6             # readback polls per settle, POLL_GAP_S apart
     POLL_GAP_S = 0.4
 
-    def __init__(self, steps, tv_ip, log, dry_run=False,
+    def __init__(self, steps, tv_ip, log, dry_run=False, to_pct=None,
                  probe=None, read=None, press=None, pause=time.sleep):
+        # to_pct (1-99) wins over steps: duck TO that percent of the
+        # pre-duck level, so the drop scales with how loud the room
+        # actually is. Only expressible at all because the readback exists
+        # - a blind channel cannot take a fraction of a level it cannot
+        # read, which is why the Ex-Link design never had this knob.
         self.steps = int(steps)
+        self.to_pct = int(to_pct) if to_pct else None
         self.log = log
         self.dry_run = dry_run
         self.probe = probe or (lambda: cglib.tv_power_state(tv_ip))
@@ -461,7 +467,12 @@ class TvDucker:
             self.log("tv_duck_skipped", state="on", reason="no_readback",
                      debt=self.out)
             return
-        target = max(0, v0 - self.steps)
+        if self.to_pct:
+            target = min(v0, round(v0 * self.to_pct / 100))
+            asked = v0 - target        # scales with v0; never clamps below 0
+        else:
+            target = max(0, v0 - self.steps)
+            asked = self.steps         # flat; the 0-clamp shows as landed<asked
         if self.dry_run:
             self.log("dry_run_would", action=f"duck vol {v0}->{target}")
             self.out += v0 - target
@@ -471,7 +482,7 @@ class TvDucker:
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
-        self.log("tv_ducked", steps=landed, asked=self.steps, vol=final,
+        self.log("tv_ducked", steps=landed, asked=asked, vol=final,
                  ok=final == target)
 
     def unduck(self):
