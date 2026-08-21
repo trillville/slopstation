@@ -10,6 +10,9 @@ Stdlib only, so it runs from any checkout without a venv.
 CREDENTIALS - the SAME pair the voice agent exports with; no extra token:
     k15/secrets.json  ->  "langfusePublicKey", "langfuseSecretKey"
     or env            ->  LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+On a worktree (<repo>/.claude/worktrees/<name>) the gitignored secrets and
+config files do not exist locally; the enclosing checkout's are read
+automatically.
 
 NOTE ON THE API: Langfuse has no /traces list endpoint. Traces are read
 through /api/public/v2/observations with isRootObservation=true - which is
@@ -33,25 +36,42 @@ DEFAULT_HOST = "https://us.cloud.langfuse.com"
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
 
+def repo_roots():
+    """This checkout first; then, when it is a worktree under
+    <repo>/.claude/worktrees/<name>, the enclosing checkout - gitignored
+    files (secrets.json, config.json) exist only where a human put them,
+    which is the main checkout, not the worktree an agent session happens
+    to run in."""
+    roots = [REPO]
+    if REPO.parent.name == "worktrees" and REPO.parent.parent.name == ".claude":
+        roots.append(REPO.parent.parent.parent)
+    return roots
+
+
 def credentials():
     pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
     sk = os.environ.get("LANGFUSE_SECRET_KEY")
     host = os.environ.get("LANGFUSE_HOST")
-    try:
-        s = json.loads((REPO / "k15" / "secrets.json").read_text(encoding="utf-8-sig"))
+    for root in repo_roots():
+        try:
+            s = json.loads((root / "k15" / "secrets.json").read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
         pk = pk or s.get("langfusePublicKey")
         sk = sk or s.get("langfuseSecretKey")
-    except (OSError, ValueError):
-        pass
+        break
     if not host:
-        try:
-            cfg = json.loads((REPO / "k15" / "config.json").read_text(encoding="utf-8"))
+        for root in repo_roots():
+            try:
+                cfg = json.loads((root / "k15" / "config.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
             host = cfg.get("voice", {}).get("langfuseHost")
-        except (OSError, ValueError):
-            pass
+            break
     if not pk or not sk or "..." in str(sk):
         sys.exit(
-            "No Langfuse keys.\n"
+            "No Langfuse keys (worktrees fall back to the enclosing\n"
+            "checkout's k15/secrets.json - NEITHER had them).\n"
             "  Add to k15/secrets.json:  \"langfusePublicKey\": \"pk-lf-...\",\n"
             "                            \"langfuseSecretKey\": \"sk-lf-...\"\n"
             "  Same pair the voice agent uses - Langfuse project settings > API keys.")

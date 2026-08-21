@@ -18,6 +18,12 @@ When a query returns nothing and you suspect the pipeline rather than the
 query, [troubleshooting.md](../../../docs/troubleshooting.md) § *Telemetry
 stopped arriving* is the runbook.
 
+Credentials come from `k15/secrets.json` (gitignored). **Worktrees have no
+copy of it**; the script falls back to the enclosing checkout's
+`k15/secrets.json` automatically, so run it from wherever you are — a
+credentials error means neither checkout has them (env
+`GC_LOKI_USER`/`GC_LOKI_READ_TOKEN` also works).
+
 ## The data model — read this before writing a query
 
 Four **labels**. Selecting on these is cheap and they are the only things

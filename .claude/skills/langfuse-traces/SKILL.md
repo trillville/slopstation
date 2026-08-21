@@ -14,6 +14,12 @@ python .claude/skills/langfuse-traces/query.py conversations --since 24h
 python .claude/skills/langfuse-traces/query.py trace <traceId> --io
 ```
 
+Credentials come from `k15/secrets.json` and the host from `k15/config.json`
+(both gitignored). **Worktrees have no copy of either**; the script falls
+back to the enclosing checkout's files automatically, so run it from
+wherever you are — a key error means neither checkout has them (env
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` also works).
+
 ## The shape of a trace
 
 **One trace = one whole conversation**, not one turn. This is Pipecat's model

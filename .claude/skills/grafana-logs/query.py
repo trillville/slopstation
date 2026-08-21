@@ -14,6 +14,9 @@ Stdlib only, so it runs from any checkout without a venv.
 CREDENTIALS (read-only; the shipper's write token cannot query):
     k15/secrets.json   ->  "grafanaLokiUser", "grafanaReadToken"
     or env             ->  GC_LOKI_USER, GC_LOKI_READ_TOKEN
+On a worktree (<repo>/.claude/worktrees/<name>) the gitignored secrets file
+does not exist locally; the enclosing checkout's k15/secrets.json is read
+automatically.
 """
 import argparse
 import base64
@@ -29,6 +32,17 @@ import urllib.request
 DEFAULT_URL = "https://logs-prod-021.grafana.net"
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
+
+def repo_roots():
+    """This checkout first; then, when it is a worktree under
+    <repo>/.claude/worktrees/<name>, the enclosing checkout - gitignored
+    files (secrets.json) exist only where a human put them, which is the
+    main checkout, not the worktree an agent session happens to run in."""
+    roots = [REPO]
+    if REPO.parent.name == "worktrees" and REPO.parent.parent.name == ".claude":
+        roots.append(REPO.parent.parent.parent)
+    return roots
+
 # Rendered first, in this order - the rest of a line's fields follow as k=v.
 LEAD = ("event", "turn", "session", "dur_ms", "err")
 
@@ -38,16 +52,19 @@ def credentials():
     user = os.environ.get("GC_LOKI_USER")
     token = os.environ.get("GC_LOKI_READ_TOKEN")
     url = os.environ.get("GC_LOKI_URL", DEFAULT_URL)
-    try:
-        s = json.loads((REPO / "k15" / "secrets.json").read_text(encoding="utf-8-sig"))
+    for root in repo_roots():
+        try:
+            s = json.loads((root / "k15" / "secrets.json").read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
         user = user or s.get("grafanaLokiUser")
         token = token or s.get("grafanaReadToken")
         url = s.get("grafanaLokiUrl") or url
-    except (OSError, ValueError):
-        pass
+        break
     if not user or not token or "..." in str(token):
         sys.exit(
-            "No Loki read credentials.\n"
+            "No Loki read credentials (worktrees fall back to the enclosing\n"
+            "checkout's k15/secrets.json - NEITHER had them).\n"
             "  Add to k15/secrets.json:  \"grafanaLokiUser\": \"1730320\",\n"
             "                            \"grafanaReadToken\": \"glc_...\"\n"
             "  The token needs logs:READ - the shipper's write token will 401 with\n"
