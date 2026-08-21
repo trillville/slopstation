@@ -439,3 +439,25 @@ def exlink_send_hex(frame_hex, port):
 def exlink_send(name, port):
     """Send a named frame from EXLINK_FRAMES."""
     return exlink_send_hex(EXLINK_FRAMES[name], port)
+
+
+def tv_power_state(ip, timeout=2.0):
+    """Ask the S90C itself whether it is on: GET /api/v2/ on port 8001
+    answers .device.PowerState = "on" | "standby" - unauthenticated, ~30 ms,
+    and it answers from standby. Measured end to end 2026-08-19;
+    docs/tv-power-detection-design.md has the full numbers, including the
+    ~5 s lag between an accepted power_on and the state flipping to "on",
+    so poll rather than read once when watching a transition.
+
+    None means UNKNOWN - unreachable, IP drifted, unparseable - never
+    "off": the endpoint rides Wi-Fi, and Samsung's worksheet says deeper
+    standby depths can drop IP entirely. Callers pick their own safe side;
+    the voice lane's ducker treats anything but "on" as do-not-touch."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://{ip}:8001/api/v2/",
+                                    timeout=timeout) as r:
+            state = json.load(r).get("device", {}).get("PowerState")
+    except Exception:
+        return None
+    return state if state in ("on", "standby") else None

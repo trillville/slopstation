@@ -319,7 +319,12 @@ class Dispatch:
         The asymmetry it accepts: from a TV already quieter than `steps`,
         vol_down clamps at 0 and the matching vol_up lands on `steps` - louder
         than it started, by at most that many. Only reachable from a
-        near-silent TV, which is the case that had nothing worth ducking."""
+        near-silent TV, which is the case that had nothing worth ducking.
+
+        These two are the raw sends; TvDucker below owns WHEN they fire and
+        how many actually landed. The voice agent drives them only through
+        it, one step at a time - see its docstring for the 2026-08-16
+        incident that forced that."""
         return self._vol_steps("vol_down", steps)
 
     def unduck(self, steps):
@@ -373,3 +378,83 @@ class Dispatch:
             return _fail(f"that input isn't configured correctly - config maps "
                          f"'{spoken_name}' to unknown command '{cmd}'")
         return self._exlink(f"input {cmd}", frame_hex)
+
+
+class TvDucker:
+    """The duck ledger and its gate - the state Dispatch.duck deliberately
+    does not own. One per agent process (the ledger spans sessions), every
+    call made from the wake loop's duck() thread under its lock; everything
+    here is synchronous.
+
+    Shaped by 2026-08-16, the first morning duckSteps was live (three voice
+    sessions, 10:56-10:59). Every burst that morning fired at a TV that was
+    never on: ducks into a standby set ahead of a cold voice launch, unducks
+    into the middle of a wake the set was refusing (the known standby
+    refusal - not caused here, but sprayed with ~50 volume frames while it
+    was happening). At 10:59:26 the receiver went silent - the only
+    "answered nothing" on record - the unduck aborted on its first frame
+    with 10 steps out, and the room stayed 10 quiet until a human sent 10
+    vol_up by hand at 11:39. Two lessons, one mechanism each:
+
+    - THE GATE: a set that is not on has no dialogue to duck, so frames at
+      it are pure risk. duck() asks the TV first (cglib.tv_power_state -
+      the S90C answers from standby) and anything but "on", unknown
+      included, means skip. Skipping is always safe: the whole cost is one
+      session of loud TV.
+    - THE LEDGER: count the steps that actually LANDED and restore exactly
+      those, so an abort mid-burst restores what went out, not what was
+      asked. A restore step that fails is retried a few times (TRIES) and
+      then the run STOPS - a wedged receiver gets a handful of frames, not
+      another storm - with the balance kept as debt that the next session's
+      close restores. The room self-heals instead of waiting for a human
+      with a remote.
+
+    The ledger dies with the process; that gap (restart between duck and
+    unduck) is documented at the caller and unchanged."""
+
+    TRIES = 3            # attempts per restore step, then the run stops
+    RETRY_GAP_S = 1.0
+
+    def __init__(self, dispatch, steps, tv_ip, probe=None, pause=time.sleep):
+        self.d = dispatch
+        self.log = dispatch.log
+        self.steps = int(steps)
+        self.probe = probe or (lambda: cglib.tv_power_state(tv_ip))
+        self.pause = pause
+        self.out = 0                    # vol_down steps not yet restored
+
+    def duck(self):
+        state = self.probe()
+        if state != "on":
+            self.log("tv_duck_skipped", state=state or "unknown",
+                     debt=self.out)
+            return
+        landed = 0
+        for _ in range(self.steps):
+            if not self.d.duck(1).ok:
+                break                   # the TV stopped answering: stop asking
+            landed += 1
+        self.out += landed
+        self.log("tv_ducked", steps=landed, asked=self.steps,
+                 ok=landed == self.steps)
+
+    def unduck(self):
+        """Restore everything on the ledger - this session's duck plus any
+        debt an earlier failed restore left behind. Quiet when the ledger is
+        empty (a skipped duck owes nothing)."""
+        if not self.out:
+            return
+        want = self.out
+        while self.out:
+            for attempt in range(self.TRIES):
+                if self.d.unduck(1).ok:
+                    self.out -= 1
+                    break
+                if attempt + 1 < self.TRIES:
+                    self.pause(self.RETRY_GAP_S)
+            else:
+                break                   # step exhausted its tries: keep debt
+        self.log("tv_unducked", steps=want - self.out, asked=want,
+                 ok=self.out == 0)
+        if self.out:
+            self.log.warn("tv_duck_deficit", steps=self.out)

@@ -43,7 +43,7 @@ import library                                  # noqa: E402
 import tracing                                  # noqa: E402
 from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
                    play_pcm, rebuild_audio)
-from dispatch import Dispatch                   # noqa: E402
+from dispatch import Dispatch, TvDucker         # noqa: E402
 from grammar_gate import GrammarMatcher         # noqa: E402
 from preroll import WakeAck                     # noqa: E402  (pipecat
 # frames are already loaded via grammar_gate, so this adds no startup cost)
@@ -306,35 +306,50 @@ def main():
             time.sleep(1.0)
 
     # TV ducking for the length of a session (Dispatch.duck has the why and
-    # the one asymmetry it accepts). OFF unless duckSteps is configured: this
-    # moves something in the room, so it does not arrive switched on with a
-    # git pull. Its own Dispatch because the per-session one does not exist
-    # yet at wake time - Dispatch owns no resources, so a second is free.
+    # the one asymmetry it accepts; TvDucker has the 2026-08-16 stranding
+    # that forced the on-gate and the ledger). OFF unless duckSteps is
+    # configured: this moves something in the room, so it does not arrive
+    # switched on with a git pull. It also needs tvIp - the duck fires only
+    # when the set says it is on, and with no address to ask it stays off
+    # rather than firing blind. Its own Dispatch because the per-session one
+    # does not exist yet at wake time - Dispatch owns no resources, so a
+    # second is free.
     duck_steps = int(voice.get("duckSteps", 0) or 0)
-    ducker = Dispatch(cfg, log, dry_run=args.dry_run) if duck_steps else None
+    tv_ip = cfg.get("tvIp")
+    if duck_steps and not tv_ip:
+        log.warn("config_suspect", setting="duckSteps", value=duck_steps,
+                 reason="duckSteps is set but tvIp is not - ducking stays off "
+                        "(the on-check needs the TV's address)")
+    ducker = (TvDucker(Dispatch(cfg, log, dry_run=args.dry_run),
+                       duck_steps, tv_ip)
+              if duck_steps and tv_ip else None)
     duck_lock = threading.Lock()
 
     def duck(restore):
-        """Fire duck/unduck without making the session wait for the serial.
+        """Fire duck/unduck without making the session wait for the serial
+        (or for the TV's power-state answer).
 
         Threaded because the steps cost duck_steps * ~60 ms of Ex-Link and the
         session build is what the user is actually waiting on. The LOCK is
         what makes it correct rather than the thread: a session that ends
         quickly would otherwise start the unduck while the duck is still
         stepping, and the two would interleave into an arbitrary final volume.
+        It also serializes the LEDGER - TvDucker is only ever touched under
+        this lock.
 
-        A hard process death between the two leaves the TV quiet - the
-        supervisor's restart cannot know to undo it. Every ordinary ending,
-        crash included, restores it from the session's finally."""
+        A hard process death between the two leaves the TV quiet - the ledger
+        dies with the process and the supervisor's restart cannot know to
+        undo it. Every ordinary ending, crash included, restores it from the
+        session's finally, and a restore that fails THERE stays on the ledger
+        as debt for the next session's close (tv_duck_deficit is the trace it
+        leaves)."""
         if ducker is None:
             return
 
         def run():
             with duck_lock:
                 try:
-                    r = (ducker.unduck if restore else ducker.duck)(duck_steps)
-                    log("tv_unducked" if restore else "tv_ducked",
-                        steps=duck_steps, ok=r.ok)
+                    (ducker.unduck if restore else ducker.duck)()
                 except Exception as e:
                     log.warn("tv_duck_failed", restore=restore, err=str(e))
 

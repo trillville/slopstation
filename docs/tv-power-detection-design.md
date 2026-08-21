@@ -1,8 +1,10 @@
 # TV power detection
 
-**Status:** nothing built, but the question is ANSWERED — the set reports its
-own power state over the network, measured end to end on 2026-08-19. What is
-left is wiring it into `couch.py`, not finding it.
+**Status:** the question is ANSWERED — the set reports its own power state
+over the network, measured end to end on 2026-08-19. First consumer landed
+2026-08-21: `cglib.tv_power_state` wraps the read and the voice lane's duck
+gates on it (`TvDucker` in `dispatch.py`, after the 08-16 stranding). What is
+left is wiring it into `couch.py`'s launch path, not finding it.
 
 **Delete this doc when** that wiring lands (the mechanism and its residue move
 into `couch.py` alongside `exlink()`).
