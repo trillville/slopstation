@@ -15,8 +15,11 @@ The S90C runs an unauthenticated HTTP endpoint that reports its own power
 state, **and it answers from standby**:
 
 ```
-GET http://<tv>:8001/api/v2/   ->   .device.PowerState  ==  "on" | "standby"
+GET http://<tv>:8001/api/v2/   ->   .device.PowerState  ==  "on" | "standby" | ""
 ```
+
+(`""` — the empty string — is a third, deeper state; see the standby-depth
+note below.)
 
 Measured on this rig, TV at `192.168.68.51`, MAC `68:FC:CA:B4:02:22`,
 `QN77S90CAFXZA`, `networkType: wireless`:
@@ -41,12 +44,19 @@ whole launch path has been guessing at. Notes for whoever wires it up:
   by MAC, before anything depends on the IP.
 - **It is on Wi-Fi.** Fine for reading state; a wired drop would matter if the
   WoL wake channel below is ever built.
-- **Unknown, and the thing to watch:** whether the IP server stays up in
-  *every* standby depth. Samsung's own worksheet says the TV goes offline to IP
-  about a minute after power-off and needs WoL after that — this set plainly
-  does not, but if a deeper standby exists, that is where the refusals live.
-  Which makes the endpoint a possible **predictor** and not merely a detector:
-  log the state at `launch_start` and see whether unreachable-then predicts
+- **Standby depth, partially measured 2026-08-21:** after hours off, the IP
+  server STAYS UP (3 ms answers, full device blob) but `PowerState` drains to
+  the **empty string** — distinct from the `"standby"` a recently-used set
+  reports, and turning the set on brings back a clean `"on"`. So the depth
+  ladder is directly observable — `"on"` / `"standby"` (shallow) /
+  `""` (deep) — and `cglib.tv_power_state` maps `""` to None (unknown), which
+  every current caller treats as not-on. Samsung's own worksheet says the TV
+  goes offline to IP about a minute after power-off and needs WoL after that;
+  this set does not go offline, it degrades. Whether a still-deeper,
+  IP-silent state exists is the remaining unknown — and the refusals
+  presumably live in the deep rungs. Which makes the endpoint a possible
+  **predictor** and not merely a detector, now sharper than first written:
+  log the RAW value at `launch_start` and see whether `""`-then predicts
   refused-wake. That correlation is the next measurement, and it is free.
 
 ## The problem

@@ -451,8 +451,11 @@ def tv_power_state(ip, timeout=2.0):
 
     None means UNKNOWN - unreachable, IP drifted, unparseable - never
     "off": the endpoint rides Wi-Fi, and Samsung's worksheet says deeper
-    standby depths can drop IP entirely. Callers pick their own safe side;
-    the voice lane's ducker treats anything but "on" as do-not-touch."""
+    standby depths can drop IP entirely. One shape of None is now measured
+    (2026-08-21): a set off for HOURS still answers in 3 ms but with
+    PowerState as the empty string - "standby" is only what a recently-used
+    set says. Callers pick their own safe side; the voice lane's ducker
+    treats anything but "on" as do-not-touch."""
     import urllib.request
     try:
         with urllib.request.urlopen(f"http://{ip}:8001/api/v2/",
