@@ -89,11 +89,19 @@ Time to READY, the number the whole system is judged on:
     (`docs/tv-power-detection-design.md` explains why a real one does not).
   - `launch_aborted` is Ctrl-C in the launch console, not a failure: no
     `last_error`, and the Puck is deliberately not buzzed.
-- **manual**: `exlink_send` `exlink_nak` `exlink_probe` — the same events from a hand-run
+- **manual**: `exlink_send` `exlink_nak` `exlink_probe` `tvremote_send` `tvremote_fail` — the same events from a hand-run
   `python exlink.py <cmd>`, kept off the launch lane so operator probing does
   not skew launch metrics. Drop the lane from a query to see every frame
   whoever sent it: `| json | event="exlink_send"`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat`
+  - Room ducking (TvDucker): `tv_ducked` / `tv_unducked` (both carry `steps` =
+    verified movement vs `asked`, plus `vol` and `ok`; `tv_unducked` may carry
+    `reason=user_adjusted|no_readback`), `tv_duck_skipped` (the on-gate:
+    `state=standby|unknown` or `reason=no_readback`), `tv_duck_failed` (a key
+    burst or the whole op raised), `tv_duck_deficit` (WARN: steps still owed —
+    the next session's close retries them). Substring gotcha: `tv_unducked`
+    does not contain "tv_duck", so match `tv_` or the event names, never
+    `|= "tv_duck"`.
   - `gate_match`/`gate_miss`/`stt_final` carry `confidence` (mean per-word, from
     Flux) — the axis for "was that a bad transcript or a bad phrasing?", and
     absent on turns where Flux sent no per-word data.

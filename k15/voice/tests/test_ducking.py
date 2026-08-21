@@ -1,12 +1,11 @@
-"""Blind test: TvDucker - the on-gate, the landed-steps ledger, restore
-retries, and the debt that makes a failed restore self-heal on the next
-session's close. Every scenario is the 2026-08-16 incident replayed against
-the fix. Run:
+"""Blind test: TvDucker - the on-gate, the readback-verified ledger, key-loss
+top-ups, user-takeover detection, and the debt that makes a failed restore
+self-heal on a later close. The scenarios replay both incidents (08-16 blind
+bursts, 08-21 eARC ack-then-refuse) against the fix. Run:
     .venv\\Scripts\\python tests\\test_ducking.py
 """
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,135 +14,145 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import dispatch as dp
 
-CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
-       "voice": {"volumeStep": 3, "volumeMax": 40, "inputs": {}}}
 
-DOWN = cglib.EXLINK_FRAMES["vol_down"]
-UP = cglib.EXLINK_FRAMES["vol_up"]
+class FakeRoom:
+    """The TV+bar as the ducker sees them: a power state, the volume the
+    readback reports, and keys that move it - with scriptable loss, death,
+    and a human hand on the remote."""
 
-attempts = []      # every frame written, acked or not
-sent = []          # frames the fake TV acked
-script = deque()   # per-frame behavior, consumed in order; empty = "ok"
+    def __init__(self, power="on", vol=14):
+        self.power = power
+        self.vol = vol
+        self.readback_dead = False
+        self.drop = 0                   # keys the CEC relay eats
+        self.press_error = None
+        self.presses = []               # every (direction, n) burst
+
+    def probe(self):
+        return self.power
+
+    def read(self):
+        return None if self.readback_dead else self.vol
+
+    def press(self, direction, n):
+        self.presses.append((direction, n))
+        if self.press_error:
+            raise self.press_error
+        landed = max(0, n - self.drop)
+        self.drop = max(0, self.drop - n)
+        self.vol = (max(0, self.vol - landed) if direction == "down"
+                    else min(100, self.vol + landed))
 
 
-def fake_exlink(frame, port):
-    attempts.append(frame)
-    if script and script.popleft() == "nak":
-        raise cglib.ExlinkNak(f"TV answered nothing (want 030cf1) for frame {frame}")
-    sent.append(frame)
-    return "030cf1"
-
-
-def reset():
-    attempts.clear()
-    sent.clear()
-    script.clear()
-
-
-def ducker(steps=4, probe="on"):
-    """A TvDucker over a real Dispatch and a scripted TV. `probe` is a state
-    string or a callable, so a test can flip the set mid-scenario."""
+def ducker(steps=10, room=None, **kw):
+    room = room or FakeRoom()
     log = cglib.CapturingLog("voice")
-    d = dp.Dispatch(CFG, log)
-    fn = probe if callable(probe) else (lambda: probe)
-    return dp.TvDucker(d, steps, "192.0.2.1", probe=fn,
-                       pause=lambda s: None), log
-
-
-def tv_events(log):
-    """The duck story alone - _exlink's own exlink_send/exlink_nak lines
-    interleave with it and are drilled by test_dispatch, not here."""
-    return [e for e in log.events() if e.startswith("tv_")]
+    dk = dp.TvDucker(steps, "192.0.2.1", log,
+                     probe=room.probe, read=room.read, press=room.press,
+                     pause=lambda s: None, **kw)
+    return dk, room, log
 
 
 def main():
     real_sleep = time.sleep
     time.sleep = lambda s: None                       # fast tests
-    cglib.exlink_send_hex = fake_exlink
 
     # --- the gate: a set that is not on is not touched -----------------------
-    reset()
-    dk, log = ducker(probe="standby")
+    dk, room, log = ducker(room=FakeRoom(power="standby"))
     dk.duck()
-    assert attempts == [], attempts
-    assert tv_events(log) == ["tv_duck_skipped"], log.records
+    assert room.presses == [] and log.events() == ["tv_duck_skipped"], log.records
     dk.unduck()                                       # nothing out, nothing owed
-    assert attempts == [] and tv_events(log) == ["tv_duck_skipped"]
+    assert room.presses == [] and log.events() == ["tv_duck_skipped"]
 
-    reset()
-    dk, log = ducker(probe=lambda: None)              # unreachable = unknown = skip
+    dk, room, log = ducker(room=FakeRoom(power=None))  # unreachable = unknown
     dk.duck()
-    assert attempts == [], attempts
-    assert log.find("tv_duck_skipped")[0]["state"] == "unknown", log.records
+    assert room.presses == [] and log.find("tv_duck_skipped")[0]["state"] == "unknown"
 
-    # --- the happy pair: N down, N up, ledger empty --------------------------
-    reset()
-    dk, log = ducker(steps=4)
+    # --- no readback = no duck: never move what cannot be verified -----------
+    room = FakeRoom()
+    room.readback_dead = True
+    dk, room, log = ducker(room=room)
     dk.duck()
+    assert room.presses == [] and log.find("tv_duck_skipped")[0]["reason"] == "no_readback"
+
+    # --- the happy pair: down to target, back to the exact start -------------
+    dk, room, log = ducker(steps=10)                  # vol 14
+    dk.duck()
+    assert room.vol == 4 and dk.out == 10
     d0 = log.find("tv_ducked")[0]
-    assert d0["steps"] == 4 and d0["asked"] == 4 and d0["ok"] is True, d0
+    assert d0["steps"] == 10 and d0["asked"] == 10 and d0["ok"] is True, d0
     dk.unduck()
-    assert sent == [DOWN] * 4 + [UP] * 4, sent
+    assert room.vol == 14 and dk.out == 0
     u0 = log.find("tv_unducked")[0]
-    assert u0["steps"] == 4 and u0["ok"] is True, u0
-    assert dk.out == 0
+    assert u0["steps"] == 10 and u0["ok"] is True, u0
 
-    # --- duck aborts mid-burst: restore what LANDED, not what was asked ------
-    reset()
-    dk, log = ducker(steps=4)
-    script.extend(["ok", "ok", "nak"])                # third vol_down dies
+    # --- clamp at zero: intent achieved counts as ok, delta stays honest -----
+    dk, room, log = ducker(steps=10, room=FakeRoom(vol=6))
     dk.duck()
-    assert sent == [DOWN] * 2, sent                   # and the burst stopped there
+    assert room.vol == 0 and dk.out == 6
     d0 = log.find("tv_ducked")[0]
-    assert d0["steps"] == 2 and d0["asked"] == 4 and d0["ok"] is False, d0
+    assert d0["steps"] == 6 and d0["asked"] == 10 and d0["ok"] is True, d0
     dk.unduck()
-    assert sent == [DOWN] * 2 + [UP] * 2, sent
+    assert room.vol == 6 and dk.out == 0
 
-    # --- a flaky restore step is retried and still restores fully ------------
-    reset()
-    dk, log = ducker(steps=3)
+    # --- lost keys: the readback notices, a top-up round finishes the job ----
+    room = FakeRoom()
+    room.drop = 3                                     # relay eats 3 of the burst
+    dk, room, log = ducker(steps=10, room=room)
     dk.duck()
-    script.extend(["nak", "ok"])                      # first vol_up misses once
-    dk.unduck()
-    assert sent == [DOWN] * 3 + [UP] * 3, sent
-    assert len(attempts) == 3 + 4, attempts           # the retry frame is visible
-    assert log.find("tv_unducked")[0]["ok"] is True and dk.out == 0
+    assert room.vol == 4 and dk.out == 10
+    assert room.presses == [("down", 10), ("down", 3)], room.presses
+    assert log.find("tv_ducked")[0]["ok"] is True
 
-    # --- receiver gone (the 10:59:26 shape): bounded frames, debt kept, ------
-    # --- and the NEXT session's close restores everything --------------------
-    reset()
-    dk, log = ducker(steps=4)
+    # --- relay dead: nothing verified means nothing owed - the 08-21 ---------
+    # --- ack-then-refuse shape can no longer inflate the ledger --------------
+    room = FakeRoom()
+    room.press_error = RuntimeError("ws down")
+    dk, room, log = ducker(room=room)
     dk.duck()
-    script.extend(["nak"] * dp.TvDucker.TRIES)        # every vol_up dies
+    assert room.vol == 14 and dk.out == 0
+    d0 = log.find("tv_ducked")[0]
+    assert d0["steps"] == 0 and d0["ok"] is False, d0
+    assert log.find("tv_duck_failed"), log.records    # the press failure traced
+    dk.unduck()                                       # ledger empty: no-op
+    assert [e for e in log.events() if e == "tv_unducked"] == []
+
+    # --- a human on the remote mid-session wins: detected, not stomped -------
+    dk, room, log = ducker(steps=10)
+    dk.duck()                                         # 14 -> 4
+    room.vol = 20                                     # user turned it UP mid-game
     dk.unduck()
-    assert dk.out == 4
-    assert attempts.count(UP) == dp.TvDucker.TRIES, attempts   # a handful, not a storm
+    assert room.vol == 20 and dk.out == 0             # their choice stands
     u0 = log.find("tv_unducked")[0]
-    assert u0["steps"] == 0 and u0["asked"] == 4 and u0["ok"] is False, u0
-    assert log.find("tv_duck_deficit")[0]["steps"] == 4, log.records
-    dk.duck()                                         # TV answers again next wake
-    assert dk.out == 8                                # new duck rides on the debt
-    dk.unduck()
-    assert dk.out == 0 and sent[-8:] == [UP] * 8, sent
+    assert u0["reason"] == "user_adjusted" and u0["steps"] == 0 and u0["ok"] is True, u0
 
-    # --- debt heals even when the next session's duck is skipped -------------
-    reset()
-    state = {"now": "on"}
-    dk, log = ducker(steps=2, probe=lambda: state["now"])
+    # --- debt: readback dies at close, and a LATER close restores the --------
+    # --- original level exactly ----------------------------------------------
+    dk, room, log = ducker(steps=10)
+    dk.duck()                                         # 14 -> 4, out 10
+    room.readback_dead = True
+    dk.unduck()                                       # cannot verify: keep debt
+    assert dk.out == 10
+    assert log.find("tv_unducked")[0]["reason"] == "no_readback"
+    assert log.find("tv_duck_deficit")[0]["steps"] == 10
+    room.readback_dead = False                        # TV back; next session:
+    dk.duck()                                         # 4 -> 0 (clamp), out 14
+    assert dk.out == 14
+    dk.unduck()                                       # one close pays it all off
+    assert room.vol == 14 and dk.out == 0, (room.vol, dk.out)
+
+    # --- dry run: books balance, nothing is pressed --------------------------
+    dk, room, log = ducker(dry_run=True)
     dk.duck()
-    script.extend(["nak"] * dp.TvDucker.TRIES)        # restore fails: debt 2
     dk.unduck()
-    assert dk.out == 2
-    state["now"] = "standby"                          # user shut the TV off
-    dk.duck()                                         # next wake: gate skips
-    assert log.find("tv_duck_skipped")[0]["debt"] == 2, log.records
-    dk.unduck()                                       # close still pays the debt
-    assert dk.out == 0 and sent[-2:] == [UP] * 2, sent
+    assert room.presses == [] and dk.out == 0
+    assert [e for e in log.events() if e == "dry_run_would"] and \
+        not log.find("tv_ducked"), log.records
 
     time.sleep = real_sleep
-    print("OK - ducking: on-gate (standby/unknown skip), landed-steps ledger, "
-          "abort mid-burst, restore retry, bounded wedge frames, deficit debt, "
-          "self-heal on next close (with and without a skipped duck)")
+    print("OK - ducking: on-gate (standby/unknown/no-readback skip), verified "
+          "ledger, clamp honesty, key-loss top-up, dead-relay zero-debt, "
+          "user-takeover stand-down, deficit debt + exact self-heal, dry run")
 
 
 if __name__ == "__main__":

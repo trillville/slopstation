@@ -464,3 +464,41 @@ def tv_power_state(ip, timeout=2.0):
     except Exception:
         return None
     return state if state in ("on", "standby") else None
+
+
+def tv_volume(ip, timeout=2.0):
+    """The room's CURRENT volume as the TV tracks it, via the TV's
+    pairing-free UPnP RenderingControl (port 9197, plain SOAP, ~3 ms on this
+    LAN). With sound output on the eARC soundbar this number IS the
+    soundbar's own level - the TV mirrors the CEC system-audio state -
+    verified against the bar's on-screen number on 2026-08-21.
+
+    This is deliberately the READ half only. SetVolume on the same service
+    answers UPnP 501 on this rig, and Ex-Link volume frames ack and then
+    pop "Not Available" on screen (also 2026-08-21): with eARC audio the
+    set refuses every direct volume WRITE. The write path that works is
+    remote keys relayed over CEC - voice/tv_remote.py - and this read is
+    what verifies them.
+
+    None = unknown, not zero: unreachable, or the DMR service asleep (it
+    goes down with the panel, unlike the /api/v2/ endpoint above)."""
+    import urllib.request
+    body = ('<?xml version="1.0" encoding="utf-8"?>'
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+            '<s:Body>'
+            '<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+            '<InstanceID>0</InstanceID><Channel>Master</Channel>'
+            '</u:GetVolume></s:Body></s:Envelope>').encode()
+    req = urllib.request.Request(
+        f"http://{ip}:9197/upnp/control/RenderingControl1", data=body,
+        headers={"Content-Type": 'text/xml; charset="utf-8"',
+                 "SOAPACTION": '"urn:schemas-upnp-org:service:'
+                               'RenderingControl:1#GetVolume"'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            out = r.read().decode(errors="replace")
+        start = out.index("<CurrentVolume>") + len("<CurrentVolume>")
+        return int(out[start:out.index("</CurrentVolume>")])
+    except Exception:
+        return None

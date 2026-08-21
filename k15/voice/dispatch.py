@@ -283,6 +283,13 @@ class Dispatch:
 
     # -- TV --------------------------------------------------------------------
 
+    # CAUTION, measured 2026-08-21: with sound output on the eARC soundbar,
+    # the TV ACKS every Ex-Link volume/mute frame and then refuses it with an
+    # on-screen "Not Available" - these four verbs currently move nothing the
+    # couch can hear. The write path that works is remote keys relayed over
+    # CEC (tv_remote.py; TvDucker below already uses it). Migrating these
+    # verbs is deliberately separate work: they are Tier-1 grammar surface,
+    # and this file's session ended at the duck.
     def _vol_steps(self, name, steps=None):
         step = int(self.voice["volumeStep"]) if steps is None else int(steps)
         if self.dry_run:
@@ -299,36 +306,6 @@ class Dispatch:
 
     def volume_down(self):
         return self._vol_steps("vol_down")
-
-    def duck(self, steps):
-        """Drop the TV for the length of a session; unduck puts it back.
-
-        Ducking is the one lever that attacks the actual problem - a talker on
-        the couch reaches the mic 10-20 dB BELOW dialogue from the TV, and no
-        wake model or threshold recovers a signal that far under. It cannot
-        help the wake word itself (nothing knows to duck until the wake word
-        has already fired) but it hands the STT a quiet room for every command
-        after it, which is the half that a session can still act on.
-
-        RELATIVE steps rather than vol_set, and that is forced rather than
-        chosen: Ex-Link here is send-only and the S90C's status query is a
-        canned echo (mute_toggle has the long version), so the level we would
-        have to restore cannot be read. Stepping down N and back up N needs no
-        state and survives the user working the remote in between.
-
-        The asymmetry it accepts: from a TV already quieter than `steps`,
-        vol_down clamps at 0 and the matching vol_up lands on `steps` - louder
-        than it started, by at most that many. Only reachable from a
-        near-silent TV, which is the case that had nothing worth ducking.
-
-        These two are the raw sends; TvDucker below owns WHEN they fire and
-        how many actually landed. The voice agent drives them only through
-        it, one step at a time - see its docstring for the 2026-08-16
-        incident that forced that."""
-        return self._vol_steps("vol_down", steps)
-
-    def unduck(self, steps):
-        return self._vol_steps("vol_up", steps)
 
     def volume_set(self, level):
         """Absolute set, clamped to volumeMax - a misheard number must never
@@ -381,47 +358,97 @@ class Dispatch:
 
 
 class TvDucker:
-    """The duck ledger and its gate - the state Dispatch.duck deliberately
-    does not own. One per agent process (the ledger spans sessions), every
-    call made from the wake loop's duck() thread under its lock; everything
-    here is synchronous.
+    """Drop the room's volume for the length of a voice session; put it back
+    on close. One per agent process (the ledger spans sessions), every call
+    made from the wake loop's duck() thread under its lock; synchronous.
 
-    Shaped by 2026-08-16, the first morning duckSteps was live (three voice
-    sessions, 10:56-10:59). Every burst that morning fired at a TV that was
-    never on: ducks into a standby set ahead of a cold voice launch, unducks
-    into the middle of a wake the set was refusing (the known standby
-    refusal - not caused here, but sprayed with ~50 volume frames while it
-    was happening). At 10:59:26 the receiver went silent - the only
-    "answered nothing" on record - the unduck aborted on its first frame
-    with 10 steps out, and the room stayed 10 quiet until a human sent 10
-    vol_up by hand at 11:39. Two lessons, one mechanism each:
+    Ducking is the one lever that attacks the actual problem - a talker on
+    the couch reaches the mic 10-20 dB BELOW dialogue from the TV, and no
+    model or threshold recovers a signal that far under. It cannot help the
+    wake word (nothing knows to duck until it has fired) but it hands the
+    STT a quiet room for every command after it.
 
-    - THE GATE: a set that is not on has no dialogue to duck, so frames at
-      it are pure risk. duck() asks the TV first (cglib.tv_power_state -
-      the S90C answers from standby) and anything but "on", unknown
-      included, means skip. Skipping is always safe: the whole cost is one
+    Two incidents shaped this class, one mechanism each:
+
+    - 2026-08-16, duckSteps' first morning: every Ex-Link burst fired at a
+      TV that was never on - into standby ahead of a cold launch, into the
+      middle of a wake the set was refusing - and the morning ended with the
+      only receiver silence on record and an unduck abandoned on its first
+      frame. Hence THE GATE: duck() asks the TV whether it is ON first
+      (cglib.tv_power_state answers from standby); anything else, unknown
+      included, means skip. Skipping is always safe - the whole cost is one
       session of loud TV.
-    - THE LEDGER: count the steps that actually LANDED and restore exactly
-      those, so an abort mid-burst restores what went out, not what was
-      asked. A restore step that fails is retried a few times (TRIES) and
-      then the run STOPS - a wedged receiver gets a handful of frames, not
-      another storm - with the balance kept as debt that the next session's
-      close restores. The room self-heals instead of waiting for a human
-      with a remote.
+    - 2026-08-21, the eARC discovery: with audio on the soundbar the TV
+      ACKS every direct volume write and refuses it on screen, so send-and-
+      hope is not just fragile, it can be theater. Hence THE READBACK:
+      writes are remote keys relayed over CEC (tv_remote.press - the one
+      thing the eARC path honours, benched same day), and the TV's
+      pairing-free UPnP volume (cglib.tv_volume - it mirrors the BAR's
+      level) is ground truth for what actually happened. The ledger holds
+      only VERIFIED movement, so restore restores exactly what moved, a
+      shortfall carries as debt the next session's close pays off, and a
+      human working the remote mid-session is DETECTED (the readback is not
+      where we left it) - the duck stands down rather than stomp their
+      choice.
 
     The ledger dies with the process; that gap (restart between duck and
     unduck) is documented at the caller and unchanged."""
 
-    TRIES = 3            # attempts per restore step, then the run stops
-    RETRY_GAP_S = 1.0
+    TOPUPS = 2            # extra key rounds when the readback comes up short
+    POLLS = 6             # readback polls per settle, POLL_GAP_S apart
+    POLL_GAP_S = 0.4
 
-    def __init__(self, dispatch, steps, tv_ip, probe=None, pause=time.sleep):
-        self.d = dispatch
-        self.log = dispatch.log
+    def __init__(self, steps, tv_ip, log, dry_run=False,
+                 probe=None, read=None, press=None, pause=time.sleep):
         self.steps = int(steps)
+        self.log = log
+        self.dry_run = dry_run
         self.probe = probe or (lambda: cglib.tv_power_state(tv_ip))
+        self.read = read or (lambda: cglib.tv_volume(tv_ip))
+        self.press = press or self._ws_press(tv_ip)
         self.pause = pause
-        self.out = 0                    # vol_down steps not yet restored
+        self.out = 0        # verified steps down, not yet restored
+        self.expect = None  # the readback our last op left behind
+
+    @staticmethod
+    def _ws_press(tv_ip):
+        def go(direction, n):
+            import tv_remote            # lazy: samsungtvws lives in the venv
+            tv_remote.TvRemote(tv_ip).press(direction, n)
+        return go
+
+    def _settle(self, target):
+        """Poll the readback toward target; the relay lands in ~1 s."""
+        for _ in range(self.POLLS):
+            v = self.read()
+            if v == target:
+                return v
+            self.pause(self.POLL_GAP_S)
+        return self.read()
+
+    def _drive(self, direction, now, target):
+        """Press toward target, verify by readback, top up what got lost.
+        Returns the last level actually SEEN - `now` if nothing verified,
+        which is the honest answer when keys or readback die mid-drive: a
+        press that raises still counts for nothing until the readback moves.
+        Bounded rounds, so a dead relay gets a couple of bursts, never a
+        storm (the 08-16 lesson, kept)."""
+        best = now
+        for _ in range(1 + self.TOPUPS):
+            need = abs(target - best)
+            if not need:
+                break
+            try:
+                self.press(direction, need)
+            except Exception as e:
+                self.log.warn("tv_duck_failed", stage="press", err=str(e))
+            final = self._settle(target)
+            if final is None:
+                break
+            if final == best:
+                break                   # keys verifiably bought nothing: stop
+            best = final
+        return best
 
     def duck(self):
         state = self.probe()
@@ -429,32 +456,57 @@ class TvDucker:
             self.log("tv_duck_skipped", state=state or "unknown",
                      debt=self.out)
             return
-        landed = 0
-        for _ in range(self.steps):
-            if not self.d.duck(1).ok:
-                break                   # the TV stopped answering: stop asking
-            landed += 1
+        v0 = self.read()
+        if v0 is None:
+            self.log("tv_duck_skipped", state="on", reason="no_readback",
+                     debt=self.out)
+            return
+        target = max(0, v0 - self.steps)
+        if self.dry_run:
+            self.log("dry_run_would", action=f"duck vol {v0}->{target}")
+            self.out += v0 - target
+            self.expect = target
+            return
+        final = self._drive("down", v0, target)
+        landed = max(0, v0 - final)
         self.out += landed
-        self.log("tv_ducked", steps=landed, asked=self.steps,
-                 ok=landed == self.steps)
+        self.expect = final
+        self.log("tv_ducked", steps=landed, asked=self.steps, vol=final,
+                 ok=final == target)
 
     def unduck(self):
         """Restore everything on the ledger - this session's duck plus any
-        debt an earlier failed restore left behind. Quiet when the ledger is
+        debt an earlier shortfall left behind. Quiet when the ledger is
         empty (a skipped duck owes nothing)."""
         if not self.out:
             return
         want = self.out
-        while self.out:
-            for attempt in range(self.TRIES):
-                if self.d.unduck(1).ok:
-                    self.out -= 1
-                    break
-                if attempt + 1 < self.TRIES:
-                    self.pause(self.RETRY_GAP_S)
-            else:
-                break                   # step exhausted its tries: keep debt
-        self.log("tv_unducked", steps=want - self.out, asked=want,
+        if self.dry_run:
+            self.log("dry_run_would", action=f"unduck +{want}")
+            self.out, self.expect = 0, None
+            return
+        now = self.read()
+        if now is None:
+            # TV gone (off, DMR asleep with the panel): keys would not
+            # relay anyway. Keep the debt; the next close retries.
+            self.log("tv_unducked", steps=0, asked=want, ok=False,
+                     reason="no_readback")
+            self.log.warn("tv_duck_deficit", steps=self.out)
+            return
+        if self.expect is not None and now != self.expect:
+            # A human moved the volume mid-session. They have chosen a
+            # level; adding our delta back lands ABOVE their choice. Only
+            # the readback makes this detectable - stand down, owe nothing.
+            self.log("tv_unducked", steps=0, asked=want, ok=True,
+                     reason="user_adjusted", vol=now)
+            self.out, self.expect = 0, None
+            return
+        target = min(100, now + want)
+        final = self._drive("up", now, target)
+        restored = max(0, final - now)
+        self.out = max(0, self.out - restored)
+        self.expect = final if self.out else None
+        self.log("tv_unducked", steps=restored, asked=want, vol=final,
                  ok=self.out == 0)
         if self.out:
             self.log.warn("tv_duck_deficit", steps=self.out)

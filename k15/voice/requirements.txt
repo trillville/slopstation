@@ -18,6 +18,11 @@ pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
 # annoyingly, aiounittest) as NEW transitives; aiohttp/requests were already
 # here. Add those to constraints.txt on the next K15 freeze.
 howlongtobeatpy==1.0.22
+# TV remote keys over WebSocket (tv_remote.py) - the volume write path that
+# works with eARC audio; imported LAZILY and fail-soft, so a broken install
+# costs ducking, never the lane. New transitives: websocket-client + yarl
+# (requests already here) - add to constraints.txt on the next K15 freeze.
+samsungtvws==3.0.5
 # Transitive versions are ENFORCED via constraints.txt (the supervisor
 # installs with `-c constraints.txt`) - see its header for the regeneration
 # rule. The as-built, for the record: pyaudio 0.2.14 (cp313 win_amd64 wheel
