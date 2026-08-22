@@ -204,6 +204,11 @@ def main():
     assert rec["launch_game"]["ok"] is False, "a raising impl must still record"
     assert "1145360" in rec["launch_game"]["args"]   # args carried, for search terms
     assert calls["n"] == 2, "tool_span not called per tool"
+    # ...and the raise itself is an EVENT, not a console print: tool_error,
+    # naming the tool and the error, in the same log the tool_call landed in.
+    errs = tlog.find("tool_error")
+    assert errs and errs[0]["tool"] == "launch_game" and "kaboom" in errs[0]["err"], \
+        tlog.records
     # log=None (REPL/bench/tests) stays quiet rather than crashing.
     assistant.function_schemas({"get_now_playing": boom})[0]
 

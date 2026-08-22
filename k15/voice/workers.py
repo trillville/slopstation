@@ -19,8 +19,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import cglib
+
 HERE = Path(__file__).resolve().parent
 WORKER_HOME = HERE / "worker_home"
+
+log = cglib.make_log("voice")
 
 PROMPT = (
     "Background job from the couch voice assistant. AGENTS.md in this "
@@ -50,7 +54,11 @@ def _library_context():
         import library
         rows = library.catalog_lines()
         deals = library.load_deals() or {}
-    except Exception:
+    except Exception as e:
+        # Said out loud: a job briefed without the catalog answers from the
+        # web alone, and "why did it recommend a game I own" had no log line
+        # to start from while this returned "" in silence.
+        log.warn("worker_catalog_failed", err=repr(e))
         return ""
     if not rows:
         return ""

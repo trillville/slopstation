@@ -45,6 +45,18 @@ def main():
     assert r["summary"] and r["detail"]                          # never empty
     print("  parse_reply: contract, fences, prose fallback, never empty")
 
+    # A catalog that cannot be built briefs the worker without one - and SAYS
+    # so, where it used to return "" in silence.
+    import library
+    real_lines, workers.log = library.catalog_lines, cglib.CapturingLog("voice")
+    library.catalog_lines = lambda: (_ for _ in ()).throw(RuntimeError("mid-write"))
+    try:
+        assert workers._library_context() == ""
+    finally:
+        library.catalog_lines = real_lines
+    assert workers.log.find("worker_catalog_failed"), workers.log.events()
+    print("  _library_context: a catalog failure is logged, never silent")
+
     # -- adapter argv + extract shapes (no CLI spawned) -----------------------
     cw = workers.ClaudeWorker(model="")
     cw.path = r"C:\x\claude.cmd"

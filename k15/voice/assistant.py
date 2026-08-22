@@ -619,8 +619,16 @@ def function_schemas(impls, log=None):
                 # that raises (a store shape drift, an expired-token mint
                 # failure) must never leave result_callback uncalled - that
                 # breaks the turn instead of answering. Log it and hand back a
-                # spoken error so the assistant says something.
-                print(f"  [tool-error] {name}: {e!r}")
+                # spoken error so the assistant says something. LOG, not
+                # print: this used to reach the console only, in the one
+                # function whose job is to record every tool call, so a
+                # production impl that raised reached neither couch.log nor
+                # Loki - the tool_call event below said ok=False and nothing
+                # said why.
+                if log:
+                    log.error("tool_error", tool=name, err=repr(e))
+                else:
+                    print(f"  [tool-error] {name}: {e!r}")   # REPL/bench: no logger
                 out = {"ok": False, "error": "that didn't go through - "
                        "something upstream failed"}
             # After the call, so the span carries the RESULT too. The await
