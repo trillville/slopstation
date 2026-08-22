@@ -9,7 +9,7 @@ import _bootstrap  # noqa: F401
 from _bootstrap import freeze_sleep
 
 import cglib
-import dispatch as dp
+import ducking
 
 
 class FakeRoom:
@@ -44,7 +44,7 @@ class FakeRoom:
 def ducker(steps=10, room=None, **kw):
     room = room or FakeRoom()
     log = cglib.CapturingLog("voice")
-    dk = dp.TvDucker(steps, "192.0.2.1", log,
+    dk = ducking.TvDucker(steps, "192.0.2.1", log,
                      probe=room.probe, read=room.read, press=room.press,
                      pause=lambda s: None, **kw)
     return dk, room, log

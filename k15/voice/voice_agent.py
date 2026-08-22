@@ -43,7 +43,7 @@ import library                                  # noqa: E402
 import tracing                                  # noqa: E402
 from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
                    play_pcm, rebuild_audio)
-from dispatch import TvDucker                   # noqa: E402
+from ducking import TvDucker                    # noqa: E402
 from grammar_gate import GrammarMatcher         # noqa: E402
 from preroll import WakeAck                     # noqa: E402  (pipecat
 # frames are already loaded via grammar_gate, so this adds no startup cost)
