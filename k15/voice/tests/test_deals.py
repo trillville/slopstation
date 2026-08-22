@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 import cglib
-import library
+import steamstore
 
 # appid -> (name, discount_pct, final_cents, formatted). The fake GetItems
 # echoes back whatever appids the caller asked for, from this fixture.
@@ -69,11 +69,10 @@ def fake_get(url, params=None, timeout=20):
 
 def main():
     tmp = Path(tempfile.mkdtemp())
-    library.STATE = tmp
-    library.DEALS = tmp / "deals.json"
-    library.FACET_CACHE = tmp / "facet-cache.json"
-    library.TAGMAP = tmp / "store-tags.json"
-    library._get = fake_get
+    steamstore.DEALS = tmp / "deals.json"
+    steamstore.FACET_CACHE = tmp / "facet-cache.json"
+    steamstore.TAGMAP = tmp / "store-tags.json"
+    steamstore._get = fake_get
     # Pin the secrets BEFORE anything runs: several fetchers reach for a key
     # (fetch_store_search -> _tag_map does). On a checkout that HAS a real
     # secrets.json this took the keyed path, cached a tag map, and then failed
@@ -82,51 +81,51 @@ def main():
     cglib.load_secrets = lambda: {}
 
     # --- specials: parsed, NOT_GAMES filtered, cents -> dollars --------------
-    sp = library.fetch_specials()
+    sp = steamstore.fetch_specials()
     assert [s["appid"] for s in sp] == [1, 2], sp
     assert sp[0] == {"appid": 1, "name": "Special A", "discount": 25, "final": 14.99}, sp[0]
 
     # --- _store_items: name/price/discount, missing appids simply absent -----
-    items = library.store_items([10, 11, 999])
+    items = steamstore.store_items([10, 11, 999])
     assert set(items) == {10, 11}, items
     assert items[10] == {"name": "Wish One", "final": "$5.00", "discount": 50, "price": 500}, items[10]
     # ...and CHUNKS past the 100-per-batch cap instead of truncating: id 12
     # sits at position 120, so it only prices if a second batch was fetched.
     big = [10] + list(range(900000, 900119)) + [12]
-    assert set(library.store_items(big)) == {10, 12}, "the >100 tail was dropped"
+    assert set(steamstore.store_items(big)) == {10, 12}, "the >100 tail was dropped"
 
     # --- wishlist_on_sale: only discounted, best deal first ------------------
-    ws = library.fetch_wishlist_on_sale("7656119")
+    ws = steamstore.fetch_wishlist_on_sale("7656119")
     assert [g["appid"] for g in ws] == [12, 10], ws     # 75% then 50%; 11 (0%) dropped
     assert ws[0]["discount"] == 75
 
     # --- trending: rank + name via GetItems ----------------------------------
-    tr = library.fetch_trending()
+    tr = steamstore.fetch_trending()
     assert tr[0] == {"appid": 100, "rank": 1, "name": "Trend A"}, tr[0]
     assert tr[1]["rank"] == 2
 
     # --- store search: appids from capsule attrs (deduped) -> priced ---------
-    rows = library.fetch_store_search(term="anything")
+    rows = steamstore.fetch_store_search(term="anything")
     assert [r["appid"] for r in rows] == [200, 201], rows
     # max_price clips on the AUTHORITATIVE GetItems price, not the search page
-    clipped = library.fetch_store_search(term="anything", max_price=20)
+    clipped = steamstore.fetch_store_search(term="anything", max_price=20)
     assert [r["appid"] for r in clipped] == [200], clipped   # 201 is $25 -> out
 
     # --- reviews: summary + non-empty snippets -------------------------------
-    rv = library.fetch_reviews(1)
+    rv = steamstore.fetch_reviews(1)
     assert rv["desc"] == "Very Positive" and rv["positive_pct"] == 90 and rv["total"] == 100, rv
     assert rv["snippets"] == ["great", "good"], rv          # the "" one dropped
 
     # --- news: patchnotes preferred, fallback to any -------------------------
-    assert library.fetch_news(1)[0]["title"] == "Patch 1"
+    assert steamstore.fetch_news(1)[0]["title"] == "Patch 1"
 
     # --- tag map: keyed only; fail-soft to {} without a key ------------------
     cglib.load_secrets = lambda: {}
-    assert library._tag_map() == {}
+    assert steamstore._tag_map() == {}
     cglib.load_secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
-    tmap = library._tag_map()
+    tmap = steamstore._tag_map()
     assert tmap.get("roguelike") == 1716 and tmap.get("co-op") == 3843, tmap
-    assert library.TAGMAP.exists()                          # cached to disk
+    assert steamstore.TAGMAP.exists()                          # cached to disk
 
     # Tag matching ignores punctuation and case, in BOTH directions: the model
     # says what a person says ("Rogue-like", "Co op"), Steam's vocabulary is
@@ -134,9 +133,9 @@ def main():
     # widened the search to co-op-anything - which is how "a co-op roguelike
     # under $20" came back Dead by Daylight and Total War (2026-08-14). A
     # dropped filter is invisible in the results, so it gets a test.
-    library.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
+    steamstore.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
     assert SEARCH_PARAMS[-1].get("tags") == "1716,3843", SEARCH_PARAMS[-1]
-    library.fetch_store_search(term="x", tags=["Not A Real Tag"])
+    steamstore.fetch_store_search(term="x", tags=["Not A Real Tag"])
     assert "tags" not in SEARCH_PARAMS[-1], "unknown tags must drop, not 404"
 
     # --- hltb: fail-soft when the optional lib is absent, then cache hit -----
@@ -145,19 +144,19 @@ def main():
     # makes the import raise, keeping this offline everywhere): the raise ->
     # None (never crashes). A pre-seeded cache entry returns without importing.
     sys.modules["howlongtobeatpy"] = None
-    assert library.fetch_hltb("Some Game With No Lib") is None
-    library._save_facets({library.fuzzy_key("Hades"): {"hltb": {"main": 21}}})
-    assert library.fetch_hltb("hades") == {"main": 21}      # cache hit, no import
+    assert steamstore.fetch_hltb("Some Game With No Lib") is None
+    steamstore._save_facets({steamstore.fuzzy_key("Hades"): {"hltb": {"main": 21}}})
+    assert steamstore.fetch_hltb("hades") == {"main": 21}      # cache hit, no import
 
     # --- refresh_deals: writes the one file the worker + list_games read -----
-    library.refresh_deals()
-    deals = library.load_deals()
+    steamstore.refresh_deals()
+    deals = steamstore.load_deals()
     assert deals["specials"][0]["appid"] == 1
     assert [g["appid"] for g in deals["wishlist_on_sale"]] == [12, 10], deals
     assert "refreshed" in deals
 
     # --- recently played: needs a key; parsed 2-week hours -------------------
-    rec = library.fetch_recently_played()
+    rec = steamstore.fetch_recently_played()
     assert rec == [{"appid": 55, "name": "Recent X", "hours2w": 5.0}], rec
 
     print("OK - layer 4: specials/wishlist/trending/search/reviews/news/tags/"

@@ -52,8 +52,9 @@ def _library_context():
     """
     try:
         import library
+        import steamstore
         rows = library.catalog_lines()
-        deals = library.load_deals() or {}
+        deals = steamstore.load_deals() or {}
     except Exception as e:
         # Said out loud: a job briefed without the catalog answers from the
         # web alone, and "why did it recommend a game I own" had no log line

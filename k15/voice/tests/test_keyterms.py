@@ -20,7 +20,7 @@ FAKE_INDEX = {
         {"appid": 1145360, "name": "Hades II", "lastPlayed": 800},
         {"appid": 1361210, "name": "Warhammer 40,000: Darktide", "lastPlayed": 700},
         {"appid": 228980, "name": "Steamworks Common Redistributables",
-         "lastPlayed": 999},                    # library.NOT_GAMES
+         "lastPlayed": 999},                    # steamstore.NOT_GAMES
     ],
     "collections": [{"name": "mech", "id": "uc-1"}, {"name": "RPG", "id": "uc-2"}],
 }

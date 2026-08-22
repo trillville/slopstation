@@ -17,6 +17,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
 import library                                  # noqa: E402
+import steamstore                               # noqa: E402
 import traces                                   # noqa: E402
 import tracing                                  # noqa: E402  (tool spans; the
 #                                    module self-gates, so REPL/bench are no-ops)
@@ -322,11 +323,11 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         want = (args.get("facets") or []) if store_on else []
         tasks = {}
         if "price" in want:
-            tasks["price"] = lambda: library.store_items([appid]).get(appid)
+            tasks["price"] = lambda: steamstore.store_items([appid]).get(appid)
         if "reviews" in want:
-            tasks["reviews"] = lambda: library.fetch_reviews(appid)
+            tasks["reviews"] = lambda: steamstore.fetch_reviews(appid)
         if "news" in want:
-            tasks["news"] = lambda: library.fetch_news(appid)
+            tasks["news"] = lambda: steamstore.fetch_news(appid)
         facets = {}
         if tasks:
             import concurrent.futures as _cf
@@ -350,9 +351,9 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             # A facet ask is already a live-store conversation, so one more
             # GetItems call is in kind - and the kill switch already zeroed
             # `want` if store calls are off.
-            name = (library.store_items([appid]).get(appid) or {}).get("name")
+            name = (steamstore.store_items([appid]).get(appid) or {}).get("name")
         if "hltb" in want and name:
-            facets["hltb"] = library.fetch_hltb(name)
+            facets["hltb"] = steamstore.fetch_hltb(name)
         if not (meta or name or any(facets.values())):
             return {"ok": False, "error": "unknown appid"}
         return {"ok": True, "name": name, "installed": installed,
@@ -367,7 +368,7 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         that lane was never enrolled."""
         source = args.get("source")
         if source == "wishlist_on_sale":
-            rows = library.load_deals().get("wishlist_on_sale")
+            rows = steamstore.load_deals().get("wishlist_on_sale")
             if rows is None:
                 # Two honest causes for a missing key, don't guess between them:
                 # no steamId64 (refresh_deals never writes the key), or the
@@ -377,11 +378,11 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             return {"ok": True, "source": source, "games": rows[:10]}
         if source == "specials":
             return {"ok": True, "source": source,
-                    "games": library.load_deals().get("specials", [])[:10]}
+                    "games": steamstore.load_deals().get("specials", [])[:10]}
         if source == "trending":
-            return {"ok": True, "source": source, "games": library.fetch_trending()[:10]}
+            return {"ok": True, "source": source, "games": steamstore.fetch_trending()[:10]}
         if source == "recently_played":
-            rows = library.fetch_recently_played()
+            rows = steamstore.fetch_recently_played()
             return {"ok": True, "source": source, "games": rows[:10]}
         if source == "downloading":
             if steam is None or not steam.available():
@@ -405,7 +406,7 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         tags = args.get("tags") or []
         if not term and not tags:
             return {"ok": False, "error": "search needs a term or a genre tag"}
-        rows = library.fetch_store_search(
+        rows = steamstore.fetch_store_search(
             term=term, tags=tags, max_price=args.get("max_price"),
             on_sale=bool(args.get("on_sale")))
         return {"ok": True, "count": len(rows), "games": rows}

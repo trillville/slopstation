@@ -13,6 +13,7 @@ import time
 
 import cglib
 import library
+import steamstore
 import titles
 import traces
 import tracing
@@ -36,7 +37,7 @@ def load_titles(count):
     rows = library.load().get("installed", [])
     rows.sort(key=lambda r: r.get("lastPlayed", 0), reverse=True)
     return [r["name"] for r in rows
-            if r.get("name") and r.get("appid") not in library.NOT_GAMES][:count]
+            if r.get("name") and r.get("appid") not in steamstore.NOT_GAMES][:count]
 
 
 def stt_keyterms(voice, wake_phrase):

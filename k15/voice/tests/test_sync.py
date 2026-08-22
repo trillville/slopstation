@@ -10,6 +10,9 @@ import time
 
 import cglib
 import library
+import cglib
+import library
+import steamstore
 
 
 def reset(monkey):
@@ -33,8 +36,8 @@ def main():
     library.refresh_owned = lambda: calls.__setitem__("owned", calls["owned"] + 1)
     library.refresh_meta = lambda appids, limit=200: calls.__setitem__("meta", calls["meta"] + 1)
     # Layer 4: deals is keyless and MUST be mocked here or sync() hits the store.
-    library.refresh_deals = lambda: calls.__setitem__("deals", calls["deals"] + 1)
-    library.load_deals = lambda: state["deals"]
+    steamstore.refresh_deals = lambda: calls.__setitem__("deals", calls["deals"] + 1)
+    steamstore.load_deals = lambda: state["deals"]
     library.load = lambda: state["index"]
     library.load_meta = lambda: state["meta_cache"]
     state["meta_cache"] = {}
