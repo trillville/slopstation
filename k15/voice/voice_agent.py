@@ -372,7 +372,7 @@ def main():
         try:
             # Inside the try so the finally's unduck is always paired with it.
             duck(restore=False)
-            asyncio.run(run_session(cfg, secrets, matcher, args,
+            asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
                                     input_idx, output_idx, capture,
                                     jobs=jobs, ack=ack, steam=steam))
         except Exception as e:

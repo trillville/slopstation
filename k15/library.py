@@ -95,6 +95,26 @@ def installed_name(appid):
     return None
 
 
+class Catalog:
+    """One read of the index for one voice session - the pipeline's vocabulary,
+    resolvers and gate all see the same snapshot while the background sync
+    may be rewriting the file. Per-operation readers (dispatch, the tools)
+    keep reading the file."""
+
+    def __init__(self, index):
+        self.installed = index.get("installed", [])
+        self.owned = index.get("owned", {})
+        self.collections = index.get("collections", [])
+        self._names = {r["appid"]: r["name"] for r in self.installed if r.get("name")}
+
+    @classmethod
+    def load(cls):
+        return cls(load())
+
+    def name(self, appid):
+        return self._names.get(appid)
+
+
 def save(index):
     _atomic_write(LIBRARY, index)               # tmp + os.replace
 

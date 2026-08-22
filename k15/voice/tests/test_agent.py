@@ -168,9 +168,9 @@ def run(argv, cfg, session=None, setup=None):
     va.log = log
     calls = []
 
-    async def fake_session(cfg, secrets, matcher, args, input_idx, output_idx,
+    async def fake_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
                            capture=None, jobs=None, ack=None, steam=None):
-        calls.append(dict(dry_run=args.dry_run, jobs=jobs, steam=steam,
+        calls.append(dict(dry_run=dry_run, jobs=jobs, steam=steam,
                           capture=capture, matcher=matcher))
         if session is not None:
             session()
