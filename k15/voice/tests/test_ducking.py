@@ -130,8 +130,9 @@ def main():
     assert log.find("tv_unducked")[0]["reason"] == "no_readback"
     assert log.find("tv_duck_deficit")[0]["steps"] == 10
     room.readback_dead = False
-    dk.duck()                                         # 4 -> 0 (clamp), out 14
-    assert dk.out == 14
+    dk.duck()                     # already down 10: left alone, debt unchanged
+    assert dk.out == 10 and room.vol == 4, (dk.out, room.vol)
+    assert log.find("tv_duck_skipped")[-1]["reason"] == "already_ducked"
     dk.unduck()
     assert room.vol == 14 and dk.out == 0, (room.vol, dk.out)
 
@@ -152,6 +153,25 @@ def main():
     dk.duck()                                         # pct wins over steps
     assert room.vol == 10, room.vol
 
+    # --- a close that could not reach the set: no silence, no swing ----------
+    # The TV went down before the restore, so the bar is still 15 low. The
+    # next wake must neither duck again (that lands on 0) nor repay first
+    # (the room would jump up and back down); the close settles it.
+    dk, room, log = ducker(steps=15, room=FakeRoom(vol=22))
+    dk.duck()
+    assert room.vol == 7 and dk.out == 15
+    room.drop = 99                    # set going down: keys relay nowhere
+    dk.unduck()
+    assert dk.out == 15 and log.find("tv_duck_deficit"), log.records
+    assert room.vol == 7, "the restore moved nothing"
+    room.drop = 0                                     # next session, bar still low
+    presses = len(room.presses)
+    dk.duck()
+    assert dk.out == 15 and room.vol == 7, (dk.out, room.vol)
+    assert len(room.presses) == presses, "a bar already ducked is not touched"
+    dk.unduck()                                       # the close pays it all back
+    assert room.vol == 22 and dk.out == 0, (room.vol, dk.out)
+
     # --- dry run: books balance, nothing is pressed --------------------------
     dk, room, log = ducker(dry_run=True)
     dk.duck()
@@ -164,7 +184,8 @@ def main():
     print("OK - ducking: on-gate (standby/unknown/no-readback skip), verified "
           "ledger, clamp honesty, key-loss top-up, dead-relay zero-debt, "
           "user-takeover stand-down, deficit debt + exact self-heal, "
-          "percentage mode (scales, wins over steps), dry run")
+          "an owed duck left alone at the next wake, percentage mode (scales, wins "
+          "over steps), dry run")
 
 
 if __name__ == "__main__":

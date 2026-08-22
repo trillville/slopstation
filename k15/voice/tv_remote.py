@@ -151,6 +151,15 @@ class TvDucker:
             self.log("tv_duck_skipped", state=state or "unknown",
                      debt=self.out)
             return
+        # Owed a duck already: the last close could not reach the set, so the
+        # bar is still that far below the baseline - as far as a fresh duck
+        # would take it. Ducking again lands on the 0-clamp (silence);
+        # repaying first swings the room up and back down at the wake. Leave
+        # it, and let the close restore the whole ledger.
+        if self.out:
+            self.log("tv_duck_skipped", state="on", reason="already_ducked",
+                     debt=self.out)
+            return
         v0 = self.read()
         if v0 is None:
             self.log("tv_duck_skipped", state="on", reason="no_readback",

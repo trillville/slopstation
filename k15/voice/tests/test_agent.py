@@ -176,9 +176,11 @@ def run(argv, cfg, session=None, setup=None):
     calls = []
 
     async def fake_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                           capture=None, jobs=None, ack=None, steam=None):
+                           capture=None, jobs=None, ack=None, steam=None,
+                           on_end_session=None):
         calls.append(dict(dry_run=dry_run, jobs=jobs, steam=steam,
-                          capture=capture, matcher=matcher))
+                          capture=capture, matcher=matcher,
+                          on_end_session=on_end_session))
         if session is not None:
             session()
     va.run_session = fake_session
@@ -232,6 +234,8 @@ def main():
     assert ann.jobs is store and store.on_done == ann.submit
     assert calls[0]["jobs"] is store and calls[0]["matcher"] == "MATCHER"
     assert calls[0]["capture"].stopped >= 1, "capture must be stopped after the session"
+    # end_session restores the room while the TV is still on (dispatch calls it)
+    assert callable(calls[0]["on_end_session"])
     print("  lanes: assistant+worker up, steam off, ducker built; one dry-run session, --once exits 0")
 
     # --- no Deepgram key: no session, fail earcon, capture released ----------------

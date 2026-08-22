@@ -139,6 +139,27 @@ def main():
     assert not r.ok and r.earcon == "fail"
     assert not cglib.CANCEL.exists(), "an idle rig's end must not leave a marker"
 
+    # The room ducker restores HERE, before the exit: the voice session stays
+    # open for the idle timeout, by which time couch has cut TV power and
+    # remote keys relay nothing (2026-08-22).
+    fresh_state(10)
+    order = []
+    gamepc.ssh = lambda cmd, **kw: order.append(f"ssh {cmd}") or "OK"
+    h = Harness()
+    h.d.on_end_session = lambda: order.append("restore")
+    assert h.d.end_session().ok
+    assert order[0] == "restore", order
+    # A hook that raises is a warn, never a failed teardown.
+    h = Harness()
+    h.d.on_end_session = lambda: 1 / 0
+    assert h.d.end_session().ok
+    assert "end_session_hook_failed" in h.log.events(), h.log.records
+    # Dry run restores too - the TV is real even when the ssh is not.
+    hooked = []
+    h = Harness(dry_run=True)
+    h.d.on_end_session = lambda: hooked.append(1)
+    assert h.d.end_session().ok and hooked == [1]
+
     # --- play_game: session-live ssh outcomes + cold-start delegation --------
     fresh_state(10)                                # fresh lock = session up
     h = Harness()

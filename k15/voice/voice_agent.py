@@ -377,7 +377,8 @@ def main():
             duck(restore=False)
             asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
                                     input_idx, output_idx, capture,
-                                    jobs=jobs, ack=ack, steam=steam))
+                                    jobs=jobs, ack=ack, steam=steam,
+                                    on_end_session=lambda: duck(restore=True)))
         except Exception as e:
             log.error("session_crashed", err=repr(e))
             ending = "fail"

@@ -179,11 +179,13 @@ class Session:
     it, then save the transcript and the carry."""
 
     def __init__(self, cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                 capture=None, jobs=None, ack=None, steam=None):
+                 capture=None, jobs=None, ack=None, steam=None,
+                 on_end_session=None):
         self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
         self.dry_run = dry_run
         self.input_idx, self.output_idx = input_idx, output_idx
         self.capture, self.jobs, self.ack, self.steam = capture, jobs, ack, steam
+        self.on_end_session = on_end_session    # the room ducker's restore
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None                     # the LLM lane's, once built
@@ -241,7 +243,8 @@ class Session:
             ),
         )
 
-        dispatcher = Dispatch(cfg, log, dry_run=self.dry_run)
+        dispatcher = Dispatch(cfg, log, dry_run=self.dry_run,
+                              on_end_session=self.on_end_session)
         assistant_live = cglib.real_key(secrets.get(PROVIDER_KEY[self.provider]))
         gate = GrammarGate(
             self.matcher, dispatcher, log,
@@ -396,7 +399,9 @@ class Session:
 
 
 async def run_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                      capture=None, jobs=None, ack=None, steam=None):
+                      capture=None, jobs=None, ack=None, steam=None,
+                      on_end_session=None):
     """voice_agent's entry: one Session, run to its end."""
     await Session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                  capture=capture, jobs=jobs, ack=ack, steam=steam).run()
+                  capture=capture, jobs=jobs, ack=ack, steam=steam,
+                  on_end_session=on_end_session).run()

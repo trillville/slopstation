@@ -64,11 +64,15 @@ def _name(appid):
 
 
 class Dispatch:
-    def __init__(self, cfg, log, dry_run=False):
+    def __init__(self, cfg, log, dry_run=False, on_end_session=None):
         self.cfg = cfg
         self.voice = cfg["voice"]
         self.log = log
         self.dry_run = dry_run
+        # Fires at the top of end_session, while the TV is still on: the room
+        # ducker restores here, ~13 s before couch's teardown cuts TV power
+        # (2026-08-22). None on lanes with no ducker (the REPL, the bench).
+        self.on_end_session = on_end_session
         # See Utterance above; one Dispatch per session.
         self.utterance = Utterance(None, None)
 
@@ -120,6 +124,15 @@ class Dispatch:
         """Works mid-game and mid-launch alike (teardown wins - Exit stops a
         running Enter on the host)."""
         turn = self.utterance.turn            # snapshot at operation start
+        # Before the exit, not after the voice session closes: the session
+        # stays open for the idle timeout, by which time couch has powered the
+        # TV off and remote keys relay nothing (2026-08-22, session fe8302 -
+        # 15 points owed). Must not raise: this is a teardown.
+        if self.on_end_session is not None:
+            try:
+                self.on_end_session()
+            except Exception as e:
+                self.log.warn("end_session_hook_failed", err=repr(e))
         if self.dry_run:
             return self._would("ssh exit")
         # K15-side half of "teardown wins" (2026-08-21): the host Exit only
