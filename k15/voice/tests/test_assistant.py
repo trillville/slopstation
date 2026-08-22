@@ -3,6 +3,7 @@ validation, pipecat/anthropic constructions with dummy keys, and a tolerant
 live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
 """
+import re
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,13 @@ CFG_MIN = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
                      "location": {"city": "", "region": "", "country": "",
                                   "timezone": ""},
                      "inputs": {"apple tv": "hdmi1", "gaming": "hdmi4"}}}
+
+
+def flat(text):
+    """Prose with its line breaks collapsed, so an assertion is about the
+    words and not where the wrap fell. str() of a list reprs its strings, so
+    the escaped newlines go too."""
+    return re.sub(r"\s+", " ", str(text).replace(r"\n", " "))
 
 
 def main():
@@ -49,21 +57,21 @@ def main():
     si = assistant.system_instruction(CFG_MIN)
     assert "CATALOG" in si and str(real_appid) in si
     # Mishear-repair: the model must know its input is STT, not typed text.
-    assert "speech-to-text" in si and "mishears" in si
+    assert "speech-to-text" in flat(si) and "mishears" in flat(si)
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
-    assert "local time" in si
+    assert "local time" in flat(si)
     zoned = {**CFG_MIN["voice"],
              "location": {**CFG_MIN["voice"]["location"],
                           "timezone": "America/Los_Angeles"}}
     si_tz = assistant.system_instruction({**CFG_MIN, "voice": zoned})
-    assert f"{time.strftime('%Y-%m-%d')} in America/Los_Angeles" in si_tz
-    assert "apple tv" in si and "'gaming' starts a session" in si
-    assert "clamped" in si and "blind toggle" in si
+    assert f"{time.strftime('%Y-%m-%d')} in America/Los_Angeles" in flat(si_tz)
+    assert "apple tv" in flat(si) and "'gaming' starts a session" in flat(si)
+    assert "clamped" in flat(si) and "blind toggle" in flat(si)
     # Out-of-catalog carve-out, so mishear-repair can't force a wrong match.
-    assert "isn't in the library" in si
+    assert "isn't in the library" in flat(si)
     n_tokens = len(si) // 4
     assert 500 < n_tokens < 30000, n_tokens
     print(f"  system prompt: ~{n_tokens} tokens, {len(library.catalog_lines())} games")
@@ -158,7 +166,7 @@ def main():
     # 11 tools minus the two store ones the kill switch drops.
     assert len(assistant.function_schemas(gated)) == 9, len(assistant.function_schemas(gated))
     # The facts-vs-judgment split lives in the descriptions the model reads.
-    assert "not background_task" in str(assistant.TOOL_DEFS)
+    assert "not background_task" in flat(assistant.TOOL_DEFS)
     print("  list_games/search_store: routed, refused cleanly, kill-switch gates")
 
     # --- fail-soft: an impl that RAISES must return an error, never propagate -
@@ -288,12 +296,12 @@ def main():
     assert all("input_schema" in t for t in at)
     # The volume range lives in the prompt (clamped), not the tool def;
     # session-start semantics live on launch_game.
-    assert "0-100" not in str(assistant.TOOL_DEFS)
-    assert "never call start_session" in str(assistant.TOOL_DEFS)
+    assert "0-100" not in flat(assistant.TOOL_DEFS)
+    assert "never call start_session" in flat(assistant.TOOL_DEFS)
     # Closing the mic must never read as ending the session on the TV - spelled
     # out in both places the model reads.
-    assert "NOT end_session" in str(assistant.TOOL_DEFS)
-    assert "never end the gaming session for them" in si
+    assert "NOT end_session" in flat(assistant.TOOL_DEFS)
+    assert "never end the gaming session for them" in flat(si)
     assert set(assistant_repl.BACKENDS) == {"anthropic", "openai"}
     assert assistant_repl.BACKENDS["anthropic"].key == "anthropicApiKey"
     assert assistant_repl.BACKENDS["openai"].key == "openaiApiKey"
@@ -304,7 +312,7 @@ def main():
     voice_off = CFG_MIN["voice"]
     assert assistant.server_tools(voice_off, "anthropic") == []
     assert assistant.server_tools(voice_off, "openai") == []
-    assert "search the web" not in si
+    assert "search the web" not in flat(si)
     voice_on = {**voice_off, "assistantWebSearch": True,
                 "location": {"city": "Portland", "region": "",
                              "country": "US", "timezone": ""}}
@@ -319,8 +327,8 @@ def main():
     assert "user_location" not in assistant.server_tools(bare, "openai")[0]
     si_on = assistant.system_instruction({**CFG_MIN, "voice": voice_on})
     # Spoken-register guardrails: no citations in TTS, no narrating search.
-    assert "search the web" in si_on and "NO citations" in si_on
-    assert "Never announce or offer to search" in si_on
+    assert "search the web" in flat(si_on) and "NO citations" in flat(si_on)
+    assert "Never announce or offer to search" in flat(si_on)
     print("  server_tools: knob-gated, provider-native shapes, location folding")
 
     # pause_turn: the partial assistant content is re-sent as-is and the text
