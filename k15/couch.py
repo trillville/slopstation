@@ -115,6 +115,21 @@ def start(appid=None, turn=None):
     # One id per intent, minted upstream; a direct run mints its own.
     turn = turn if events.valid_turn(turn) else events.new_turn()
     events.context(turn=turn)
+    # Before the lock: a config doctor would FAIL must not reach power_on, and
+    # must not die holding the lock.
+    try:
+        missing = cglib.missing_config(cglib.config())
+    except Exception as e:
+        missing, err = [], str(e)
+    else:
+        err = None
+    if missing or err:
+        log.error("config_invalid", missing=missing or None, err=err)
+        try:
+            cglib.LAST_ERROR.write_text(f"config.json: {err or f'missing {missing}'}")
+        except OSError:
+            pass
+        return 2
     # The pre-read only shapes the log lines - acquire_lock is the arbiter.
     age = cglib.lock_age()
     if cglib.session_active(age):
@@ -212,13 +227,18 @@ def start(appid=None, turn=None):
             `attempts` is per-call: the first dispatch also waits out logon
             after a cold boot, a re-dispatch must not spend the READY window."""
             nonlocal enter_sent
+            refused = None
             for _ in range(attempts):
                 cglib.touch_lock()
                 raise_if_cancelled()
                 try:
-                    if gamepc.enter() == "OK":
+                    answer = gamepc.enter()
+                    if answer == "OK":
                         enter_sent = True
                         log(event, dur_ms=ms()); return True
+                    if answer != refused:       # NOTASK:Enter / FAILED:<code> / DENIED
+                        log.warn("enter_refused", answer=answer)
+                        refused = answer
                 except Exception as e:
                     log.warn("enter_retry", err=str(e))
                 time.sleep(1)
@@ -408,9 +428,11 @@ def reconcile():
     # A reconcile is its own intent: new id, not the dead session's.
     events.context(turn=events.new_turn())
     log("reconcile_found")
+    answered = False
     for _ in range(3):                  # boot-time network may need a moment
         try:
             st = gamepc.status()
+            answered = True
             if st != "NOTREADY":
                 log("reconcile_resumed")
                 # Adopt, don't just touch: the owner note still names the dead
@@ -422,7 +444,8 @@ def reconcile():
             break                       # definitive NOTREADY - session is dead
         except Exception:
             time.sleep(2)
-    log.warn("reconcile_cleared", reason="dead_session")
+    log.warn("reconcile_cleared",
+             reason="dead_session" if answered else "unreachable")
     # Force-clear, not release_lock: the owner is known dead and its pid would
     # never match ours.
     cglib.LOCK.unlink(missing_ok=True)

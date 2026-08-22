@@ -22,6 +22,7 @@ def reset(monkey):
 
 
 def main():
+    real_refresh = library.refresh
     calls = {"installed": 0, "owned": 0, "meta": 0, "deals": 0, "collections": 0}
     state = {"index": {}, "refresh_rc": 0}
 
@@ -117,6 +118,23 @@ def main():
     assert calls["installed"] == 1, "second sync should not have entered"
     barrier.set()
     t.join()
+
+    # --- the events: refresh says sync_done / sync_skipped on the library lane --
+    from _bootstrap import fresh_state
+    fresh_state()
+    library.log = cglib.CapturingLog("library")
+    library.fetch_installed_ssh = lambda: [{"appid": 1, "name": "G", "state": 4,
+                                            "size": 1, "lastPlayed": 0}]
+    assert real_refresh() == 0
+    assert library.log.find("sync_done")[0]["layer"] == "installed"
+
+    def asleep():
+        raise OSError("ssh: connect timed out")
+    library.fetch_installed_ssh = asleep
+    assert real_refresh() == 1
+    skipped = library.log.find("sync_skipped")[0]
+    assert skipped["layer"] == "installed" and skipped["level"] == "warn"
+    print("  events: sync_done / sync_skipped (warn) from refresh, lane library")
 
     print("OK - sync: key-gate, deals (keyless+staleness), collections "
           "(gated on the PC being awake), owned staleness (6h), meta top-up, "

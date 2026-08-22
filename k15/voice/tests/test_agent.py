@@ -122,6 +122,14 @@ class FakeDucker:
         pass
 
 
+class CtxLog(cglib.CapturingLog):
+    """CapturingLog plus the ambient session id at each call."""
+
+    def _write(self, level, event, fields):
+        super()._write(level, event, fields)
+        self.records[-1]["_session"] = events.current().get("session")
+
+
 def stub_everything():
     va.open_audio = lambda voice: ("PA", 0, 1)
     va.rebuild_audio = lambda pa, voice, listener: ("PA2", 0, 1)
@@ -164,7 +172,7 @@ def run(argv, cfg, session=None, setup=None):
     if setup:
         setup()
     cglib.use_config(cfg)
-    log = cglib.CapturingLog("voice")
+    log = CtxLog("voice")
     va.log = log
     calls = []
 
@@ -213,6 +221,9 @@ def main():
     assert ev.index("wake") < ev.index("session_open") < ev.index("session_close")
     assert log.find("wake")[0]["trigger"] == "wake_word"
     assert log.find("session_close")[0]["ending"] == "close"
+    # the wake carries the session it opens (events.context is merged per wake)
+    wake, opened = log.find("wake")[0], log.find("session_open")[0]
+    assert wake["_session"] and wake["_session"] == opened["_session"]
     # dry_run reaches every constructor and the session
     assert calls and calls[0]["dry_run"] is True
     assert FakeJobStore.made[0].dry_run is True

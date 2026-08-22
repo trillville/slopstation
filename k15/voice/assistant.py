@@ -568,6 +568,8 @@ def function_schemas(impls, log=None):
                 # raises must never leave result_callback uncalled - that
                 # breaks the turn instead of answering.
                 print(f"  [tool-error] {name}: {e!r}")
+                if log:
+                    log.error("tool_error", tool=name, err=repr(e))
                 out = {"ok": False, "error": "that didn't go through - "
                        "something upstream failed"}
             # After the call, so the span carries the RESULT. The await above

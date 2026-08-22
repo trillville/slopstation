@@ -58,11 +58,9 @@ class JobStore:
             return []
 
     def _save(self, jobs):
-        JOBS_FILE.parent.mkdir(exist_ok=True)
         live = [j for j in jobs if j["status"] in (QUEUED, RUNNING)]
         done = [j for j in jobs if j["status"] not in (QUEUED, RUNNING)]
-        JOBS_FILE.write_text(json.dumps(live + done[-KEEP:], indent=1),
-                             encoding="utf-8")
+        cglib.write_json(JOBS_FILE, live + done[-KEEP:], indent=1)
 
     def _update(self, job_id, **fields):
         with self._lock:
@@ -139,39 +137,56 @@ class JobStore:
                 job = self._next_queued()
                 if job is None:
                     break
-                self.log("job_running", job=job["id"], provider=self.adapter.exe,
-                         dry_run=self.dry_run or None)
                 t0 = time.time()
-                with tracing.job_span(job["id"], job["task"],
-                                      job.get("trace"), job.get("session"),
-                                      self.adapter.exe) as jspan:
-                    r = self.adapter.run(self._task_text(job), self.timeout_s)
-                    meta = r.get("meta") or {}
-                    for s in r.get("steps") or []:
-                        jspan.step(s.get("tool"), s.get("input"),
-                                   s.get("result"))
-                    jspan.finish(r["summary"], r["detail"], meta)
-                status = DONE if r["ok"] else FAILED
-                self._update(job["id"], status=status, read=False,
-                             finished=int(time.time()),
-                             summary=r["summary"], detail=r["detail"])
-                emit = self.log if r["ok"] else self.log.error
-                emit("job_done" if r["ok"] else "job_failed", job=job["id"],
-                     status=status, dur_ms=round((time.time() - t0) * 1000),
-                     session=job.get("session"), summary=r["summary"][:200],
-                     tools=len(r.get("steps") or []) or None,
-                     **{k: meta[k] for k in
-                        ("cost_usd", "turns", "web_searches", "web_fetches",
-                         "denials", "model", "stop_reason")
-                        if k in meta})
-                if self.on_done:
-                    job.update(status=status, summary=r["summary"],
-                               detail=r["detail"])
+                try:
+                    self._run_one(job, t0)
+                except Exception as e:
+                    # The thread outlives any job: a RUNNING row that never
+                    # finishes would otherwise wait for the next restart.
+                    self.log.error("job_failed", job=job["id"], status=FAILED,
+                                   dur_ms=round((time.time() - t0) * 1000),
+                                   session=job.get("session"), err=repr(e))
                     try:
-                        self.on_done(job)
-                    except Exception as e:
-                        self.log.error("job_announce_hook_failed",
-                                       job=job["id"], err=repr(e))
+                        self._update(job["id"], status=FAILED, read=False,
+                                     finished=int(time.time()),
+                                     summary="the task crashed",
+                                     detail=repr(e))
+                    except Exception:
+                        pass
+
+    def _run_one(self, job, t0):
+        self.log("job_running", job=job["id"], provider=self.adapter.exe,
+                 dry_run=self.dry_run or None)
+        with tracing.job_span(job["id"], job["task"],
+                              job.get("trace"), job.get("session"),
+                              self.adapter.exe) as jspan:
+            r = self.adapter.run(self._task_text(job), self.timeout_s)
+            meta = r.get("meta") or {}
+            for s in r.get("steps") or []:
+                jspan.step(s.get("tool"), s.get("input"),
+                           s.get("result"))
+            jspan.finish(r["summary"], r["detail"], meta)
+        status = DONE if r["ok"] else FAILED
+        self._update(job["id"], status=status, read=False,
+                     finished=int(time.time()),
+                     summary=r["summary"], detail=r["detail"])
+        emit = self.log if r["ok"] else self.log.error
+        emit("job_done" if r["ok"] else "job_failed", job=job["id"],
+             status=status, dur_ms=round((time.time() - t0) * 1000),
+             session=job.get("session"), summary=r["summary"][:200],
+             tools=len(r.get("steps") or []) or None,
+             **{k: meta[k] for k in
+                ("cost_usd", "turns", "web_searches", "web_fetches",
+                 "denials", "model", "stop_reason")
+                if k in meta})
+        if self.on_done:
+            job.update(status=status, summary=r["summary"],
+                       detail=r["detail"])
+            try:
+                self.on_done(job)
+            except Exception as e:
+                self.log.error("job_announce_hook_failed",
+                               job=job["id"], err=repr(e))
 
     # -- the voice surface ----------------------------------------------------
 

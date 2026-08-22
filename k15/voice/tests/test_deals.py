@@ -143,8 +143,10 @@ def main():
     assert steamstore.fetch_hltb("hades") == {"main": 21}      # cache hit, no import
 
     # --- refresh_deals: writes the one file the worker + list_games read -----
+    steamstore.log = cglib.CapturingLog("library")
     steamstore.refresh_deals()
     deals = steamstore.load_deals()
+    assert "deals_synced" in steamstore.log.events(), steamstore.log.events()
     assert deals["specials"][0]["appid"] == 1
     assert [g["appid"] for g in deals["wishlist_on_sale"]] == [12, 10], deals
     assert "refreshed" in deals

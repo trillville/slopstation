@@ -35,7 +35,7 @@ PYTHON = {
     "chord_partial": {"btn", "want"},
     "collection_miss": {"fallback", "reason", "spoken"},
     "collection_resolved": {"id", "name", "spoken"},
-    "config_invalid": {"missing"},
+    "config_invalid": {"err", "missing"},
     "config_suspect": {"reason", "setting", "value"},
     "deals_synced": {"specials", "wishlist"},
     "dispatch": {"detail", "intent", "ok"},
@@ -52,6 +52,7 @@ PYTHON = {
     "enter_died": {"dur_ms"},
     "enter_dispatched": {"dur_ms"},
     "enter_redispatched": {"dur_ms"},
+    "enter_refused": {"answer"},
     "enter_retry": {"err"},
     "exit_dispatched": {"reason"},
     "exlink_nak": {"cmd", "err"},
@@ -76,7 +77,7 @@ PYTHON = {
     "job_announce_hook_failed": {"err", "job"},
     "job_announced": {"job"},
     "job_done": {"dur_ms", "job", "session", "status", "summary", "tools"},
-    "job_failed": {"dur_ms", "job", "session", "status", "summary", "tools"},
+    "job_failed": {"dur_ms", "err", "job", "session", "status", "summary", "tools"},
     "job_orphaned": {"job", "reason"},
     "job_queued": {"job", "task"},
     "job_requested": {"ok", "task"},
@@ -135,6 +136,7 @@ PYTHON = {
     "token_mint_failed": {"err", "stage"},
     "token_transfer_failed": {"err", "url"},
     "tool_call": {"args", "ok", "tool"},
+    "tool_error": {"err", "tool"},
     "tool_refused": {"appid", "reason", "tool"},
     "trace_save_failed": {"err"},
     "trace_saved": {"file", "messages", "pruned"},
@@ -188,7 +190,9 @@ POWERSHELL = {
     "puck_released": set(),
     "ready": {"fg", "focused", "running_appid"},
     "stopgame_start": set(),
+    "verb": {"answer", "cmd", "turn", "verb"},
     "wake-safety_start": set(),
+    "wake_cleanup": {"reason"},
 }
 
 BAT = {

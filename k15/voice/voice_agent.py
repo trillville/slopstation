@@ -345,6 +345,11 @@ def main():
             log.error("wake_stream_died", err=str(e))
             pa, input_idx, output_idx = rebuild_audio(pa, voice, listener)
             continue
+        # One id per conversation, minted before the event loop exists so
+        # asyncio.run carries it into every task inside (and to_thread into
+        # dispatch). Langfuse groups follow-ups on it. Minted here so the
+        # wake event carries the session it opens, not the previous one.
+        events.context(session=events.new_turn())
         if score is None:
             # A bulletin just finished: the mic opens for a follow-up with no
             # wake word, and no chime - the announcement was the cue.
@@ -361,10 +366,6 @@ def main():
             ack.claim()
             play_pcm(pa, earcons.pcm("fail"), output_idx)
             continue
-        # One id per conversation, minted before the event loop exists so
-        # asyncio.run carries it into every task inside (and to_thread into
-        # dispatch). Langfuse groups follow-ups on it.
-        events.context(session=events.new_turn())
         log("session_open")
         if announcer:
             announcer.session_active.set()
