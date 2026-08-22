@@ -84,17 +84,21 @@ Time to READY, the number the whole system is judged on:
 
 ## Event vocabulary
 
-- **launch**: `launch_start` `wol_sent` `ssh_up` `tv_on` `tv_state_unknown` `enter_dispatched` `host_ready` `launch_failed` `launch_aborted` `session_ended` `session_idle` `exlink_send` `exlink_nak` `enter_died` `enter_redispatched`
+- **launch**: `launch_start` `wol_sent` `ssh_up` `tv_on` `tv_state_unknown` `enter_dispatched` `host_ready` `launch_failed` `launch_aborted` `exit_dispatched` `cancel_void_failed` `session_ended` `session_idle` `exlink_send` `exlink_nak` `enter_died` `enter_redispatched`
   - `launch_start` carries `tv` on rigs with `tvIp`: the set's RAW PowerState
     as the launch found it — `on`, `standby` (shallow), `""` (deep: hours
-    off, still answering with the field drained) or null (unreachable).
-    Whether `""` predicts a refused wake is the open measurement.
+    off, still answering with the field drained) or `unreachable` (a
+    sentinel — the emitter drops None fields, so the read's own None cannot
+    ship). Whether `""` predicts a refused wake is the open measurement.
   - `tv_on` is the TV-wake gate (couch.py `wait_tv_on`) confirming the set
-    REPORTS on before Enter is dispatched; its `dur_ms` is the frame-to-lit
-    distribution. `tv_state_unknown` (WARN) is the gate standing down after
+    REPORTS on before Enter is dispatched. Its `dur_ms` is elapsed-since-
+    intent like every `dur_ms`, and the gate starts only after `ssh_up` — so
+    cold boots censor it (the PC dominates); read frame-to-lit from warm-PC
+    launches only. `tv_state_unknown` (WARN) is the gate standing down after
     consecutive unreadable answers — the launch proceeds on the legacy blind
-    path. A gated launch that still fails on the TV fails in ~30 s with
-    `launch_failed` err `TV never reported on`.
+    path. A gated launch that still fails on the TV fails after ~30 s of
+    polling (measured from `ssh_up`) with `launch_failed` err
+    `TV never reported on`.
   - `enter_died` means the PC's Enter task exited WITHOUT writing the marker —
     the launch was lost at that moment, where before this event existed the
     K15 just polled a dead task for the rest of its READY wait.

@@ -381,6 +381,8 @@ def main():
     couch.READY_WAIT_S = 5                 # only the cancel may end this wait
 
     def cancel_on_first_poll(cmd):
+        if cmd.startswith("exit"):
+            return "OK"                    # the abort's own teardown dispatch
         cglib.CANCEL.write_text("aaaaaa")  # the cancelling utterance's turn
         return "NOTREADY"
 
@@ -393,11 +395,18 @@ def main():
     aborted = log.find("launch_aborted")[0]
     assert aborted["err"] == "Cancelled", aborted
     assert aborted["cancelled_by"] == "aaaaaa", aborted
+    # Enter had left for the host, so the abort dispatches its OWN exit - the
+    # canceller's exit stops only a RUNNING Enter, and one still inside the
+    # schtasks trigger gap when that exit finishes would otherwise run to
+    # completion with no watcher alive.
+    exits = log.find("exit_dispatched")
+    assert exits and exits[0]["reason"] == "cancel_after_enter", ev
     assert not cglib.LOCK.exists(), "a cancelled launch still releases the lock"
     assert not cglib.LAST_ERROR.exists(), "a cancel is deliberate - no fail buzz"
     assert not cglib.CANCEL.exists(), "consumed, or it kills the NEXT launch too"
     assert sent == ["power_on"], f"a cancel must never switch the input: {sent}"
-    print("  cancel: marker aborts the wait, consumed, no buzz, TV alone")
+    print("  cancel: marker aborts the wait, consumed, no buzz, TV alone, "
+          "exit chases the sent Enter")
 
     # --- cancel beats the rescue: no redispatch over a teardown ----------------
     # The exact interleave from 0b785e: the cancel lands while the death is
@@ -409,6 +418,8 @@ def main():
     reads = {"n": 0}
 
     def die_then_cancel(cmd):
+        if cmd.startswith("exit"):
+            return "OK"
         if cmd.startswith("enterstate"):
             reads["n"] += 1
             if reads["n"] == 2:            # written as the death is proven
@@ -493,7 +504,10 @@ def main():
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_state_unknown" in ev and "host_ready" in ev, ev
-    assert log.find("launch_start")[0]["tv"] is None
+    # A SENTINEL, not None: events.emit drops None-valued fields, so logging
+    # the read's own None would make an unreachable set byte-identical in
+    # Loki to a rig with no tvIp at all.
+    assert log.find("launch_start")[0]["tv"] == "unreachable"
     print("  tv gate: unreadable set -> fail open, legacy launch unharmed")
 
     # No tvIp: the gate must not exist - not a read, not a field.

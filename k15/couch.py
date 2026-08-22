@@ -63,11 +63,16 @@ TV_POKE_S      = 6     # re-send power_on this often while the set is not on:
                        # answer before the next. Discrete power_on - safe to
                        # repeat (see the READY-wait re-poke for the full
                        # argument).
-TV_UNKNOWN_N   = 5     # consecutive unreadable answers before the gate stands
+TV_UNKNOWN_N   = 3     # consecutive unreadable answers before the gate stands
                        # down to the legacy blind path. None is UNKNOWN, never
                        # "off" (Wi-Fi blip, IP drift, a rig with no tvIp) - a
                        # read that cannot answer must never cost a launch that
-                       # would have worked.
+                       # would have worked. 3, with 0.5 s per read: a healthy
+                       # set answers in 3-33 ms so a real blip rarely survives
+                       # two retries, and 3 caps a DEAD address (silent
+                       # timeout, the worst mode) at ~4.5 s per launch where 5
+                       # was ~10 - a cost paid on EVERY launch for as long as
+                       # the address is wrong, so it stays small.
 
 log = cglib.make_log("launch")
 
@@ -101,7 +106,14 @@ def raise_if_cancelled():
         by = cglib.CANCEL.read_text().strip()
     except OSError:
         return                          # no marker - the overwhelming case
-    cglib.CANCEL.unlink(missing_ok=True)
+    try:
+        cglib.CANCEL.unlink(missing_ok=True)
+    except OSError:
+        # A sharing violation (the writer's handle still open - CPython opens
+        # without FILE_SHARE_DELETE) must not turn a deliberate stop into
+        # launch_failed with a fail buzz. The stop still happens; the marker
+        # left behind is voided at the next launch's start.
+        pass
     raise Cancelled(by)
 
 
@@ -216,10 +228,23 @@ def start(appid=None, turn=None):
         log.warn("lock_recycled", lock_age_s=round(age))
     if not cglib.acquire_lock(f"{turn} {os.getpid()}"):
         log("launch_busy", reason="lost_acquire_race"); return 1
+    # Whether an Enter ever left for the host - the Cancelled handler keys on
+    # it: a cancel consumed AFTER our enter went out may have raced the very
+    # exit that wrote it (the host stops only an Enter that is RUNNING when
+    # Exit lands; one triggered-but-not-yet-running slips through).
+    enter_sent = False
     # A cancel that predates this intent is void - it was aimed at whatever
     # the rig was doing BEFORE this launch existed, and honouring it here
-    # would kill a launch nobody asked to stop.
-    cglib.CANCEL.unlink(missing_ok=True)
+    # would kill a launch nobody asked to stop. Guarded because it runs
+    # OUTSIDE the try below: missing_ok only swallows FileNotFoundError, and
+    # a Windows sharing violation here would be the b43b74 silent-death shape
+    # - no terminal event, the lock held for staleness to recycle. Worst case
+    # of swallowing it instead: one launch aborts on a marker that should
+    # have been void, which the warn makes diagnosable.
+    try:
+        cglib.CANCEL.unlink(missing_ok=True)
+    except OSError as e:
+        log.warn("cancel_void_failed", err=str(e))
     t0 = time.time()
 
     def ms():
@@ -232,7 +257,10 @@ def start(appid=None, turn=None):
         tv_ip = CFG.get("tvIp")
         # The raw depth rung as the launch FOUND the set - "on", "standby"
         # (shallow), "" (deep: hours off, the IP server still answering in
-        # 3 ms with PowerState drained) or null (unreachable). Logged for
+        # 3 ms with PowerState drained) or "unreachable". The last is a
+        # SENTINEL, not the read's own None: events.emit drops None-valued
+        # fields, so logging the None would make an unreachable set
+        # byte-identical in Loki to a rig with no tvIp at all. Logged for
         # the open correlation: does "" at launch_start predict the
         # acked-and-refused wake? The Ex-Link ack can never carry this - it
         # is a CONSTANT, probed 2026-08-19: the same 030cf1 whatever the
@@ -241,8 +269,9 @@ def start(appid=None, turn=None):
         # space hunting a status frame - the same protocol carries
         # service-mode commands, and a valid-checksum guess is not a safe
         # thing to fire at a TV someone watches.
-        tv0 = cglib.tv_power_state(tv_ip, timeout=1.0, raw=True) if tv_ip else None
-        log("launch_start", appid=appid, **({"tv": tv0} if tv_ip else {}))
+        tv0 = cglib.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
+        log("launch_start", appid=appid,
+            **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}))
         exlink("power_on")
         wol()
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
@@ -281,10 +310,14 @@ def start(appid=None, turn=None):
             while time.time() < give_up:
                 cglib.touch_lock()
                 raise_if_cancelled()
-                state = cglib.tv_power_state(tv_ip, timeout=1.0, raw=True)
+                state = cglib.tv_power_state(tv_ip, timeout=0.5, raw=True)
                 if state == "on":
-                    # dur_ms here is the frame-to-lit distribution - the
-                    # number TV_WAIT_S and TV_POKE_S are tuned against.
+                    # dur_ms is elapsed-since-intent like every dur_ms, and
+                    # the gate only starts after wait_port - so on a COLD
+                    # boot this is censored by the PC (~20-90 s of boot with
+                    # the panel long since lit). Tune TV_WAIT_S / TV_POKE_S
+                    # against warm-PC launches only, where ssh_up is ~0.2 s
+                    # and dur_ms approximates frame-to-lit.
                     log("tv_on", dur_ms=ms())
                     return
                 if state is None:
@@ -313,11 +346,13 @@ def start(appid=None, turn=None):
             logon after a cold boot, while a re-dispatch already knows the PC
             is up and answering - burning a minute there would spend the whole
             READY window on retries of a call that is not the problem."""
+            nonlocal enter_sent
             for _ in range(attempts):
                 cglib.touch_lock()
                 raise_if_cancelled()
                 try:
                     if ssh_intent("enter") == "OK":
+                        enter_sent = True
                         log(event, dur_ms=ms()); return True
                 except Exception as e:
                     log.warn("enter_retry", err=str(e))
@@ -489,6 +524,21 @@ def start(appid=None, turn=None):
         # stories - this launch's turn and the utterance that stopped it.
         by = {"cancelled_by": e.by} if isinstance(e, Cancelled) and e.by else {}
         log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms(), **by)
+        if isinstance(e, Cancelled) and enter_sent:
+            # The residual window in "teardown wins": the canceller's exit
+            # stops a RUNNING Enter, but one triggered in the last second and
+            # still inside the schtasks trigger gap when Exit finishes runs
+            # to completion - claiming the Puck and TV-GAMING with no watcher
+            # left alive (0b785e measured that gap at up to ~7 s of exit
+            # variance). Our own exit, dispatched strictly AFTER our last
+            # enter, closes the ordering by construction. Best-effort and
+            # Cancelled-only: Ctrl-C keeps its leave-everything semantics -
+            # whoever pressed it is at the desk, not on the couch.
+            try:
+                ssh_intent("exit")
+                log("exit_dispatched", reason="cancel_after_enter")
+            except Exception:
+                pass
         cglib.release_lock(); return 1
     return 0
 

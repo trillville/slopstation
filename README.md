@@ -182,7 +182,7 @@ Still genuinely open, worst first:
   the wireless MAC and WoL over Wi-Fi is the weaker case) and one more
   `wol()` call beside the Ex-Link frame. The free measurement is already
   wired: `launch_start`'s `tv` field logs the raw depth rung ("on" /
-  "standby" / `""`-deep / null-unreachable), so whether `""` predicts a
+  "standby" / `""`-deep / "unreachable"), so whether `""` predicts a
   refused wake is now a Grafana query, not a project.
 - **Clock skew** between the two machines — correlation is by `turn` rather than
   timestamp, so skew only misorders a merged view; measure it by running
