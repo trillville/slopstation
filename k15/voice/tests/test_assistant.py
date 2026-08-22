@@ -4,7 +4,6 @@ live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
 """
 import re
-import sys
 import time
 from pathlib import Path
 
