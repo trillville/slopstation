@@ -450,13 +450,13 @@ def exlink_send(name, port):
     return exlink_send_hex(EXLINK_FRAMES[name], port)
 
 
-def tv_power_state(ip, timeout=2.0):
+def tv_power_state(ip, timeout=2.0, raw=False):
     """Ask the S90C itself whether it is on: GET /api/v2/ on port 8001
     answers .device.PowerState = "on" | "standby" - unauthenticated, ~30 ms,
-    and it answers from standby. Measured end to end 2026-08-19;
-    docs/tv-power-detection-design.md has the full numbers, including the
-    ~5 s lag between an accepted power_on and the state flipping to "on",
-    so poll rather than read once when watching a transition.
+    and it answers from standby. Measured end to end 2026-08-19; couch.py's
+    TV-wake gate carries the full numbers, including the ~5 s lag between
+    an accepted power_on and the state flipping to "on", so poll rather
+    than read once when watching a transition.
 
     None means UNKNOWN - unreachable, IP drifted, unparseable - never
     "off": the endpoint rides Wi-Fi, and Samsung's worksheet says deeper
@@ -464,7 +464,13 @@ def tv_power_state(ip, timeout=2.0):
     (2026-08-21): a set off for HOURS still answers in 3 ms but with
     PowerState as the empty string - "standby" is only what a recently-used
     set says. Callers pick their own safe side; the voice lane's ducker
-    treats anything but "on" as do-not-touch."""
+    treats anything but "on" as do-not-touch.
+
+    raw=True skips the safe collapse and returns the value as the set
+    reported it - "on" / "standby" / "" / None-for-unreachable - for the
+    one caller that needs the depth ladder itself: couch.py logs the rung
+    at launch_start, because whether "" predicts an acked-and-refused wake
+    is the open measurement."""
     import urllib.request
     try:
         with urllib.request.urlopen(f"http://{ip}:8001/api/v2/",
@@ -472,6 +478,8 @@ def tv_power_state(ip, timeout=2.0):
             state = json.load(r).get("device", {}).get("PowerState")
     except Exception:
         return None
+    if raw:
+        return state
     return state if state in ("on", "standby") else None
 
 

@@ -28,7 +28,6 @@ drift away from them.
 | [troubleshooting.md](docs/troubleshooting.md) | Both lanes, symptom → diagnosis → fix. |
 | [custom-wakeword-design.md](docs/custom-wakeword-design.md) | Unfinished: a bespoke wake model is trained and vendored but inert. The two config values that deploy it, and the couch ladder that has to pass before it stays. |
 | [resume-game-design.md](docs/resume-game-design.md) | Unbuilt: landing back *in* a game across sessions. Two attempts, why both failed, and the one question that gates a third. |
-| [tv-power-detection-design.md](docs/tv-power-detection-design.md) | Unbuilt: knowing whether the TV actually came on. The Ex-Link probe that refuted the cheap answer, and the two leads left. |
 | [`.claude/skills/`](.claude/skills/) | Two skills so telemetry can be *asked about* rather than looked up: `grafana-logs` (ops — launches, errors, liveness, both machines) and `langfuse-traces` (agent — what the assistant heard, said, cost). Each carries a stdlib-only query script. |
 
 When something misbehaves, troubleshooting is symptom-first; for a full sweep,
@@ -155,6 +154,7 @@ with the reasoning; if the premise changes, reopen it deliberately.
 | **A custom status page** | Grafana and Langfuse are the web app. If one is ever wanted it reads their query APIs and stores nothing. |
 | **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. The `sys.path` inserts are the price and it is already paid. |
 | **Pausing/resuming downloads by voice** | Voice can *see* download progress (ClientComm `download_status`) and *start* installs, but not pause/resume. Deliberately cut: it is a rare want, and the couch is for playing, not managing a queue. The CDP `Downloads.*` verbs exist if this is ever revisited. |
+| **CEC for TV power (a Pulse-Eight adapter), or hunting an Ex-Link status frame** | The set's own `/api/v2/` endpoint answers the power question free over the LAN (`cglib.tv_power_state`; couch.py's TV-wake gate is the consumer). CEC is ~$50 of hardware plus libcec plus a relay verb, and Samsung's own partners report Anynet+ disrupts IP control — it could cost the channel that solved this. The Ex-Link ack was probed 2026-08-19: a constant `030cf1` regardless of power state or command, nothing past three bytes. Do not re-run that probe, and do not brute-force the command space hunting a status frame — the same protocol carries service-mode commands, and a valid-checksum guess is not safe to fire at a TV someone watches. |
 
 Still genuinely open, worst first:
 
@@ -170,6 +170,20 @@ Still genuinely open, worst first:
   provider, it has none of the claude lane's isolation (its sandbox confines
   writes, not reads or shell — `doctor.py` warns whenever it is selected), and
   dropping it would delete a risk nobody is using. Kept only as the A/B arm.
+- **The TV wake itself.** The launch path now reads the set's own PowerState —
+  Enter waits for an answered "on", and a set that keeps refusing fails the
+  launch early with the TV named (couch.py's `wait_tv_on`) — but nothing yet
+  makes the refusal *rarer*. Two unmeasured levers, both from Samsung's IP
+  Control Worksheet: the standby-depth settings (eco, "Power On with Mobile",
+  "Keep Bixby in Standby" — the last is described as holding the IP server
+  open in standby precisely to make power-on reliable) are menu toggles whose
+  measurement is the failure rate itself; and the TV answers WoL — a second
+  wake channel is a MAC in config (`68:FC:CA:B4:02:22` here, though that is
+  the wireless MAC and WoL over Wi-Fi is the weaker case) and one more
+  `wol()` call beside the Ex-Link frame. The free measurement is already
+  wired: `launch_start`'s `tv` field logs the raw depth rung ("on" /
+  "standby" / `""`-deep / null-unreachable), so whether `""` predicts a
+  refused wake is now a Grafana query, not a project.
 - **Clock skew** between the two machines — correlation is by `turn` rather than
   timestamp, so skew only misorders a merged view; measure it by running
   `(Get-Date).ToUniversalTime().ToString('o')` on both within a few seconds and

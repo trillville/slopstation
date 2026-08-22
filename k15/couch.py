@@ -50,6 +50,24 @@ WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
                        # ~20-30s; the false-positive cost of a transient outage
                        # is a desk-side relaunch (the Puck stays claimed, so the
                        # chord can't hear).
+TV_WAIT_S      = 30    # power_on until the set REPORTS "on" (wait_tv_on in
+                       # start()), before Enter is dispatched. The state flips
+                       # ~5 s after a frame the set accepts (measured
+                       # 2026-08-19: standby at t+1..4 s, on at t+5 s), so 30 s
+                       # covers the flip plus several re-pokes - and a set
+                       # still not on at 30 s is refusing, which is worth a
+                       # failure that NAMES it: every recorded TV-refusal
+                       # burned 47-121 s learning the same thing from Enter.
+TV_POKE_S      = 6     # re-send power_on this often while the set is not on:
+                       # just past the ~5 s flip lag, so each frame gets its
+                       # answer before the next. Discrete power_on - safe to
+                       # repeat (see the READY-wait re-poke for the full
+                       # argument).
+TV_UNKNOWN_N   = 5     # consecutive unreadable answers before the gate stands
+                       # down to the legacy blind path. None is UNKNOWN, never
+                       # "off" (Wi-Fi blip, IP drift, a rig with no tvIp) - a
+                       # read that cannot answer must never cost a launch that
+                       # would have worked.
 
 log = cglib.make_log("launch")
 
@@ -211,11 +229,80 @@ def start(appid=None, turn=None):
         return round((time.time() - t0) * 1000)
 
     try:
-        log("launch_start", appid=appid)
+        tv_ip = CFG.get("tvIp")
+        # The raw depth rung as the launch FOUND the set - "on", "standby"
+        # (shallow), "" (deep: hours off, the IP server still answering in
+        # 3 ms with PowerState drained) or null (unreachable). Logged for
+        # the open correlation: does "" at launch_start predict the
+        # acked-and-refused wake? The Ex-Link ack can never carry this - it
+        # is a CONSTANT, probed 2026-08-19: the same 030cf1 whatever the
+        # power state and whatever the command, nothing past three bytes at
+        # all. Do not re-run that probe, and do not brute-force the command
+        # space hunting a status frame - the same protocol carries
+        # service-mode commands, and a valid-checksum guess is not a safe
+        # thing to fire at a TV someone watches.
+        tv0 = cglib.tv_power_state(tv_ip, timeout=1.0, raw=True) if tv_ip else None
+        log("launch_start", appid=appid, **({"tv": tv0} if tv_ip else {}))
         exlink("power_on")
         wol()
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
+
+        def wait_tv_on():
+            """The gate the launch path was guessing without: power_on ->
+            poll PowerState until "on" -> only THEN dispatch Enter. Every
+            recorded TV refusal (2026-08-13 17:20, 08-16 17:56, 08-19 01:18,
+            and 0b785e on 08-21) was a set that acked power_on, stayed dark,
+            and let Enter burn 47-121 s discovering a display that was never
+            there - the receiver is powered in standby, so the ack proves
+            delivery and nothing else, and the gaming PC cannot see the
+            panel either (EDID and all three WMI monitor classes read
+            identically awake or asleep across a full power cycle,
+            2026-08-13). Idle duration does not predict the refusal:
+            failures at 11.8-20.0 h since last session, successes at 22+ h.
+            The enter_died re-dispatch remains as the rescue for rigs this
+            gate cannot serve - it converts a refused first wake into a
+            slower success whenever a later frame lands; this gate spends
+            the budget on the thing that actually has to happen and makes
+            that rescue rare rather than the primary signal.
+
+            Fail-open on silence: a set that cannot be READ (no tvIp, IP
+            drift, Wi-Fi blip - the endpoint rides Wi-Fi) gets the legacy
+            blind path, because an unreadable TV is not a refused one.
+            Fail-closed only on the set's own word: TV_WAIT_S of answered
+            "standby"/"" is the set refusing, reported while whoever asked
+            is still holding the controller."""
+            if not tv_ip:
+                return
+            give_up = time.time() + TV_WAIT_S
+            poke_at = time.time() + TV_POKE_S
+            unknowns = 0
+            state = tv0
+            while time.time() < give_up:
+                cglib.touch_lock()
+                raise_if_cancelled()
+                state = cglib.tv_power_state(tv_ip, timeout=1.0, raw=True)
+                if state == "on":
+                    # dur_ms here is the frame-to-lit distribution - the
+                    # number TV_WAIT_S and TV_POKE_S are tuned against.
+                    log("tv_on", dur_ms=ms())
+                    return
+                if state is None:
+                    unknowns += 1
+                    if unknowns >= TV_UNKNOWN_N:
+                        log.warn("tv_state_unknown", dur_ms=ms())
+                        return
+                else:
+                    unknowns = 0
+                if time.time() >= poke_at:
+                    exlink("power_on", again=True)
+                    poke_at = time.time() + TV_POKE_S
+                time.sleep(1)
+            raise RuntimeError(f"TV never reported on (PowerState={state!r} "
+                               f"after {TV_WAIT_S}s of asking) - the set is "
+                               "refusing the wake, not missing the frame")
+
+        wait_tv_on()
 
         def dispatch_enter(event, attempts=ENTER_ATTEMPTS):
             """Trigger the Enter task; True once Dispatch answered OK. Called
