@@ -1,8 +1,9 @@
 """Guard: the gaming-PC scripts parse, and the literals Dispatch.ps1 cannot
 share (it is dependency-free) stay equal to their one home in
 CouchGaming.common.ps1 - marker paths, the nav-collection charset, the
-emitter-owned key list - plus the Set-Turn-after-guards order. Stdlib only,
-so it runs on system python as well as in the venv. Run:
+emitter-owned key list, the event timestamp format, the vdf root regex -
+plus the Set-Turn-after-guards order. Stdlib only, so it runs on system
+python as well as in the venv. Run:
     .venv\\Scripts\\python tests\\test_ps_parse.py
 """
 import base64
@@ -113,7 +114,7 @@ def main():
     assert d.group(1) == t.group(1), f"collection charset drift: {d.group(1)} vs {t.group(1)}"
     print(f"  nav collection charset: {d.group(1)} in both")
 
-    # 4. Set-Turn after the guards, before the task start (B.11): every early
+    # 4. Set-Turn after the guards, before the task start: every early
     # `break` (a refusal) precedes it, and Start-CgTask follows it.
     arms = verb_arms(dispatch)
     assert len(arms) == 13, f"expected 13 verb arms, got {len(arms)}"
@@ -136,7 +137,19 @@ def main():
     assert a == b, f"owned-key drift: Dispatch {a} vs common {b}"
     print(f"  owned keys: {a}")
 
-    print("OK - ps parse: every script parses; markers, charset, turn order, owned keys agree")
+    # 6. The ts both emitters write is what Alloy's timestamp stage parses and
+    #    events.emit produces; the vdf root regex is one text in both resolvers.
+    ts = [re.search(r"ToUniversalTime\(\)\.ToString\('([^']+)'\)",
+                    text[text.index(f"function {fn}"):]).group(1)
+          for text, fn in ((dispatch, "Write-Event"), (common, "Write-CgEvent"))]
+    assert ts[0] == ts[1] == "yyyy-MM-ddTHH:mm:ss.fffZ", f"ts format drift: {ts}"
+    vdf = [re.search(r"""-match '([^']*"path"[^']*)'""", t).group(1)
+           for t in (dispatch, common)]
+    assert vdf[0] == vdf[1], f"vdf root regex drift: {vdf}"
+    print(f"  ts format {ts[0]!r} and vdf regex {vdf[0]!r} in both")
+
+    print("OK - ps parse: every script parses; markers, charset, turn order, owned keys, "
+          "ts format, vdf regex agree")
 
 
 if __name__ == "__main__":
