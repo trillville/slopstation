@@ -125,23 +125,33 @@ def current():
 _redactions = None
 
 
+def load_secrets(path):
+    """secrets.json as a dict; {} when absent. Raises ValueError when present
+    but malformed (cglib's wrapper turns that into a console note). utf-8-sig
+    eats Notepad's BOM. Lives here because cglib imports this module."""
+    try:
+        return json.loads(pathlib.Path(path).read_text(encoding="utf-8-sig"))
+    except OSError:
+        return {}
+
+
+def real_key(value):
+    """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent. Redacting
+    "..." would black out prose."""
+    return (isinstance(value, str) and "..." not in value
+            and not value.upper().startswith("PLACEHOLDER")
+            and len(value.strip()) >= 15)
+
+
 def _secret_values():
     """Every real secret value, loaded once, so no key can ride out in a
-    field. Re-implements cglib.load_secrets rather than importing it: cglib
-    imports this module."""
+    field."""
     global _redactions
     if _redactions is None:
         vals = set()
         try:
-            raw = json.loads((BASE / "secrets.json").read_text(encoding="utf-8-sig"))
-            for k, v in raw.items():
-                if k.startswith("_"):
-                    continue
-                # Same placeholder rule as cglib.real_key: redacting "..."
-                # would black out prose.
-                if (isinstance(v, str) and "..." not in v
-                        and not v.upper().startswith("PLACEHOLDER")
-                        and len(v.strip()) >= 15):
+            for k, v in load_secrets(BASE / "secrets.json").items():
+                if not k.startswith("_") and real_key(v):
                     vals.add(v.strip())
         except (OSError, ValueError, AttributeError):
             pass                    # no secrets file on this box: nothing to hide

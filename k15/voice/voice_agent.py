@@ -45,17 +45,6 @@ from session_runtime import run_session         # noqa: E402
 
 log = cglib.make_log("voice")
 
-# Missing any of these fails at startup, not per-wake.
-REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
-                  "eotThreshold", "eagerEotThreshold", "keytermCount",
-                  "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
-                  "assistantProvider", "assistantModelAnthropic",
-                  "assistantModelOpenai", "assistantReasoningEffort", "inputs",
-                  "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "workerProvider", "workerModelAnthropic", "workerModelOpenai",
-                  "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
-
-
 def refresh_library_bg():
     """Catalog sync off the wake loop: a slow/asleep PC (30 s ssh timeout)
     must not delay a wake. Fail-soft; no-ops if one is running."""
@@ -105,9 +94,9 @@ def main():
         list_devices()
         return 0
 
-    cfg = cglib.load_config()
+    cfg = cglib.config()
     voice = cfg["voice"]
-    missing = [k for k in REQUIRED_VOICE if k not in voice]
+    missing = cglib.missing_config(cfg, voice=True)
     if missing:
         log.error("config_invalid", missing=missing)
         return 1
@@ -148,9 +137,9 @@ def main():
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
         log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
-    from assistant import BACKENDS
-    brain = BACKENDS.get(voice["assistantProvider"])
-    brain_live = bool(brain and cglib.real_key(secrets.get(brain.key)))
+    from assistant import PROVIDER_KEY
+    brain_key = PROVIDER_KEY.get(voice["assistantProvider"])
+    brain_live = bool(brain_key and cglib.real_key(secrets.get(brain_key)))
     # Assistant = Messages API (full ids only); worker = claude CLI (aliases
     # fine). Warn, never refuse: the INACTIVE provider must not block startup.
     if not voice["assistantModelAnthropic"].startswith("claude-"):
@@ -169,20 +158,20 @@ def main():
     prewarm_imports_bg(voice["assistantProvider"])
     if brain_live:
         from assistant import default_model
-        ap = voice["assistantProvider"]
-        log("lane_up", what="assistant", provider=ap,
-            model=default_model(cfg, ap),
+        provider = voice["assistantProvider"]
+        log("lane_up", what="assistant", provider=provider,
+            model=default_model(voice, provider),
             # anthropic has no effort knob
-            effort=voice["assistantReasoningEffort"] if ap == "openai" else None,
+            effort=voice["assistantReasoningEffort"] if provider == "openai" else None,
             websearch=voice["assistantWebSearch"] or None)
 
     # Tier-3 worker lane, fail-soft: no CLI just turns background tasks off.
     import announce
     import jobs as jobs_mod
-    from workers import MODEL_KEY, WORKERS
+    from workers import WORKER_MODEL_KEY, WORKERS
     jobs = announcer = None
     wp = voice["workerProvider"]
-    adapter = (WORKERS[wp](voice[MODEL_KEY[wp]], voice["workerEffort"])
+    adapter = (WORKERS[wp](voice[WORKER_MODEL_KEY[wp]], voice["workerEffort"])
                if wp in WORKERS else None)
     if adapter is None:
         log.warn("lane_disabled", what="worker", reason="unknown workerProvider",

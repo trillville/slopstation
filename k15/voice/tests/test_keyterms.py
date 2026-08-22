@@ -5,8 +5,7 @@ Pins the list's shape; bench/probe_stt.py is the live counterpart. Run:
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
 
 import library                                  # noqa: E402
 import session_runtime                          # noqa: E402

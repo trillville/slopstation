@@ -10,8 +10,7 @@ import time
 import types
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
 
 import announce
 import cglib
@@ -59,11 +58,11 @@ def main():
     cw.stream = True
     assert "--model" not in argv                 # empty = the CLI's own
     # One vocabulary across both lanes, a model key per vendor.
-    assert set(workers.WORKERS) == set(workers.MODEL_KEY) == {"anthropic",
+    assert set(workers.WORKERS) == set(workers.WORKER_MODEL_KEY) == {"anthropic",
                                                               "openai"}
     assert workers.WORKERS["anthropic"].exe == "claude"
     assert workers.WORKERS["openai"].exe == "codex"
-    assert workers.MODEL_KEY["anthropic"] == "workerModelAnthropic"
+    assert workers.WORKER_MODEL_KEY["anthropic"] == "workerModelAnthropic"
     assert not any(a.startswith("TASK") for a in argv)           # prompt=stdin
     assert cw._env() is None                     # no knob -> inherit the CLI's
     cw2 = workers.ClaudeWorker(model="claude-haiku-4-5", effort="high")
@@ -199,7 +198,6 @@ def main():
     # bench/harness.py doubles this store; a drifted signature reads as an API
     # blip inside the trial loop's `except Exception`, so pin the two together.
     import inspect
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
     import harness
     real, fake_sig = (inspect.signature(jobs_mod.JobStore.enqueue),
                       inspect.signature(harness.FakeJobs.enqueue))

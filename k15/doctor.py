@@ -21,18 +21,17 @@ def report(level, name, detail, hint=""):
 
 
 def check_config():
-    required = ("gamingPcMac", "gamingPcIp", "sshHost", "tvComPort",
-                "tvGamingCmd", "tvIdleCmd", "tvOffWhenDone")
     try:
         cfg = cglib.load_config()
     except Exception as e:
         report(FAIL, "config.json", f"unreadable ({e})", "recreate from k15/config.example.json")
         return None
-    missing = [k for k in required if k not in cfg]
+    missing = cglib.missing_config(cfg)
+    n = len(cglib.REQUIRED_CONFIG)
     if missing:
         report(FAIL, "config.json", f"missing keys: {missing}", "compare with k15/config.example.json")
     else:
-        report(PASS, "config.json", f"{len(required)}/{len(required)} keys present")
+        report(PASS, "config.json", f"{n}/{n} keys present")
     return cfg
 
 
@@ -201,7 +200,7 @@ def check_session_state():
     else:
         report(WARN, "session lock", f"stale ({age:.0f}s)",
                "harmless - next launch or reconcile recycles it")
-    err = cglib.BASE / "state" / "last_error"
+    err = cglib.LAST_ERROR
     try:
         report(WARN, "last_error", err.read_text().strip() or "(empty)",
                "most recent launch failure - see couch.log")
@@ -278,7 +277,7 @@ def check_voice(cfg):
     else:
         report(WARN, "voice venv", "not bootstrapped (no .venv\\deps-ok)",
                "run voice\\Start-Voice.bat once (~2 min with network)")
-    lib = cglib.BASE / "state" / "library.json"
+    lib = cglib.STATE / "library.json"
     try:
         data = json.loads(lib.read_text(encoding="utf-8"))
         age_h = (time.time() - lib.stat().st_mtime) / 3600
@@ -293,7 +292,7 @@ def check_voice(cfg):
 
     # Deals precompute: the agent refreshes ~6h, so stale means the store sync
     # is failing. WARN past 24h; absent is silent (fills on first sync).
-    deals = cglib.BASE / "state" / "deals.json"
+    deals = cglib.STATE / "deals.json"
     if deals.exists():
         age_h = (time.time() - deals.stat().st_mtime) / 3600
         if age_h > 24:
@@ -373,7 +372,7 @@ def check_voice(cfg):
         if not (voice_dir / "worker_home" / "AGENTS.md").exists():
             report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
                    "git pull should restore it - workers act unbriefed without it")
-    jobs_file = cglib.BASE / "state" / "jobs.json"
+    jobs_file = cglib.STATE / "jobs.json"
     if jobs_file.exists():
         try:
             rows = json.loads(jobs_file.read_text(encoding="utf-8"))

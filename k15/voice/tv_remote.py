@@ -44,7 +44,7 @@ class TvRemote:
         self.name = name
         self.key_delay = key_delay
         self.timeout = timeout
-        self.token = cglib.BASE / "state" / "tv-ws-token.txt"
+        self.token = cglib.STATE / "tv-ws-token.txt"
 
     def press(self, direction, n):
         """Send n volume keys. Raises on a dead/unpaired connection."""
@@ -62,7 +62,7 @@ class TvRemote:
 
 
 def main(argv):
-    ip = cglib.load_config().get("tvIp")
+    ip = cglib.config().get("tvIp")
     if not ip:
         print("config.json has no tvIp")
         return 2

@@ -12,8 +12,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
 
 import cglib
 import steam_session as ss

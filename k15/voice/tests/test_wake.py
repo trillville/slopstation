@@ -15,10 +15,9 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
 import cglib
-from audio import WakeListener
+from audio import WakeListener, wake_phrase
 
 
 def deployed_model():
@@ -34,7 +33,7 @@ def deployed_model():
 MODEL = deployed_model()
 # Same derivation as session_runtime.py: the filename IS the phrase, so an
 # off-convention model name breaks here loudly.
-PHRASE = MODEL.rsplit("_v", 1)[0].replace("_", " ")
+PHRASE = wake_phrase(MODEL)
 VOICE_CFG = {"wakeModel": MODEL}
 CHUNK = WakeListener.CHUNK
 

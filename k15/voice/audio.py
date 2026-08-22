@@ -31,6 +31,12 @@ class DeviceMissing(Exception):
         self.wanted = wanted
 
 
+def wake_phrase(model_name):
+    """"hey_jarvis_v0.1" -> "hey jarvis": what the pre-roll transcribes and
+    strip_wake anchors on. WakeListener.key keeps the underscored stem."""
+    return model_name.rsplit("_v", 1)[0].replace("_", " ")
+
+
 def resolve_device(pa, fragment, want_input, log=log, required=True):
     """Config name-fragment -> PyAudio device index; None = system default.
     Logs the bound NAME: after a rebuild the index alone says nothing about

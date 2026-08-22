@@ -8,8 +8,8 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
+from _bootstrap import fresh_state              # noqa: E402
 
 import cglib
 import couch                 # the ssh seam - dispatch reaches it via the module
@@ -30,19 +30,6 @@ class Harness:
         self.d = dp.Dispatch(CFG, self.log, dry_run=dry_run)
 
 
-def with_temp_lock(age_s):
-    """Point cglib.LOCK at a temp file with the given age; None = absent.
-    CANCEL rides along, or test cancels land in the real state dir."""
-    tmp = Path(tempfile.mkdtemp()) / "session.lock"
-    if age_s is not None:
-        tmp.write_text("x")
-        old = time.time() - age_s
-        import os
-        os.utime(tmp, (old, old))
-    cglib.LOCK = tmp
-    cglib.CANCEL = tmp.parent / "cancel"
-
-
 def main():
     sent = []
     real_sleep = time.sleep
@@ -50,24 +37,24 @@ def main():
     cglib.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
 
     # --- lock arbiter --------------------------------------------------------
-    with_temp_lock(10)                                # fresh lock
+    fresh_state(10)                                # fresh lock
     h = Harness(dry_run=True)
     r = h.d.start_session()
     assert not r.ok and r.earcon == "busy", r
 
-    with_temp_lock(None)
+    fresh_state(None)
     h = Harness(dry_run=True)
     r = h.d.start_session(appid=12345)
     assert r.ok and "couch.py start 12345" in r.detail, r
     # Assert on the EVENT, not its prose: dashboards group by event name.
     assert "dry_run_would" in h.log.events(), h.log.records
 
-    with_temp_lock(999)                               # stale lock = launchable
+    fresh_state(999)                               # stale lock = launchable
     h = Harness(dry_run=True)
     assert h.d.start_session().ok
 
     # --- live start spawns couch.py ------------------------------------------
-    with_temp_lock(None)
+    fresh_state(None)
     spawned = []
     dp.subprocess.Popen = lambda args, **kw: spawned.append(args)
     h = Harness()
@@ -108,13 +95,13 @@ def main():
 
     # No session: "switch to the pc" means "start a session" - spawns the full
     # couch launch and never touches the TV (couch.py flips at READY).
-    with_temp_lock(None)
+    fresh_state(None)
     sent.clear(); spawned.clear()
     r = h.d.switch_input("the pc")
     assert r.ok and spawned and spawned[0][-1] == "start" and not sent, \
         (r, spawned, sent)
     # Mid-launch (fresh lock, host pre-READY): truthful busy, no switch.
-    with_temp_lock(10)
+    fresh_state(10)
     couch.ssh = lambda cmd, **kw: "NOTREADY"
     sent.clear()
     r = h.d.switch_input("the pc")
@@ -130,29 +117,29 @@ def main():
     # --- end session over ssh outcomes ---------------------------------------
     # With the rig busy, ending writes the cancel marker couch.py consumes
     # BEFORE the ssh, so the launch stands down even if the exit never lands.
-    with_temp_lock(10)
+    fresh_state(10)
     couch.ssh = lambda cmd, **kw: "OK"
     h = Harness()
     assert h.d.end_session().ok
     assert cglib.CANCEL.exists(), "a busy rig's end must leave the marker"
     assert "end_session_dispatched" in h.log.events()
-    with_temp_lock(10)
+    fresh_state(10)
     couch.ssh = lambda cmd, **kw: "FAILED:1"
     assert not Harness().d.end_session().ok
-    with_temp_lock(10)                    # mid-launch, PC mid-wake: still an end
+    fresh_state(10)                    # mid-launch, PC mid-wake: still an end
     couch.ssh = ssh_down
     h = Harness()
     r = h.d.end_session()
     assert r.ok and cglib.CANCEL.exists(), r
     assert "end_session_dispatched" in h.log.events()
     # Idle rig: nothing to cancel, so an unreachable PC is a real failure.
-    with_temp_lock(None)
+    fresh_state(None)
     r = Harness().d.end_session()
     assert not r.ok and r.earcon == "fail"
     assert not cglib.CANCEL.exists(), "an idle rig's end must not leave a marker"
 
     # --- play_game: session-live ssh outcomes + cold-start delegation --------
-    with_temp_lock(10)                                # fresh lock = session up
+    fresh_state(10)                                # fresh lock = session up
     h = Harness()
     couch.ssh = lambda cmd, **kw: "OK"
     assert h.d.play_game(1888160).ok
@@ -178,7 +165,7 @@ def main():
     assert "controller" in r.detail, r
     couch.ssh = ssh_down
     assert Harness().d.play_game(1).earcon == "fail"
-    with_temp_lock(None)                              # cold: full couch launch
+    fresh_state(None)                              # cold: full couch launch
     spawned.clear()
     r = Harness().d.play_game(777)
     i = spawned[0].index("start")
@@ -222,10 +209,10 @@ def main():
     assert "start one first" in r.detail, r
     # Mid-start (fresh lock) the busy names the situation: "start one first"
     # told the model to start the session it had just started (2026-08-15).
-    with_temp_lock(10)
+    fresh_state(10)
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
-    with_temp_lock(None)
+    fresh_state(None)
     # An unknown kind is refused HERE and never reaches the wire.
     wire2 = []
     couch.ssh = lambda cmd, **kw: wire2.append(cmd) or "OK"
@@ -239,7 +226,7 @@ def main():
     # Register-ScheduledTask (2026-08-14); the reply names the task and the fix.
     h = Harness()
     dp.library.installed_name = lambda a: None
-    with_temp_lock(5)          # a live session, so play_game takes the ssh path
+    fresh_state(5)          # a live session, so play_game takes the ssh path
     for verb, task, call in (("nav", "Nav", lambda: h.d.nav("downloads")),
                              ("stop", "StopGame", lambda: h.d.quit_game(1)),
                              ("launch", "LaunchGame", lambda: h.d.play_game(1))):

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import cglib
 
-STATE = cglib.BASE / "state"
+STATE = cglib.STATE
 LIBRARY = STATE / "library.json"
 
 log = cglib.make_log("library")
@@ -277,7 +277,7 @@ def _get(url, params=None, timeout=20):
 def _cc():
     """Country code for prices, from voice.location.country (defaults US)."""
     try:
-        return (cglib.load_config().get("voice", {})
+        return (cglib.config().get("voice", {})
                 .get("location", {}).get("country") or "US").upper()
     except Exception:
         return "US"

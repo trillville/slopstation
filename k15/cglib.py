@@ -8,6 +8,7 @@ import json, os, pathlib, struct, time
 import events
 
 BASE = pathlib.Path(__file__).resolve().parent
+STATE = BASE / "state"
 
 # Valve Steam Controller Puck (as forwarded by VirtualHere).
 # 0x1304 = USB_PRODUCT_VALVE_STEAM_PROTEUS_DONGLE in SDL's usb_ids.h.
@@ -96,10 +97,10 @@ def play_pattern(dev, steps, gain=0):
 
 
 # --- Session state (shared by couch.py and the chord listener) ----------------
-LOCK = BASE / "state" / "session.lock"
+LOCK = STATE / "session.lock"
 LOCK_STALE_S = 300          # a live session touches the lock every few seconds
-LAST_ERROR = BASE / "state" / "last_error"   # written by couch.py on launch failure
-CANCEL = BASE / "state" / "cancel"  # one line: the cancelling turn (may be
+LAST_ERROR = STATE / "last_error"   # written by couch.py on launch failure
+CANCEL = STATE / "cancel"   # one line: the cancelling turn (may be
                                     # empty). Written by voice end_session,
                                     # unlinked by couch.py at every launch
                                     # wait; stale copies voided at the next
@@ -251,7 +252,79 @@ PATTERN_FAIL   = (_THUD, _THUD, _THUD_END)
 
 
 def load_config():
-    return json.loads((BASE / "config.json").read_text())
+    """The raw file read; config() is what runtime code calls."""
+    return json.loads((BASE / "config.json").read_text(encoding="utf-8-sig"))
+
+
+_config = None
+
+
+def config():
+    """This process's config.json, read once on first call."""
+    global _config
+    if _config is None:
+        _config = load_config()
+    return _config
+
+
+def use_config(cfg):
+    """Test seam: make config() answer `cfg` without touching the file."""
+    global _config
+    _config = cfg
+
+
+REQUIRED_CONFIG = ("gamingPcMac", "gamingPcIp", "sshHost", "tvComPort",
+                   "tvGamingCmd", "tvIdleCmd", "tvOffWhenDone")
+# Missing any of these fails the voice agent at startup, not per-wake. Every
+# other voice key is optional with an inert default: config.json is
+# per-machine and gitignored, so a key made mandatory in code is an agent
+# that will not start after a git pull.
+REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
+                  "eotThreshold", "eagerEotThreshold", "keytermCount",
+                  "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
+                  "assistantProvider", "assistantModelAnthropic",
+                  "assistantModelOpenai", "assistantReasoningEffort", "inputs",
+                  "assistantWebSearch", "assistantSearchMaxUses", "location",
+                  "workerProvider", "workerModelAnthropic", "workerModelOpenai",
+                  "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
+
+
+def missing_config(cfg, voice=False):
+    """Required keys absent from cfg (top level, or its voice section)."""
+    if voice:
+        section = cfg.get("voice") if isinstance(cfg, dict) else None
+        if not isinstance(section, dict):
+            return list(REQUIRED_VOICE)
+        return [k for k in REQUIRED_VOICE if k not in section]
+    return [k for k in REQUIRED_CONFIG if k not in cfg]
+
+
+# --- state files ----------------------------------------------------------------
+
+
+def load_json(path, default):
+    """A JSON state file, or `default` when absent or unparseable."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, obj, indent=1):
+    """tmp + os.replace, so a reader never sees a partial file. The replace
+    retries: Windows denies a rename onto a file another process holds open
+    (doctor reads jobs.json) - see _recycle_stale_lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=indent), encoding="utf-8")
+    for attempt in range(8):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            if attempt == 7:
+                raise
+            time.sleep(0.05)
 
 
 # --- secrets (voice lanes; chord path never needs these) ----------------------
@@ -260,21 +333,15 @@ SECRETS = BASE / "secrets.json"
 
 def load_secrets():
     """Fail-soft: missing or malformed file = no keys = lanes disabled
-    downstream, never a crash. utf-8-sig eats Notepad's BOM."""
+    downstream, never a crash. Reads SECRETS at call time (tests re-point it)."""
     try:
-        return json.loads(SECRETS.read_text(encoding="utf-8-sig"))
-    except OSError:
-        return {}
+        return events.load_secrets(SECRETS)
     except ValueError:
         print(f"[cglib] {SECRETS.name} is malformed - all keyed lanes disabled")
         return {}
 
 
-def real_key(value):
-    """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent."""
-    return (isinstance(value, str) and "..." not in value
-            and not value.upper().startswith("PLACEHOLDER")
-            and len(value.strip()) >= 15)
+real_key = events.real_key
 
 
 def rotate_log(max_bytes=5_000_000):

@@ -158,7 +158,7 @@ def _make_llm(voice, secrets, system_text):
         return OpenAIResponsesHttpLLMService(
             api_key=secrets["openaiApiKey"],
             settings=OpenAIResponsesHttpLLMService.Settings(
-                model=default_model({"voice": voice}, "openai"),
+                model=default_model(voice, "openai"),
                 system_instruction=system_text, max_completion_tokens=1500,
                 reasoning=OpenAIResponsesReasoningConfig(
                     effort=voice["assistantReasoningEffort"])))
@@ -166,7 +166,7 @@ def _make_llm(voice, secrets, system_text):
     return AnthropicLLMService(
         api_key=secrets["anthropicApiKey"],
         settings=AnthropicLLMService.Settings(
-            model=default_model({"voice": voice}, "anthropic"),
+            model=default_model(voice, "anthropic"),
             system_instruction=system_text,
             enable_prompt_caching=True, max_tokens=400))
 
@@ -190,9 +190,10 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
 
     voice = cfg["voice"]
     game_terms = load_titles(voice["keytermCount"])
-    # "hey_jarvis_v0.1" -> "hey jarvis"; keyterm-boosted so the pre-roll wake
-    # phrase transcribes canonically and strip_wake matches.
-    wake_phrase = voice["wakeModel"].rsplit("_v", 1)[0].replace("_", " ")
+    # Keyterm-boosted so the pre-roll wake phrase transcribes canonically and
+    # strip_wake matches.
+    from audio import wake_phrase as _wake_phrase
+    wake_phrase = _wake_phrase(voice["wakeModel"])
     keyterms = stt_keyterms(voice, wake_phrase)
     log("stt_vocabulary", terms=len(keyterms), titles=len(game_terms),
         headroom=MAX_KEYTERMS - len(keyterms))
@@ -221,9 +222,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     )
 
     dispatcher = Dispatch(cfg, log, dry_run=args.dry_run)
-    from assistant import BACKENDS
+    from assistant import PROVIDER_KEY
     provider = voice["assistantProvider"]
-    assistant_live = cglib.real_key(secrets.get(BACKENDS[provider].key))
+    assistant_live = cglib.real_key(secrets.get(PROVIDER_KEY[provider]))
     gate = GrammarGate(
         matcher, dispatcher, log,
         resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])

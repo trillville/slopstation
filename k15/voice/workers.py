@@ -318,4 +318,4 @@ class CodexWorker(_CliWorker):
 # Keyed by vendor, like assistantProvider; workerProvider lines up with
 # workerModel<Vendor>.
 WORKERS = {"anthropic": ClaudeWorker, "openai": CodexWorker}
-MODEL_KEY = {"anthropic": "workerModelAnthropic", "openai": "workerModelOpenai"}
+WORKER_MODEL_KEY = {"anthropic": "workerModelAnthropic", "openai": "workerModelOpenai"}

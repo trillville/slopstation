@@ -10,13 +10,11 @@ import threading
 import time
 import uuid
 
-from pathlib import Path
-
+import cglib
 import events
 import tracing
 
-HERE = Path(__file__).resolve().parent
-JOBS_FILE = HERE.parent / "state" / "jobs.json"
+JOBS_FILE = cglib.STATE / "jobs.json"
 
 QUEUED, RUNNING, DONE, FAILED = "QUEUED", "RUNNING", "DONE", "FAILED"
 KEEP = 10                       # finished jobs retained in the file

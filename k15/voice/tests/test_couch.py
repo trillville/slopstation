@@ -9,13 +9,11 @@ import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
+from _bootstrap import fresh_state              # noqa: E402
 
 import cglib
 import events
-
-events.LOG_DIR = Path(tempfile.mkdtemp())        # keep test events out of logs/
 
 import couch                                     # noqa: E402  (needs LOG_DIR set)
 
@@ -24,20 +22,6 @@ CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4", "tvIdleCmd": "hdmi1",
        "gamingPcIp": "127.0.0.1", "gamingPcMac": "00-00-00-00-00-00"}
 
 READY_TS = "2026-08-12T20:00:00"                 # what a legacy marker answers
-
-
-def fresh_state(lock_age_s=None, lock_content="x"):
-    """Point cglib's lock + last_error into a new tmpdir. lock_age_s seeds a
-    lock of that age (None = absent)."""
-    tmp = Path(tempfile.mkdtemp())
-    cglib.LOCK = tmp / "session.lock"
-    cglib.LAST_ERROR = tmp / "last_error"
-    cglib.CANCEL = tmp / "cancel"
-    if lock_age_s is not None:
-        cglib.LOCK.write_text(lock_content)
-        old = time.time() - lock_age_s
-        os.utime(cglib.LOCK, (old, old))
-    return tmp
 
 
 def wire(script, default=None):
@@ -76,7 +60,7 @@ def wire(script, default=None):
 def main():
     real_sleep = time.sleep
     time.sleep = lambda s: None                  # fast tests
-    couch.CFG = CFG
+    cglib.use_config(CFG)
     couch.ENTER_ATTEMPTS = 2
     couch.READY_WAIT_S = 0.3
     couch.WATCH_POLL_S = 0
@@ -401,7 +385,7 @@ def main():
 
     # --- TV evidence: rides the READY wait, gates only the rescue --------------
     real_tv_state = cglib.tv_power_state
-    couch.CFG = dict(CFG, tvIp="tv")
+    cglib.use_config(dict(CFG, tvIp="tv"))
     couch.TV_WAIT_S = 0.2
     couch.TV_POKE_S = 0.05
 
@@ -493,7 +477,7 @@ def main():
     def boom(ip, timeout=2.0, raw=False):
         raise AssertionError("no tvIp - the launch must never read the TV")
     cglib.tv_power_state = boom
-    couch.CFG = CFG
+    cglib.use_config(CFG)
     log, sent = wire([
         ("enter", "OK"),
         ("status", "ab12cd"),

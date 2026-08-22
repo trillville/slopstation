@@ -7,8 +7,6 @@ import os, socket, subprocess, sys, time
 import cglib
 import events
 
-CFG  = cglib.load_config()
-
 PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
@@ -80,7 +78,7 @@ def raise_if_cancelled():
 
 def exlink(name, **fields):
     try:
-        ack = cglib.exlink_send(name, CFG["tvComPort"])
+        ack = cglib.exlink_send(name, cglib.config()["tvComPort"])
         # ack = the receiver accepted the frame, not that the set acted on
         # it; Ex-Link is send-only and power_on can ack on a dark set.
         log("exlink_send", cmd=name, ack=ack or "no-ack", **fields)
@@ -90,7 +88,7 @@ def exlink(name, **fields):
 
 
 def wol():
-    mac = bytes.fromhex(CFG["gamingPcMac"].replace(":", "").replace("-", ""))
+    mac = bytes.fromhex(cglib.config()["gamingPcMac"].replace(":", "").replace("-", ""))
     pkt = b"\xff" * 6 + mac * 16
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -106,7 +104,7 @@ def ssh(cmd, timeout=15):
     unreachable host RAISES instead of returning ssh's error text as session
     state - otherwise the READY poll reads 'ssh: connect ... timed out' as
     READY, and watch() never detects sleep."""
-    r = subprocess.run(["ssh", CFG["sshHost"], cmd],
+    r = subprocess.run(["ssh", cglib.config()["sshHost"], cmd],
                        capture_output=True, text=True, timeout=timeout, check=True)
     return r.stdout.strip()
 
@@ -144,7 +142,7 @@ def wait_port(timeout=PORT_WAIT_S):
         # A cold boot can spend the whole 90 s here; a cancel must not wait it out.
         raise_if_cancelled()
         try:
-            with socket.create_connection((CFG["gamingPcIp"], 22), 3):
+            with socket.create_connection((cglib.config()["gamingPcIp"], 22), 3):
                 return True
         except OSError:
             time.sleep(1)
@@ -180,7 +178,7 @@ def start(appid=None, turn=None):
         return round((time.time() - t0) * 1000)
 
     try:
-        tv_ip = CFG.get("tvIp")
+        tv_ip = cglib.config().get("tvIp")
         # Raw depth rung as the launch FOUND the set: "on", "standby", ""
         # (deep: hours off, IP server still answering with PowerState drained)
         # or the "unreachable" sentinel - events.emit drops None-valued fields,
@@ -353,7 +351,7 @@ def start(appid=None, turn=None):
             time.sleep(1)
         if not ready: raise RuntimeError("host never reported READY")
         cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
-        exlink(CFG["tvGamingCmd"])
+        exlink(cglib.config()["tvGamingCmd"])
         if appid:
             # Voice "play <title>" from cold. Best-effort - Big Picture up is
             # a working outcome, except on ALREADY (appid already running from
@@ -428,7 +426,7 @@ def watch(expected=None):
                 log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
-    exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
+    exlink("power_off" if cglib.config()["tvOffWhenDone"] else cglib.config()["tvIdleCmd"])
     # Ownership-checked: a lock recycled while we stalled belongs to the
     # successor, and unlinking it would free a live session.
     if not cglib.release_lock():

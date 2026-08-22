@@ -630,7 +630,7 @@ def server_tools(voice, provider):
 
 
 class AnthropicBackend:
-    key = "anthropicApiKey"
+    key = "anthropicApiKey"          # == PROVIDER_KEY["anthropic"]
 
     def __init__(self, secrets, model, effort=None, voice=None):
         import anthropic
@@ -684,7 +684,7 @@ class OpenAIBackend:
     """Responses API: reasoning and tool calls coexist here, unlike the legacy
     chat-completions endpoint. State is server-side via previous_response_id,
     which also threads reasoning items across tool calls."""
-    key = "openaiApiKey"
+    key = "openaiApiKey"             # == PROVIDER_KEY["openai"]
 
     def __init__(self, secrets, model, effort="low", voice=None):
         import openai
@@ -742,10 +742,11 @@ BACKENDS = {"anthropic": AnthropicBackend, "openai": OpenAIBackend}
 # whole A/B, and neither lane hides behind a default.
 MODEL_KEY = {"anthropic": "assistantModelAnthropic",
              "openai": "assistantModelOpenai"}
+PROVIDER_KEY = {"anthropic": "anthropicApiKey", "openai": "openaiApiKey"}
 
 
-def default_model(cfg, provider):
-    return cfg["voice"][MODEL_KEY[provider]]
+def default_model(voice, provider):
+    return voice[MODEL_KEY[provider]]
 
 
 def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
@@ -759,14 +760,14 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
     if provider not in BACKENDS:
         print(f"unknown provider '{provider}' - one of {list(BACKENDS)}")
         return 2
-    keyname = BACKENDS[provider].key
+    keyname = PROVIDER_KEY[provider]
     if not cglib.real_key(secrets.get(keyname)):
         print(f"{keyname} is a placeholder - add it to secrets.json for {provider}")
         return 1
 
     impls = tool_impls(Dispatch(cfg, log, dry_run=dry_run), log)
     effort = effort or cfg["voice"]["assistantReasoningEffort"]
-    backend = BACKENDS[provider](secrets, model or default_model(cfg, provider),
+    backend = BACKENDS[provider](secrets, model or default_model(cfg["voice"], provider),
                                  effort=effort, voice=cfg["voice"])
     system_text = system_instruction(cfg)
     tag = f"{provider}/{backend.model}"

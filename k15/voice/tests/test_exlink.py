@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
 import cglib
 
 # name -> (c1, c2, c3, value), straight from the official worksheet rows.

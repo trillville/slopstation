@@ -5,8 +5,7 @@ configured device that is merely absent. Fake device table, no PortAudio. Run:
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap                               # noqa: F401,E402
 
 import audio                                    # noqa: E402
 import cglib                                    # noqa: E402
