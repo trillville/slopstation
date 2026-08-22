@@ -322,7 +322,7 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         want = (args.get("facets") or []) if store_on else []
         tasks = {}
         if "price" in want:
-            tasks["price"] = lambda: library._store_items([appid]).get(appid)
+            tasks["price"] = lambda: library.store_items([appid]).get(appid)
         if "reviews" in want:
             tasks["reviews"] = lambda: library.fetch_reviews(appid)
         if "news" in want:
@@ -350,7 +350,7 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             # A facet ask is already a live-store conversation, so one more
             # GetItems call is in kind - and the kill switch already zeroed
             # `want` if store calls are off.
-            name = (library._store_items([appid]).get(appid) or {}).get("name")
+            name = (library.store_items([appid]).get(appid) or {}).get("name")
         if "hltb" in want and name:
             facets["hltb"] = library.fetch_hltb(name)
         if not (meta or name or any(facets.values())):

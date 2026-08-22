@@ -87,13 +87,13 @@ def main():
     assert sp[0] == {"appid": 1, "name": "Special A", "discount": 25, "final": 14.99}, sp[0]
 
     # --- _store_items: name/price/discount, missing appids simply absent -----
-    items = library._store_items([10, 11, 999])
+    items = library.store_items([10, 11, 999])
     assert set(items) == {10, 11}, items
     assert items[10] == {"name": "Wish One", "final": "$5.00", "discount": 50, "price": 500}, items[10]
     # ...and CHUNKS past the 100-per-batch cap instead of truncating: id 12
     # sits at position 120, so it only prices if a second batch was fetched.
     big = [10] + list(range(900000, 900119)) + [12]
-    assert set(library._store_items(big)) == {10, 12}, "the >100 tail was dropped"
+    assert set(library.store_items(big)) == {10, 12}, "the >100 tail was dropped"
 
     # --- wishlist_on_sale: only discounted, best deal first ------------------
     ws = library.fetch_wishlist_on_sale("7656119")

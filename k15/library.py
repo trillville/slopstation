@@ -87,7 +87,7 @@ def fetch_installed_local():
                     f[key] = m.group(1)
             # ASCII-only names, same rule as the Dispatch verb (encoding-proof
             # across ssh/shell hops; (tm) glyphs are noise to voice anyway).
-            name = _ascii(f.get("name", ""))
+            name = ascii_only(f.get("name", ""))
             if f.get("appid") and name and f["appid"] not in seen:
                 seen.add(f["appid"])
                 rows.append({"appid": int(f["appid"]), "name": name,
@@ -191,7 +191,7 @@ def fetch_owned(api_key, steamid):
             "hours": round(g.get("playtime_forever", 0) / 60, 1),
             "hours2w": round(g.get("playtime_2weeks", 0) / 60, 1),
             "last": g.get("rtime_last_played", 0),
-            "name": _ascii(g.get("name", "")),
+            "name": ascii_only(g.get("name", "")),
         }
     return out
 
@@ -210,7 +210,7 @@ def fetch_meta_one(appid):
         meta.update({
             "genres": [g["description"] for g in data.get("genres", [])],
             "controller": next((v for k, v in _CTRL.items() if k in cats), "none"),
-            "desc": _ascii(data.get("short_description", ""))[:160],
+            "desc": ascii_only(data.get("short_description", ""))[:160],
             "score": (data.get("metacritic") or {}).get("score"),
             "year": (data.get("release_date") or {}).get("date", "")[-4:],
         })
@@ -318,13 +318,13 @@ def _cc():
     return _CC
 
 
-def _ascii(s):
+def ascii_only(s):
     """Names go ASCII-only, the same rule the catalog fetchers use (encoding-
     proof across every hop, and (tm)-glyphs are noise to voice)."""
     return re.sub(r"[^\x20-\x7E]", "", s or "").strip()
 
 
-def _store_items(appids, cc=None):
+def store_items(appids, cc=None):
     """IStoreBrowseService/GetItems - the batch name/price/discount workhorse,
     keyless. {appid: {name, price, discount, final}} for the appids it could
     resolve; missing ones are simply absent (fail-soft per item). Review scores
@@ -354,7 +354,7 @@ def _store_items(appids, cc=None):
                 continue
             opt = it.get("best_purchase_option", {}) or {}
             out[int(appid)] = {
-                "name": _ascii(it.get("name", "")),
+                "name": ascii_only(it.get("name", "")),
                 "final": opt.get("formatted_final_price"),
                 "discount": int(opt.get("discount_pct", 0) or 0),
                 "price": (int(opt.get("final_price_in_cents", 0) or 0) or None),
@@ -370,7 +370,7 @@ def fetch_wishlist_on_sale(steamid, cc=None):
     # int() the appids: GetItems keys its result by int, so a string appid from
     # the API would silently miss the price lookup and drop the game.
     appids = [int(it["appid"]) for it in items if it.get("appid")]
-    priced = _store_items(appids, cc)
+    priced = store_items(appids, cc)
     on_sale = [{"appid": a, **priced[a]} for a in appids
                if a in priced and priced[a]["discount"] > 0]
     on_sale.sort(key=lambda g: -g["discount"])
@@ -387,7 +387,7 @@ def fetch_specials(cc=None):
     for it in items:
         if it.get("id") in NOT_GAMES:
             continue
-        out.append({"appid": it.get("id"), "name": _ascii(it.get("name", "")),
+        out.append({"appid": it.get("id"), "name": ascii_only(it.get("name", "")),
                     "discount": int(it.get("discount_percent", 0) or 0),
                     "final": (it.get("final_price", 0) or 0) / 100 or None})
     return out
@@ -399,7 +399,7 @@ def fetch_trending(cc=None):
     d = _get(f"{API}/ISteamChartsService/GetMostPlayedGames/v1/")
     ranks = ((d or {}).get("response", {}) or {}).get("ranks", []) or []
     appids = [int(r["appid"]) for r in ranks[:20] if r.get("appid")]   # int keys, see wishlist
-    named = _store_items(appids, cc)
+    named = store_items(appids, cc)
     return [{"appid": a, "rank": i + 1,
              "name": named.get(a, {}).get("name") or f"app {a}"}
             for i, a in enumerate(appids)]
@@ -416,7 +416,7 @@ def fetch_recently_played():
     d = _get(f"{API}/IPlayerService/GetRecentlyPlayedGames/v1/",
              {"key": s["steamApiKey"], "steamid": s["steamId64"]})
     games = ((d or {}).get("response", {}) or {}).get("games", []) or []
-    return [{"appid": g.get("appid"), "name": _ascii(g.get("name", "")),
+    return [{"appid": g.get("appid"), "name": ascii_only(g.get("name", "")),
              "hours2w": round(g.get("playtime_2weeks", 0) / 60, 1)}
             for g in games if g.get("appid")]
 
@@ -439,7 +439,7 @@ def _tag_map():
     d = _get(f"{API}/IStoreService/GetTagList/v1/", {"key": s["steamApiKey"],
                                                      "language": "english"})
     tags = ((d or {}).get("response", {}) or {}).get("tags", []) or []
-    out = {_ascii(t.get("name", "")).lower(): t.get("tagid")
+    out = {ascii_only(t.get("name", "")).lower(): t.get("tagid")
            for t in tags if t.get("name") and t.get("tagid")}
     if out:
         statefile.atomic_write(TAGMAP, out)
@@ -474,7 +474,7 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
             seen.add(a); appids.append(a)
         if len(appids) >= 20:
             break
-    named = _store_items(appids, cc)
+    named = store_items(appids, cc)
     rows = [{"appid": a, **named[a]} for a in appids if a in named]
     if max_price:                           # GetItems is truth on price; re-clip
         cap = int(max_price) * 100
@@ -491,7 +491,7 @@ def fetch_reviews(appid):
     if not d or not d.get("query_summary"):
         return None
     q = d["query_summary"]
-    snippets = [_ascii(r.get("review", ""))[:280]
+    snippets = [ascii_only(r.get("review", ""))[:280]
                 for r in (d.get("reviews") or [])[:3] if r.get("review")]
     return {"desc": q.get("review_score_desc"),
             "positive_pct": (round(100 * q.get("total_positive", 0)
@@ -511,7 +511,7 @@ def fetch_news(appid, count=3):
         d = _get(f"{API}/ISteamNews/GetNewsForApp/v2/",
                  {"appid": int(appid), "count": count, "maxlength": 1})
         items = ((d or {}).get("appnews", {}) or {}).get("newsitems", []) or []
-    return [{"title": _ascii(n.get("title", "")),
+    return [{"title": ascii_only(n.get("title", "")),
              "date": time.strftime("%Y-%m-%d", time.localtime(n.get("date", 0)))}
             for n in items[:count] if n.get("title")]
 
