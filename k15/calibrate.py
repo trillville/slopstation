@@ -11,7 +11,7 @@ time. Not while chord_listener.py is running - one process owns the Puck.
 import time
 import hid
 
-from cglib import VID, PID
+from haptics import VID, PID
 
 def pick_interface():
     for d in hid.enumerate(VID, PID):

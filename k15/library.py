@@ -18,7 +18,6 @@ CLI:
 """
 import glob
 import json
-import os
 import re
 import sys
 import threading
@@ -38,8 +37,8 @@ log = cglib.make_log("library")
 
 def fetch_installed_ssh():
     """Production path (K15): the gaming PC enumerates its own ACFs."""
-    from couch import ssh
-    return parse_games_json(ssh("games", timeout=30))
+    import gamepc
+    return parse_games_json(gamepc.games())
 
 
 def parse_games_json(text):
@@ -83,10 +82,7 @@ def fetch_installed_local():
 
 
 def load():
-    try:
-        return json.loads(LIBRARY.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return cglib.load_json(LIBRARY, {})
 
 
 def installed_name(appid):
@@ -117,8 +113,8 @@ def refresh(local=False):
 
 def fetch_collections_ssh():
     """Big Picture collections as [{name, id}]. Needs the PC awake."""
-    from couch import ssh
-    return parse_games_json(ssh("collections", timeout=15))
+    import gamepc
+    return parse_games_json(gamepc.collections())
 
 
 def refresh_collections():
@@ -205,10 +201,7 @@ def fetch_meta_one(appid):
 
 
 def load_meta():
-    try:
-        return json.loads(META_CACHE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return cglib.load_json(META_CACHE, {})
 
 
 def _save_meta(cache):
@@ -386,10 +379,9 @@ def _tag_map():
     except OSError:                             # missing or a stat race -> refetch
         fresh = False
     if fresh:
-        try:
-            return json.loads(TAGMAP.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
+        cached = cglib.load_json(TAGMAP, None)
+        if cached is not None:
+            return cached
     s = cglib.load_secrets()
     if not cglib.real_key(s.get("steamApiKey")):
         return {}
@@ -499,17 +491,11 @@ def fuzzy_key(name):
 # -- caches (every JSON write goes through _atomic_write: tmp + os.replace) ---
 
 def _atomic_write(path, obj):
-    STATE.mkdir(exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    cglib.write_json(path, obj, indent=1)
 
 
 def _load_facets():
-    try:
-        return json.loads(FACET_CACHE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return cglib.load_json(FACET_CACHE, {})
 
 
 def _save_facets(cache):
@@ -517,10 +503,7 @@ def _save_facets(cache):
 
 
 def load_deals():
-    try:
-        return json.loads(DEALS.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return cglib.load_json(DEALS, {})
 
 
 def refresh_deals():

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import _bootstrap                               # noqa: F401,E402
 import cglib
+import tv
 
 # name -> (c1, c2, c3, value), straight from the official worksheet rows.
 SPECS = {
@@ -25,18 +26,18 @@ SPECS = {
 
 
 def main():
-    assert set(SPECS) == set(cglib.EXLINK_FRAMES), (
-        f"table/spec drift: {set(SPECS) ^ set(cglib.EXLINK_FRAMES)}")
+    assert set(SPECS) == set(tv.EXLINK_FRAMES), (
+        f"table/spec drift: {set(SPECS) ^ set(tv.EXLINK_FRAMES)}")
     for name, spec in SPECS.items():
-        built = cglib.exlink_frame(*spec)
-        frozen = cglib.EXLINK_FRAMES[name]
+        built = tv.exlink_frame(*spec)
+        frozen = tv.EXLINK_FRAMES[name]
         assert built == frozen, f"{name}: builder={built} literal={frozen}"
 
     # Worksheet's own example: volume 20 -> checksum 0xC1.
-    assert cglib.vol_set_frame(20) == "082201000014c1"
-    assert cglib.vol_set_frame(0) == cglib.exlink_frame(0x01, 0x00, 0x00, 0)
-    assert cglib.vol_set_frame(-5) == cglib.vol_set_frame(0)      # clamp low
-    assert cglib.vol_set_frame(250) == cglib.vol_set_frame(100)   # clamp high
+    assert tv.vol_set_frame(20) == "082201000014c1"
+    assert tv.vol_set_frame(0) == tv.exlink_frame(0x01, 0x00, 0x00, 0)
+    assert tv.vol_set_frame(-5) == tv.vol_set_frame(0)      # clamp low
+    assert tv.vol_set_frame(250) == tv.vol_set_frame(100)   # clamp high
 
     # COM contention: retry once after a settle, then propagate.
     import types
@@ -59,13 +60,13 @@ def main():
     _real_sleep = time.sleep
     time.sleep = lambda s: None
     try:
-        assert cglib.exlink_send_hex("082202000000d4", "COMX") == "030cf1"
+        assert tv.exlink_send_hex("082202000000d4", "COMX") == "030cf1"
         assert calls["n"] == 2, "should have retried once"
         calls["n"] = 0
         FakePort.__init__ = lambda self, *a, **k: (_ for _ in ()).throw(
             fake_serial.SerialException("always"))
         try:
-            cglib.exlink_send_hex("082202000000d4", "COMX")
+            tv.exlink_send_hex("082202000000d4", "COMX")
             assert False, "second failure must propagate"
         except fake_serial.SerialException:
             pass
@@ -75,22 +76,22 @@ def main():
 
         FakePort.read = lambda self, n: bytes.fromhex("030cff")   # NAK
         try:
-            cglib.exlink_send_hex("082202000000d4", "COMX")
+            tv.exlink_send_hex("082202000000d4", "COMX")
             assert False, "NAK must raise ExlinkNak"
-        except cglib.ExlinkNak:
+        except tv.ExlinkNak:
             pass
 
         FakePort.read = lambda self, n: b""                       # TV silent/off
         try:
-            cglib.exlink_send_hex("082202000000d4", "COMX")
+            tv.exlink_send_hex("082202000000d4", "COMX")
             assert False, "missing ack must raise ExlinkNak"
-        except cglib.ExlinkNak:
+        except tv.ExlinkNak:
             pass
     finally:
         time.sleep = _real_sleep
         del sys.modules["serial"]
 
-    for name, hexs in cglib.EXLINK_FRAMES.items():
+    for name, hexs in tv.EXLINK_FRAMES.items():
         b = bytes.fromhex(hexs)
         assert len(b) == 7, f"{name}: {len(b)} bytes"
         assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"

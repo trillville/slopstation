@@ -3,98 +3,12 @@
 Everything lives beside this file: config.json, secrets.json, couch.log,
 state/, and the scripts that import this.
 """
-import json, os, pathlib, struct, time
+import json, os, pathlib, time
 
 import events
 
 BASE = pathlib.Path(__file__).resolve().parent
 STATE = BASE / "state"
-
-# Valve Steam Controller Puck (as forwarded by VirtualHere).
-# 0x1304 = USB_PRODUCT_VALVE_STEAM_PROTEUS_DONGLE in SDL's usb_ids.h.
-VID, PID = 0x28DE, 0x1304
-
-# Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum,
-# checksum = (0x100 - sum(first 6)) & 0xFF. Serial is 9600 baud, 8N1.
-# Volume/mute family from Samsung's RS-232 worksheet. DANGER: a one-byte slip
-# in this family is power_off - frozen literals, cross-checked against
-# exlink_frame() by voice/tests/test_exlink.py.
-EXLINK_FRAMES = {
-    "power_on":  "082200000002d4",
-    "power_off": "082200000001d5",
-    "hdmi1": "08220a000500c7",
-    "hdmi2": "08220a000501c6",
-    "hdmi3": "08220a000502c5",
-    "hdmi4": "08220a000503c4",
-    "vol_up":      "082201000100d4",
-    "vol_down":    "082201000200d3",
-    "mute_toggle": "082202000000d4",   # the only toggle here - power_on/off
-                                       # are discrete, so safe to re-send
-}
-
-# Every frame the S90C accepts acks with exactly these three bytes.
-EXLINK_ACK = "030cf1"
-
-
-class ExlinkNak(RuntimeError):
-    """Not EXLINK_ACK (or no answer at all): the command did not land.
-    Callers abort fast; no blind retries."""
-
-
-def exlink_frame(c1, c2, c3, value):
-    """Build one 7-byte Ex-Link frame (hex string) with computed checksum."""
-    body = bytes([0x08, 0x22, c1, c2, c3, value])
-    return (body + bytes([(0x100 - sum(body)) & 0xFF])).hex()
-
-
-def vol_set_frame(level):
-    """Volume Direct 0-100. Clamps to the protocol range only; the
-    room-protecting volumeMax clamp lives in voice dispatch."""
-    return exlink_frame(0x01, 0x00, 0x00, max(0, min(100, int(level))))
-
-
-# --- Triton haptic output reports ---------------------------------------------
-# Layouts from SDL's steam/controller_structs.h (Nov 2024 snapshot; re-verify
-# after controller firmware updates). Plain HID output reports (dev.write) on
-# the same interface that streams 0x42 state reports. All u16 little-endian,
-# no padding.
-HAPTIC_RUMBLE = 0x80   # 10B: type u8, intensity u16, left speed u16 + gain s8, right speed u16 + gain s8
-HAPTIC_PULSE  = 0x81   # 8B: side u8, on_us u16, off_us u16, repeat u16; zero-filled = stop tone
-HAPTIC_TONE   = 0x83   # 10B: side u8, gain_db s8, freq u16, duration_ms u16, lfo_freq u16, lfo_depth u8
-
-
-def tone_report(side, freq_hz, duration_ms, gain=0, lfo_freq=0, lfo_depth=0):
-    return struct.pack('<BBbHHHB', HAPTIC_TONE, side, gain, freq_hz, duration_ms,
-                       lfo_freq, lfo_depth)
-
-
-def pulse_report(side, on_us, off_us, repeat):
-    return struct.pack('<BBHHH', HAPTIC_PULSE, side, on_us, off_us, repeat)
-
-
-def stop_report(side):
-    """Zero-filled 0x81 = stop any playing tone on that side."""
-    return pulse_report(side, 0, 0, 0)
-
-
-def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
-    """One-shot 0x80 rumble; hardware safety-timeout stops it in ~50 ms."""
-    return struct.pack('<BBHHbHb', HAPTIC_RUMBLE, 0, intensity,
-                       left_speed, left_gain, right_speed, right_gain)
-
-
-def play_pattern(dev, steps, gain=0):
-    """Play a haptic pattern; production and bench audition share this engine.
-    steps = ((freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth), ...); each
-    tone plays out before the next. The trailing stops are harmless if tones
-    self-terminated and required if they sustained."""
-    for freq, dur, gap, lfo_f, lfo_d in steps:
-        for side in (0, 1):
-            dev.write(tone_report(side, freq, dur, gain, lfo_f, lfo_d))
-        time.sleep((dur + gap) / 1000)
-    for side in (0, 1):
-        dev.write(stop_report(side))
-
 
 # --- Session state (shared by couch.py and the chord listener) ----------------
 LOCK = STATE / "session.lock"
@@ -240,15 +154,6 @@ def release_lock():
         return False
     LOCK.unlink(missing_ok=True)
     return True
-
-
-# --- Haptic vocabulary: one base note, count is the message -------------------
-#   1 thud = launch dispatched   2 = busy (launch already active)   3 = launch failed
-_THUD     = (220, 60, 90, 0, 0)
-_THUD_END = (220, 60, 0, 0, 0)
-PATTERN_LAUNCH = (_THUD_END,)
-PATTERN_BUSY   = (_THUD, _THUD_END)
-PATTERN_FAIL   = (_THUD, _THUD, _THUD_END)
 
 
 def load_config():
@@ -432,91 +337,3 @@ class CapturingLog(_Log):
 
     def find(self, event):
         return [r for r in self.records if r["event"] == event]
-
-
-def _exlink_txn(frame_hex, port):
-    import serial
-    with serial.Serial(port, 9600, timeout=1) as s:
-        s.write(bytes.fromhex(frame_hex))
-        return s.read(3).hex()
-
-
-def exlink_send_hex(frame_hex, port):
-    """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK, raises
-    ExlinkNak on any other answer, never retries a NAK. serial imports lazily
-    so a box without pyserial can still import cglib. The 1 s retry is for
-    PORT CONTENTION only: couch.py and the voice agent share this port."""
-    import serial
-    try:
-        ack = _exlink_txn(frame_hex, port)
-    except serial.SerialException:
-        time.sleep(1)
-        ack = _exlink_txn(frame_hex, port)
-    if ack != EXLINK_ACK:
-        raise ExlinkNak(f"TV answered {ack or 'nothing'} (want {EXLINK_ACK}) "
-                        f"for frame {frame_hex}")
-    return ack
-
-
-def exlink_send(name, port):
-    """Send a named frame from EXLINK_FRAMES."""
-    return exlink_send_hex(EXLINK_FRAMES[name], port)
-
-
-def tv_power_state(ip, timeout=2.0, raw=False):
-    """Ask the S90C whether it is on: GET /api/v2/ on port 8001 answers
-    .device.PowerState = "on" | "standby". Unauthenticated, ~30 ms, answers
-    from standby (2026-08-19). An accepted power_on takes ~5 s to flip the
-    state, so poll rather than read once across a transition.
-
-    None = UNKNOWN (unreachable, IP drifted, unparseable), never "off": the
-    endpoint rides Wi-Fi and deeper standby depths can drop IP entirely. A set
-    off for HOURS answers in 3 ms with PowerState as the empty string
-    (2026-08-21); "standby" is only what a recently-used set says. raw=True
-    returns the value as reported - "on" / "standby" / "" / None - instead of
-    collapsing to the safe pair. Callers pick their own safe side; the voice
-    ducker treats anything but "on" as do-not-touch."""
-    import urllib.request
-    try:
-        with urllib.request.urlopen(f"http://{ip}:8001/api/v2/",
-                                    timeout=timeout) as r:
-            state = json.load(r).get("device", {}).get("PowerState")
-    except Exception:
-        return None
-    if raw:
-        return state
-    return state if state in ("on", "standby") else None
-
-
-def tv_volume(ip, timeout=2.0):
-    """Current volume as the TV tracks it, via pairing-free UPnP
-    RenderingControl (port 9197, plain SOAP, ~3 ms). With eARC soundbar output
-    this number IS the bar's level - the TV mirrors CEC system audio
-    (2026-08-21).
-
-    READ half only: with eARC audio the set refuses every direct volume WRITE
-    (SetVolume answers UPnP 501; Ex-Link volume frames ack, then pop "Not
-    Available" on screen - 2026-08-21). Writes go through remote keys over
-    CEC, voice/tv_remote.py, verified by this read. None = unknown, not zero:
-    unreachable, or the DMR service asleep (it goes down with the panel,
-    unlike /api/v2/ above)."""
-    import urllib.request
-    body = ('<?xml version="1.0" encoding="utf-8"?>'
-            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
-            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-            '<s:Body>'
-            '<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
-            '<InstanceID>0</InstanceID><Channel>Master</Channel>'
-            '</u:GetVolume></s:Body></s:Envelope>').encode()
-    req = urllib.request.Request(
-        f"http://{ip}:9197/upnp/control/RenderingControl1", data=body,
-        headers={"Content-Type": 'text/xml; charset="utf-8"',
-                 "SOAPACTION": '"urn:schemas-upnp-org:service:'
-                               'RenderingControl:1#GetVolume"'})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = r.read().decode(errors="replace")
-        start = out.index("<CurrentVolume>") + len("<CurrentVolume>")
-        return int(out[start:out.index("</CurrentVolume>")])
-    except Exception:
-        return None

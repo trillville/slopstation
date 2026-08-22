@@ -13,9 +13,11 @@ import _bootstrap                               # noqa: F401,E402
 from _bootstrap import fresh_state              # noqa: E402
 
 import cglib
+import tv
 import events
 
-import couch                                     # noqa: E402  (needs LOG_DIR set)
+import couch
+import gamepc                                     # noqa: E402  (needs LOG_DIR set)
 
 CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4", "tvIdleCmd": "hdmi1",
        "tvOffWhenDone": True, "sshHost": "gamepc",
@@ -51,7 +53,7 @@ def wire(script, default=None):
         return reply
 
     couch.exlink = fake_exlink
-    couch.ssh = fake_ssh
+    gamepc.ssh = fake_ssh
     couch.wol = lambda: log("wol_sent")
     couch.wait_port = lambda *a, **kw: True
     return log, sent
@@ -384,7 +386,7 @@ def main():
     print("  stale cancel: voided at start, launch unharmed")
 
     # --- TV evidence: rides the READY wait, gates only the rescue --------------
-    real_tv_state = cglib.tv_power_state
+    real_tv_state = tv.tv_power_state
     cglib.use_config(dict(CFG, tvIp="tv"))
     couch.TV_WAIT_S = 0.2
     couch.TV_POKE_S = 0.05
@@ -394,7 +396,7 @@ def main():
     fresh_state()
     couch.ENTER_SETTLE_S = 0
     couch.READY_WAIT_S = 5
-    cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: "standby"
+    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: "standby"
     log, sent = wire([("enter", "OK")], default=lambda cmd:
                      "IDLE" if cmd.startswith("enterstate") else "NOTREADY")
     assert couch.start() == 1
@@ -415,7 +417,7 @@ def main():
     couch.READY_WAIT_S = 5
     couch.TV_POKE_S = 10                   # real seconds - no poke inside a drill
     seq = ["standby", "standby", "standby"]          # first pop = launch_start read
-    cglib.tv_power_state = \
+    tv.tv_power_state = \
         lambda ip, timeout=2.0, raw=False: (seq.pop(0) if seq else "on")
     log, sent = wire([
         ("enter", "OK"),
@@ -435,7 +437,7 @@ def main():
     # Enter dies but the set HAD answered on: the rescue redispatches at once.
     fresh_state()
     couch.ENTER_SETTLE_S = 0
-    cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: "on"
+    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: "on"
     log, sent = wire([
         ("enter", "OK"),
         ("status", "NOTREADY"), ("enterstate", "IDLE"),
@@ -454,7 +456,7 @@ def main():
     # blind path.
     fresh_state()
     couch.ENTER_SETTLE_S = 10
-    cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: None
+    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: None
     log, sent = wire([
         ("enter", "OK"),
         ("status", "NOTREADY"),
@@ -476,7 +478,7 @@ def main():
 
     def boom(ip, timeout=2.0, raw=False):
         raise AssertionError("no tvIp - the launch must never read the TV")
-    cglib.tv_power_state = boom
+    tv.tv_power_state = boom
     cglib.use_config(CFG)
     log, sent = wire([
         ("enter", "OK"),
@@ -485,7 +487,7 @@ def main():
     ])
     assert couch.start(turn="ab12cd") == 0
     assert "tv" not in log.find("launch_start")[0], log.find("launch_start")
-    cglib.tv_power_state = real_tv_state
+    tv.tv_power_state = real_tv_state
     print("  tv gate: no tvIp -> no reads, launch exactly as before")
 
     # --- watch: blips forgiven, a run of failures dies honestly ---------------

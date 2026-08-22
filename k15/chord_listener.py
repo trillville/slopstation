@@ -3,15 +3,15 @@ import hid
 
 import cglib
 import events
-from cglib import VID, PID
+import haptics
+from haptics import RID_INPUT, VID, PID
 
-RID_INPUT = 0x42                  # input report type, from calibrate.py ("report type: 42")
 BTN_BYTE = 4
 CHORD    = 0x01 | 0x80            # Steam + right-trigger click
 HOLD_S   = 2.0
 COUCH    = cglib.BASE / "couch.py"
 
-# Haptic vocabulary (patterns in cglib): count is the message - 1 thud launch,
+# Haptic vocabulary (patterns in haptics.py): count is the message - 1 thud launch,
 # 2 busy, 3 fail. Re-bench after controller firmware updates.
 HAPTIC_GAIN     = 0     # s8 dB-ish; 0 = natural level, 120 = clamped max
 BUSY_COOLDOWN_S = 5.0   # a held chord re-validates every ~2s; don't machine-gun the busy buzz
@@ -27,7 +27,7 @@ log = cglib.make_log("listener")
 def buzz(dev, pattern, what):
     """Best-effort: a haptic failure must never delay or block anything."""
     try:
-        cglib.play_pattern(dev, pattern, HAPTIC_GAIN)
+        haptics.play_pattern(dev, pattern, HAPTIC_GAIN)
         log("buzz_sent", pattern=what)
         return True
     except Exception as e:
@@ -47,7 +47,7 @@ def signal_last_error(dev):
         cglib.LAST_ERROR.unlink(missing_ok=True)
         log("stale_error_discarded", age_s=round(age))
         return
-    if buzz(dev, cglib.PATTERN_FAIL, "fail"):
+    if buzz(dev, haptics.PATTERN_FAIL, "fail"):
         try:
             reason = cglib.LAST_ERROR.read_text().strip()
         except OSError:
@@ -159,7 +159,7 @@ def main():
                     if cglib.session_active(age):
                         if time.time() - last_busy >= BUSY_COOLDOWN_S:
                             log("chord_busy", lock_age_s=round(age))
-                            buzz(puck.active, cglib.PATTERN_BUSY, "busy")
+                            buzz(puck.active, haptics.PATTERN_BUSY, "busy")
                             last_busy = time.time()
                         held = None
                     else:
@@ -168,7 +168,7 @@ def main():
                         # the gaming PC.
                         turn = events.new_turn()
                         log("chord", turn=turn)
-                        buzz(puck.active, cglib.PATTERN_LAUNCH, "launch")
+                        buzz(puck.active, haptics.PATTERN_LAUNCH, "launch")
                         # The only silence guaranteed BEFORE couch.py has
                         # started python and taken the lock.
                         puck.close()

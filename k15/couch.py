@@ -6,6 +6,8 @@ import os, socket, subprocess, sys, time
 
 import cglib
 import events
+import gamepc
+import tv
 
 PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
@@ -78,7 +80,7 @@ def raise_if_cancelled():
 
 def exlink(name, **fields):
     try:
-        ack = cglib.exlink_send(name, cglib.config()["tvComPort"])
+        ack = tv.exlink_send(name, cglib.config()["tvComPort"])
         # ack = the receiver accepted the frame, not that the set acted on
         # it; Ex-Link is send-only and power_on can ack on a dark set.
         log("exlink_send", cmd=name, ack=ack or "no-ack", **fields)
@@ -94,46 +96,6 @@ def wol():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.sendto(pkt, ("255.255.255.255", 9))
     log("wol_sent")
-
-
-def ssh(cmd, timeout=15):
-    """Run one Dispatch verb on the host; returns its stdout.
-
-    stdout only, so stderr noise stays out of state comparisons; Dispatch
-    reports its own failures as FAILED:<code>. check=True is load-bearing: an
-    unreachable host RAISES instead of returning ssh's error text as session
-    state - otherwise the READY poll reads 'ssh: connect ... timed out' as
-    READY, and watch() never detects sleep."""
-    r = subprocess.run(["ssh", cglib.config()["sshHost"], cmd],
-                       capture_output=True, text=True, timeout=timeout, check=True)
-    return r.stdout.strip()
-
-
-def ssh_intent(cmd, turn=None, **kw):
-    """A MUTATING verb, tagged with this launch's turn id; read-only polls use
-    plain ssh(). Pass `turn` explicitly from callers whose ambient context
-    predates the utterance (the voice lane's - a ContextVar cannot reach it)."""
-    turn = turn or events.current().get("turn")
-    # Dispatch fails CLOSED on a malformed id (matches no verb, answers
-    # DENIED), so re-validate here and send it uncorrelated instead.
-    return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd, **kw)
-
-
-def enter_running():
-    """True/False if the gaming PC could tell us whether its Enter task is
-    still running; None if it could not. The None is load-bearing: a PC
-    predating `enterstate` answers DENIED and an ssh blip raises, and
-    re-dispatching on either would fight a healthy Enter."""
-    try:
-        ans = ssh("enterstate")
-    except Exception:
-        return None
-    if ans == "RUNNING":
-        return True
-    # NOTASK is unreachable in practice but is still not-running.
-    if ans in ("IDLE", "NOTASK"):
-        return False
-    return None
 
 
 def wait_port(timeout=PORT_WAIT_S):
@@ -189,7 +151,7 @@ def start(appid=None, turn=None):
         # hunting a status frame - the same protocol carries service-mode
         # commands, and a valid-checksum guess is not safe to fire at a TV
         # someone is watching.
-        tv0 = cglib.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
+        tv0 = tv.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
         log("launch_start", appid=appid,
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}))
         exlink("power_on")
@@ -225,7 +187,7 @@ def start(appid=None, turn=None):
             nonlocal tv_confirmed, tv_gave_up, tv_unknowns, tv_last, tv_poke_at
             if not tv_ip or tv_confirmed or tv_gave_up:
                 return
-            tv_last = cglib.tv_power_state(tv_ip, timeout=0.5, raw=True)
+            tv_last = tv.tv_power_state(tv_ip, timeout=0.5, raw=True)
             if tv_last == "on":
                 tv_confirmed = True
                 # dur_ms is elapsed-since-intent and polling starts only after
@@ -254,7 +216,7 @@ def start(appid=None, turn=None):
                 cglib.touch_lock()
                 raise_if_cancelled()
                 try:
-                    if ssh_intent("enter") == "OK":
+                    if gamepc.enter() == "OK":
                         enter_sent = True
                         log(event, dur_ms=ms()); return True
                 except Exception as e:
@@ -284,7 +246,7 @@ def start(appid=None, turn=None):
                 exlink("power_on", again=True)
                 repoke_at = None
             try:
-                st = ssh("status")
+                st = gamepc.status()
                 # The marker echoes the turn Enter was given: ours = ready.
                 if st == turn:
                     log("host_ready", status=st, dur_ms=ms(), verified=True)
@@ -309,7 +271,7 @@ def start(appid=None, turn=None):
             # Still NOTREADY. An Enter no longer running will never write the
             # marker, so the rest of the window is dead time: re-dispatch.
             if (st == "NOTREADY" and time.time() >= settle_at
-                    and enter_running() is False):
+                    and gamepc.enter_running() is False):
                 # Enter writes the marker and THEN exits, so one (NOTREADY,
                 # task-idle) pair can be those instants read in the wrong
                 # order. Demand it twice: a marker that landed in between is
@@ -358,7 +320,7 @@ def start(appid=None, turn=None):
             # an EARLIER session), where the couch cannot drive it: warn
             # (2026-08-13 turn 14852d).
             try:
-                answer = ssh_intent(f"launch {appid}")
+                answer = gamepc.launch(appid)
                 emit = log.warn if answer == "ALREADY" else log
                 emit("game_launch", appid=appid, result=answer)
             except Exception as e:
@@ -386,7 +348,7 @@ def start(appid=None, turn=None):
             # exit variance, 0b785e). Our own exit, strictly after our last
             # enter, closes the ordering.
             try:
-                ssh_intent("exit")
+                gamepc.exit()
                 log("exit_dispatched", reason="cancel_after_enter")
             except Exception:
                 pass
@@ -405,7 +367,7 @@ def watch(expected=None):
         time.sleep(WATCH_POLL_S)
         cglib.touch_lock()
         try:
-            st = ssh("status"); fails = 0
+            st = gamepc.status(); fails = 0
             if st == "NOTREADY":
                 log("session_ended", reason="host"); break
             if expected and events.valid_turn(st) and st != expected:
@@ -422,7 +384,7 @@ def watch(expected=None):
         # and a held Puck means a deaf chord; if it is only a blip, the PC's
         # teardown releases it.
         try:
-            if ssh_intent("exit") == "OK":
+            if gamepc.exit() == "OK":
                 log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
@@ -448,7 +410,7 @@ def reconcile():
     log("reconcile_found")
     for _ in range(3):                  # boot-time network may need a moment
         try:
-            st = ssh("status")
+            st = gamepc.status()
             if st != "NOTREADY":
                 log("reconcile_resumed")
                 # Adopt, don't just touch: the owner note still names the dead

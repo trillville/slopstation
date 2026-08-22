@@ -7,6 +7,7 @@ chord chain can FAIL. Exit code = number of FAILs.
 import json, subprocess, sys, time
 
 import cglib
+import haptics
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 _counts = {PASS: 0, WARN: 0, FAIL: 0}
@@ -64,7 +65,7 @@ def check_com(cfg):
 def check_puck():
     try:
         import hid
-        n = len(hid.enumerate(cglib.VID, cglib.PID))
+        n = len(hid.enumerate(haptics.VID, haptics.PID))
     except Exception as e:
         report(FAIL, "puck enumerate", str(e), "hidapi broken?")
         return False
@@ -130,11 +131,8 @@ def _local_rev():
 
 
 def check_ssh():
-    try:
-        from couch import ssh
-    except Exception as e:
-        report(FAIL, "ssh", f"couch.py unimportable ({e})", "config broken? see above")
-        return
+    import gamepc
+    ssh = gamepc.ssh
     try:
         st = ssh("status")
         report(PASS, "ssh status", f"-> {st!r} (key, forced command, sshd, firewall all good)")

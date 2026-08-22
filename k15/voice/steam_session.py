@@ -14,7 +14,6 @@ Parsing is defensive throughout - shape drift must degrade to a spoken
 """
 import base64
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -372,9 +371,7 @@ class SteamSession:
                   "fix it, then run enroll again.")
             raise SystemExit(1)
         data["steamRefreshToken"] = refresh
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        cglib.write_json(path, data, indent=2)
         self._refresh = refresh
         self._access = None
         self.log("enrolled", steamid=self.steamid)

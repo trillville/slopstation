@@ -11,6 +11,7 @@ from pathlib import Path
 import _bootstrap                               # noqa: F401,E402
 
 import couch
+import gamepc
 import events
 
 DISPATCH = Path(__file__).resolve().parents[3] / "gaming-pc" / "Dispatch.ps1"
@@ -92,44 +93,44 @@ def main():
 
     # -- the wire: uncorrelated beats refused ----------------------------------
     sent = []
-    real_ssh = couch.ssh
-    couch.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
+    real_ssh = gamepc.ssh
+    gamepc.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
     try:
         tok = events.context(turn="9f2c1a")
-        couch.ssh_intent("enter")
+        gamepc.ssh_intent("enter")
         assert sent[-1] == "enter --turn 9f2c1a", sent[-1]
         events.reset(tok)
 
         # A malformed id must not go on the wire: Dispatch fails closed, so a
         # telemetry bug would become a launch outage.
         tok = events.context(turn="../../evil")
-        couch.ssh_intent("enter")
+        gamepc.ssh_intent("enter")
         assert sent[-1] == "enter", f"malformed turn reached the wire: {sent[-1]!r}"
         events.reset(tok)
 
-        couch.ssh_intent("exit")
+        gamepc.ssh_intent("exit")
         assert sent[-1] == "exit", sent[-1]
 
         # -- the task boundary -------------------------------------------------
         # A ContextVar is copied into a task when that task is CREATED, so a
         # turn minted in a running frame processor cannot reach the assistant's
         # tool-dispatch task. Explicit-with-no-ambient must still tag the wire.
-        couch.ssh_intent("exit", turn="4c1d0e")
+        gamepc.ssh_intent("exit", turn="4c1d0e")
         assert sent[-1] == "exit --turn 4c1d0e", \
             f"explicit turn lost when ambient is empty: {sent[-1]!r}"
 
         # Explicit beats a stale ambient value rather than losing to it.
         tok = events.context(turn="9f2c1a")
-        couch.ssh_intent("exit", turn="4c1d0e")
+        gamepc.ssh_intent("exit", turn="4c1d0e")
         assert sent[-1] == "exit --turn 4c1d0e", sent[-1]
         events.reset(tok)
 
         # A hostile explicit id is still dropped - the parameter is no bypass.
-        couch.ssh_intent("exit", turn="../../evil")
+        gamepc.ssh_intent("exit", turn="../../evil")
         assert sent[-1] == "exit", \
             f"explicit turn bypassed validation: {sent[-1]!r}"
     finally:
-        couch.ssh = real_ssh
+        gamepc.ssh = real_ssh
     print("  wire: valid turn tagged, malformed dropped, launch never blocked")
     print("  wire: explicit turn survives an empty/stale ambient, still validated")
 
@@ -140,7 +141,7 @@ def main():
     import dispatch as dp
 
     sent.clear()
-    couch.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
+    gamepc.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
     try:
         d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, cglib.CapturingLog("d"))
         assert d.utterance == dp.Utterance(None, None), \
@@ -157,12 +158,12 @@ def main():
             d.begin_utterance("bbbbbb", "never mind")   # barge-in mid-ssh
             return "OK"
         d.begin_utterance("aaaaaa", "end the session")
-        couch.ssh = ssh_mid_flight
+        gamepc.ssh = ssh_mid_flight
         d.end_session()
         assert sent[-1] == "exit --turn aaaaaa", \
             f"a mid-flight utterance re-labeled an in-flight action: {sent[-1]!r}"
     finally:
-        couch.ssh = real_ssh
+        gamepc.ssh = real_ssh
     print("  dispatch: the exit verb carries the utterance's id, no ContextVar")
     print("  dispatch: an in-flight action keeps its snapshot through a barge-in")
 

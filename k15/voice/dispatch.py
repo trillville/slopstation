@@ -13,12 +13,12 @@ import time
 from collections import namedtuple
 
 import cglib
-import couch
 import events
+import gamepc
 import library
-# couch.ssh / couch.ssh_intent are reached through the MODULE, never imported
-# by name: `from couch import ssh` makes a second binding that patching
-# couch.ssh would miss.
+import tv
+# gamepc is reached through the MODULE, never `from gamepc import ...`: a
+# second binding is one the tests' patches would miss.
 
 COUCH = cglib.BASE / "couch.py"
 
@@ -83,11 +83,11 @@ class Dispatch:
         return _ok(f"dry-run: {what}")
 
     def _exlink(self, what, frame_hex):
-        """TV serial send; COM-port contention retry lives in cglib."""
+        """TV serial send; COM-port contention retry lives in tv.py."""
         if self.dry_run:
             return self._would(f"exlink {what} ({frame_hex})")
         try:
-            ack = cglib.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
+            ack = tv.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
             self.log("exlink_send", cmd=what, ack=ack or "no-ack")
             return _ok(f"exlink {what}")
         except Exception as e:
@@ -135,7 +135,7 @@ class Dispatch:
             except OSError:
                 pass                          # the host-side exit still runs
         try:
-            out = couch.ssh_intent("exit", turn=turn)
+            out = gamepc.exit(turn)
         except Exception as e:
             if cancelled:
                 # A PC mid-wake is unreachable and has nothing to tear down
@@ -156,7 +156,7 @@ class Dispatch:
         if self.dry_run:
             return self._would("ssh playing")
         try:
-            out = couch.ssh("playing").strip()
+            out = gamepc.playing().strip()
         except Exception as e:
             return _fail(f"couldn't reach the PC (ssh playing: {e})")
         return _ok(out if out.isdigit() else "0")
@@ -171,7 +171,7 @@ class Dispatch:
         try:
             # Explicit turn: the Tier-2 path runs in a different task than
             # the gate, so the ambient one is absent (see Utterance).
-            out = couch.ssh_intent(f"launch {appid}", turn=self.utterance.turn)
+            out = gamepc.launch(appid, self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh launch: {e})")
@@ -201,7 +201,7 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh stop {appid}")
         try:
-            out = couch.ssh_intent(f"stop {appid}", turn=self.utterance.turn)
+            out = gamepc.stop(appid, self.utterance.turn)
         except Exception as e:
             self.log.error("quit_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh stop: {e})")
@@ -229,11 +229,11 @@ class Dispatch:
         kind = str(kind).strip().lower()
         if kind not in self.NAV_KINDS:
             return _fail(f"there's no navigation target called '{kind}'")
-        cmd = f"nav {kind}" + (f" {arg}" if arg not in (None, "") else "")
+        cmd = gamepc.nav_cmd(kind, arg)
         if self.dry_run:
             return self._would(f"ssh {cmd}")
         try:
-            out = couch.ssh_intent(cmd, turn=self.utterance.turn)
+            out = gamepc.nav(kind, arg, self.utterance.turn)
         except Exception as e:
             self.log.error("nav_failed", kind=kind, err=str(e))
             return _fail(f"couldn't reach the PC (ssh {cmd}: {e})")
@@ -272,7 +272,7 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"{name} x{step}")
         for _ in range(step):
-            r = self._exlink(name, cglib.EXLINK_FRAMES[name])
+            r = self._exlink(name, tv.EXLINK_FRAMES[name])
             if not r.ok:
                 return r
             time.sleep(0.05)
@@ -291,13 +291,13 @@ class Dispatch:
         clamped = max(0, min(vmax, int(level)))
         if clamped != int(level):
             self.log("volume_clamped", asked=int(level), set=clamped, max=vmax)
-        return self._exlink(f"vol_set {clamped}", cglib.vol_set_frame(clamped))
+        return self._exlink(f"vol_set {clamped}", tv.vol_set_frame(clamped))
 
     def mute_toggle(self):
         """Blind toggle: the S90C has no discrete mute on/off and its status
         query returns a canned echo, byte-identical across volume and mute
         states, so no state is trackable."""
-        return self._exlink("mute_toggle", cglib.EXLINK_FRAMES["mute_toggle"])
+        return self._exlink("mute_toggle", tv.EXLINK_FRAMES["mute_toggle"])
 
     def switch_input(self, spoken_name):
         """Config owns the spoken-name -> input map. The GAMING input means
@@ -315,14 +315,14 @@ class Dispatch:
             if self.dry_run:
                 return self._would(f"check READY then exlink {cmd}")
             try:
-                if couch.ssh("status") == "NOTREADY":
+                if gamepc.status() == "NOTREADY":
                     self.log("input_deferred", input=cmd, reason="not_ready")
                     return _busy("the session is still starting - the TV will "
                                  "switch over on its own when it's ready")
             except Exception as e:
                 self.log.error("input_refused", input=cmd, err=str(e))
                 return _fail(f"couldn't reach the PC (status check: {e})")
-        frame_hex = cglib.EXLINK_FRAMES.get(cmd)
+        frame_hex = tv.EXLINK_FRAMES.get(cmd)
         if frame_hex is None:
             return _fail(f"that input isn't configured correctly - config maps "
                          f"'{spoken_name}' to unknown command '{cmd}'")
@@ -337,11 +337,11 @@ class TvDucker:
     duck() thread under its lock. The ledger spans sessions but dies with the
     process, so a restart between duck and unduck loses it.
 
-    Gate: duck() runs only when cglib.tv_power_state says "on" (it answers
+    Gate: duck() runs only when tv.tv_power_state says "on" (it answers
     from standby too); anything else, unknown included, skips (2026-08-16).
 
     Readback: writes are remote keys over CEC (tv_remote.press, the only path
-    the eARC setup honours) and the pairing-free UPnP volume (cglib.tv_volume,
+    the eARC setup honours) and the pairing-free UPnP volume (tv.tv_volume,
     mirroring the soundbar) is ground truth. The ledger holds only VERIFIED
     movement, so a shortfall carries as debt to the next close and a human
     moving the remote mid-session is detected (2026-08-21)."""
@@ -358,8 +358,8 @@ class TvDucker:
         self.to_pct = int(to_pct) if to_pct else None
         self.log = log
         self.dry_run = dry_run
-        self.probe = probe or (lambda: cglib.tv_power_state(tv_ip))
-        self.read = read or (lambda: cglib.tv_volume(tv_ip))
+        self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
+        self.read = read or (lambda: tv.tv_volume(tv_ip))
         self.press = press or self._ws_press(tv_ip)
         self.pause = pause
         self.out = 0        # verified steps down, not yet restored

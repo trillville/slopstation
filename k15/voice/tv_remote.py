@@ -4,11 +4,11 @@ With sound output on the eARC soundbar (HW-Q990C) the TV refuses every direct
 volume write: Ex-Link vol frames ack and pop "Not Available", UPnP SetVolume
 answers 501 (both 2026-08-21). Only remote volume keys move the bar, relayed
 by the TV over CEC; the WebSocket remote on port 8002 injects those. Bench
-2026-08-21: one KEY_VOLDOWN = one step, tracked by cglib.tv_volume within a
+2026-08-21: one KEY_VOLDOWN = one step, tracked by tv.tv_volume within a
 second.
 
 Voice lane only - samsungtvws lives in the voice venv, so the chord lane may
-not import this (the chord-safe readback lives in cglib).
+not import this (the chord-safe readback lives in tv.py).
 
 The TV must allow this client once (Device Connection Manager): run `pair`
 from the K15 before first use and accept the popup on the TV.
@@ -29,6 +29,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
 import events                                   # noqa: E402
+import tv                                       # noqa: E402
 
 KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
 
@@ -52,13 +53,13 @@ class TvRemote:
             return
         from samsungtvws import SamsungTVWS
         self.token.parent.mkdir(exist_ok=True)
-        tv = SamsungTVWS(self.ip, port=8002, token_file=str(self.token),
+        ws = SamsungTVWS(self.ip, port=8002, token_file=str(self.token),
                          name=self.name, timeout=self.timeout,
                          key_press_delay=self.key_delay)
         try:
-            tv.send_key(KEYS[direction], times=n)
+            ws.send_key(KEYS[direction], times=n)
         finally:
-            tv.close()
+            ws.close()
 
 
 def main(argv):
@@ -67,7 +68,7 @@ def main(argv):
         print("config.json has no tvIp")
         return 2
     if argv and argv[0] == "vol":
-        print(cglib.tv_volume(ip))
+        print(tv.tv_volume(ip))
         return 0
     if argv and argv[0] == "pair":
         # Long timeout: a human has to find Allow on the TV.
@@ -76,10 +77,10 @@ def main(argv):
         try:
             from samsungtvws import SamsungTVWS
             remote.token.parent.mkdir(exist_ok=True)
-            tv = SamsungTVWS(ip, port=8002, token_file=str(remote.token),
+            ws = SamsungTVWS(ip, port=8002, token_file=str(remote.token),
                              name=remote.name, timeout=45)
-            tv.open()
-            tv.close()
+            ws.open()
+            ws.close()
             events.emit("manual", "tvremote_send", cmd="pair", ok=True)
             print(f"paired - token cached at {remote.token}")
             return 0
@@ -90,7 +91,7 @@ def main(argv):
             return 1
     if argv and argv[0] in KEYS:
         n = int(argv[1]) if len(argv) > 1 else 1
-        before = cglib.tv_volume(ip)
+        before = tv.tv_volume(ip)
         try:
             TvRemote(ip).press(argv[0], n)
         except Exception as e:
@@ -99,7 +100,7 @@ def main(argv):
             print(f"{argv[0]} x{n}: FAILED - {e}")
             return 1
         time.sleep(1.0)
-        after = cglib.tv_volume(ip)
+        after = tv.tv_volume(ip)
         events.emit("manual", "tvremote_send", cmd=argv[0], n=n,
                     vol_before=before, vol_after=after)
         print(f"{argv[0]} x{n}: volume {before} -> {after}")

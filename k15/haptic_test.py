@@ -26,10 +26,9 @@ import sys, time
 
 import hid
 
-import cglib
-from cglib import VID, PID
+import haptics
+from haptics import RID_INPUT as STATE_REPORT, VID, PID   # 0x42, ID_TRITON_CONTROLLER_STATE
 
-STATE_REPORT = 0x42            # ID_TRITON_CONTROLLER_STATE
 SUSTAIN_MS = 0x18FF            # bridge's PlayHapticTone duration (~6.4 s)
 
 
@@ -76,18 +75,18 @@ def open_input_interface(timeout_s=2.0):
 def chirp(dev, gain):
     for freq, dur in ((440, 60), (660, 90)):
         for side in (0, 1):
-            w(dev, cglib.tone_report(side, freq, dur, gain), f"tone {freq}Hz/{dur}ms side{side}")
+            w(dev, haptics.tone_report(side, freq, dur, gain), f"tone {freq}Hz/{dur}ms side{side}")
         time.sleep(0.07)
     for side in (0, 1):
-        w(dev, cglib.stop_report(side), f"stop side{side}")
+        w(dev, haptics.stop_report(side), f"stop side{side}")
 
 
-# Production vocabulary, from cglib, played by the listener's engine.
+# Production vocabulary, from haptics.py, played by the listener's engine.
 # Count is the message: 1 launch, 2 busy, 3 fail.
 PATTERNS = {
-    "launch": cglib.PATTERN_LAUNCH,
-    "busy":   cglib.PATTERN_BUSY,
-    "fail":   cglib.PATTERN_FAIL,
+    "launch": haptics.PATTERN_LAUNCH,
+    "busy":   haptics.PATTERN_BUSY,
+    "fail":   haptics.PATTERN_FAIL,
 }
 
 
@@ -96,29 +95,29 @@ def audition(dev, gain):
     for name, steps in PATTERNS.items():
         print(f"\n>>> {name}")
         time.sleep(1.0)
-        cglib.play_pattern(dev, steps, gain)
+        haptics.play_pattern(dev, steps, gain)
         time.sleep(1.5)
 
 
 def sustained(dev, gain):
     for side in (0, 1):
-        w(dev, cglib.tone_report(side, 440, SUSTAIN_MS, gain), f"tone 440Hz sustained side{side}")
+        w(dev, haptics.tone_report(side, 440, SUSTAIN_MS, gain), f"tone 440Hz sustained side{side}")
     time.sleep(0.055)
     for side in (0, 1):
-        w(dev, cglib.tone_report(side, 660, SUSTAIN_MS, gain), f"tone 660Hz sustained side{side}")
+        w(dev, haptics.tone_report(side, 660, SUSTAIN_MS, gain), f"tone 660Hz sustained side{side}")
     time.sleep(0.09)
     for side in (0, 1):
-        w(dev, cglib.stop_report(side), f"stop side{side}")
+        w(dev, haptics.stop_report(side), f"stop side{side}")
 
 
 def pulse(dev, _gain):
     for side in (0, 1):
-        w(dev, cglib.pulse_report(side, 3000, 3000, 40), f"pulse side{side}")
+        w(dev, haptics.pulse_report(side, 3000, 3000, 40), f"pulse side{side}")
         time.sleep(0.5)
 
 
 def rumble(dev, _gain):
-    w(dev, cglib.rumble_report(700, 130, 60, 270, 60), "rumble one-shot")
+    w(dev, haptics.rumble_report(700, 130, 60, 270, 60), "rumble one-shot")
 
 
 def probe(_dev=None, _gain=None):
