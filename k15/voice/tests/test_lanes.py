@@ -20,7 +20,8 @@ VOICE = K15 / "voice"
 
 # The load-bearing lane: stdlib plus the two system-python packages doctor.py
 # tells you to install (hidapi, pyserial), and each other. Nothing else.
-CHORD = ("cglib.py", "events.py", "couch.py", "chord_listener.py", "verbs.py")
+CHORD = ("cglib.py", "events.py", "couch.py", "chord_listener.py", "verbs.py",
+         "tv.py")
 CHORD_EXTRAS = {"hid", "serial"}
 
 # Everything beside them runs on system python too (doctor, the manual CLIs,

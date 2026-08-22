@@ -6,11 +6,11 @@ screen, UPnP SetVolume answers 501 (both measured 2026-08-21). What DOES
 move the bar is what the physical remote does - volume keys, which the TV
 relays over CEC - and the WebSocket remote on port 8002 injects exactly
 those. Bench 2026-08-21: one KEY_VOLDOWN moved the bar one step and
-cglib.tv_volume's readback tracked it within a second.
+tv.tv_volume's readback tracked it within a second.
 
 Voice lane only: samsungtvws lives in the voice venv, so nothing on the
 chord lane may import this module (the readback, which IS chord-safe,
-lives in cglib for that reason).
+lives in tv.py for that reason).
 
 The TV must allow this client once (Device Connection Manager). Run the
 pairing from the K15 before first use and accept the popup on the TV:
@@ -33,6 +33,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
 import events                                   # noqa: E402
+import tv                                   # noqa: E402
 
 KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
 
@@ -73,7 +74,7 @@ def main(argv):
         print("config.json has no tvIp")
         return 2
     if argv and argv[0] == "vol":
-        print(cglib.tv_volume(ip))
+        print(tv.tv_volume(ip))
         return 0
     if argv and argv[0] == "pair":
         # Long timeout: a human has to find Allow on the TV. A token that
@@ -97,7 +98,7 @@ def main(argv):
             return 1
     if argv and argv[0] in KEYS:
         n = int(argv[1]) if len(argv) > 1 else 1
-        before = cglib.tv_volume(ip)
+        before = tv.tv_volume(ip)
         try:
             TvRemote(ip).press(argv[0], n)
         except Exception as e:
@@ -106,7 +107,7 @@ def main(argv):
             print(f"{argv[0]} x{n}: FAILED - {e}")
             return 1
         time.sleep(1.0)
-        after = cglib.tv_volume(ip)
+        after = tv.tv_volume(ip)
         events.emit("manual", "tvremote_send", cmd=argv[0], n=n,
                     vol_before=before, vol_after=after)
         print(f"{argv[0]} x{n}: volume {before} -> {after}")

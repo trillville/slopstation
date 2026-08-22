@@ -7,6 +7,7 @@ import os, socket, subprocess, sys, time
 import cglib
 import events
 import verbs
+import tv
 
 # Read on first use by cfg(), NOT at import. Every voice module reaches this
 # file (dispatch imports couch for the ssh seam), so an import-time read made
@@ -73,7 +74,7 @@ def cfg():
 
 def exlink(name, **fields):
     try:
-        ack = cglib.exlink_send(name, cfg()["tvComPort"])
+        ack = tv.exlink_send(name, cfg()["tvComPort"])
         # `ack` means the TV's serial receiver ACCEPTED THE FRAME. It is not
         # confirmation that the TV acted on it, and there is no read-back that
         # would be: Ex-Link here is send-only. A power_on can ack and leave the

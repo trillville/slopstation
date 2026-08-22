@@ -9,6 +9,7 @@ import sys
 
 import cglib
 import events
+import tv
 
 
 def _emit(cmd, ack=None, err=None, **extra):
@@ -36,27 +37,27 @@ def main(argv):
         if level > 100:
             print("vol_set takes 0-100")
             return 2
-        frame = cglib.vol_set_frame(level)
+        frame = tv.vol_set_frame(level)
         try:
-            ack = cglib.exlink_send_hex(frame, port)
+            ack = tv.exlink_send_hex(frame, port)
             _emit("vol_set", ack=ack, level_pct=level)
             print(f"vol_set {level}: sent {frame}, ack {ack}")
             return 0
-        except cglib.ExlinkNak as e:
+        except tv.ExlinkNak as e:
             _emit("vol_set", err=str(e), level_pct=level)
             print(f"vol_set {level}: FAILED - {e}")
             return 1
-    if len(argv) == 1 and argv[0] in cglib.EXLINK_FRAMES:
+    if len(argv) == 1 and argv[0] in tv.EXLINK_FRAMES:
         try:
-            ack = cglib.exlink_send(argv[0], port)
+            ack = tv.exlink_send(argv[0], port)
             _emit(argv[0], ack=ack)
             print(f"{argv[0]}: sent, ack {ack}")
             return 0
-        except cglib.ExlinkNak as e:
+        except tv.ExlinkNak as e:
             _emit(argv[0], err=str(e))
             print(f"{argv[0]}: FAILED - {e}")
             return 1
-    print("usage: exlink.py " + "|".join(cglib.EXLINK_FRAMES)
+    print("usage: exlink.py " + "|".join(tv.EXLINK_FRAMES)
           + " | vol_set <0-100>")
     return 2
 

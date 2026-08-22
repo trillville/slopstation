@@ -8,6 +8,7 @@ import _bootstrap  # noqa: F401
 from _bootstrap import fresh_state, freeze_sleep
 
 import cglib
+import tv
 import couch                 # THE ssh seam - dispatch reaches it through the module
 import dispatch as dp
 
@@ -28,7 +29,7 @@ class Harness:
 
 def main():
     sent = []
-    cglib.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
+    tv.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
 
     # --- lock arbiter --------------------------------------------------------
     fresh_state(10)                                    # fresh lock
@@ -61,16 +62,16 @@ def main():
     # --- volume: stepping, clamp, mute ---------------------------------------
     h = Harness(); sent.clear()
     assert h.d.volume_up().ok
-    assert sent == [cglib.EXLINK_FRAMES["vol_up"]] * 3, sent   # volumeStep=3
+    assert sent == [tv.EXLINK_FRAMES["vol_up"]] * 3, sent   # volumeStep=3
 
     sent.clear()
     r = h.d.volume_set(80)                            # clamps to volumeMax 40
-    assert r.ok and sent == [cglib.vol_set_frame(40)], sent
+    assert r.ok and sent == [tv.vol_set_frame(40)], sent
     sent.clear()
-    assert h.d.volume_set(25).ok and sent == [cglib.vol_set_frame(25)]
+    assert h.d.volume_set(25).ok and sent == [tv.vol_set_frame(25)]
 
     sent.clear()
-    assert h.d.mute_toggle().ok and sent == [cglib.EXLINK_FRAMES["mute_toggle"]]
+    assert h.d.mute_toggle().ok and sent == [tv.EXLINK_FRAMES["mute_toggle"]]
 
     # (duck/unduck left Dispatch on 2026-08-21: with eARC audio the TV
     # refuses Ex-Link volume writes, so ducking moved to remote-key relay +
@@ -78,16 +79,16 @@ def main():
 
     # --- serial send raises -> fail earcon (COM retry now lives in cglib) ----
     def always_down(frame, port): raise OSError("dead")
-    cglib.exlink_send_hex = always_down
+    tv.exlink_send_hex = always_down
     r = h.d.mute_toggle()
     assert not r.ok and r.earcon == "fail"
 
     # --- input map + gaming-input semantics ----------------------------------
-    cglib.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
+    tv.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
     h = Harness(); sent.clear()
     assert not h.d.switch_input("garage").ok          # unknown name
     assert h.d.switch_input("Apple TV ").ok
-    assert sent == [cglib.EXLINK_FRAMES["hdmi1"]]
+    assert sent == [tv.EXLINK_FRAMES["hdmi1"]]
 
     # No session: "switch to the pc" means "start a session" - it spawns the
     # full couch launch and never touches the TV (couch.py flips at READY).
@@ -104,7 +105,7 @@ def main():
     assert not r.ok and r.earcon == "busy" and not sent, r
     # Live READY session: flips instantly.
     couch.ssh = lambda cmd, **kw: "2026-08-10T20:00:00"  # READY timestamp
-    assert h.d.switch_input("the pc").ok and sent == [cglib.EXLINK_FRAMES["hdmi4"]]
+    assert h.d.switch_input("the pc").ok and sent == [tv.EXLINK_FRAMES["hdmi4"]]
     # Fresh lock but host unreachable: honest fail, no switch.
     def ssh_down(cmd, **kw): raise RuntimeError("unreachable")
     couch.ssh = ssh_down

@@ -21,6 +21,7 @@ import couch
 import events
 import library
 import verbs
+import tv
 # couch.ssh / couch.ssh_intent are reached through the MODULE, never imported
 # by name: one implementation and ONE SEAM, so swapping couch.ssh intercepts
 # every verb. `from couch import ssh` would create a second binding that such
@@ -103,12 +104,12 @@ class Dispatch:
         return _ok(f"dry-run: {what}")
 
     def _exlink(self, what, frame_hex):
-        """TV serial send; COM-port contention retry lives in cglib so
+        """TV serial send; COM-port contention retry lives in tv.py so
         couch.py's power/input sends get the same protection."""
         if self.dry_run:
             return self._would(f"exlink {what} ({frame_hex})")
         try:
-            ack = cglib.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
+            ack = tv.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
             self.log("exlink_send", cmd=what, ack=ack or "no-ack")
             return _ok(f"exlink {what}")
         except Exception as e:
@@ -298,7 +299,7 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"{name} x{step}")
         for _ in range(step):
-            r = self._exlink(name, cglib.EXLINK_FRAMES[name])
+            r = self._exlink(name, tv.EXLINK_FRAMES[name])
             if not r.ok:
                 return r
             time.sleep(0.05)
@@ -317,7 +318,7 @@ class Dispatch:
         clamped = max(0, min(vmax, int(level)))
         if clamped != int(level):
             self.log("volume_clamped", asked=int(level), set=clamped, max=vmax)
-        return self._exlink(f"vol_set {clamped}", cglib.vol_set_frame(clamped))
+        return self._exlink(f"vol_set {clamped}", tv.vol_set_frame(clamped))
 
     def mute_toggle(self):
         """Blind toggle, permanently: the S90C exposes no discrete mute
@@ -325,7 +326,7 @@ class Dispatch:
         byte-identical across volume and mute states - there is no state to
         read, so none is tracked. 'mute' means toggle; vol_set is the
         resync."""
-        return self._exlink("mute_toggle", cglib.EXLINK_FRAMES["mute_toggle"])
+        return self._exlink("mute_toggle", tv.EXLINK_FRAMES["mute_toggle"])
 
     def switch_input(self, spoken_name):
         """Config owns the spoken-name -> input map. The GAMING input means
@@ -353,7 +354,7 @@ class Dispatch:
             except Exception as e:
                 self.log.error("input_refused", input=cmd, err=str(e))
                 return _fail(f"couldn't reach the PC (status check: {e})")
-        frame_hex = cglib.EXLINK_FRAMES.get(cmd)
+        frame_hex = tv.EXLINK_FRAMES.get(cmd)
         if frame_hex is None:
             return _fail(f"that input isn't configured correctly - config maps "
                          f"'{spoken_name}' to unknown command '{cmd}'")
@@ -378,7 +379,7 @@ class TvDucker:
       middle of a wake the set was refusing - and the morning ended with the
       only receiver silence on record and an unduck abandoned on its first
       frame. Hence THE GATE: duck() asks the TV whether it is ON first
-      (cglib.tv_power_state answers from standby); anything else, unknown
+      (tv.tv_power_state answers from standby); anything else, unknown
       included, means skip. Skipping is always safe - the whole cost is one
       session of loud TV.
     - 2026-08-21, the eARC discovery: with audio on the soundbar the TV
@@ -386,7 +387,7 @@ class TvDucker:
       hope is not just fragile, it can be theater. Hence THE READBACK:
       writes are remote keys relayed over CEC (tv_remote.press - the one
       thing the eARC path honours, benched same day), and the TV's
-      pairing-free UPnP volume (cglib.tv_volume - it mirrors the BAR's
+      pairing-free UPnP volume (tv.tv_volume - it mirrors the BAR's
       level) is ground truth for what actually happened. The ledger holds
       only VERIFIED movement, so restore restores exactly what moved, a
       shortfall carries as debt the next session's close pays off, and a
@@ -412,8 +413,8 @@ class TvDucker:
         self.to_pct = int(to_pct) if to_pct else None
         self.log = log
         self.dry_run = dry_run
-        self.probe = probe or (lambda: cglib.tv_power_state(tv_ip))
-        self.read = read or (lambda: cglib.tv_volume(tv_ip))
+        self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
+        self.read = read or (lambda: tv.tv_volume(tv_ip))
         self.press = press or self._ws_press(tv_ip)
         self.pause = pause
         self.out = 0        # verified steps down, not yet restored

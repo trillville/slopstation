@@ -2,7 +2,7 @@
 
 **Status:** the question is ANSWERED — the set reports its own power state
 over the network, measured end to end on 2026-08-19. First consumer landed
-2026-08-21: `cglib.tv_power_state` wraps the read and the voice lane's duck
+2026-08-21: `tv.tv_power_state` wraps the read and the voice lane's duck
 gates on it (`TvDucker` in `dispatch.py`, after the 08-16 stranding). What is
 left is wiring it into `couch.py`'s launch path, not finding it.
 
@@ -49,7 +49,7 @@ whole launch path has been guessing at. Notes for whoever wires it up:
   the **empty string** — distinct from the `"standby"` a recently-used set
   reports, and turning the set on brings back a clean `"on"`. So the depth
   ladder is directly observable — `"on"` / `"standby"` (shallow) /
-  `""` (deep) — and `cglib.tv_power_state` maps `""` to None (unknown), which
+  `""` (deep) — and `tv.tv_power_state` maps `""` to None (unknown), which
   every current caller treats as not-on. Samsung's own worksheet says the TV
   goes offline to IP about a minute after power-off and needs WoL after that;
   this set does not go offline, it degrades. Whether a still-deeper,
