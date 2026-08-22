@@ -34,7 +34,8 @@ SYSTEM_PYTHON_EXTRAS = CHORD_EXTRAS | {"winreg"}
 # stay stdlib + chord-lane. The coupling is documented at doctor.py's import
 # site; this is what keeps it honest after the next `import requests` someone
 # adds to one of them.
-VOICE_IMPORTED_BY_DOCTOR = ("workers.py", "steam_session.py")
+VOICE_IMPORTED_BY_DOCTOR = ("workers.py", "steam_session.py", "jobs.py",
+                            "tracing.py")          # jobs imports tracing
 
 
 def top_level_imports(path):
@@ -92,10 +93,12 @@ def main():
                                 f"modules run on system python; import it "
                                 f"inside the function that needs it")
 
-    # 4. The voice modules doctor.py reaches from system python.
+    # 4. The voice modules doctor.py reaches from system python - and what
+    #    THEY import at the top has to meet the same bar (jobs -> tracing).
+    doctor_reach = {Path(f).stem for f in VOICE_IMPORTED_BY_DOCTOR}
     for f in VOICE_IMPORTED_BY_DOCTOR:
         for mod in top_level_imports(VOICE / f):
-            if mod not in stdlib | k15_names:
+            if mod not in stdlib | k15_names | doctor_reach:
                 problems.append(f"voice/{f}: top-level import of {mod!r} - "
                                 f"doctor.py imports this file on system python")
 

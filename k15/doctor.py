@@ -14,6 +14,8 @@ import json, subprocess, sys, time
 
 import cglib
 import couch
+import library
+import steamstore
 import verbs
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -256,12 +258,15 @@ def check_voice(cfg):
     so a broken voice lane must not turn the chain doctor red (exit code =
     FAILs, and the chord's chain is what that number means). Filesystem +
     process checks only - doctor runs on system python, which deliberately
-    does not have the voice venv's deps."""
+    does not have the voice venv's deps.
+
+    One concern per check_voice_* below, in the order they print."""
     voice_dir = cglib.BASE / "voice"
     if not (cfg and isinstance(cfg.get("voice"), dict)):
         report(WARN, "voice config", "no voice section in config.json",
                "copy the voice block from config.example.json to enable voice")
         return
+    voice = cfg["voice"]
     # The agent refuses to start on these (cglib.REQUIRED_VOICE, the same
     # list it checks), so say so here rather than from a supervisor window.
     missing = [m for m in cglib.missing_config(cfg, voice=True)
@@ -270,19 +275,31 @@ def check_voice(cfg):
         report(WARN, "voice config", f"missing {', '.join(missing)}",
                "the agent will not start without them - compare config.example.json")
     # The ONE place the chord lane reaches into the voice lane, so it is the
-    # one place to read about it: two voice modules whose TOP LEVEL is stdlib
-    # + chord lane (test_lanes pins exactly that), imported here so system
-    # python can ask the real code - which CLI a workerProvider means, how to
-    # read a JWT's exp - instead of carrying a copy that is free to drift.
-    # Voice venv deps stay off-limits: nothing below imports pipecat or friends.
+    # one place to read about it: voice modules whose TOP LEVEL is stdlib +
+    # chord lane (test_lanes pins exactly that), imported by the checks below
+    # so system python can ask the real code - which CLI a workerProvider
+    # means, how to read a JWT's exp, where the job store lives - instead of
+    # carrying a copy that is free to drift. Voice venv deps stay off-limits:
+    # nothing below imports pipecat or friends.
     sys.path.insert(0, str(voice_dir))
-    from steam_session import jwt_exp
     try:
         secrets = cglib.load_secrets()
     except Exception as e:
         report(WARN, "voice secrets", f"unreadable ({e})",
                "recreate from secrets.template.json")
         secrets = {}
+    check_voice_keys(secrets)
+    check_voice_venv(voice_dir, voice)
+    check_voice_library()
+    check_voice_deals()
+    check_voice_grammar(voice)
+    check_voice_steam(secrets)
+    check_voice_worker(voice_dir, voice)
+    check_voice_jobs()
+    check_voice_agent()
+
+
+def check_voice_keys(secrets):
     lanes = {"deepgramApiKey": "STT+TTS", "anthropicApiKey": "assistant",
              "openaiApiKey": "assistant A/B", "steamApiKey": "library owned/meta"}
     live = [what for key, what in lanes.items() if cglib.real_key(secrets.get(key))]
@@ -291,9 +308,12 @@ def check_voice(cfg):
            f"live: {', '.join(live) or 'none'}"
            + (f" | disabled: {', '.join(dead)}" if dead else ""),
            "sessions need a real deepgramApiKey in secrets.json")
+
+
+def check_voice_venv(voice_dir, voice):
     if (voice_dir / ".venv" / "deps-ok").exists():
         report(PASS, "voice venv", "bootstrapped (deps-ok sentinel present)")
-        model = cfg["voice"].get("wakeModel", "")
+        model = voice.get("wakeModel", "")
         # Same order the agent resolves in (audio.py _resolve_model), so this
         # answers which copy WOULD load rather than whether one exists.
         vendored = voice_dir / "models" / f"{model}.onnx"
@@ -311,7 +331,10 @@ def check_voice(cfg):
     else:
         report(WARN, "voice venv", "not bootstrapped (no .venv\\deps-ok)",
                "run voice\\Start-Voice.bat once (~2 min with network)")
-    lib = cglib.BASE / "state" / "library.json"
+
+
+def check_voice_library():
+    lib = library.LIBRARY
     try:
         data = json.loads(lib.read_text(encoding="utf-8"))
         age_h = (time.time() - lib.stat().st_mtime) / 3600
@@ -324,12 +347,14 @@ def check_voice(cfg):
         report(WARN, "voice library", f"unreadable ({e})",
                "delete state\\library.json; the agent rebuilds it")
 
-    # Deals precompute (wishlist-on-sale + specials). The agent refreshes it
-    # every ~6h; a stale file when the agent is up means the store sync is
-    # failing, which silently serves empty "anything on sale?" answers. WARN
-    # only past 24h so a normally-sleeping rig doesn't nag; absent is silent
-    # (optional, keyless, fills on first sync).
-    deals = cglib.BASE / "state" / "deals.json"
+
+def check_voice_deals():
+    """Deals precompute (wishlist-on-sale + specials). The agent refreshes it
+    every ~6h; a stale file when the agent is up means the store sync is
+    failing, which silently serves empty "anything on sale?" answers. WARN
+    only past 24h so a normally-sleeping rig doesn't nag; absent is silent
+    (optional, keyless, fills on first sync)."""
+    deals = steamstore.DEALS
     if deals.exists():
         age_h = (time.time() - deals.stat().st_mtime) / 3600
         if age_h > 24:
@@ -338,11 +363,12 @@ def check_voice(cfg):
         else:
             report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
 
-    # Config sanity: a spoken name in BOTH inputs and navTargets would let
-    # "show <name>" double-match SwitchInput and Nav. Cheap to catch here (the
-    # grammar's disjointness is otherwise only vocabulary-enforced).
-    v = cfg.get("voice", {})
-    clash = set(map(str.lower, v.get("inputs", {}))) & set(map(str.lower, v.get("navTargets", {})))
+
+def check_voice_grammar(voice):
+    """Config sanity: a spoken name in BOTH inputs and navTargets would let
+    "show <name>" double-match SwitchInput and Nav. Cheap to catch here (the
+    grammar's disjointness is otherwise only vocabulary-enforced)."""
+    clash = set(map(str.lower, voice.get("inputs", {}))) & set(map(str.lower, voice.get("navTargets", {})))
     if clash:
         report(WARN, "voice config", f"inputs/navTargets overlap: {', '.join(sorted(clash))}",
                "rename one side - a shared spoken name double-matches in the grammar")
@@ -353,15 +379,17 @@ def check_voice(cfg):
     # weakens the "the lane reading the web cannot act" split - so it gets
     # SAID, once, rather than living only in someone's memory. Not a WARN: it
     # is a chosen setting, and a permanent nag is how warnings stop being read.
-    if v.get("assistantWebSearch"):
+    if voice.get("assistantWebSearch"):
         report(PASS, "voice web search", "on - page text reaches the "
                "tool-calling turn (set assistantWebSearch false to split them)")
 
-    # Account session (install-by-voice). WARN-only, and only speaks up when a
-    # token IS present but unusable or nearing death - a re-scan is a HUMAN
-    # action, so it earns a heads-up before movie night finds it, not after.
-    # Absent is silent (the lane is optional). Stdlib only, like the CLI.
-    secrets = cglib.load_secrets()
+
+def check_voice_steam(secrets):
+    """Account session (install-by-voice). WARN-only, and only speaks up when a
+    token IS present but unusable or nearing death - a re-scan is a HUMAN
+    action, so it earns a heads-up before movie night finds it, not after.
+    Absent is silent (the lane is optional). Stdlib only, like the CLI."""
+    from steam_session import jwt_exp
     tok = secrets.get("steamRefreshToken")
     if cglib.real_key(tok):
         try:
@@ -386,43 +414,49 @@ def check_voice(cfg):
             report(WARN, "steam session", f"token unreadable ({e})",
                    "re-run steam_session.py enroll")
 
-    # Tier-3 worker lane - stdlib checks only, same WARN-only posture:
-    # background tasks off must never redden the chain doctor.
+
+def check_voice_worker(voice_dir, voice):
+    """Tier-3 worker lane - stdlib checks only, same WARN-only posture:
+    background tasks off must never redden the chain doctor."""
     import shutil
-    wp = cfg["voice"].get("workerProvider", "")
-    if wp:
-        # provider -> CLI name lives in workers.py and nowhere else (the
-        # voice-lane reach above is what makes it importable here).
+    wp = voice.get("workerProvider", "")
+    if not wp:
+        return
+    # provider -> CLI name lives in workers.py and nowhere else (the
+    # voice-lane reach in check_voice is what makes it importable here).
+    try:
+        from workers import WORKERS
+        exe = WORKERS[wp].exe
+    except Exception as e:
+        exe = None
+        report(WARN, "worker CLI", f"can't resolve provider '{wp}' ({e})",
+               "workerProvider is anthropic|openai (see config.example.json)")
+    if exe:
+        cli = shutil.which(exe)
+        if cli:
+            report(PASS, "worker CLI", f"{wp} -> {exe} on PATH ({cli})")
+        else:
+            report(WARN, "worker CLI", f"'{exe}' not on PATH - background "
+                   "tasks disabled (everything else runs)",
+                   f"npm i -g the {exe} CLI and log in once, "
+                   "as the autologon user")
+    if wp == "openai":
+        # Codex keeps a shell, so on this lane the boundary is AGENTS.md
+        # policy rather than the harness (see workers.py).
+        report(WARN, "worker isolation",
+               "codex keeps a shell (sandbox confines writes, not reads)",
+               "structural research-only isolation is the anthropic lane")
+    if not (voice_dir / "worker_home" / "AGENTS.md").exists():
+        report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
+               "git pull should restore it - workers act unbriefed without it")
+
+
+def check_voice_jobs():
+    from jobs import JOBS_FILE, RUNNING         # the store's own path and word
+    if JOBS_FILE.exists():
         try:
-            from workers import WORKERS
-            exe = WORKERS[wp].exe
-        except Exception as e:
-            exe = None
-            report(WARN, "worker CLI", f"can't resolve provider '{wp}' ({e})",
-                   "workerProvider is anthropic|openai (see config.example.json)")
-        if exe:
-            cli = shutil.which(exe)
-            if cli:
-                report(PASS, "worker CLI", f"{wp} -> {exe} on PATH ({cli})")
-            else:
-                report(WARN, "worker CLI", f"'{exe}' not on PATH - background "
-                       "tasks disabled (everything else runs)",
-                       f"npm i -g the {exe} CLI and log in once, "
-                       "as the autologon user")
-        if wp == "openai":
-            # Codex keeps a shell, so on this lane the boundary is AGENTS.md
-            # policy rather than the harness (see workers.py).
-            report(WARN, "worker isolation",
-                   "codex keeps a shell (sandbox confines writes, not reads)",
-                   "structural research-only isolation is the anthropic lane")
-        if not (voice_dir / "worker_home" / "AGENTS.md").exists():
-            report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
-                   "git pull should restore it - workers act unbriefed without it")
-    jobs_file = cglib.BASE / "state" / "jobs.json"
-    if jobs_file.exists():
-        try:
-            rows = json.loads(jobs_file.read_text(encoding="utf-8"))
-            running_jobs = [j for j in rows if j.get("status") == "RUNNING"]
+            rows = json.loads(JOBS_FILE.read_text(encoding="utf-8"))
+            running_jobs = [j for j in rows if j.get("status") == RUNNING]
             unread = [j for j in rows if not j.get("read", True)]
             note = (f"{len(rows)} recorded, {len(running_jobs)} running, "
                     f"{len(unread)} unread")
@@ -434,6 +468,9 @@ def check_voice(cfg):
         except Exception as e:
             report(WARN, "worker jobs", f"jobs.json unreadable ({e})",
                    "delete state\\jobs.json; the store recreates it")
+
+
+def check_voice_agent():
     try:
         running = "voice_agent" in _python_cmdlines()
     except Exception as e:
