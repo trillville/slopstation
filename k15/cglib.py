@@ -101,6 +101,15 @@ def play_pattern(dev, steps, gain=0):
 LOCK = BASE / "state" / "session.lock"
 LOCK_STALE_S = 300          # a live session touches the lock every few seconds
 LAST_ERROR = BASE / "state" / "last_error"   # written by couch.py on launch failure
+CANCEL = BASE / "state" / "cancel"  # one line: the cancelling turn (may be
+                                    # empty). Written by the voice lane's
+                                    # end_session, consumed (unlinked) by
+                                    # couch.py at every launch wait - see
+                                    # couch.Cancelled for the incident that
+                                    # earned it. Stale copies are voided at
+                                    # the next launch's start, so a cancel
+                                    # nobody consumed can never kill a launch
+                                    # that had not been asked for yet.
 
 
 def lock_age():

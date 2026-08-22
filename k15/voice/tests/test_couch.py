@@ -15,6 +15,10 @@ stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
     answer `enterstate` at all falls back to exactly the old timeout;
   * Ctrl-C is a BaseException: it still releases the lock, and deliberately
     does NOT leave last_error for the listener to buzz;
+  * a voice cancel (state/cancel) aborts the same way, is consumed rather
+    than left for the next launch, beats the enter_redispatched rescue even
+    when it lands as the death is being proven, and a STALE one is voided
+    at launch start;
   * watch() rides out ssh blips and dies honestly on a run of them;
   * reconcile resumes a live session and clears a dead one, TV untouched.
 
@@ -51,6 +55,7 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     tmp = Path(tempfile.mkdtemp())
     cglib.LOCK = tmp / "session.lock"
     cglib.LAST_ERROR = tmp / "last_error"
+    cglib.CANCEL = tmp / "cancel"
     if lock_age_s is not None:
         cglib.LOCK.write_text(lock_content)
         old = time.time() - lock_age_s
@@ -362,6 +367,75 @@ def main():
     assert not cglib.LAST_ERROR.exists(), "a deliberate abort must not buzz the Puck"
     assert sent == ["power_on"], f"an abort must never switch the input: {sent}"
     print("  ctrl-C: launch_aborted, lock released, no fail buzz, TV alone")
+
+    # --- voice cancel: end_session's marker aborts the launch ------------------
+    # 2026-08-21 turn 0b785e: "end the session" against an in-flight launch
+    # could only ssh `exit`, which stops a RUNNING Enter - the first Enter had
+    # already died, so the exit raced the enter_redispatched rescue and won on
+    # timing alone. The marker is the channel that reaches THIS process.
+    fresh_state()
+    couch.READY_WAIT_S = 5                 # only the cancel may end this wait
+
+    def cancel_on_first_poll(cmd):
+        cglib.CANCEL.write_text("aaaaaa")  # the cancelling utterance's turn
+        return "NOTREADY"
+
+    log, sent = wire([("enter", "OK")], default=cancel_on_first_poll)
+    t0 = time.time()
+    assert couch.start() == 1
+    assert time.time() - t0 < 3, "a cancelled launch must not wait out the window"
+    ev = log.events()
+    assert "launch_aborted" in ev and "launch_failed" not in ev, ev
+    aborted = log.find("launch_aborted")[0]
+    assert aborted["err"] == "Cancelled", aborted
+    assert aborted["cancelled_by"] == "aaaaaa", aborted
+    assert not cglib.LOCK.exists(), "a cancelled launch still releases the lock"
+    assert not cglib.LAST_ERROR.exists(), "a cancel is deliberate - no fail buzz"
+    assert not cglib.CANCEL.exists(), "consumed, or it kills the NEXT launch too"
+    assert sent == ["power_on"], f"a cancel must never switch the input: {sent}"
+    print("  cancel: marker aborts the wait, consumed, no buzz, TV alone")
+
+    # --- cancel beats the rescue: no redispatch over a teardown ----------------
+    # The exact interleave from 0b785e: the cancel lands while the death is
+    # being proven, one iteration too late for the loop-top check. The
+    # last-instant check inside the idle_seen branch is what must catch it -
+    # before the re-poke, before the second Enter.
+    fresh_state()
+    couch.ENTER_SETTLE_S = 0
+    reads = {"n": 0}
+
+    def die_then_cancel(cmd):
+        if cmd.startswith("enterstate"):
+            reads["n"] += 1
+            if reads["n"] == 2:            # written as the death is proven
+                cglib.CANCEL.write_text("bbbbbb")
+            return "IDLE"
+        return "NOTREADY"
+
+    log, sent = wire([("enter", "OK")], default=die_then_cancel)
+    assert couch.start() == 1
+    ev = log.events()
+    assert "enter_died" in ev, ev
+    assert "enter_redispatched" not in ev, ev
+    assert "launch_aborted" in ev and "launch_failed" not in ev, ev
+    assert sent == ["power_on"], f"no re-poke for a launch being torn down: {sent}"
+    assert not cglib.LOCK.exists() and not cglib.CANCEL.exists()
+    couch.ENTER_SETTLE_S = 10
+    print("  cancel vs rescue: enter_died then cancel -> no redispatch, abort")
+
+    # --- a stale cancel is void: it predates this launch -----------------------
+    fresh_state()
+    couch.READY_WAIT_S = 0.3
+    cglib.CANCEL.write_text("ffffff")      # nobody consumed it; not our intent
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "ab12cd"),
+        ("status", "NOTREADY"),
+    ])
+    assert couch.start(turn="ab12cd") == 0
+    assert "launch_aborted" not in log.events(), log.events()
+    assert "host_ready" in log.events()
+    print("  stale cancel: voided at start, launch unharmed")
 
     # --- watch: blips forgiven, a run of failures dies honestly ---------------
     fresh_state()

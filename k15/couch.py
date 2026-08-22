@@ -54,6 +54,39 @@ WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
 log = cglib.make_log("launch")
 
 
+class Cancelled(BaseException):
+    """A requested stop of an in-flight launch - the K15-side half of
+    "teardown wins". The voice lane's end_session can only ssh `exit`, and
+    Exit can only stop an Enter that is RUNNING when it lands: on 2026-08-21
+    (turn 0b785e) the first Enter had already died, so the exit raced this
+    process's enter_redispatched rescue and won by six seconds of luck -
+    the reverse ordering drops OFFICE topology and a released Puck onto a
+    live couch session. end_session now also writes cglib.CANCEL, and every
+    wait in start() consumes it through raise_if_cancelled().
+
+    BaseException ON PURPOSE, exactly like KeyboardInterrupt: it must ride
+    the abort handler (launch_aborted, lock released, no last_error, no fail
+    buzz - whoever cancelled already knows), never the launch_failed path."""
+
+    def __init__(self, by):
+        self.by = by                    # the CANCELLING intent's turn, or ""
+        super().__init__(by)
+
+
+def raise_if_cancelled():
+    """Consume a pending cancel (unlink is the ack - a marker left behind
+    would kill the next launch too) and stop the launch through the abort
+    path. The unlink-then-raise order is safe against a crash between them:
+    a re-raise never happens, and a consumed-but-unraised marker costs one
+    ssh poll, not a launch."""
+    try:
+        by = cglib.CANCEL.read_text().strip()
+    except OSError:
+        return                          # no marker - the overwhelming case
+    cglib.CANCEL.unlink(missing_ok=True)
+    raise Cancelled(by)
+
+
 def exlink(name, **fields):
     try:
         ack = cglib.exlink_send(name, CFG["tvComPort"])
@@ -138,6 +171,9 @@ def enter_running():
 def wait_port(timeout=PORT_WAIT_S):
     end = time.time() + timeout
     while time.time() < end:
+        # A cold boot spends up to the whole 90 s here - "end the session"
+        # during it must not wait that out.
+        raise_if_cancelled()
         try:
             with socket.create_connection((CFG["gamingPcIp"], 22), 3):
                 return True
@@ -162,6 +198,10 @@ def start(appid=None, turn=None):
         log.warn("lock_recycled", lock_age_s=round(age))
     if not cglib.acquire_lock(f"{turn} {os.getpid()}"):
         log("launch_busy", reason="lost_acquire_race"); return 1
+    # A cancel that predates this intent is void - it was aimed at whatever
+    # the rig was doing BEFORE this launch existed, and honouring it here
+    # would kill a launch nobody asked to stop.
+    cglib.CANCEL.unlink(missing_ok=True)
     t0 = time.time()
 
     def ms():
@@ -188,6 +228,7 @@ def start(appid=None, turn=None):
             READY window on retries of a call that is not the problem."""
             for _ in range(attempts):
                 cglib.touch_lock()
+                raise_if_cancelled()
                 try:
                     if ssh_intent("enter") == "OK":
                         log(event, dur_ms=ms()); return True
@@ -207,6 +248,7 @@ def start(appid=None, turn=None):
         repoke_at = time.time() + WAKE_RETRY_S
         while time.time() < end:
             cglib.touch_lock()
+            raise_if_cancelled()
             # The only rescue there is for a TV that slept through the power_on
             # at launch_start. Enter's profile retry re-applies TV-GAMING but
             # cannot ask the set to wake - the gaming PC has no Ex-Link, this
@@ -282,6 +324,14 @@ def start(appid=None, turn=None):
                 idle_seen += 1
                 if idle_seen >= 2:
                     log.warn("enter_died", dur_ms=ms())
+                    # THE race this marker exists for, re-checked at the last
+                    # instant: a cancel that lands while the death was being
+                    # proven must win here, before the re-poke and the second
+                    # Enter. The loop-top check alone leaves a window exactly
+                    # one iteration wide, and 0b785e's exit fell inside it.
+                    # (A cancel arriving AFTER the redispatch is the host's
+                    # to resolve: Exit stops a running Enter.)
+                    raise_if_cancelled()
                     # Out of retries: say so NOW. Sitting out the rest of the
                     # window on a task we have just proved is gone is exactly
                     # the dead time this whole change exists to delete - and
@@ -345,7 +395,13 @@ def start(appid=None, turn=None):
         # Deliberately no LAST_ERROR: whoever pressed Ctrl-C already knows,
         # and buzzing the Puck three times to tell them would be noise. The
         # lock still has to go, which is the whole reason this clause exists.
-        log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms())
+        #
+        # Cancelled arrives here BY DESIGN (see the class): a voice "end the
+        # session" against an in-flight launch is the same intent as Ctrl-C,
+        # from the couch instead of the desk. cancelled_by joins the two
+        # stories - this launch's turn and the utterance that stopped it.
+        by = {"cancelled_by": e.by} if isinstance(e, Cancelled) and e.by else {}
+        log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms(), **by)
         cglib.release_lock(); return 1
     return 0
 

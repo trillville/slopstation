@@ -145,9 +145,35 @@ class Dispatch:
         turn = self.utterance.turn            # snapshot at operation start
         if self.dry_run:
             return self._would("ssh exit")
+        # The K15-side half of "teardown wins", earned on 2026-08-21 turn
+        # 0b785e: Exit can only stop an Enter that is RUNNING when it lands.
+        # That launch's first Enter had already died, so the exit raced
+        # couch.py's enter_redispatched rescue and lost only by timing - the
+        # rescue re-claimed the Puck and re-applied TV-GAMING two seconds
+        # into the teardown. The marker reaches the process the ssh verb
+        # cannot: couch.py consumes it at every wait and stands down instead
+        # of rescuing a launch nobody wants. Written BEFORE the ssh so the
+        # K15 side stops even if the exit itself cannot get through, and
+        # only when the lock says something is actually running - with the
+        # rig idle there is nothing the marker could stop, and couch.py
+        # voids stale ones at the next launch's start anyway.
+        cancelled = False
+        if cglib.session_active():
+            try:
+                cglib.CANCEL.write_text(turn or "")
+                cancelled = True
+            except OSError:
+                pass                          # the host-side exit still runs
         try:
             out = couch.ssh_intent("exit", turn=turn)
         except Exception as e:
+            if cancelled:
+                # Mid-launch the PC can be mid-wake and unreachable - and a
+                # PC that never got its Enter has nothing to tear down, so
+                # the marker alone IS the whole teardown. Not reaching the
+                # host here is the expected shape, not a failure.
+                self.log("end_session_dispatched", turn=turn, via="cancel")
+                return _ok("stopping the launch - the PC wasn't up yet")
             self.log.error("end_session_failed", err=str(e), turn=turn)
             return _fail(f"couldn't reach the PC (ssh exit: {e})")
         if out == "OK":

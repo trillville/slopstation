@@ -93,8 +93,12 @@ Time to READY, the number the whole system is judged on:
     refused to wake for on the first ask, so **`enter_died` counts the TV**,
     not the PC — it is the closest thing to a TV-power metric that exists
     (`docs/tv-power-detection-design.md` explains why a real one does not).
-  - `launch_aborted` is Ctrl-C in the launch console, not a failure: no
-    `last_error`, and the Puck is deliberately not buzzed.
+  - `launch_aborted` is a deliberate stop, not a failure: no `last_error`,
+    and the Puck is deliberately not buzzed. `err=KeyboardInterrupt` is
+    Ctrl-C in the launch console; `err=Cancelled` is a voice "end the
+    session" against an in-flight launch (the `state/cancel` marker), and
+    `cancelled_by` carries the cancelling utterance's turn so the two
+    stories join.
 - **manual**: `exlink_send` `exlink_nak` `exlink_probe` `tvremote_send` `tvremote_fail` — the same events from a hand-run
   `python exlink.py <cmd>`, kept off the launch lane so operator probing does
   not skew launch metrics. Drop the lane from a query to see every frame

@@ -31,7 +31,9 @@ class Harness:
 
 
 def with_temp_lock(age_s):
-    """Point cglib.LOCK at a temp file with the given age; None = absent."""
+    """Point cglib.LOCK at a temp file with the given age; None = absent.
+    CANCEL rides along: end_session writes it next to the lock, and leaving
+    it at the repo path would land test cancels in the real state dir."""
     tmp = Path(tempfile.mkdtemp()) / "session.lock"
     if age_s is not None:
         tmp.write_text("x")
@@ -39,6 +41,7 @@ def with_temp_lock(age_s):
         import os
         os.utime(tmp, (old, old))
     cglib.LOCK = tmp
+    cglib.CANCEL = tmp.parent / "cancel"
 
 
 def main():
@@ -129,13 +132,30 @@ def main():
     assert not h.d.switch_input("the pc").ok and not sent
 
     # --- end session over ssh outcomes ---------------------------------------
+    # With the rig busy (fresh lock = a launch or session in flight), ending
+    # also writes the cancel marker couch.py consumes - BEFORE the ssh, so
+    # the launch stands down even when the exit can't get through (0b785e:
+    # the exit that raced the rescue Enter).
+    with_temp_lock(10)
     couch.ssh = lambda cmd, **kw: "OK"
-    assert Harness().d.end_session().ok
+    h = Harness()
+    assert h.d.end_session().ok
+    assert cglib.CANCEL.exists(), "a busy rig's end must leave the marker"
+    assert "end_session_dispatched" in h.log.events()
+    with_temp_lock(10)
     couch.ssh = lambda cmd, **kw: "FAILED:1"
     assert not Harness().d.end_session().ok
+    with_temp_lock(10)                    # mid-launch, PC mid-wake: still an end
     couch.ssh = ssh_down
+    h = Harness()
+    r = h.d.end_session()
+    assert r.ok and cglib.CANCEL.exists(), r
+    assert "end_session_dispatched" in h.log.events()
+    # Idle rig: nothing to cancel, so an unreachable PC is a real failure.
+    with_temp_lock(None)
     r = Harness().d.end_session()
     assert not r.ok and r.earcon == "fail"
+    assert not cglib.CANCEL.exists(), "an idle rig's end must not leave a marker"
 
     # --- play_game: session-live ssh outcomes + cold-start delegation --------
     with_temp_lock(10)                                # fresh lock = session up
