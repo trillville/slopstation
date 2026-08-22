@@ -297,6 +297,12 @@ def main():
     assert set(assistant.BACKENDS) == {"anthropic", "openai"}
     assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"
+    # One map answers "which secret does this provider read" for the
+    # production gates; the REPL backends carry the same value.
+    assert assistant.PROVIDER_KEY == {"anthropic": "anthropicApiKey",
+                                      "openai": "openaiApiKey"}
+    assert all(assistant.BACKENDS[p].key == k
+               for p, k in assistant.PROVIDER_KEY.items())
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
     # Server-side search: knob off -> absent everywhere, prompt included; knob

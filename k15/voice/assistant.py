@@ -692,13 +692,19 @@ def server_tools(voice, provider):
     return [tool]
 
 
+# Which secrets.json key each provider's lane reads. The production path
+# (voice_agent's lane check, session_runtime's assistant gate) needs only this
+# map; the REPL backends below carry the same value as .key.
+PROVIDER_KEY = {"anthropic": "anthropicApiKey", "openai": "openaiApiKey"}
+
+
 # --- provider backends: one turn (with its tool loop) -> reply text -----------
 # System prompt, tool schemas, and tool impls are provider-neutral; only the
 # request/response shape differs. Each backend holds its own conversation state.
 
 
 class AnthropicBackend:
-    key = "anthropicApiKey"
+    key = PROVIDER_KEY["anthropic"]
 
     def __init__(self, secrets, model, effort=None, voice=None):
         import anthropic
@@ -755,7 +761,7 @@ class OpenAIBackend:
     reasoning and tool calls coexist here (they don't cleanly on the legacy
     chat-completions endpoint). State is server-side via previous_response_id,
     which also threads reasoning items across tool calls for us."""
-    key = "openaiApiKey"
+    key = PROVIDER_KEY["openai"]
 
     def __init__(self, secrets, model, effort="low", voice=None):
         import openai

@@ -152,9 +152,9 @@ def main():
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
         log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
-    from assistant import BACKENDS
-    brain = BACKENDS.get(voice["assistantProvider"])
-    brain_live = bool(brain and cglib.real_key(secrets.get(brain.key)))
+    from assistant import PROVIDER_KEY
+    brain_key = PROVIDER_KEY.get(voice["assistantProvider"])
+    brain_live = bool(brain_key and cglib.real_key(secrets.get(brain_key)))
     # The two lanes take different value grammars for the same-looking key:
     # the assistant calls the Messages API (full ids only), the worker calls
     # the claude CLI (aliases fine, and preferable - they follow the latest).

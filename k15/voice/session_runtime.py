@@ -275,9 +275,9 @@ async def run_session(cfg, secrets, matcher, args, input_idx, output_idx,
     )
 
     dispatcher = Dispatch(cfg, log, dry_run=args.dry_run)
-    from assistant import BACKENDS
+    from assistant import PROVIDER_KEY
     provider = voice["assistantProvider"]
-    assistant_live = cglib.real_key(secrets.get(BACKENDS[provider].key))
+    assistant_live = cglib.real_key(secrets.get(PROVIDER_KEY[provider]))
     gate = GrammarGate(
         matcher, dispatcher, log,
         resolve_game=(titles.build_resolver(voice["fuzzyTitleThreshold"])
