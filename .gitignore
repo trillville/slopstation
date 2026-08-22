@@ -44,9 +44,9 @@ k15/voice/models/*
 k15/voice/room.wav
 k15/voice/room_*.wav
 
-# Voice: Tier-3 worker scratch - the briefing is committed, everything a worker
-# writes is runtime state. The guardrail is workers.py's --disallowedTools and
-# nothing else: a settings.json deny list used to sit here too, and it was
+# Voice: background-worker scratch - the briefing is committed, everything a
+# worker writes is runtime state. The guardrail is workers.py's
+# --disallowedTools and nothing else: a settings.json deny list used to sit here too, and it was
 # measured (2026-08-14) not to hold - Read(**/x) was ignored and the file read
 # anyway - while naming only tools the denylist already removes.
 k15/voice/worker_home/*

@@ -1,4 +1,4 @@
-# Tier-1 grammar (hassil). Every final transcript is screened against this
+# The command grammar (hassil). Every final transcript is screened against this
 # BEFORE any LLM. Slot lists are supplied at runtime (config inputs map /
 # library titles), so installing a game needs no edit here. EndSession stays
 # narrow (risky command, no fuzz); ExitSession = "conversation over", not a
