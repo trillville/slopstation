@@ -7,17 +7,9 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'nav'
 try {
-    $marker = 'C:\ProgramData\CouchGaming\nav-target'
-    if (-not (Test-Path $marker)) { Log 'no nav-target marker - nothing to do'; return }
-    # Stringify before trimming (Get-Content on an empty file returns $null in
-    # PS 5.1). Delete best-effort: the marker is written by the ELEVATED sshd
-    # context and this task runs limited, so the delete is DENIED - but Dispatch
-    # clears it before every write, so a survivor is overwritten.
-    $raw = Get-Content $marker -TotalCount 1
-    try { Remove-Item $marker -Force } catch {
-        Log 'marker not deletable from this token - Dispatch overwrites it next nav'
-    }
-    $parts = ("$raw".Trim()) -split '\s+', 2
+    $target = Read-CgMarker $CG.NavMarker
+    if ($null -eq $target) { Log 'no nav-target marker - nothing to do'; return }
+    $parts = $target -split '\s+', 2
     $kind = $parts[0]
     $arg = if ($parts.Count -gt 1) { $parts[1] } else { '' }
     $url = switch ($kind) {
@@ -32,7 +24,7 @@ try {
         'collection' { if ($arg -match '^[A-Za-z0-9_.*+=-]{1,64}$') { "steam://open/library/collection/$arg" } else { $null } }
         default      { $null }
     }
-    if (-not $url) { throw "unrecognized nav target: '$raw'" }
+    if (-not $url) { throw "unrecognized nav target: '$target'" }
     Log "nav -> $url"
     Start-Process $url
     Write-CgEvent 'nav_fired' @{ kind = $kind; url = $url }
@@ -40,5 +32,5 @@ try {
     Write-CgEvent 'nav_failed' @{ err = "$_" } 'error'
     throw
 } finally {
-    Stop-Transcript | Out-Null
+    Stop-CgTranscript
 }

@@ -13,7 +13,7 @@ if (Test-CgTaskRunning 'Exit') {
     if (-not (Wait-For { -not (Test-CgTaskRunning 'Exit') } 45 'Exit finished')) {
         Log 'Exit still running - aborting launch, TV untouched'
         Write-CgEvent 'enter_failed' @{ reason = 'exit_still_running' } 'error'
-        Stop-Transcript
+        Stop-CgTranscript
         throw 'aborted: Exit task still running'
     }
 }
@@ -128,4 +128,4 @@ catch {
     Clear-ReadyMarker
     throw
 }
-finally { Stop-Transcript }
+finally { Stop-CgTranscript }

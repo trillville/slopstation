@@ -15,9 +15,17 @@ $CG = @{
     TvHeight    = 2160                     # see Test-TvIsPrimary
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
-    ReadyMarker = 'C:\ProgramData\CouchGaming\ready'   # cross-context state, not under Root
-    TurnMarker  = 'C:\ProgramData\CouchGaming\turn'    # written by Dispatch, read here (schtasks can't pass args)
+    StateDir    = 'C:\ProgramData\CouchGaming'   # cross-context state, not under Root
 }
+# Markers under StateDir, shared with the dependency-free Dispatch.ps1 as
+# literals; voice/tests/test_ps_parse.py holds the two sets equal. Dispatch
+# writes turn/launch-app/nav-target/stop-app (schtasks /Run can't pass args)
+# and reads ready.
+$CG.ReadyMarker  = Join-Path $CG.StateDir 'ready'
+$CG.TurnMarker   = Join-Path $CG.StateDir 'turn'
+$CG.LaunchMarker = Join-Path $CG.StateDir 'launch-app'
+$CG.NavMarker    = Join-Path $CG.StateDir 'nav-target'
+$CG.StopMarker   = Join-Path $CG.StateDir 'stop-app'
 
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
@@ -38,8 +46,8 @@ function Get-CgTurn {
 }
 
 $script:CgTurn = Get-CgTurn
-# Lane defaults to the dot-sourcing script, so one with no transcript
-# (Office-Safety, Wake-Safety) still emits under a sensible label.
+# Start-CgTranscript sets the lane (every emitting script calls it first);
+# this default only labels an emit that precedes it.
 $script:CgLane = if ($MyInvocation.PSCommandPath) {
     [IO.Path]::GetFileNameWithoutExtension($MyInvocation.PSCommandPath).ToLower()
 } else { 'pc' }
@@ -88,9 +96,14 @@ function Start-CgTranscript([string]$Tag) {
     $stamp = Get-Date -Format yyyyMMdd-HHmmss
     $name = if ($script:CgTurn) { "{0}-{1}-{2}.log" -f $Tag, $stamp, $script:CgTurn }
             else                { "{0}-{1}.log" -f $Tag, $stamp }
-    Start-Transcript (Join-Path $CG.LogDir $name)
+    # An unwritable logs\ must not abort a task before its try block.
+    try { Start-Transcript (Join-Path $CG.LogDir $name) } catch { Log "note: transcript unavailable - $_" }
     Write-CgEvent "${Tag}_start"
 }
+
+# `| Out-Null` alone does not suppress the "not transcribing" error a failed
+# Start-CgTranscript leaves behind.
+function Stop-CgTranscript { try { Stop-Transcript | Out-Null } catch { } }
 
 function Wait-For([scriptblock]$Cond, [double]$TimeoutSec, [string]$What) {
     $end = $script:CgStopwatch.Elapsed.TotalSeconds + $TimeoutSec
@@ -330,13 +343,13 @@ function Request-PuckRelease([int]$Attempts = 3) {
     $released
 }
 
-# schtasks wrappers for the \CouchGaming\ task folder.
-# English-locale match - the same assumption Wake-Safety's powercfg parse makes.
+# Task guards for the \CouchGaming\ folder. Get-ScheduledTask, not schtasks
+# /Query: .State is an enum, while /FO LIST prints a LOCALISED string that a
+# non-English install would read as idle - the direction that re-dispatches
+# Enter on top of a healthy launch. A missing task reads as not running.
+# ~0.45 s for a fresh process, ~0.3 s per call after (measured 2026-08-22).
 function Test-CgTaskRunning([string]$Name) {
-    try {
-        $out = schtasks /Query /TN "\CouchGaming\$Name" /FO LIST 2>$null | Out-String
-        return [bool]($out -match 'Status:\s+Running')
-    } catch { return $false }
+    (Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName $Name -ErrorAction SilentlyContinue).State -eq 'Running'
 }
 
 function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | Out-Null }
@@ -375,3 +388,21 @@ function Set-ReadyMarker {
 }
 function Clear-ReadyMarker { Remove-Item $CG.ReadyMarker -ErrorAction SilentlyContinue }
 function Test-ReadyMarker  { Test-Path $CG.ReadyMarker }
+
+# One-shot payload from Dispatch to a task (LaunchMarker/NavMarker/StopMarker):
+# the first line, trimmed, or $null when absent; the caller validates.
+# Stringify before trimming: Get-Content on an empty file returns $null in
+# PS 5.1 and .Trim() would throw before the delete, stranding the marker. The
+# delete is best-effort: the marker is owned by the ELEVATED sshd forced-command
+# context (BUILTIN\Administrators; Users read-only) and the tasks run limited,
+# so it is DENIED - fatal under ErrorActionPreference=Stop. Dispatch clears it
+# before every write, so a survivor is overwritten; only a MANUAL task run
+# replays the last value.
+function Read-CgMarker([string]$Path) {
+    if (-not (Test-Path $Path)) { return $null }
+    $raw = Get-Content $Path -TotalCount 1
+    try { Remove-Item $Path -Force } catch {
+        Log 'marker not deletable from this token - Dispatch overwrites it next time'
+    }
+    "$raw".Trim()
+}

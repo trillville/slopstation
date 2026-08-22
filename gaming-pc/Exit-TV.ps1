@@ -48,4 +48,4 @@ Hide-DesktopSteam
 Clear-ReadyMarker
 Log 'done'
 Write-CgEvent 'exit_done' @{ office_ok = $officeOk; puck_ok = $puckOk }
-Stop-Transcript
+Stop-CgTranscript

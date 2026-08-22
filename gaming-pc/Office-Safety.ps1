@@ -10,7 +10,7 @@ Start-CgTranscript 'office-safety'
 # without the stand-down it would "recover" a live launch.
 if ((Test-CgTaskRunning 'Enter') -or (Test-CgTaskRunning 'Exit')) {
     Log 'Enter/Exit task running - standing down (session flow owns the displays)'
-    Stop-Transcript
+    Stop-CgTranscript
     exit 0
 }
 
@@ -18,10 +18,13 @@ if (-not (Test-TvIsPrimary)) {
     # Fail-open: a broken probe reads as "office confirmed" rather than
     # thrashing displays at every logon.
     Log 'office confirmed'
-} elseif (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 25 3 'office restored')) {
+} elseif (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 25 3 'office restored') {
+    Write-CgEvent 'profile_applied' @{ profile = 'OFFICE' }
+} else {
     Log 'WARNING: OFFICE never took after 3 attempts'
+    Write-CgEvent 'profile_apply_failed' @{ profile = 'OFFICE' } 'warn'
 }
 Stop-DisplayMagician
 Clear-ReadyMarker
 Clear-OldLogs
-Stop-Transcript
+Stop-CgTranscript

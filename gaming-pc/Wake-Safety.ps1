@@ -16,6 +16,7 @@ if ($wake -match $NetworkWakePattern) {
     Log 'network wake - couch launch owns this; standing down'
 } elseif (Test-ReadyMarker) {
     Log 'stale TV session detected - running Exit cleanup'
+    Write-CgEvent 'wake_cleanup' @{ reason = 'stale_session' }
     # Via the task, not inline: Task Scheduler serializes this against a
     # tile/hotkey Exit, and it leaves the normal exit-*.log trail.
     schtasks /Run /TN '\CouchGaming\Exit' | Out-Null
@@ -23,4 +24,4 @@ if ($wake -match $NetworkWakePattern) {
     Log 'clean wake - nothing to do'
 }
 Clear-OldLogs
-Stop-Transcript
+Stop-CgTranscript

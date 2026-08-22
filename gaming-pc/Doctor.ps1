@@ -70,9 +70,12 @@ if ($h -gt 0) {
 if (Test-ReadyMarker) { Report WARN 'ready marker' 'present - a session is (or looks) active' 'stale after a crash? Exit task or Office-Safety clears it' }
 else { Report PASS 'ready marker' 'absent (idle)' }
 
-if (Test-Path 'C:\ProgramData\CouchGaming\launch-app') {
-    Report WARN 'launch marker' 'launch-app marker present - a voice launch never got consumed' 'safe to delete; LaunchGame task may have failed - check its transcript'
-} else { Report PASS 'launch marker' 'absent' }
+foreach ($m in 'LaunchMarker','NavMarker','StopMarker') {
+    $leaf = Split-Path $CG[$m] -Leaf
+    if (Test-Path $CG[$m]) {
+        Report WARN "$leaf marker" 'present - a dispatched verb never got consumed' 'safe to delete; its task may have failed - check the transcript'
+    } else { Report PASS "$leaf marker" 'absent' }
+}
 
 try {
     $probeFile = Join-Path $CG.LogDir ".doctor-write-test"

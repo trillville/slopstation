@@ -13,13 +13,8 @@ Start-CgTranscript 'stopgame'
 
 $method = 'none'
 try {
-    $marker = 'C:\ProgramData\CouchGaming\stop-app'
-    if (-not (Test-Path $marker)) { Log 'no stop-app marker - nothing to do'; return }
-    $raw = Get-Content $marker -TotalCount 1
-    try { Remove-Item $marker -Force } catch {
-        Log 'marker not deletable from this token - Dispatch overwrites it next stop'
-    }
-    $id = "$raw".Trim()
+    $id = Read-CgMarker $CG.StopMarker
+    if ($null -eq $id) { Log 'no stop-app marker - nothing to do'; return }
     if ($id -notmatch '^\d{1,10}$') { throw "invalid appid in marker: '$id'" }
     $idn = [int]$id
 
@@ -81,5 +76,5 @@ catch {
     throw
 }
 finally {
-    Stop-Transcript | Out-Null
+    Stop-CgTranscript
 }

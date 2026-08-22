@@ -7,7 +7,9 @@
 //   pc-YYYYMMDD.jsonl   the MILESTONES - enter_start, profile_applied,
 //                       puck_claimed, ready, enter_failed, exit_done.
 //                       Structured, carries the turn id; what dashboards
-//                       count and alerts fire on.
+//                       count and alerts fire on. pc-dispatch-YYYYMMDD.jsonl
+//                       is the same shape from Dispatch.ps1 (lane=dispatch),
+//                       in its own file because it writes elevated.
 //
 //   enter-*.log etc.    the NARRATIVE - Start-Transcript's full capture of
 //                       the run, shipped as free text under
@@ -52,10 +54,8 @@ livedebugging { enabled = false }
 // rejecting writes. Shorten it only alongside an alert that catches a dead
 // shipper faster than the new window.
 //
-// KNOWN GAP: pc-*.jsonl below is NOT archived, only deleted at 30 days, so
-// that glob grows by one file per day to ~30 while only today's can ever be
-// appended to - ~1.2% of a core to poll files that can never change again.
-// The fix is the move Clear-OldLogs already makes for *.log.
+// pc-*.jsonl is archived on the same two-day schedule, so the milestones glob
+// below holds today's files plus two days of finished ones.
 
 // ---------------------------------------------------------------- milestones
 
