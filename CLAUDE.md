@@ -17,8 +17,9 @@ run and deploy them. This file holds the process rules an agent session needs.
   is free and renaming an event must break a test. `cglib.CapturingLog` is
   the double; don't hand-roll one.
 - **Two lanes, one direction of dependency.** The chord lane (`cglib.py`,
-  `events.py`, `couch.py`, `chord_listener.py`) is load-bearing, runs on
-  system python, and must stay stdlib-only (`events.py` documents why).
+  `events.py`, `couch.py`, `chord_listener.py`, `tv.py`, `haptics.py`,
+  `gamepc.py`) is load-bearing, runs on system python, and must stay
+  stdlib-only (`events.py` documents why; `test_lint` enforces it).
   Voice is an overlay with its own venv and may depend on the chord lane's
   modules, never the reverse.
 - **Telemetry never costs a session.** Anything on an emit path is fail-soft
@@ -56,13 +57,18 @@ deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
 The blind suite runs as scripts, not pytest — `events._env()` detects tests
 by `sys.argv[0]`, so pytest would mislabel events as env=prod:
 
-    .venv\Scripts\python tests\test_couch.py     (from k15\voice\)
+    .venv\Scripts\python tests\run.py      (from k15\voice\; --all forces the
+                                            machine-bound tests)
 
-`test_lint.py` (pyflakes, undefined names) sweeps every module and is the
-cheapest full-repo check. `test_turn.py` reads the SHIPPING `Dispatch.ps1`,
-so gaming-pc regex changes are drilled from here. Hardware-bound tests
-(`test_standoff` needs hid + the Puck, `test_session_pipeline` needs audio
-devices) only run on the K15.
+Every test begins with `import _bootstrap`. The rules above are tests:
+`test_event_names` (the frozen vocabulary - a new event is added there, a
+rename is a deliberate edit there), `test_imports` (imports without config or
+hardware; every `module.attr` resolves - run it after any move), `test_lint`
+(pyflakes + the lane rule from the AST), `test_ps_parse` (every `.ps1` parses;
+the PC-side contract agrees with itself). `test_turn.py` reads the SHIPPING
+`Dispatch.ps1`, so gaming-pc regex changes are drilled from here.
+`test_library` needs a local Steam (the gaming PC); `test_session_pipeline`
+needs audio devices (the K15).
 
 ## Deploying
 

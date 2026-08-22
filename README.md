@@ -42,7 +42,7 @@ and warns on drift.
 | `Exit-TV.ps1` | Teardown: close Big Picture, restore OFFICE, release Puck. Task `\CouchGaming\Exit`. Stops a mid-flight Enter first. |
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
 | `Wake-Safety.ps1` | Cleans up sessions abandoned before sleep; stands down for network wakes. Task `\CouchGaming\WakeSafety`. |
-| `Dispatch.ps1` | The entire SSH surface — see the verb list under Conventions. Forced command in `administrators_authorized_keys`; dependency-free. |
+| `Dispatch.ps1` | The entire SSH surface — see the verb list under Conventions. Forced command in `administrators_authorized_keys`; dependency-free. Mutating verbs and `DENIED` write a `verb` event to `logs\pc-dispatch-*.jsonl` (its own file: Dispatch runs elevated, the tasks do not). |
 | `Launch-Game.ps1` | Task `\CouchGaming\LaunchGame`, fired by `launch`: reads the appid marker, re-validates, `steam -applaunch` into the running Big Picture session. |
 | `Nav-BigPicture.ps1` | Task `\CouchGaming\Nav`, fired by `nav`: reads the nav-target marker, re-validates, fires a `steam://` URL into Big Picture. |
 | `Stop-Game.ps1` | Task `\CouchGaming\StopGame`, fired by `stop`: `steam +app_stop`, then window-close, then a forced tree-kill only if both are ignored. Re-focuses Big Picture after. |
@@ -54,13 +54,17 @@ and warns on drift.
 
 | File | Role |
 |---|---|
-| `cglib.py` | Shared module: config and secrets loading, the per-lane logger (`log("event", field=…)` → console + `couch.log` + JSONL), Ex-Link frame table, Puck VID/PID, haptic report builders and the thud vocabulary, the session lock and its reconciliation, log rotation, and the HTTP TV reads `tv_power_state` / `tv_volume`. |
+| `cglib.py` | The K15 runtime core: `config()` (read once per process) and secrets, the per-lane logger (`log("event", field=…)` → console + `couch.log` + JSONL) and its test double, the session lock and its markers, `load_json`/`write_json` for `state/`, log rotation. |
+| `tv.py` | The TV from the K15, chord-safe: Ex-Link frame table and serial send, the HTTP reads `tv_power_state` / `tv_volume`. The venv-side write path over WebSocket is `voice/tv_remote.py`. |
+| `haptics.py` | The controller's haptics over the Puck: VID/PID, the 0x42 input report id, report builders, `play_pattern`, the thud vocabulary. |
+| `gamepc.py` | The gaming PC as the K15 sees it: `ssh()`/`ssh_intent()` and one function per Dispatch verb (`enter`, `status`, `launch`, …). `test_turn` holds it and `Dispatch.ps1` in step. |
 | `events.py` | The event core, stdlib-only so the chord lane gains no dependency: JSONL writer, daily files, secret scrubber, the `turn` correlation id, and an `emit` CLI the `.bat` supervisors call so a crash-restart loop is visible. |
-| `couch.py` | Orchestrator: Ex-Link TV power → WoL → `ssh enter` → poll READY → switch input → watch loop. Subcommands `start` and `reconcile` (the latter re-adopts or clears a session lock that survived a K15 restart). |
+| `couch.py` | Orchestrator: Ex-Link TV power → WoL → `enter` → poll READY → switch input → watch loop. Subcommands `start` and `reconcile` (the latter re-adopts or clears a session lock that survived a K15 restart). |
 | `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s and answers through the controller — 1 thud = launching, 2 = busy, 3 = failed — then fires `couch.py start`. |
-| `library.py` | Game catalog: installed games (over ssh), owned games + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json` and auto-synced by the voice agent. Also the Steam store fetchers (search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat) and the `state/deals.json` precompute. |
-| `doctor.py` | Read-only chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (skipped while the listener owns the Puck), ssh contract, session state, telemetry (event retention + the Alloy service), voice overlay (WARN-only). |
-| `exlink.py` | Manual Ex-Link TV control from the command line. Power and inputs work; the volume/mute subcommands are acked and refused on this rig (see Conventions). |
+| `library.py` | Game catalog: installed games (over ssh), owned games + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json` and auto-synced by the voice agent; `Catalog` is one read of it for a voice session. |
+| `steamstore.py` | Live Steam store data: search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat, and the `state/deals.json` precompute. `python steamstore.py <probe>` smokes an endpoint. |
+| `doctor.py` | Read-only chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (skipped while the listener owns the Puck), ssh contract + deploy skew, session state, telemetry (event retention + the Alloy service), voice overlay (WARN-only, one `check_*` per row group). |
+| `exlink.py` | Manual Ex-Link TV control from the command line (frames from `tv.py`). Power and inputs work; the volume/mute subcommands are acked and refused on this rig (see Conventions). |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after a firmware change. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports. Run only with the listener stopped. |
 | `config.example.json` | Template for `config.json` (gitignored): MAC, IPs, COM port, TV input mapping, voice tuning. Every key is documented inline. |
@@ -79,13 +83,14 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `voice_agent.py` | Composition root and wake loop. |
 | `audio.py` | The PortAudio layer: device resolution, stream recovery, the wake listener. |
 | `preroll.py` | Wake pre-roll buffer, so "hey jarvis volume up" as one sentence keeps its tail. |
-| `session_runtime.py` | One session's Pipecat pipeline — Flux STT → grammar gate → dispatch, with the LLM assistant lane and cross-session carry. |
+| `session_runtime.py` | One session's Pipecat pipeline as a `Session` — Flux STT → grammar gate → dispatch, with the LLM assistant lane and cross-session carry. |
 | `grammar_gate.py` | Tier-1 deterministic intent matching as a Pipecat processor. Screens every final transcript before the LLM lane sees it. |
 | `grammar.yaml` | The command grammar the gate matches against. |
 | `titles.py` | Fuzzy game-title and collection resolution: Steam's strings ↔ what a human says. |
-| `dispatch.py` | Every voice side effect — session, TV, launch, quit, Big Picture nav — plus the per-utterance snapshot and `TvDucker`. Shared by both lanes. |
-| `tv_remote.py` | TV remote keys over WebSocket (port 8002) — the only volume-write path that works on this rig. Needs a one-time pairing, see below. |
-| `assistant.py` | The catalog-in-context LLM lane: store-data, nav, quit and install tools, optional web search, and a `--text` REPL. |
+| `dispatch.py` | Every voice side effect — session, TV, launch, quit, Big Picture nav — plus the per-utterance snapshot. Shared by both lanes. |
+| `tv_remote.py` | TV remote keys over WebSocket (port 8002) — the only volume-write path that works on this rig — and `TvDucker`, the session-length ducking built on them. Needs a one-time pairing, see below. |
+| `assistant.py` | The catalog-in-context LLM lane: prompt, tool schemas and impls (store data, nav, quit, install), optional web search. |
+| `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
 | `workers.py` / `jobs.py` / `announce.py` | Tier-3 background tasks: claude/codex CLI adapters, the job store, and proactive spoken results. `worker_home/` is the worker's working directory. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice and download status over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
@@ -147,14 +152,23 @@ tests by `sys.argv[0]`, so pytest would label their events `env=prod`. From
 `k15\voice\`:
 
 ```
-.venv\Scripts\python tests\test_couch.py
+.venv\Scripts\python tests\run.py
 ```
 
-`test_lint.py` (pyflakes, undefined names) sweeps every module in the repo and
-is the cheapest full check. `test_turn.py` reads the shipping `Dispatch.ps1`, so
-gaming-pc regex changes are drilled from here. `test_standoff.py` needs hid plus
-the Puck and `test_session_pipeline.py` needs audio devices, so those two only
-run on the K15.
+runs every file in its own process and skips what the machine lacks
+(`test_library` needs a local Steam + PowerShell, `test_session_pipeline` real
+audio devices, `test_wake` the wake models); `--all` forces them. Every test
+starts with `import _bootstrap` (paths, a temp log dir, a config fixture, so the
+suite runs on a checkout with no `config.json`).
+
+Four tests are the repo's rules: `test_event_names` freezes the event
+vocabulary, field keys and lanes (a rename is a deliberate edit there);
+`test_imports` imports every module with no config and no hardware and checks
+every `module.attr` resolves; `test_lint` is pyflakes plus the lane rule read
+off the AST; `test_ps_parse` parses every `.ps1` and checks the marker paths,
+charsets and turn order agree between `Dispatch.ps1` and `common.ps1`.
+`test_turn` reads the shipping `Dispatch.ps1`, so gaming-pc regex changes are
+drilled from here.
 
 ## Configuration
 
@@ -180,9 +194,11 @@ checkout runs without local config fighting `git pull`:
 
 ## Telemetry
 
-Events land as JSONL beside `couch.log` on each machine. Grafana Alloy runs as a
-Windows service per machine and ships them to Loki; `doctor.py` checks that it
-is installed and running. Agent traces go to Langfuse.
+Events land as JSONL beside `couch.log` on each machine (on the PC, the task
+scripts write `pc-*.jsonl` and `Dispatch.ps1` writes `pc-dispatch-*.jsonl`).
+Grafana Alloy runs as a Windows service per machine and ships them to Loki;
+`doctor.py` checks that it is installed and running. Agent traces go to
+Langfuse.
 
 The local JSONL is the source of truth and Grafana is a mirror — Alloy's
 position file tracks what it read, not what it sent, so lines read during an

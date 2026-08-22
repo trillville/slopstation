@@ -111,7 +111,7 @@ Time to READY, the number the whole system is judged on:
     launch console; `err=Cancelled` is a voice "end the session" against an
     in-flight launch (the `state/cancel` marker), and `cancelled_by` carries
     the cancelling utterance's turn.
-- **manual**: `exlink_send` `exlink_nak` `exlink_probe` `tvremote_send`
+- **manual**: `exlink_send` `exlink_nak` `tvremote_send`
   `tvremote_fail` — the same events from a hand-run `python exlink.py <cmd>`,
   kept off the launch lane so operator probing does not skew launch metrics.
   Drop the lane to see every frame whoever sent it:
@@ -166,6 +166,25 @@ Time to READY, the number the whole system is judged on:
   only `python steam_session.py …` at the console lands on `lane="steam"`.
   Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
+
+- **dispatch** (gaming PC, `logs\pc-dispatch-*.jsonl` - its own file, because
+  Dispatch runs elevated and the task scripts do not): `verb` - every mutating
+  verb (`enter` `exit` `launch` `nav` `stop`) with `verb`, `answer` and the
+  `turn` it carried; a `DENIED` command lands at `level="warn"` with
+  `answer=DENIED` and the first 60 chars as `cmd`. The read-only polls stay
+  silent.
+- Newer names on existing lanes: launch `config_invalid` (a config doctor would
+  FAIL, refused before the lock and before `power_on`), `enter_refused` (a
+  non-OK answer to `enter`, once per distinct answer - today the K15 retried
+  in silence), `reconcile_cleared reason=unreachable` (the PC did not answer
+  at boot; `dead_session` now means it answered NOTREADY); voice `tool_error`
+  (a tool impl raised; pairs with the `tool_call ok=false` for the same call);
+  gamepc `profile_applied` / `profile_apply_failed` on `lane="office-safety"`
+  (a logon that had to restore OFFICE) and `wake_cleanup` on
+  `lane="wake-safety"`.
+
+The frozen list - every name, its field keys and its lane - is
+`k15/voice/tests/test_event_names.py`; a rename is a deliberate edit there.
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.
