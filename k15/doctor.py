@@ -366,22 +366,35 @@ def check_steam_session():
                    "re-run steam_session.py enroll")
 
 
+def _worker_exe(voice_dir, wp):
+    """The provider's CLI name, asked of workers.py in the voice venv - doctor
+    runs on system python and imports nothing from voice/. None when the venv
+    is absent or the provider is unknown."""
+    vpy = voice_dir / ".venv" / "Scripts" / "python.exe"
+    if not vpy.exists():
+        return None
+    try:
+        p = subprocess.run(
+            [str(vpy), "-c", f"import workers; print(workers.WORKERS[{wp!r}].exe)"],
+            cwd=str(voice_dir), capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    exe = p.stdout.strip()
+    return exe if p.returncode == 0 and exe else None
+
+
 def check_workers(cfg):
     voice_dir = cglib.BASE / "voice"
-    # Background-task lane - stdlib checks only, WARN-only.
+    # Background-task lane - WARN-only.
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
     if wp:
-        # provider -> CLI name lives only in workers.py, which is stdlib-only.
-        sys.path.insert(0, str(voice_dir))
-        try:
-            from workers import WORKERS
-            exe = WORKERS[wp].exe
-        except Exception as e:
-            exe = None
-            report(WARN, "worker CLI", f"can't resolve provider '{wp}' ({e})",
-                   "workerProvider is anthropic|openai (see config.example.json)")
-        if exe:
+        exe = _worker_exe(voice_dir, wp)
+        if exe is None:
+            report(WARN, "worker CLI", f"can't resolve provider '{wp}'",
+                   "workerProvider is anthropic|openai (see config.example.json); "
+                   "needs the voice venv (voice\\Start-Voice.bat once)")
+        else:
             cli = shutil.which(exe)
             if cli:
                 report(PASS, "worker CLI", f"{wp} -> {exe} on PATH ({cli})")

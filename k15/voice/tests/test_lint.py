@@ -2,7 +2,7 @@
 class py_compile misses; run_session and the --text repl open audio/network,
 so no unit test exercises them. Plus the lane rule, read off the AST: the
 modules that run on system python import only stdlib + each other (+ hid and
-serial) at top level, and nothing in k15/ imports voice/ at top level. Run:
+serial) at top level, and nothing in k15/ imports voice/ - not even lazily. Run:
     .venv\\Scripts\\python tests\\test_lint.py
 """
 import ast
@@ -24,18 +24,16 @@ MODULES += sorted((K15 / "voice" / "bench").glob("*.py"))
 # this venv - harmless, pyflakes parses rather than imports.
 MODULES += sorted((K15.parent / "wake-training").glob("*.py"))
 
-# Runs on system python (no venv): the chord lane plus the K15 tools, and
-# voice/workers.py because doctor imports it. Third-party allowed: hid, serial.
+# Runs on system python (no venv): the chord lane plus the K15 tools.
+# Third-party allowed: hid, serial.
 SYSTEM_PYTHON = {"cglib", "events", "couch", "chord_listener", "exlink", "tv",
                  "haptics", "gamepc", "doctor", "calibrate", "haptic_test"}
-SYSTEM_PYTHON_VOICE = {"workers"}
 THIRD_PARTY_OK = {"hid", "serial"}
 STDLIB = set(sys.stdlib_module_names)
 
 
-def top_level_imports(path):
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in tree.body:
+def _imports(nodes):
+    for node in nodes:
         if isinstance(node, ast.Import):
             for a in node.names:
                 yield a.name.split(".")[0], node.lineno
@@ -43,21 +41,25 @@ def top_level_imports(path):
             yield node.module.split(".")[0], node.lineno
 
 
+def top_level_imports(path):
+    return _imports(ast.parse(path.read_text(encoding="utf-8")).body)
+
+
+def all_imports(path):
+    return _imports(ast.walk(ast.parse(path.read_text(encoding="utf-8"))))
+
+
 def check_lanes():
     voice_mods = {p.stem for p in (K15 / "voice").glob("*.py")}
     bad = []
     for p in K15.glob("*.py"):
-        for mod, line in top_level_imports(p):
-            if mod in voice_mods and mod not in SYSTEM_PYTHON_VOICE:
-                bad.append(f"{p.name}:{line} imports voice module {mod} (chord lane must not)")
-            if p.stem in SYSTEM_PYTHON and not (mod in STDLIB or mod in SYSTEM_PYTHON
-                                                or mod in THIRD_PARTY_OK):
-                bad.append(f"{p.name}:{line} imports {mod} - not stdlib, runs on system python")
-    for name in SYSTEM_PYTHON_VOICE:
-        p = K15 / "voice" / f"{name}.py"
-        for mod, line in top_level_imports(p):
-            if not (mod in STDLIB or mod in SYSTEM_PYTHON or mod in SYSTEM_PYTHON_VOICE):
-                bad.append(f"voice/{p.name}:{line} imports {mod} - doctor imports this on system python")
+        for mod, line in all_imports(p):
+            if mod in voice_mods:
+                bad.append(f"{p.name}:{line} imports voice module {mod} (k15/ must not)")
+        if p.stem in SYSTEM_PYTHON:
+            for mod, line in top_level_imports(p):
+                if not (mod in STDLIB or mod in SYSTEM_PYTHON or mod in THIRD_PARTY_OK):
+                    bad.append(f"{p.name}:{line} imports {mod} - not stdlib, runs on system python")
     return bad
 
 
@@ -81,7 +83,7 @@ def main():
         print("FAIL", b)
     assert not lanes, f"{len(lanes)} lane-rule violation(s)"
     print(f"OK - pyflakes: no undefined names across {checked} modules; "
-          f"lane rule holds for {len(SYSTEM_PYTHON) + len(SYSTEM_PYTHON_VOICE)} system-python modules")
+          f"lane rule holds for {len(SYSTEM_PYTHON)} system-python modules")
 
 
 if __name__ == "__main__":
