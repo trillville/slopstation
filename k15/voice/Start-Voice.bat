@@ -24,7 +24,9 @@ exit /b
 :main
 if not exist ".venv\Scripts\python.exe" (
   echo [supervisor] first run: creating venv...
-  python -m venv .venv || (echo [supervisor] venv create failed - is python on PATH? & pause & exit /b 1)
+  rem The two ways this lane can die before it starts each emit first: the
+  rem window is minimized by Start-K15 and a pause nobody sees is silence.
+  python -m venv .venv || (echo [supervisor] venv create failed - is python on PATH? & python ..\events.py emit supervisor venv_failed what=voice --level error >nul 2>&1 & pause & exit /b 1)
 )
 
 rem Mic array reboot-hang workaround; no-ops until xvf_host is installed here
@@ -57,7 +59,7 @@ if errorlevel 1 (
   rem ')' closes the block early and cmd dies with "... was unexpected at this
   rem time", taking the whole supervisor with it before it starts.
   echo [supervisor] pins changed - installing pinned deps, takes a minute or two...
-  .venv\Scripts\python -m pip install -r requirements.txt -c constraints.txt || (echo [supervisor] pip install failed - fix network and rerun & pause & exit /b 1)
+  .venv\Scripts\python -m pip install -r requirements.txt -c constraints.txt || (echo [supervisor] pip install failed - fix network and rerun & python ..\events.py emit supervisor deps_failed what=voice --level error >nul 2>&1 & pause & exit /b 1)
   rem Sentinel written only AFTER pip succeeds: a half-built venv (network
   rem died mid-install) must retry, not skip forever.
   copy /y requirements.txt ".venv\deps-ok" >nul

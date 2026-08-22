@@ -73,9 +73,12 @@ rem necessarily contains the script name - can never match itself. The exit
 rem code is the number of processes killed, so a stray duplicate agent is swept
 rem too and still reports honestly.
 powershell -NoProfile -Command "$p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*%~1*' }); $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; exit $p.Count"
-if errorlevel 1 (
+rem Capture the count FIRST - every command after this resets %errorlevel%
+rem (the event used to say killed=1 whatever the count was).
+set "KILLED=%errorlevel%"
+if %KILLED% GEQ 1 (
   echo [start-k15] stopped the %~2 - its supervisor will relaunch it
-  python "%~dp0events.py" emit supervisor lane_reloaded what=%~3 killed=1 >nul 2>&1
+  python "%~dp0events.py" emit supervisor lane_reloaded what=%~3 killed=%KILLED% >nul 2>&1
 ) else (
   echo [start-k15] %~2 was already down - its supervisor will bring it back
   python "%~dp0events.py" emit supervisor lane_reloaded what=%~3 killed=0 >nul 2>&1
