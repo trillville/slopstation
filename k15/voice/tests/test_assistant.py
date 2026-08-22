@@ -10,6 +10,7 @@ from pathlib import Path
 import _bootstrap                               # noqa: F401,E402
 
 import assistant
+import assistant_repl
 import cglib
 import library
 import steamstore
@@ -279,9 +280,9 @@ def main():
     # out in both places the model reads.
     assert "NOT end_session" in str(assistant.TOOL_DEFS)
     assert "never end the gaming session for them" in si
-    assert set(assistant.BACKENDS) == {"anthropic", "openai"}
-    assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"
-    assert assistant.BACKENDS["openai"].key == "openaiApiKey"
+    assert set(assistant_repl.BACKENDS) == {"anthropic", "openai"}
+    assert assistant_repl.BACKENDS["anthropic"].key == "anthropicApiKey"
+    assert assistant_repl.BACKENDS["openai"].key == "openaiApiKey"
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
     # Server-side search: knob off -> absent everywhere; knob on -> each
@@ -311,7 +312,7 @@ def main():
     # pause_turn: the partial assistant content is re-sent as-is and the text
     # accumulates - the API's documented contract.
     import types
-    b = assistant.AnthropicBackend({"anthropicApiKey": "x" * 24},
+    b = assistant_repl.AnthropicBackend({"anthropicApiKey": "x" * 24},
                                    "claude-haiku-4-5", voice=voice_on)
     script = [
         types.SimpleNamespace(
@@ -373,7 +374,7 @@ def main():
     print("  ToolsSchema: native web_search rendered after the function tools")
     # OpenAIBackend must default to a REAL reasoning effort, not disable it.
     import inspect
-    eff = inspect.signature(assistant.OpenAIBackend.__init__).parameters["effort"]
+    eff = inspect.signature(assistant_repl.OpenAIBackend.__init__).parameters["effort"]
     assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"
     print("  constructions: LLMContext, Anthropic + OpenAI Responses, Aura-2 - OK")
 

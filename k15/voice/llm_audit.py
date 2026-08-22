@@ -10,10 +10,7 @@ A stream tee, not a hook: LLMService's event handlers are function-call
 shaped and observers see frames, of which a server-side tool pushes none.
 Every event reaches Pipecat untouched and in order.
 """
-log = None                                      # set by install()
-
-
-def _search_item(item):
+def search_item(item):
     """-> (kind, query) for a provider-executed search item, else None.
     Matches a type CONTAINING 'search', not an exact string: the family grows
     (web_search_call, file_search_call, ...)."""
@@ -62,12 +59,10 @@ class _Tee:
                 return
 
 
-def install(service, logger, tracing=None, context=None):
+def install(service, log, tracing=None, context=None):
     """Wrap `service`'s OpenAI client so server-side searches are recorded.
     Fail-soft: a Pipecat internal that has moved leaves the service untouched
     and voice runs on. True if the audit is live."""
-    global log
-    log = logger
     try:
         responses = service._client.responses
         create = responses.create
@@ -84,7 +79,7 @@ def install(service, logger, tracing=None, context=None):
         # `done` (final query, status present) or every search logs twice.
         if "done" not in (getattr(event, "type", "") or ""):
             return
-        hit = _search_item(item)
+        hit = search_item(item)
         if not hit:
             return
         kind, query = hit

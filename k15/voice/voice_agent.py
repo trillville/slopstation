@@ -38,10 +38,10 @@ import library                                  # noqa: E402
 import tracing                                  # noqa: E402
 from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
                    play_pcm, rebuild_audio)
-from dispatch import TvDucker                   # noqa: E402
 from grammar_gate import GrammarMatcher         # noqa: E402
 from preroll import WakeAck                     # noqa: E402
 from session_runtime import run_session         # noqa: E402
+from tv_remote import TvDucker                  # noqa: E402
 
 log = cglib.make_log("voice")
 
@@ -126,7 +126,7 @@ def main():
         return 0
 
     if args.text:
-        from assistant import repl
+        from assistant_repl import repl
         return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
                     model=args.model, effort=args.effort)
 
