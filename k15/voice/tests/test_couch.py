@@ -19,10 +19,11 @@ stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
     than left for the next launch, beats the enter_redispatched rescue even
     when it lands as the death is being proven, and a STALE one is voided
     at launch start;
-  * the TV-wake gate: Enter is not dispatched until the set REPORTS on,
-    a set that keeps answering standby fails the launch early with the TV
-    named, an UNREADABLE set falls open to the legacy blind path, and a rig
-    with no tvIp never reads at all;
+  * TV evidence rides the READY wait: Enter goes out immediately (zero tax
+    on a healthy launch), the enter_died rescue waits for the set's own
+    "on" and redispatches only against a lit panel, a set that keeps
+    ANSWERING standby fails with the TV named, an UNREADABLE set stands
+    down to the legacy blind path, and a rig with no tvIp never reads;
   * watch() rides out ssh blips and dies honestly on a run of them;
   * reconcile resumes a live session and clears a dead one, TV untouched.
 
@@ -452,52 +453,87 @@ def main():
     assert "host_ready" in log.events()
     print("  stale cancel: voided at start, launch unharmed")
 
-    # --- the TV-wake gate: Enter waits for the set's own word ------------------
+    # --- TV evidence: rides the READY wait, gates only the rescue --------------
     real_tv_state = cglib.tv_power_state
     couch.CFG = dict(CFG, tvIp="tv")
     couch.TV_WAIT_S = 0.2
     couch.TV_POKE_S = 0.05
 
-    # A set that keeps ANSWERING standby is refusing: fail early, name the
-    # TV, and never reach Enter - the 47-121 s of learning it from the PC is
-    # the cost this gate deletes.
+    # A set that keeps ANSWERING standby is refusing. Enter still goes out
+    # immediately (the zero-tax rule) and dies as it always did; the change
+    # is what happens next - the rescue refuses to redispatch into the dark,
+    # and the failure finally NAMES the TV instead of 'host never reported
+    # READY'.
     fresh_state()
+    couch.ENTER_SETTLE_S = 0
+    couch.READY_WAIT_S = 5
     cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: "standby"
-    log, sent = wire([])                   # any ssh call would assert: no Enter
+    log, sent = wire([("enter", "OK")], default=lambda cmd:
+                     "IDLE" if cmd.startswith("enterstate") else "NOTREADY")
     assert couch.start() == 1
     ev = log.events()
+    assert "enter_dispatched" in ev, "Enter is never gated - zero happy-path tax"
+    assert "enter_died" in ev and "enter_redispatched" not in ev, ev
     assert "launch_failed" in ev and "tv_on" not in ev, ev
     assert "TV never reported on" in cglib.LAST_ERROR.read_text()
     assert log.find("launch_start")[0]["tv"] == "standby"
     assert set(sent) == {"power_on"} and len(sent) >= 2, \
-        f"the gate re-pokes while it waits, and never switches input: {sent}"
+        f"the evidence re-pokes while not-on, and never switches input: {sent}"
     assert not cglib.LOCK.exists()
-    print("  tv gate: answered standby -> early honest failure, Enter never ran")
+    print("  tv evidence: standby set -> no redispatch into the dark, TV named")
 
-    # The healthy shape: standby while the frame lands, then on -> Enter.
+    # The healthy shape: Enter first, the set flips on mid-wait, launch lands.
     fresh_state()
+    couch.ENTER_SETTLE_S = 10
+    couch.READY_WAIT_S = 5
+    couch.TV_POKE_S = 10                   # real seconds - no poke inside a drill
     seq = ["standby", "standby", "standby"]          # first pop = launch_start read
     cglib.tv_power_state = \
         lambda ip, timeout=2.0, raw=False: (seq.pop(0) if seq else "on")
     log, sent = wire([
         ("enter", "OK"),
+        ("status", "NOTREADY"),
+        ("status", "NOTREADY"),
         ("status", "ab12cd"),
         ("status", "NOTREADY"),
     ])
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_on" in ev and "host_ready" in ev, ev
-    assert ev.index("tv_on") < ev.index("enter_dispatched"), \
-        "Enter must not be dispatched before the set reports on"
-    assert "hdmi4" in sent
-    print("  tv gate: standby -> on -> Enter dispatched, launch lands")
+    assert ev.index("enter_dispatched") < ev.index("tv_on"), \
+        "Enter must not wait for the set - the evidence rides the READY wait"
+    assert "hdmi4" in sent and sent.count("power_on") == 1, sent
+    print("  tv evidence: Enter immediately, tv_on mid-wait, launch lands")
+
+    # Enter dies but the set HAD answered on: the TV is not the problem, so
+    # the rescue redispatches immediately - the pre-evidence behavior.
+    fresh_state()
+    couch.ENTER_SETTLE_S = 0
+    cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: "on"
+    log, sent = wire([
+        ("enter", "OK"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),
+        ("status", "NOTREADY"), ("enterstate", "IDLE"),
+        ("enter", "OK"),
+        ("status", "ab12cd"),
+        ("status", "NOTREADY"),
+    ])
+    assert couch.start(turn="ab12cd") == 0
+    ev = log.events()
+    assert "tv_on" in ev and "enter_died" in ev and "enter_redispatched" in ev, ev
+    assert log.find("host_ready")[0]["verified"] is True
+    print("  tv evidence: confirmed-on set -> rescue redispatches at once")
 
     # A set that cannot be READ is not a refused one: stand down to the
     # legacy blind path rather than fail a launch that would have worked.
     fresh_state()
+    couch.ENTER_SETTLE_S = 10
     cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: None
     log, sent = wire([
         ("enter", "OK"),
+        ("status", "NOTREADY"),
+        ("status", "NOTREADY"),
+        ("status", "NOTREADY"),
         ("status", "ab12cd"),
         ("status", "NOTREADY"),
     ])
@@ -508,7 +544,7 @@ def main():
     # the read's own None would make an unreachable set byte-identical in
     # Loki to a rig with no tvIp at all.
     assert log.find("launch_start")[0]["tv"] == "unreachable"
-    print("  tv gate: unreadable set -> fail open, legacy launch unharmed")
+    print("  tv evidence: unreadable set -> stand down, legacy launch unharmed")
 
     # No tvIp: the gate must not exist - not a read, not a field.
     fresh_state()

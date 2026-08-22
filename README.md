@@ -170,10 +170,12 @@ Still genuinely open, worst first:
   provider, it has none of the claude lane's isolation (its sandbox confines
   writes, not reads or shell — `doctor.py` warns whenever it is selected), and
   dropping it would delete a risk nobody is using. Kept only as the A/B arm.
-- **The TV wake itself.** The launch path now reads the set's own PowerState —
-  Enter waits for an answered "on", and a set that keeps refusing fails the
-  launch early with the TV named (couch.py's `wait_tv_on`) — but nothing yet
-  makes the refusal *rarer*. Two unmeasured levers, both from Samsung's IP
+- **The TV wake itself.** The launch path now reads the set's own PowerState
+  alongside the READY wait (couch.py's `tv_poll` — Enter is never gated on
+  it, so a healthy launch pays nothing): not-on answers drive early re-pokes,
+  the enter_died rescue redispatches only against a lit panel, and a set
+  that keeps refusing fails with the TV named — but nothing yet makes the
+  refusal *rarer*. Two unmeasured levers, both from Samsung's IP
   Control Worksheet: the standby-depth settings (eco, "Power On with Mobile",
   "Keep Bixby in Standby" — the last is described as holding the IP server
   open in standby precisely to make power-on reliable) are menu toggles whose

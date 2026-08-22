@@ -50,29 +50,33 @@ WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
                        # ~20-30s; the false-positive cost of a transient outage
                        # is a desk-side relaunch (the Puck stays claimed, so the
                        # chord can't hear).
-TV_WAIT_S      = 30    # power_on until the set REPORTS "on" (wait_tv_on in
-                       # start()), before Enter is dispatched. The state flips
-                       # ~5 s after a frame the set accepts (measured
-                       # 2026-08-19: standby at t+1..4 s, on at t+5 s), so 30 s
-                       # covers the flip plus several re-pokes - and a set
-                       # still not on at 30 s is refusing, which is worth a
-                       # failure that NAMES it: every recorded TV-refusal
-                       # burned 47-121 s learning the same thing from Enter.
-TV_POKE_S      = 6     # re-send power_on this often while the set is not on:
-                       # just past the ~5 s flip lag, so each frame gets its
-                       # answer before the next. Discrete power_on - safe to
-                       # repeat (see the READY-wait re-poke for the full
-                       # argument).
-TV_UNKNOWN_N   = 3     # consecutive unreadable answers before the gate stands
-                       # down to the legacy blind path. None is UNKNOWN, never
-                       # "off" (Wi-Fi blip, IP drift, a rig with no tvIp) - a
-                       # read that cannot answer must never cost a launch that
-                       # would have worked. 3, with 0.5 s per read: a healthy
-                       # set answers in 3-33 ms so a real blip rarely survives
-                       # two retries, and 3 caps a DEAD address (silent
-                       # timeout, the worst mode) at ~4.5 s per launch where 5
-                       # was ~10 - a cost paid on EVERY launch for as long as
-                       # the address is wrong, so it stays small.
+TV_WAIT_S      = 30    # how long the enter_died rescue will wait for the set
+                       # to REPORT "on" (tv_poll in start()) before spending
+                       # its one redispatch - or, if the set keeps ANSWERING
+                       # not-on the whole time, failing with the TV named. The
+                       # state flips ~5 s after a frame the set accepts
+                       # (measured 2026-08-19: standby at t+1..4 s, on at
+                       # t+5 s), so 30 s covers the flip plus several
+                       # re-pokes. Deliberately NOT a gate before Enter: that
+                       # shape taxed every healthy launch ~5 s (the comment at
+                       # tv_poll has the 30-day numbers), so this budget is
+                       # only ever spent on a launch that is already lost.
+TV_POKE_S      = 6     # re-send power_on this often while the set answers
+                       # not-on: just past the ~5 s flip lag, so each frame
+                       # gets its answer before the next. Evidence-driven
+                       # where WAKE_RETRY_S is blind - a set that takes the
+                       # second frame lights inside Enter's own retry-apply
+                       # window and the launch never records a death.
+                       # Discrete power_on - safe to repeat (see the
+                       # READY-wait re-poke for the full argument).
+TV_UNKNOWN_N   = 3     # consecutive unreadable answers before the evidence
+                       # stands down to the legacy blind path. None is
+                       # UNKNOWN, never "off" (Wi-Fi blip, IP drift, a rig
+                       # with no tvIp) - a read that cannot answer must never
+                       # cost a launch that would have worked. The reads ride
+                       # waits that are already looping, so a dead address
+                       # costs ~0.5 s of loop drag per read, three times, not
+                       # wall-clock serialized ahead of Enter.
 
 log = cglib.make_log("launch")
 
@@ -277,65 +281,78 @@ def start(appid=None, turn=None):
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
 
-        def wait_tv_on():
-            """The gate the launch path was guessing without: power_on ->
-            poll PowerState until "on" -> only THEN dispatch Enter. Every
-            recorded TV refusal (2026-08-13 17:20, 08-16 17:56, 08-19 01:18,
-            and 0b785e on 08-21) was a set that acked power_on, stayed dark,
-            and let Enter burn 47-121 s discovering a display that was never
-            there - the receiver is powered in standby, so the ack proves
-            delivery and nothing else, and the gaming PC cannot see the
-            panel either (EDID and all three WMI monitor classes read
-            identically awake or asleep across a full power cycle,
-            2026-08-13). Idle duration does not predict the refusal:
-            failures at 11.8-20.0 h since last session, successes at 22+ h.
-            The enter_died re-dispatch remains as the rescue for rigs this
-            gate cannot serve - it converts a refused first wake into a
-            slower success whenever a later frame lands; this gate spends
-            the budget on the thing that actually has to happen and makes
-            that rescue rare rather than the primary signal.
+        # --- TV evidence (tvIp rigs) ------------------------------------------
+        # The read the launch path was guessing without - but it RIDES the
+        # READY wait instead of gating Enter. The first cut of this
+        # serialized: power_on -> poll until "on" -> only then dispatch
+        # Enter, per the old design doc. 30 days of host_ready timings
+        # killed that shape before it deployed: 36 of 38 launches sat in a
+        # tight 9.1-12.9 s band and would each have eaten the panel's ~5 s
+        # frame-to-flip lag as pure added wait - a ~42% median tax on every
+        # healthy launch to improve the ~10% that refuse. Enter's own
+        # profile wait already absorbs the flip on a set that is waking
+        # normally; it always has. So Enter goes out immediately, exactly
+        # as it did before the read existed, and the evidence does two
+        # things instead: it re-pokes power_on EARLY (TV_POKE_S, not the
+        # blind 30 s WAKE_RETRY_S) while the set keeps answering not-on, so
+        # a set that takes the second frame lights inside Enter's own
+        # retry-apply window and the launch never even records a death; and
+        # it gates the RESCUE below - the one redispatch is spent on a lit
+        # panel or not at all.
+        #
+        # Why the read matters at all, kept from the incidents: every
+        # recorded TV refusal (2026-08-13 17:20, 08-16 17:56, 08-19 01:18,
+        # 0b785e on 08-21) was a set that acked power_on, stayed dark, and
+        # let Enter burn 47-121 s discovering a display that was never
+        # there - the serial receiver is powered in standby so the ack
+        # proves delivery and nothing else, and the gaming PC cannot see
+        # the panel either (EDID and all three WMI monitor classes read
+        # identically awake or asleep across a full power cycle,
+        # 2026-08-13). Idle duration does not predict the refusal:
+        # failures at 11.8-20.0 h since last session, successes at 22+ h.
+        #
+        # Fail-open on silence: a set that cannot be READ (no tvIp, IP
+        # drift, Wi-Fi blip - the endpoint rides Wi-Fi) stands the evidence
+        # down and leaves the legacy blind path exactly as it was, because
+        # an unreadable TV is not a refused one. Fail-closed only on the
+        # set's own word, and only where it changes an outcome: at the
+        # rescue, where TV_WAIT_S of answered "standby"/"" means the set is
+        # refusing and the launch finally says so by name.
+        tv_confirmed = False    # the set answered "on" at least once
+        tv_gave_up = False      # stood down: TV_UNKNOWN_N unreadable answers
+        tv_unknowns = 0
+        tv_last = tv0           # last raw answer, for the honest error text
+        tv_poke_at = time.time() + TV_POKE_S
 
-            Fail-open on silence: a set that cannot be READ (no tvIp, IP
-            drift, Wi-Fi blip - the endpoint rides Wi-Fi) gets the legacy
-            blind path, because an unreadable TV is not a refused one.
-            Fail-closed only on the set's own word: TV_WAIT_S of answered
-            "standby"/"" is the set refusing, reported while whoever asked
-            is still holding the controller."""
-            if not tv_ip:
+        def tv_poll():
+            """One evidence step, called from waits that are already looping:
+            read the set, latch "on", stand down on persistent silence,
+            re-poke while it answers not-on. No-op once concluded, and on
+            rigs with no tvIp it never reads at all."""
+            nonlocal tv_confirmed, tv_gave_up, tv_unknowns, tv_last, tv_poke_at
+            if not tv_ip or tv_confirmed or tv_gave_up:
                 return
-            give_up = time.time() + TV_WAIT_S
-            poke_at = time.time() + TV_POKE_S
-            unknowns = 0
-            state = tv0
-            while time.time() < give_up:
-                cglib.touch_lock()
-                raise_if_cancelled()
-                state = cglib.tv_power_state(tv_ip, timeout=0.5, raw=True)
-                if state == "on":
-                    # dur_ms is elapsed-since-intent like every dur_ms, and
-                    # the gate only starts after wait_port - so on a COLD
-                    # boot this is censored by the PC (~20-90 s of boot with
-                    # the panel long since lit). Tune TV_WAIT_S / TV_POKE_S
-                    # against warm-PC launches only, where ssh_up is ~0.2 s
-                    # and dur_ms approximates frame-to-lit.
-                    log("tv_on", dur_ms=ms())
-                    return
-                if state is None:
-                    unknowns += 1
-                    if unknowns >= TV_UNKNOWN_N:
-                        log.warn("tv_state_unknown", dur_ms=ms())
-                        return
-                else:
-                    unknowns = 0
-                if time.time() >= poke_at:
-                    exlink("power_on", again=True)
-                    poke_at = time.time() + TV_POKE_S
-                time.sleep(1)
-            raise RuntimeError(f"TV never reported on (PowerState={state!r} "
-                               f"after {TV_WAIT_S}s of asking) - the set is "
-                               "refusing the wake, not missing the frame")
-
-        wait_tv_on()
+            tv_last = cglib.tv_power_state(tv_ip, timeout=0.5, raw=True)
+            if tv_last == "on":
+                tv_confirmed = True
+                # dur_ms is elapsed-since-intent like every dur_ms, and
+                # polling starts only after wait_port - so on a COLD boot
+                # this is censored by the PC (~20-90 s of boot with the
+                # panel long since lit). Tune TV_POKE_S / TV_WAIT_S against
+                # warm-PC launches only, where ssh_up is ~0.2 s and dur_ms
+                # approximates frame-to-lit.
+                log("tv_on", dur_ms=ms())
+                return
+            if tv_last is None:
+                tv_unknowns += 1
+                if tv_unknowns >= TV_UNKNOWN_N:
+                    tv_gave_up = True
+                    log.warn("tv_state_unknown", dur_ms=ms())
+                return
+            tv_unknowns = 0
+            if time.time() >= tv_poke_at:
+                exlink("power_on", again=True)
+                tv_poke_at = time.time() + TV_POKE_S
 
         def dispatch_enter(event, attempts=ENTER_ATTEMPTS):
             """Trigger the Enter task; True once Dispatch answered OK. Called
@@ -371,6 +388,7 @@ def start(appid=None, turn=None):
         while time.time() < end:
             cglib.touch_lock()
             raise_if_cancelled()
+            tv_poll()
             # The only rescue there is for a TV that slept through the power_on
             # at launch_start. Enter's profile retry re-applies TV-GAMING but
             # cannot ask the set to wake - the gaming PC has no Ex-Link, this
@@ -461,6 +479,29 @@ def start(appid=None, turn=None):
                     # pressed the chord is still holding the controller.
                     if not redispatches:
                         raise RuntimeError("Enter exited without READY")
+                    # The one redispatch is precious - spend it on a lit
+                    # panel. Enter dead with the set never having answered
+                    # "on" is THE refusal shape, and a rescue Enter fired at
+                    # a dark TV just burns its window the way the first one
+                    # did. Wait here (bounded, still poking) for the set's
+                    # own word; a set that NEVER says it is on inside
+                    # TV_WAIT_S is refusing, and failing with the TV named
+                    # beats redispatching into the dark. Confirmed-on or
+                    # unreadable rigs skip straight to the redispatch -
+                    # on those, the TV either is not the problem or cannot
+                    # be asked, and the legacy behavior stands.
+                    rescue_by = time.time() + TV_WAIT_S
+                    while tv_ip and not tv_confirmed and not tv_gave_up:
+                        if time.time() >= rescue_by:
+                            raise RuntimeError(
+                                f"TV never reported on (PowerState="
+                                f"{tv_last!r} after {TV_WAIT_S}s of asking) "
+                                "- the set is refusing the wake, not "
+                                "missing the frame")
+                        cglib.touch_lock()
+                        raise_if_cancelled()
+                        tv_poll()
+                        time.sleep(1)
                     exlink("power_on", again=True)
                     if not dispatch_enter("enter_redispatched", attempts=5):
                         raise RuntimeError("Enter died and could not be re-triggered")

@@ -90,15 +90,21 @@ Time to READY, the number the whole system is judged on:
     off, still answering with the field drained) or `unreachable` (a
     sentinel — the emitter drops None fields, so the read's own None cannot
     ship). Whether `""` predicts a refused wake is the open measurement.
-  - `tv_on` is the TV-wake gate (couch.py `wait_tv_on`) confirming the set
-    REPORTS on before Enter is dispatched. Its `dur_ms` is elapsed-since-
-    intent like every `dur_ms`, and the gate starts only after `ssh_up` — so
-    cold boots censor it (the PC dominates); read frame-to-lit from warm-PC
-    launches only. `tv_state_unknown` (WARN) is the gate standing down after
-    consecutive unreadable answers — the launch proceeds on the legacy blind
-    path. A gated launch that still fails on the TV fails after ~30 s of
-    polling (measured from `ssh_up`) with `launch_failed` err
-    `TV never reported on`.
+  - `tv_on` is the TV evidence (couch.py `tv_poll`) confirming the set
+    REPORTS on. It rides the READY wait — Enter is dispatched immediately
+    and is never gated on it, so a healthy launch pays nothing. Its
+    `dur_ms` is elapsed-since-intent like every `dur_ms`, and polling
+    starts only after `ssh_up` — so cold boots censor it (the PC
+    dominates); read frame-to-lit from warm-PC launches only.
+    `tv_state_unknown` (WARN) is the evidence standing down after
+    consecutive unreadable answers — the launch proceeds on the legacy
+    blind path. Where it bites: while the set answers not-on it re-pokes
+    `power_on` every ~6 s (so a set that takes the second frame lights
+    inside Enter's own retry and no death is ever recorded), and after
+    `enter_died` the rescue waits for the set's "on" before spending its
+    one redispatch — a set that keeps ANSWERING not-on fails with
+    `launch_failed` err `TV never reported on` (~60-90 s all told)
+    instead of redispatching into the dark and burning the full window.
   - `enter_died` means the PC's Enter task exited WITHOUT writing the marker —
     the launch was lost at that moment, where before this event existed the
     K15 just polled a dead task for the rest of its READY wait.

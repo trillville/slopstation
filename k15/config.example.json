@@ -8,7 +8,7 @@
   "_steamMachineName": "OPTIONAL: the gaming PC's Steam client name (its Windows hostname). Only needed if you are ALSO signed into Steam on another PC that could be listed first - it pins install-by-voice/download-status to this box. Empty = use the first signed-in client.",
   "tvComPort":   "COM3",
   "tvIp":        "192.168.68.51",
-  "_tvIp": "The set's LAN address - give it a DHCP reservation, because the /api/v2/ power-state read (cglib.tv_power_state) fails silently if this drifts. OPTIONAL, but two things stay off without it: duckSteps (the duck is gated on the TV reporting itself on, and with no address to ask, not ducking is the safe side) and the launch path's TV-wake gate (couch.py waits for the set to REPORT on before dispatching Enter and fails in ~30 s naming the TV when it keeps refusing - without an address it falls back to the old blind power_on-and-hope).",
+  "_tvIp": "The set's LAN address - give it a DHCP reservation, because the /api/v2/ power-state read (cglib.tv_power_state) fails silently if this drifts. OPTIONAL, but two things stay off without it: duckSteps (the duck is gated on the TV reporting itself on, and with no address to ask, not ducking is the safe side) and the launch path's TV evidence (couch.py polls the set through the READY wait - never delaying Enter - re-pokes power_on early while it answers not-on, and spends the enter_died redispatch only on a panel that reports on, failing with the TV named when it keeps refusing; without an address it falls back to the old blind power_on-and-hope).",
   "tvGamingCmd": "hdmi4",
   "tvIdleCmd":   "hdmi1",
   "tvOffWhenDone": true,
