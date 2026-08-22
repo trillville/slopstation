@@ -1,12 +1,12 @@
-"""GrammarGate: Tier-1 deterministic intent matching as a Pipecat processor.
+"""GrammarGate: deterministic intent matching as a Pipecat processor.
 
 Sits between STT and everything else. Every FINAL transcript is screened here
 first - matches are swallowed (the LLM lane never sees them), acked, and
 dispatched; non-matches flow downstream to the assistant lane, or dead-end
 with a fail earcon when no LLM key is configured. Both ways out of a session
-end here by pushing EndWorkerFrame downstream: a Tier-1 exit phrase ends it on
-the spot, and stop_listening arms request_stop() so it ends once the goodbye
-has been spoken.
+end here by pushing EndWorkerFrame downstream: an exit phrase matched here
+ends it on the spot, and stop_listening arms request_stop() so it ends once
+the goodbye has been spoken.
 """
 import asyncio
 import time
@@ -206,7 +206,7 @@ class GrammarGate(FrameProcessor):
             return True
         if intent in ("TaskResult", "TaskDetail", "TaskCancel"):
             if self.jobs is None:
-                return False                    # worker lane off -> Tier 2
+                return False        # no background lane -> the assistant
             return await self._task_intent(intent)
         actions = {
             "StartSession": d.start_session,
@@ -222,11 +222,11 @@ class GrammarGate(FrameProcessor):
         try:
             if intent == "PlayGame":
                 r = await self._play_game(str(slots["game"]))
-                if r is None:                   # unresolvable title -> Tier 2
+                if r is None:            # title unresolved -> the assistant
                     return False
             elif intent == "ShowCollection":
                 r = await self._show_collection(str(slots["collection"]))
-                if r is None:                   # unresolvable collection -> Tier 2
+                if r is None:       # collection unresolved -> the assistant
                     return False
             elif intent in actions:
                 r = await asyncio.to_thread(actions[intent])
@@ -356,7 +356,7 @@ class GrammarGate(FrameProcessor):
                 if m is not None:
                     self.log("gate_match", text=text, intent=m[0], confidence=conf)
                     if await self._run_intent(*m):
-                        return                      # swallowed: Tier 1 handled it
+                        return              # swallowed: the gate handled it
                 if not self.assistant_enabled:
                     self.log.warn("gate_miss", text=text, fallback="none",
                                   reason="assistant_disabled", confidence=conf)

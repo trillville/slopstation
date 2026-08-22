@@ -1,4 +1,4 @@
-"""Blind test: the Tier-1 grammar, offline - utterance -> intent+slots,
+"""Blind test: the grammar gate, offline - utterance -> intent+slots,
 negatives that must fall through to the assistant lane. Run:
     .venv\\Scripts\\python tests\\test_grammar.py
 """

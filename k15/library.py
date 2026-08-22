@@ -1,9 +1,10 @@
 """Game-library index builder.
 
-Layer 1 (installed) comes from `ssh gamepc games`, or --local-steam (ACF scan)
-when run on the gaming PC. Layers 2-3 (owned/playtime via the Steam Web API,
-metadata via appdetails + SteamSpy) merge into the same file. Layer 4 is live
-store data (deals, search, reviews, news, how-long-to-beat), not the catalog.
+Layer 1 (installed) comes from `ssh gamepc games`, or --local-steam (a read
+of Steam's appmanifest_*.acf files) when run on the gaming PC. Layers 2-3
+(owned/playtime via the Steam Web API, metadata via appdetails + SteamSpy)
+merge into the same file. Layer 4 is live store data (deals, search,
+reviews, news, how-long-to-beat), not the catalog.
 
 Layer 4 lives in steamstore.py; `probe` below delegates to it.
 
@@ -175,8 +176,8 @@ _CTRL = {28: "full", 18: "partial"}          # Steam category ids
 
 
 def fetch_owned(api_key, steamid):
-    """Account-global playtime + recency (ACF LastPlayed is per-machine).
-    One call, own key only."""
+    """Account-global playtime + recency (appmanifest LastPlayed is
+    per-machine). One call, own key only."""
     import requests
     r = requests.get(
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/",

@@ -1,6 +1,8 @@
-"""Tier-3 job store + runner. state/jobs.json is the one home for job state,
-reconciled at startup. One worker thread, small queue: a job ends DONE or
-FAILED, never vanishes.
+"""Background tasks: the job store and its runner. A job is a research
+brief handed to an agent CLI (workers.py) that answers minutes later, out
+of session. state/jobs.json is the one home for job state, reconciled at
+startup. One worker thread, small queue: a job ends DONE or FAILED, never
+vanishes.
 
 Read/unread is the announcement contract: a finished job stays unread until
 its summary has been HEARD (full playback, or a "what did you find"
@@ -35,7 +37,8 @@ class JobStore:
     on_done = fn(job dict), called off-thread when a job finishes."""
 
     # The codex lane keeps a shell (the claude lane has none), so --dry-run
-    # can't gate a worker the way Dispatch gates Tier 1/2. Advisory only.
+    # can't gate a worker the way dispatch.py gates the in-session actions.
+    # Advisory only.
     DRY_NOTE = ("[The couch system is in DRY-RUN: research and report only. "
                 "Do not run couch.py, exlink.py, or any other command that "
                 "changes system state.] ")

@@ -1,8 +1,9 @@
 """Game-title normalization: Steam's title string <-> what a human says.
 
-spoken_form feeds hassil {game} slot variants; hassil matches exact token
-sequences, so variants must look like transcripts - hence apostrophes KEPT and
-numerals unified to digits, which is what numerals=true makes Flux emit.
+spoken_form feeds hassil (the grammar matcher) its {game} slot variants;
+hassil matches exact token sequences, so variants must look like
+transcripts - hence apostrophes KEPT and numerals unified to digits, which
+is what numerals=true makes Flux emit.
 fuzzy_norm drops the rest of the punctuation and feeds rapidfuzz.
 """
 import re

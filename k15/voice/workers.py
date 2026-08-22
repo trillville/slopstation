@@ -1,4 +1,4 @@
-"""Tier-3 worker adapters: each vendor's agent CLI as a headless subprocess.
+"""Background-task workers: each vendor's agent CLI as a headless subprocess.
 Contract: run(task, timeout) -> dict(ok, summary, detail); run() never raises.
 Chosen by config.workerProvider (anthropic = claude CLI, openai = codex).
 

@@ -1,5 +1,5 @@
-"""Every voice-triggered side effect: GrammarGate (Tier 1) and the
-assistant's tools (Tier 2) call the same functions.
+"""Every voice-triggered side effect: the grammar gate and the assistant's
+tools call the same functions.
 
 Actions return a Result: `earcon` names the count-coded tone, `detail` is
 both the log line and the only thing the assistant lane reports to the model
@@ -182,8 +182,8 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            # Explicit turn: the Tier-2 path runs in a different task than
-            # the gate, so the ambient one is absent (see Utterance).
+            # Explicit turn: the assistant path runs in a different task
+            # than the gate, so the ambient one is absent (see Utterance).
             out = gamepc.launch(appid, self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))

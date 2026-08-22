@@ -1,5 +1,6 @@
-"""Live Steam store data (layer 4 of the catalog): deals, search, reviews,
-news, how-long-to-beat, and the state/deals.json precompute. Every fetch
+"""Live Steam store data: deals, search, reviews, news, how-long-to-beat,
+and the state/deals.json precompute. Layer 4 of the catalog - library.py
+builds layers 1-3, what the user owns and has installed. Every fetch
 routes through _get, the one test seam. Only /appreviews and GetNewsForApp
 are officially documented, so parses read defensively and the lane degrades
 rather than crashing.
@@ -225,9 +226,10 @@ def fetch_news(appid, count=3):
 
 
 def fetch_hltb(name):
-    """Beat times via howlongtobeatpy, which chases HLTB's endpoint churn.
-    Lazy + fail-soft on BOTH import and call (the pin is optional, it drags in
-    fake_useragent/bs4). Beat-times never move, so results cache forever."""
+    """Beat times via howlongtobeatpy, which chases howlongtobeat.com's
+    endpoint churn. Lazy + fail-soft on BOTH import and call (the pin is
+    optional, it drags in fake_useragent/bs4). Beat-times never move, so
+    results cache forever."""
     key = library.fuzzy_key(name)
     cache = _load_facets()
     if key in cache and "hltb" in cache[key]:

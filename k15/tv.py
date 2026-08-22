@@ -102,15 +102,15 @@ def tv_power_state(ip, timeout=2.0, raw=False):
 def tv_volume(ip, timeout=2.0):
     """Current volume as the TV tracks it, via pairing-free UPnP
     RenderingControl (port 9197, plain SOAP, ~3 ms). With eARC soundbar output
-    this number IS the bar's level - the TV mirrors CEC system audio
+    this number IS the bar's level - the TV mirrors HDMI-CEC system audio
     (2026-08-21).
 
     READ half only: with eARC audio the set refuses every direct volume WRITE
     (SetVolume answers UPnP 501; Ex-Link volume frames ack, then pop "Not
     Available" on screen - 2026-08-21). Writes go through remote keys over
-    CEC, voice/tv_remote.py, verified by this read. None = unknown, not zero:
-    unreachable, or the DMR service asleep (it goes down with the panel,
-    unlike /api/v2/ above)."""
+    HDMI-CEC, voice/tv_remote.py, verified by this read. None = unknown, not
+    zero: unreachable, or the TV's UPnP renderer asleep (it goes down with
+    the panel, unlike /api/v2/ above)."""
     import urllib.request
     body = ('<?xml version="1.0" encoding="utf-8"?>'
             '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '

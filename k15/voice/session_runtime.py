@@ -268,10 +268,11 @@ class Session:
             stages += [transport.output()]
 
         # No barge-in: nothing here constructs an InterruptionWorkerFrame and
-        # the transport has no vad_analyzer, so a Tier-1 command spoken
-        # mid-answer DISPATCHES while the answer keeps playing over it.
+        # the transport has no vad_analyzer, so a command the gate matches,
+        # spoken mid-answer, DISPATCHES while the answer keeps playing.
         #
-        # enable_metrics is what populates token counts and TTFB in the spans;
+        # enable_metrics is what populates token counts and time to first
+        # byte in the spans;
         # enable_tracing belongs on PipelineWorker, not PipelineTask.
         tracing_on = tracing.is_on()
         worker = PipelineWorker(

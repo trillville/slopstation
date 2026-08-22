@@ -4,9 +4,9 @@ that works on this rig) and the session ducker built on them.
 With sound output on the eARC soundbar (HW-Q990C) the TV refuses every direct
 volume write: Ex-Link vol frames ack and pop "Not Available", UPnP SetVolume
 answers 501 (both 2026-08-21). Only remote volume keys move the bar, relayed
-by the TV over CEC; the WebSocket remote on port 8002 injects those. Bench
-2026-08-21: one KEY_VOLDOWN = one step, tracked by tv.tv_volume within a
-second.
+by the TV over HDMI-CEC; the WebSocket remote on port 8002 injects those.
+Bench 2026-08-21: one KEY_VOLDOWN = one step, tracked by tv.tv_volume
+within a second.
 
 Voice lane only - samsungtvws lives in the voice venv, so the chord lane may
 not import this (the chord-safe readback lives in tv.py).
@@ -194,8 +194,8 @@ class TvDucker:
             return
         now = self.read()
         if now is None:
-            # TV gone (off, DMR asleep with the panel): keys would not relay.
-            # Keep the debt; the next close retries.
+            # TV gone (off, or its UPnP renderer down with the panel): keys
+            # would not relay. Keep the debt; the next close retries.
             self.log("tv_unducked", steps=0, asked=want, ok=False,
                      reason="no_readback")
             self.log.warn("tv_duck_deficit", steps=self.out)

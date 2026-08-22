@@ -234,7 +234,7 @@ def main():
             effort=voice["assistantReasoningEffort"] if provider == "openai" else None,
             websearch=voice["assistantWebSearch"] or None)
 
-    # Tier-3 worker lane, fail-soft: no CLI just turns background tasks off.
+    # Background tasks, fail-soft: no CLI just turns them off.
     import announce
     import jobs as jobs_mod
     from workers import WORKER_MODEL_KEY, WORKERS

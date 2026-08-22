@@ -1,10 +1,11 @@
-"""Earcon synthesis: count vocabulary, session bookends, announcement cue.
-Synthesized from specs; no binary assets. All PCM is SAMPLE_RATE
-mono s16le, ready to wrap in an OutputAudioRawFrame.
+"""Earcons - the short tones the system answers with instead of speech:
+count vocabulary, session bookends, announcement cue. Synthesized from
+specs, so no binary assets; all PCM is SAMPLE_RATE mono s16le, ready to
+wrap in an OutputAudioRawFrame.
 
 The counts are the contract, mirroring the haptic thuds: 1 = accepted,
-2 = busy, 3 = failed. Tier-1 acks must be instant - never synthesize speech
-for them; pcm() is a dict lookup after first use.
+2 = busy, 3 = failed. A grammar-gate ack must be instant - never
+synthesize speech for it; pcm() is a dict lookup after first use.
 """
 import numpy as np
 

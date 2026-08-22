@@ -1,7 +1,8 @@
 """Ships the voice pipeline's Pipecat spans to Langfuse.
 
 Pipecat emits the tree itself - conversation (one voice session) -> turn ->
-stt/llm/tts, with token counts, TTFB, transcripts and TTS character counts
+stt/llm/tts, with token counts, time to first byte, transcripts and TTS
+character counts
 already attached; this module is only plumbing. Enabled by the presence of
 keys; every entry point returns a bool and swallows everything, so a bad key
 or a dead uplink costs traces, never voice. Spans carry transcripts and
@@ -139,7 +140,7 @@ def conversation_id():
     return events.current().get("session") or events.new_turn()
 
 
-# --- Tier-3 background jobs ---------------------------------------------------
+# --- background jobs ----------------------------------------------------------
 #
 # A job finishes minutes after the conversation's spans close, in a worker
 # subprocess outside the pipeline Pipecat traces. W3C trace context bridges

@@ -84,21 +84,21 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `audio.py` | The PortAudio layer: device resolution, stream recovery, the wake listener. |
 | `preroll.py` | Wake pre-roll buffer, so "hey jarvis volume up" as one sentence keeps its tail. |
 | `session_runtime.py` | One session's Pipecat pipeline as a `Session` — Flux STT → grammar gate → dispatch, with the LLM assistant lane and cross-session carry. |
-| `grammar_gate.py` | Tier-1 deterministic intent matching as a Pipecat processor. Screens every final transcript before the LLM lane sees it. |
+| `grammar_gate.py` | Deterministic intent matching as a Pipecat processor. Screens every final transcript before the LLM lane sees it. |
 | `grammar.yaml` | The command grammar the gate matches against. |
 | `titles.py` | Fuzzy game-title and collection resolution: Steam's strings ↔ what a human says. |
 | `dispatch.py` | Every voice side effect — session, TV, launch, quit, Big Picture nav — plus the per-utterance snapshot. Shared by both lanes. |
 | `tv_remote.py` | TV remote keys over WebSocket (port 8002) — the only volume-write path that works on this rig — and `TvDucker`, the session-length ducking built on them. Needs a one-time pairing, see below. |
 | `assistant.py` | The catalog-in-context LLM lane: prompt, tool schemas and impls (store data, nav, quit, install), optional web search. |
 | `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
-| `workers.py` / `jobs.py` / `announce.py` | Tier-3 background tasks: claude/codex CLI adapters, the job store, and proactive spoken results. `worker_home/` is the worker's working directory. |
+| `workers.py` / `jobs.py` / `announce.py` | Background tasks — a research brief handed to an agent CLI that answers minutes later, out of session: the claude/codex adapters, the job store, and proactive spoken results. `worker_home/` is the worker's working directory. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice and download status over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
 | `tracing.py` / `traces.py` / `llm_audit.py` | Langfuse spans, per-conversation JSON dumps under `state/traces/`, and a record of provider-executed tool calls. |
 | `requirements.txt` / `constraints.txt` | Pinned deps, plus the as-built transitive versions passed to pip as `-c`. A constraints-only change must ride a `requirements.txt` touch or the dependency gate won't fire. |
 | `models/` | Vendored wake models. `config.json`'s `wakeModel` selects one; the default is stock `hey_jarvis_v0.1`. |
 | `bench/` | Hand-run probes: room recording and slicing, STT/intent/grounding/tool-select measurement, wake-model comparison, verifier training. |
-| `tests/` | The blind suite — see Tests below. |
+| `tests/` | The blind suite — the tests that need neither machine nor hardware. See Tests below. |
 | `Start-Voice.bat` | Voice-lane supervisor, launched by `Start-K15.bat`: creates the venv on first run, then supervises the agent (single-instance, 10 s crash restart). The dependency gate lives inside the restart loop, so a `git pull` that changes pins installs them on the next agent launch. Args pass through — `Start-Voice.bat --dry-run` logs side effects instead of executing them. |
 
 ### Wake-word training (`wake-training/`)
@@ -216,7 +216,7 @@ stdlib-only query script.
 |---|---|
 | Gaming PC | `TILLMAN-DESKTOP` · `192.168.68.67` · MAC `74-56-3C-45-92-DD` · user `tillm` |
 | K15 | `K15` · `192.168.68.75` · user `minipc` |
-| Puck (VirtualHere) | `K15.5` — VID `28DE`, PID `1304` |
+| Puck | The controller's wireless receiver, shared over VirtualHere as `K15.5` — VID `28DE`, PID `1304` |
 | Ex-Link serial | `COM3` on the K15 · 9600 8N1 |
 | TV | Samsung S90C · EDID name `QCQ90S` · `192.168.68.51` |
 | TV inputs | HDMI1 Apple TV · HDMI2 PS5 · HDMI3 eARC · HDMI4 PC |

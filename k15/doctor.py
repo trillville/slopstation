@@ -368,7 +368,7 @@ def check_steam_session():
 
 def check_workers(cfg):
     voice_dir = cglib.BASE / "voice"
-    # Tier-3 worker lane - stdlib checks only, WARN-only.
+    # Background-task lane - stdlib checks only, WARN-only.
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
     if wp:

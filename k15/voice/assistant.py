@@ -1,8 +1,8 @@
 """Assistant lane: system prompt, tool schemas, and tool impls.
 
 Shared by the Pipecat pipeline (voice) and assistant_repl.py (the --text
-bench); every tool routes through the same dispatch.py as Tier 1. An appid
-that isn't in the index is refused at the tool boundary.
+bench); every tool routes through the same dispatch.py as the grammar gate.
+An appid that isn't in the index is refused at the tool boundary.
 """
 import json
 import sys
@@ -130,7 +130,7 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                steam=None):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL.
 
-    jobs is the Tier-3 JobStore and on_stop_listening is
+    jobs is the background-task JobStore and on_stop_listening is
     GrammarGate.request_stop; None for either makes that tool refuse.
     voice=cfg["voice"] with steamDataTools false drops list_games/
     search_store, and function_schemas renders only what's present - so the

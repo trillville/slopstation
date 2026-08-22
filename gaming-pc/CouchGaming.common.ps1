@@ -190,8 +190,9 @@ function Get-RunningAppId {
 
 if (-not ('CG.Win' -as [type])) {
     # WindowByTitle, not FindWindow(null, title): FindWindow returns 0 for
-    # windows EnumWindows reports under exactly that title (Steam's UI is CEF,
-    # drawn by steamwebhelper.exe - also why steam.exe's MainWindowHandle is 0).
+    # windows EnumWindows reports under exactly that title (Steam's UI is an
+    # embedded browser drawn by steamwebhelper.exe - also why steam.exe's
+    # MainWindowHandle is 0).
     Add-Type -Namespace CG -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
@@ -263,7 +264,7 @@ function Get-SteamLibraryRoots {
 }
 
 # appid -> its full install directory (…\steamapps\common\<installdir>), from
-# the ACF's `installdir` field, or $null.
+# the appmanifest's `installdir` field, or $null.
 function Get-AppInstallDir([int]$AppId) {
     foreach ($root in (Get-SteamLibraryRoots)) {
         $acf = Join-Path $root "steamapps\appmanifest_$AppId.acf"

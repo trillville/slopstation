@@ -1,5 +1,6 @@
-"""Run the blind suite: one subprocess per test file, so events._env() sees
-`tests/` in argv[0] and monkeypatches stay per-process.
+"""Run the blind suite - the tests that need neither machine nor hardware.
+One subprocess per test file, so events._env() sees `tests/` in argv[0] and
+monkeypatches stay per-process.
 
     .venv\\Scripts\\python tests\\run.py            (skips what this machine lacks)
     .venv\\Scripts\\python tests\\run.py --all      (run everything)
