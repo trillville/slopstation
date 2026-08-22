@@ -27,7 +27,6 @@ CLI:
 """
 import glob
 import json
-import os
 import re
 import sys
 import threading
@@ -36,10 +35,11 @@ from pathlib import Path
 
 import cglib
 import couch
+import statefile
 # couch.ssh is reached through the MODULE (one seam - dispatch.py says why),
 # and at the top now that importing couch no longer reads config.json.
 
-STATE = cglib.BASE / "state"
+STATE = statefile.STATE
 LIBRARY = STATE / "library.json"
 
 log = cglib.make_log("library")
@@ -96,10 +96,7 @@ def fetch_installed_local():
 
 
 def load():
-    try:
-        return json.loads(LIBRARY.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return statefile.load_json(LIBRARY)
 
 
 def installed_name(appid):
@@ -113,7 +110,7 @@ def installed_name(appid):
 
 
 def save(index):
-    _atomic_write(LIBRARY, index)               # tmp + os.replace, one home below
+    statefile.atomic_write(LIBRARY, index)
 
 
 def refresh(local=False):
@@ -223,14 +220,11 @@ def fetch_meta_one(appid):
 
 
 def load_meta():
-    try:
-        return json.loads(META_CACHE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return statefile.load_json(META_CACHE)
 
 
 def _save_meta(cache):
-    _atomic_write(META_CACHE, cache)
+    statefile.atomic_write(META_CACHE, cache)
 
 
 def refresh_meta(appids, limit=200):
@@ -432,10 +426,9 @@ def _tag_map():
     except OSError:                             # missing or a stat race -> refetch
         fresh = False
     if fresh:
-        try:
-            return json.loads(TAGMAP.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
+        cached = statefile.load_json(TAGMAP)
+        if cached:
+            return cached
     s = cglib.load_secrets()
     if not cglib.real_key(s.get("steamApiKey")):
         return {}
@@ -445,7 +438,7 @@ def _tag_map():
     out = {_ascii(t.get("name", "")).lower(): t.get("tagid")
            for t in tags if t.get("name") and t.get("tagid")}
     if out:
-        _atomic_write(TAGMAP, out)
+        statefile.atomic_write(TAGMAP, out)
     return out
 
 
@@ -550,33 +543,20 @@ def fuzzy_key(name):
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 
-# -- caches (atomic tmp + os.replace) -----------------------------------------
-# The one home for the write idiom - save()/_save_meta() and the layer-4 caches
-# all route through it, so a JSON write is never half-flushed on a crash.
-
-def _atomic_write(path, obj):
-    STATE.mkdir(exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
-
+# -- caches ------------------------------------------------------------------
+# Read and written through statefile (load_json / atomic_write - tmp +
+# os.replace), so a JSON write is never half-flushed on a crash.
 
 def _load_facets():
-    try:
-        return json.loads(FACET_CACHE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return statefile.load_json(FACET_CACHE)
 
 
 def _save_facets(cache):
-    _atomic_write(FACET_CACHE, cache)
+    statefile.atomic_write(FACET_CACHE, cache)
 
 
 def load_deals():
-    try:
-        return json.loads(DEALS.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return statefile.load_json(DEALS)
 
 
 def refresh_deals():
@@ -599,7 +579,7 @@ def refresh_deals():
     deals = {"refreshed": time.strftime("%Y-%m-%dT%H:%M:%S"), "specials": specials}
     if steamid.isdigit():
         deals["wishlist_on_sale"] = wishlist
-    _atomic_write(DEALS, deals)
+    statefile.atomic_write(DEALS, deals)
     log("deals_synced", specials=len(specials), wishlist=len(wishlist))
     return 0
 

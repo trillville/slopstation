@@ -7,18 +7,15 @@ Read/unread is the announcement contract: a finished job is unread until its
 summary has actually been HEARD (full announcement playback, or a "what did
 you find" retrieval) - an aborted announcement leaves it unread, so the
 next-wake mention picks it up."""
-import json
 import threading
 import time
 import uuid
 
-from pathlib import Path
-
 import events
+import statefile
 import tracing
 
-HERE = Path(__file__).resolve().parent
-JOBS_FILE = HERE.parent / "state" / "jobs.json"
+JOBS_FILE = statefile.STATE / "jobs.json"
 
 QUEUED, RUNNING, DONE, FAILED = "QUEUED", "RUNNING", "DONE", "FAILED"
 KEEP = 10                       # finished jobs retained in the file
@@ -63,17 +60,16 @@ class JobStore:
     # -- the state file (all access under the lock) ---------------------------
 
     def _load(self):
-        try:
-            return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
+        return statefile.load_json(JOBS_FILE, list)
 
     def _save(self, jobs):
-        JOBS_FILE.parent.mkdir(exist_ok=True)
         live = [j for j in jobs if j["status"] in (QUEUED, RUNNING)]
         done = [j for j in jobs if j["status"] not in (QUEUED, RUNNING)]
-        JOBS_FILE.write_text(json.dumps(live + done[-KEEP:], indent=1),
-                             encoding="utf-8")
+        # Atomic (tmp + os.replace): this file is rewritten on every status
+        # transition, and a plain write truncated mid-way read back as [] -
+        # every queued job gone, invisibly, under a reconciler that reads the
+        # same file.
+        statefile.atomic_write(JOBS_FILE, live + done[-KEEP:])
 
     def _update(self, job_id, **fields):
         with self._lock:

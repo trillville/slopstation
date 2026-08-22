@@ -173,6 +173,12 @@ def main():
 
     # -- JobStore on a temp state file ---------------------------------------
     jobs_mod.JOBS_FILE = Path(tempfile.mkdtemp()) / "jobs.json"
+    # A file truncated mid-write reads as NO jobs - which is why every save
+    # below goes through statefile.atomic_write (tmp + os.replace) and must
+    # leave no .tmp sibling behind.
+    jobs_mod.JOBS_FILE.write_text('[{"id": "x", "sta', encoding="utf-8")
+    assert jobs_mod.JobStore(log, None, 1)._load() == []
+    jobs_mod.JOBS_FILE.unlink()
 
     class FakeAdapter:
         exe = "fake"
@@ -198,6 +204,7 @@ def main():
     assert store._task_text({"task": "x"}) == "x"
     ok, detail = store.enqueue("find coop games")
     assert ok and "queued" in detail
+    assert not list(jobs_mod.JOBS_FILE.parent.glob("*.tmp")), "atomic write left its tmp"
 
     # This store has a DOUBLE in bench/harness.py, and a double that drifts is
     # worse than no double: when `asked` arrived here, the tool called the fake

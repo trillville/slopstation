@@ -10,9 +10,9 @@ import json
 import time
 
 import cglib
-import library
+import statefile
 
-DIR = library.STATE / "traces"
+DIR = statefile.STATE / "traces"
 TTL_DAYS = 14
 
 log = cglib.make_log("traces")
