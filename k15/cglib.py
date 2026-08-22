@@ -281,6 +281,47 @@ def load_config():
     return json.loads((BASE / "config.json").read_text())
 
 
+# What a launch reads, and what the voice agent reads: presence checks in ONE
+# place, so doctor.py, couch.start and voice_agent.main cannot disagree about
+# what "config.json is fine" means. They used to keep two lists that did not
+# know about each other, and couch kept none - a key only the input switch
+# reads (tvGamingCmd) raised KeyError after the TV was on and the PC awake.
+# Presence only, by design: README § Deliberately not doing closes a typed
+# config layer, and the config_suspect warnings at the call sites catch the
+# value errors that actually occur.
+REQUIRED_CONFIG = ("gamingPcMac", "gamingPcIp", "sshHost", "tvComPort",
+                   "tvGamingCmd", "tvIdleCmd", "tvOffWhenDone")
+
+# config.json's voice section is the one home for tuning values; a deployed
+# config missing any of these should fail loudly at startup, not per-wake.
+# The wake-tuning knobs are deliberately NOT here (audio.WakeListener reads
+# them with inert defaults): a per-machine config.json is gitignored, so a key
+# that is mandatory in code is an agent that will not start after a git pull
+# until someone edits it by hand.
+REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
+                  "eotThreshold", "eagerEotThreshold", "keytermCount",
+                  "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
+                  "assistantProvider", "assistantModelAnthropic",
+                  "assistantModelOpenai", "assistantReasoningEffort", "inputs",
+                  "assistantWebSearch", "assistantSearchMaxUses", "location",
+                  "workerProvider", "workerModelAnthropic", "workerModelOpenai",
+                  "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
+
+
+def missing_config(cfg, voice=False):
+    """Required keys absent from cfg - and, with voice=True, from its voice
+    section as "voice.<key>" ("voice" alone if the section is not there).
+    Empty means complete."""
+    missing = [k for k in REQUIRED_CONFIG if k not in cfg]
+    if voice:
+        section = cfg.get("voice")
+        if not isinstance(section, dict):
+            missing.append("voice")
+        else:
+            missing += [f"voice.{k}" for k in REQUIRED_VOICE if k not in section]
+    return missing
+
+
 # --- secrets (voice lanes; chord path never needs these) ----------------------
 SECRETS = BASE / "secrets.json"
 

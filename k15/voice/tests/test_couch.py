@@ -387,8 +387,31 @@ def main():
     print("  reconcile: resumes live, clears dead with TV untouched, "
           "shrugs off boot-time errors")
 
+    # --- config: refused before the lock and before any side effect -----------
+    # A key only the input switch reads (tvGamingCmd) used to KeyError after
+    # power_on, WoL, Enter and READY; a missing sshHost spent ENTER_ATTEMPTS
+    # retrying a call that could not be built. One list (cglib.REQUIRED_CONFIG,
+    # the one doctor checks), consulted first, and last_error left so the
+    # listener buzzes it like any other failed launch.
+    for dropped in ("tvGamingCmd", "sshHost"):
+        fresh_state()
+        couch.CFG = {k: v for k, v in CFG.items() if k != dropped}
+        log, sent = wire([])                     # any ssh call would assert
+        assert couch.start() == 1
+        assert "config_invalid" in log.events() and not sent, (dropped, log.events())
+        assert log.find("config_invalid")[0]["missing"] == [dropped]
+        assert not cglib.LOCK.exists(), "a refused launch must not take the lock"
+        assert dropped in cglib.LAST_ERROR.read_text()
+    couch.CFG = CFG
+    assert cglib.missing_config(CFG) == []
+    assert cglib.missing_config(CFG, voice=True) == ["voice"]
+    assert cglib.missing_config({**CFG, "voice": {}}, voice=True) == \
+        [f"voice.{k}" for k in cglib.REQUIRED_VOICE]
+    print("  config: a missing key refuses before the lock - nothing sent, "
+          "last_error left, one list for couch, doctor and the voice agent")
+
     print("OK - couch: atomic acquire, ownership, one-rule ordering, failure "
-          "release, watch death, reconcile paths")
+          "release, watch death, reconcile paths, config refusal")
 
 
 if __name__ == "__main__":

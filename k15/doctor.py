@@ -28,18 +28,19 @@ def report(level, name, detail, hint=""):
 
 
 def check_config():
-    required = ("gamingPcMac", "gamingPcIp", "sshHost", "tvComPort",
-                "tvGamingCmd", "tvIdleCmd", "tvOffWhenDone")
     try:
         cfg = cglib.load_config()
     except Exception as e:
         report(FAIL, "config.json", f"unreadable ({e})", "recreate from k15/config.example.json")
         return None
-    missing = [k for k in required if k not in cfg]
+    # The SAME list couch.start refuses a launch on (cglib.REQUIRED_CONFIG),
+    # so a PASS here means a launch will not trip on a missing key.
+    missing = cglib.missing_config(cfg)
+    n = len(cglib.REQUIRED_CONFIG)
     if missing:
         report(FAIL, "config.json", f"missing keys: {missing}", "compare with k15/config.example.json")
     else:
-        report(PASS, "config.json", f"{len(required)}/{len(required)} keys present")
+        report(PASS, "config.json", f"{n}/{n} keys present")
     return cfg
 
 
@@ -260,6 +261,13 @@ def check_voice(cfg):
         report(WARN, "voice config", "no voice section in config.json",
                "copy the voice block from config.example.json to enable voice")
         return
+    # The agent refuses to start on these (cglib.REQUIRED_VOICE, the same
+    # list it checks), so say so here rather than from a supervisor window.
+    missing = [m for m in cglib.missing_config(cfg, voice=True)
+               if m.startswith("voice.")]
+    if missing:
+        report(WARN, "voice config", f"missing {', '.join(missing)}",
+               "the agent will not start without them - compare config.example.json")
     try:
         secrets = cglib.load_secrets()
     except Exception as e:

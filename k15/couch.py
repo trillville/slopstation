@@ -169,6 +169,21 @@ def start(appid=None, turn=None):
     # its own, so nothing is ever uncorrelated.
     turn = turn if events.valid_turn(turn) else events.new_turn()
     events.context(turn=turn)
+    missing = cglib.missing_config(cfg())
+    if missing:
+        # Before the lock and before the first side effect. A key only the
+        # input switch reads (tvGamingCmd) used to KeyError AFTER power_on,
+        # WoL, Enter and READY - TV on, PC in TV topology, input never
+        # switched - and a missing sshHost spent ENTER_ATTEMPTS retrying a
+        # call that could not be built. Refuse here, where nothing has moved,
+        # and leave last_error so the listener buzzes it like any failure.
+        log.error("config_invalid", missing=missing)
+        try:
+            cglib.LAST_ERROR.write_text(
+                f"config.json is missing {', '.join(missing)}")
+        except OSError:
+            pass
+        return 1
     # The pre-read only shapes the log lines - acquire_lock is the arbiter,
     # and losing it means another launch won in the last few milliseconds.
     age = cglib.lock_age()

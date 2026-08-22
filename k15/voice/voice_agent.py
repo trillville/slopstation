@@ -51,17 +51,6 @@ from session_runtime import run_session         # noqa: E402
 
 log = cglib.make_log("voice")
 
-# config.json's voice section is the one home for tuning values; a deployed
-# config missing any of these should fail loudly at startup, not per-wake.
-REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
-                  "eotThreshold", "eagerEotThreshold", "keytermCount",
-                  "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
-                  "assistantProvider", "assistantModelAnthropic",
-                  "assistantModelOpenai", "assistantReasoningEffort", "inputs",
-                  "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "workerProvider", "workerModelAnthropic", "workerModelOpenai",
-                  "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
-
 
 def refresh_library_bg():
     """Full catalog sync off the wake loop - a slow/asleep PC (30 s ssh timeout)
@@ -116,11 +105,13 @@ def main():
         return 0
 
     cfg = cglib.load_config()
-    voice = cfg["voice"]
-    missing = [k for k in REQUIRED_VOICE if k not in voice]
+    # The chord lane's keys too (dispatch reads tvComPort and tvGamingCmd)
+    # and the voice section's - cglib's lists, the same ones doctor checks.
+    missing = cglib.missing_config(cfg, voice=True)
     if missing:
         log.error("config_invalid", missing=missing)
         return 1
+    voice = cfg["voice"]
     secrets = cglib.load_secrets()
     # Earcon volume is taste, and taste needs a knob you can turn from the
     # couch: optional (an already-deployed config must not fail to start).
