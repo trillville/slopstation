@@ -3,18 +3,15 @@ thread dies on Ctrl+C) keeps progress instead of re-crawling from zero. Run:
     .venv\\Scripts\\python tests\\test_meta.py
 """
 import sys
-import tempfile
 import time
-from pathlib import Path
 
 import _bootstrap                               # noqa: F401,E402
+from _bootstrap import fresh_state              # noqa: E402
 import library
 
 
 def main():
-    tmp = Path(tempfile.mkdtemp())
-    library.STATE = tmp
-    library.META_CACHE = tmp / "metadata-cache.json"
+    fresh_state()
 
     fetched = []
     library.fetch_meta_one = lambda appid: fetched.append(appid) or {"tags": [f"t{appid}"]}

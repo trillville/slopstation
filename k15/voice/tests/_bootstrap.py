@@ -1,9 +1,11 @@
 """Shared test setup. `import _bootstrap` first in every test.
 
-Paths for k15/ and k15/voice/ on sys.path; events.LOG_DIR to a tempdir; a
-config fixture so the suite imports on a checkout with no config.json.
-fresh_state() points every state-file constant into a tempdir; freeze_sleep()
-makes time.sleep a no-op; wants() skips a test the machine cannot run.
+Paths for k15/ and k15/voice/ on sys.path; events.LOG_DIR and cglib's state
+paths to tempdirs, so no test writes beside the real lanes whether or not it
+asks for one; a config fixture so the suite imports on a checkout with no
+config.json. fresh_state() points every state-file constant into a NEW
+tempdir; freeze_sleep() makes time.sleep a no-op; wants() skips a test the
+machine cannot run.
 """
 import json
 import os
@@ -23,6 +25,11 @@ import events                                   # noqa: E402
 import cglib                                    # noqa: E402
 
 events.LOG_DIR = Path(tempfile.mkdtemp(prefix="cg-test-logs-"))
+# Before any module that derives its state paths from cglib.STATE is imported.
+cglib.STATE = Path(tempfile.mkdtemp(prefix="cg-test-state-"))
+cglib.LOCK = cglib.STATE / "session.lock"
+cglib.LAST_ERROR = cglib.STATE / "last_error"
+cglib.CANCEL = cglib.STATE / "cancel"
 
 # config.example.json is the fixture: a test that needs specific values
 # calls cglib.use_config(...) itself.
