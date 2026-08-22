@@ -3,12 +3,8 @@ validation (unknown appids REFUSED at the boundary), pipecat/anthropic
 constructions with dummy keys, and a tolerant live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
 """
-import sys
+import _bootstrap  # noqa: F401
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import assistant
 import cglib
@@ -28,7 +24,22 @@ def main():
     d = Dispatch(CFG_MIN, log, dry_run=True)
     impls = assistant.tool_impls(d, log)
 
-    rows = library.load()["installed"]
+    rows = library.load().get("installed") or []
+    if not rows:
+        # state/library.json is per-machine and gitignored, so a checkout
+        # that is not the K15 has none. Stand up a one-game index so the
+        # tool boundary is still drilled, and say so - the docstring's
+        # "REAL library" is the rig's case, not a precondition.
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        library.LIBRARY, library.META_CACHE = tmp / "library.json", tmp / "meta.json"
+        library.save({"installed": [{"appid": 1145360, "name": "Hades II",
+                                     "lastPlayed": 1, "state": 4, "size": 1}],
+                      "owned": {"1145360": {"name": "Hades II", "hours": 1.0,
+                                            "hours2w": 0.0, "last": 0}}})
+        rows = library.load()["installed"]
+        print("  (no state/library.json on this checkout - synthetic one-game index)")
     real_appid = rows[0]["appid"]
 
     si = assistant.system_instruction(CFG_MIN)
@@ -378,14 +389,18 @@ def main():
     assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"
     print("  constructions: LLMContext, Anthropic + OpenAI Responses, Aura-2 - OK")
 
-    # Live metadata (keyless APIs) - tolerant: network may be absent.
-    try:
-        meta = library.fetch_meta_one(real_appid)
-        assert meta.get("tags") or meta.get("genres"), meta
-        print(f"  live metadata for {real_appid}: tags={meta.get('tags', [])[:3]} "
-              f"controller={meta.get('controller')}")
-    except Exception as e:
-        print(f"  live metadata SKIPPED ({e}) - rerun with network")
+    # Live metadata (keyless APIs) - tolerant: network may be absent, and
+    # the runner only lets it out on request (run.py --with network).
+    if not _bootstrap.wants("network"):
+        print("  live metadata SKIPPED (run.py --with network to include it)")
+    else:
+        try:
+            meta = library.fetch_meta_one(real_appid)
+            assert meta.get("tags") or meta.get("genres"), meta
+            print(f"  live metadata for {real_appid}: tags={meta.get('tags', [])[:3]} "
+                  f"controller={meta.get('controller')}")
+        except Exception as e:
+            print(f"  live metadata SKIPPED ({e}) - rerun with network")
 
     print("OK - assistant: prompt, tool boundary, routing, constructions")
 

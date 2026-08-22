@@ -8,12 +8,9 @@ SHIPPING SCRIPT here rather than copied, so the test cannot drift away from
 what actually runs. Run:
     .venv\\Scripts\\python tests\\test_turn.py
 """
+import _bootstrap  # noqa: F401
 import re
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import couch
 import events
@@ -152,7 +149,6 @@ def main():
     # The same shape one layer up: with NO ambient turn, a Dispatch that was
     # told the turn must still tag both machine-crossing verbs - which is what
     # GrammarGate does when it mints the id.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import cglib
     import dispatch as dp
 

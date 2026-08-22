@@ -6,17 +6,15 @@ Scripted TranscriptionFrames stand in for Flux (its own connect path needs the
 key). Brief tones will be audible. Run:
     .venv\\Scripts\\python tests\\test_session_pipeline.py
 """
+import _bootstrap  # noqa: F401
 import asyncio
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
 from dispatch import Dispatch
 from grammar_gate import GrammarGate, GrammarMatcher
 from preroll import WakeAck
+
+REQUIRES = {"audio"}          # real devices, audible tones: run.py --with audio
 
 # (utterance, event the gate must emit, intent field where the event carries one).
 # Asserting on events, not prose: rewording is free, renaming is caught -

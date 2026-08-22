@@ -5,12 +5,10 @@ order (sleep < wake < acks, nothing loud enough to startle) must hold; the
 gain knob must scale and never wrap int16. Run:
     .venv\\Scripts\\python tests\\test_earcons.py
 """
-import sys
-from pathlib import Path
+import _bootstrap  # noqa: F401
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import earcons
 
 

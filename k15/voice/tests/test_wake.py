@@ -14,19 +14,19 @@ Caveat for an invented phrase: SAPI may pronounce it nothing like a person
 would, so a low score here with good live trials is the test's limit rather
 than the model's - see docs/custom-wakeword-design.md.
 """
+import _bootstrap  # noqa: F401
 import json
 import subprocess
-import sys
 import tempfile
 import wave
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 from audio import WakeListener
+
+REQUIRES = {"downloads"}      # SAPI voices + the oWW model fetch: run.py --with downloads
 
 
 def deployed_model():

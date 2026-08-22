@@ -4,16 +4,15 @@ install on this machine, cross-validated against the actual Dispatch.ps1
 the ARMORED-CORE-™-VI-vs-"armored core six" normalization problem. Run:
     .venv\\Scripts\\python tests\\test_library.py
 """
+import _bootstrap  # noqa: F401
 import subprocess
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import library
 import titles
 from grammar_gate import GrammarMatcher
+
+REQUIRES = {"steam"}          # a local Steam install + Dispatch.ps1: the gaming PC
 
 DISPATCH = Path(__file__).resolve().parents[3] / "gaming-pc" / "Dispatch.ps1"
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1"}}

@@ -4,12 +4,9 @@ self-heal on a later close. The scenarios replay both incidents (08-16 blind
 bursts, 08-21 eARC ack-then-refuse) against the fix. Run:
     .venv\\Scripts\\python tests\\test_ducking.py
 """
-import sys
-import time
-from pathlib import Path
+import _bootstrap  # noqa: F401
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _bootstrap import freeze_sleep
 
 import cglib
 import dispatch as dp
@@ -54,9 +51,6 @@ def ducker(steps=10, room=None, **kw):
 
 
 def main():
-    real_sleep = time.sleep
-    time.sleep = lambda s: None                       # fast tests
-
     # --- the gate: a set that is not on is not touched -----------------------
     dk, room, log = ducker(room=FakeRoom(power="standby"))
     dk.duck()
@@ -166,7 +160,6 @@ def main():
     assert [e for e in log.events() if e == "dry_run_would"] and \
         not log.find("tv_ducked"), log.records
 
-    time.sleep = real_sleep
     print("OK - ducking: on-gate (standby/unknown/no-readback skip), verified "
           "ledger, clamp honesty, key-loss top-up, dead-relay zero-debt, "
           "user-takeover stand-down, deficit debt + exact self-heal, "
@@ -174,4 +167,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with freeze_sleep():
+        main()

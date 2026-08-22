@@ -21,41 +21,21 @@ stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
 Run:
     .venv\\Scripts\\python tests\\test_couch.py
 """
+import _bootstrap  # noqa: F401
 import os
-import sys
-import tempfile
 import threading
 import time
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _bootstrap import fresh_state, freeze_sleep
 
 import cglib
-import events
-
-events.LOG_DIR = Path(tempfile.mkdtemp())        # keep test events out of logs/
-
-import couch                                     # noqa: E402  (needs LOG_DIR set)
+import couch
 
 CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4", "tvIdleCmd": "hdmi1",
        "tvOffWhenDone": True, "sshHost": "gamepc",
        "gamingPcIp": "127.0.0.1", "gamingPcMac": "00-00-00-00-00-00"}
 
 READY_TS = "2026-08-12T20:00:00"                 # what a legacy marker answers
-
-
-def fresh_state(lock_age_s=None, lock_content="x"):
-    """Point cglib's lock + last_error into a new tmpdir. lock_age_s seeds a
-    lock of that age (None = absent)."""
-    tmp = Path(tempfile.mkdtemp())
-    cglib.LOCK = tmp / "session.lock"
-    cglib.LAST_ERROR = tmp / "last_error"
-    if lock_age_s is not None:
-        cglib.LOCK.write_text(lock_content)
-        old = time.time() - lock_age_s
-        os.utime(cglib.LOCK, (old, old))
-    return tmp
 
 
 def wire(script, default=None):
@@ -94,8 +74,6 @@ def wire(script, default=None):
 
 
 def main():
-    real_sleep = time.sleep
-    time.sleep = lambda s: None                  # fast tests
     couch.CFG = CFG
     couch.ENTER_ATTEMPTS = 2
     couch.READY_WAIT_S = 0.3
@@ -409,10 +387,10 @@ def main():
     print("  reconcile: resumes live, clears dead with TV untouched, "
           "shrugs off boot-time errors")
 
-    time.sleep = real_sleep
     print("OK - couch: atomic acquire, ownership, one-rule ordering, failure "
           "release, watch death, reconcile paths")
 
 
 if __name__ == "__main__":
-    main()
+    with freeze_sleep():
+        main()

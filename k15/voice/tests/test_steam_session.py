@@ -4,16 +4,15 @@ path, an X-eresult failure surfaced, download-status parse, and enrollment that
 persists the token WITHOUT ever logging it. No network. Run:
     .venv\\Scripts\\python tests\\test_steam_session.py
 """
+import _bootstrap  # noqa: F401
 import base64
 import json
-import sys
 import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _bootstrap import freeze_sleep
 
 import cglib
 import steam_session as ss
@@ -82,8 +81,6 @@ def main():
     s._post = fake_post
     s._get = fake_get
     s._login_post = fake_login_post
-    real_sleep = time.sleep
-    time.sleep = lambda n: None
 
     # --- token mint + cache + re-mint on expiry ------------------------------
     # The mint is the TRANSFER-LOGIN flow, not GenerateAccessTokenForApp: that
@@ -211,11 +208,11 @@ def main():
         pass
     assert "keep-me" in tmp.read_text()                 # untouched, recoverable
 
-    time.sleep = real_sleep
     print("OK - steam_session: gate, token mint/cache/refresh, session pick, "
           "install verify + X-eresult + offline, download parse, enroll persists "
           "the token without logging it and refuses a corrupt secrets.json")
 
 
 if __name__ == "__main__":
-    main()
+    with freeze_sleep():
+        main()

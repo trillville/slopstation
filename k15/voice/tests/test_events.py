@@ -5,13 +5,10 @@ The scrubber test is the load-bearing one: events leave the house now, so a
 key reaching a field is a real leak, not a cosmetic bug. Run:
     .venv\\Scripts\\python tests\\test_events.py
 """
+import _bootstrap  # noqa: F401
 import json
-import sys
 import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
 import events

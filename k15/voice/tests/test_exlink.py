@@ -4,11 +4,10 @@ vol_set clamping must all agree. Rebuilds every table entry from its
 builder's checksum math drifts, this fails. Run:
     .venv\\Scripts\\python tests\\test_exlink.py
 """
+import _bootstrap  # noqa: F401
 import sys
 import time
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 
 # name -> (c1, c2, c3, value), straight from the official worksheet rows.

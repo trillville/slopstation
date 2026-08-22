@@ -54,15 +54,29 @@ deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
 ## Running the tests
 
 The blind suite runs as scripts, not pytest — `events._env()` detects tests
-by `sys.argv[0]`, so pytest would mislabel events as env=prod:
+by `sys.argv[0]`, so pytest would mislabel events as env=prod. One runner
+spawns each file as its own process and keeps that contract:
 
-    .venv\Scripts\python tests\test_couch.py     (from k15\voice\)
+    .venv\Scripts\python tests\run.py                    (from k15\voice\)
+    .venv\Scripts\python tests\run.py couch turn         just those two
+    .venv\Scripts\python tests\run.py --with mic,steam   allow named features
+    .venv\Scripts\python tests\run.py --all              everything (the K15)
+
+A single file still runs by hand (`.venv\Scripts\python tests\test_couch.py`)
+and then skips nothing. A file that needs hardware or the world declares
+`REQUIRES = {"audio", ...}` at the top and the runner skips it unless asked;
+a mostly-pure file gates its one live case with `_bootstrap.wants("mic")`.
+Exit code = the number of failures. `tests/_bootstrap.py` is the one home for
+sys.path, the test-only event dir and the shared helpers — every test imports
+it first.
 
 `test_lint.py` (pyflakes, undefined names) sweeps every module and is the
-cheapest full-repo check. `test_turn.py` reads the SHIPPING `Dispatch.ps1`,
-so gaming-pc regex changes are drilled from here. Hardware-bound tests
-(`test_standoff` needs hid + the Puck, `test_session_pipeline` needs audio
-devices) only run on the K15.
+cheapest full-repo check; `test_lanes.py` enforces the two-lane import rule
+above from the AST, on system python. `test_turn.py` reads the SHIPPING
+`Dispatch.ps1`, so gaming-pc regex changes are drilled from here. The
+hardware-bound files (`test_session_pipeline` plays tones, `test_wake` fetches
+models, `test_library` scans a local Steam install) run only where that
+hardware is; `test_standoff` stubs `hid` and runs anywhere.
 
 ## Deploying
 

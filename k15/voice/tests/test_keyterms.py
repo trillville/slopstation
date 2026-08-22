@@ -4,11 +4,7 @@ model; this one pins the list's SHAPE, which is where the bug actually was.
 
     .venv\\Scripts\\python tests\\test_keyterms.py
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap  # noqa: F401
 
 import library                                  # noqa: E402
 import session_runtime                          # noqa: E402

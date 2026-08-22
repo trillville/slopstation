@@ -11,10 +11,13 @@ from pathlib import Path
 from pyflakes import api, reporter
 
 K15 = Path(__file__).resolve().parents[2]        # .../k15
-MODULES = [K15 / n for n in
-           ("cglib.py", "events.py", "couch.py", "library.py", "exlink.py",
-            "chord_listener.py", "doctor.py", "calibrate.py")]
+# Globbed, never listed: a hand-kept list is how a new k15/ module stays
+# unlinted until someone remembers it. Every .py in k15/, k15/voice/ and the
+# suite itself (a test with an undefined name in an unexercised branch is a
+# test that will die the day that branch matters).
+MODULES = sorted(K15.glob("*.py"))
 MODULES += sorted((K15 / "voice").glob("*.py"))
+MODULES += sorted((K15 / "voice" / "tests").glob("*.py"))
 # bench/ too: a probe is the thing you reach for when something is already
 # wrong, so an undefined name in one costs you the diagnosis at the worst
 # moment. They were outside the sweep until a new probe went in and nothing

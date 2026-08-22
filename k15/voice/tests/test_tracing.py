@@ -7,12 +7,8 @@ until traces are already flowing wrongly. The rest of the file is the rule
 that matters more than any of it: tracing must never be able to cost a voice
 session, so every entry point is driven into failure and expected to shrug.
 """
+import _bootstrap  # noqa: F401
 import base64
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
 import events

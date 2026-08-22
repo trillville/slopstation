@@ -2,15 +2,12 @@
 objects (model_dump), prune expired files on save, and fail soft. Run:
     .venv\\Scripts\\python tests\\test_traces.py
 """
+import _bootstrap  # noqa: F401
 import json
 import os
-import sys
 import tempfile
 import time
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import traces
 

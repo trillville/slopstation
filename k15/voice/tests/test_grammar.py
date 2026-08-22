@@ -3,11 +3,8 @@ table, negatives that MUST fall through to the assistant lane, and the
 risky-command narrowness rule. Run:
     .venv\\Scripts\\python tests\\test_grammar.py
 """
-import sys
-from pathlib import Path
+import _bootstrap  # noqa: F401
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from grammar_gate import GrammarMatcher, strip_wake
 
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",

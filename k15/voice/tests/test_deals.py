@@ -3,12 +3,12 @@ through the single _get seam (no network), so this pins the parse shapes a
 keyless checkout otherwise can't see - and the incremental hltb cache. Run:
     .venv\\Scripts\\python tests\\test_deals.py
 """
+import _bootstrap  # noqa: F401
 import json
 import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import library
 

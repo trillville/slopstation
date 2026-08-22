@@ -3,11 +3,7 @@ tool_result without its tool_use (Anthropic 400s on that). It trims the
 carried slice to whole exchanges starting at a plain user turn. Run:
     .venv\\Scripts\\python tests\\test_carry.py
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import _bootstrap  # noqa: F401
 
 from session_runtime import _trim_carry
 

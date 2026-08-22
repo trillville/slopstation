@@ -11,14 +11,11 @@ contract the feature rests on: StartFrame first, then the ENTIRE pre-roll,
 only then live mic audio - no interleave, no loss. Run:
     .venv\\Scripts\\python tests\\test_preroll.py
 """
+import _bootstrap  # noqa: F401
 import asyncio
-import sys
 import threading
 import time
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
 from preroll import CHUNK_BYTES, CHUNK_SAMPLES, PrerollFeeder, WakeAck, WakeCapture
@@ -415,8 +412,12 @@ def main():
     test_wake_chime_waits_for_the_end_of_speech()
     test_wake_ack_is_claimed_exactly_once()
     test_feeder_chunking()
-    asyncio.run(test_pipeline_ordering())
-    print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")
+    if _bootstrap.wants("mic"):                   # real devices; run.py --with mic
+        asyncio.run(test_pipeline_ordering())
+        print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")
+    else:
+        print("OK - pre-roll: capture and chunking hold (pipeline ordering on the "
+              "real mic skipped: run.py --with mic)")
 
 
 if __name__ == "__main__":

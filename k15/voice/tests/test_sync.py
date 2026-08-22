@@ -4,12 +4,10 @@ only, and the non-reentrant guard so rapid session-boundary calls can't stack
 concurrent crawls. All layer fns are mocked; no network. Run:
     .venv\\Scripts\\python tests\\test_sync.py
 """
-import sys
+import _bootstrap  # noqa: F401
 import threading
 import time
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cglib
 import library
 

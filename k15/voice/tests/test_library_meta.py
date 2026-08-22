@@ -1,13 +1,13 @@
 """Blind test: refresh_meta saves incrementally so a killed crawl (daemon
 thread dies on Ctrl+C) keeps progress instead of re-crawling from zero. Run:
-    .venv\\Scripts\\python tests\\test_meta.py
+    .venv\\Scripts\\python tests\\test_library_meta.py
 """
-import sys
+import _bootstrap  # noqa: F401
 import tempfile
-import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _bootstrap import freeze_sleep
+
 import library
 
 
@@ -18,9 +18,6 @@ def main():
 
     fetched = []
     library.fetch_meta_one = lambda appid: fetched.append(appid) or {"tags": [f"t{appid}"]}
-    real_sleep = time.sleep
-    time.sleep = lambda s: None
-
     # Incremental invariant: the cache is saved after EACH fetch, not once at
     # the end, so a daemon-thread kill after item N leaves N on disk, not zero.
     orig_save = library._save_meta
@@ -53,10 +50,10 @@ def main():
     assert {"action", "rpg", "roguelike"} <= set(terms), terms
     assert library.query_terms(limit=1) == ["mechs"]
 
-    time.sleep = real_sleep
     print("OK - refresh_meta: saves after each fetch, resume does top-up only; "
           "query_terms ranks the tag/genre vocabulary")
 
 
 if __name__ == "__main__":
-    main()
+    with freeze_sleep():
+        main()

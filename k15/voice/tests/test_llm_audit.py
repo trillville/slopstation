@@ -7,13 +7,9 @@ conversation, which sets the bar: it must pass every event through unchanged
 and in order, and no failure inside it may reach the pipeline. Both are
 asserted here with fakes - no network, no keys.
 """
+import _bootstrap  # noqa: F401
 import asyncio
-import sys
 import types
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
 import llm_audit

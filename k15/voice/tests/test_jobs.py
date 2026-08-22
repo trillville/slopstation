@@ -5,15 +5,13 @@ DONE, cap, cancel, unread flow), the restart reconciler, and the announcer's
 defer/abort gates with playback stubbed. Run:
     .venv\\Scripts\\python tests\\test_jobs.py
 """
+import _bootstrap  # noqa: F401
 import json
 import sys
 import tempfile
 import time
 import types
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import announce
 import cglib

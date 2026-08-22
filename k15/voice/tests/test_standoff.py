@@ -12,14 +12,12 @@ Two properties, one per risk:
 
 Run:  python tests\\test_standoff.py     (system python - no venv needed)
 """
-import os
+import _bootstrap  # noqa: F401
 import sys
-import tempfile
 import time
 import types
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _bootstrap import fresh_state
 
 # The listener runs on SYSTEM python and `hid` is deliberately not in the voice
 # venv, so stub it: nothing here tests HID, only the decision to let go of it.
@@ -37,16 +35,6 @@ _real_poll = cl.STANDOFF_POLL_S
 # exercising its loop: a log rotation and a heartbeat thread.
 cglib.rotate_log = lambda *a, **k: None
 events.start_heartbeat = lambda *a, **k: None
-
-
-def with_temp_lock(age_s):
-    """Point cglib.LOCK at a temp file with the given age; None = absent."""
-    tmp = Path(tempfile.mkdtemp()) / "session.lock"
-    if age_s is not None:
-        tmp.write_text("x")
-        old = time.time() - age_s
-        os.utime(tmp, (old, old))
-    cglib.LOCK = tmp
 
 
 class FakeHandle:
@@ -99,7 +87,7 @@ def drive(lock_age_s, stop_after, session_starts_at=None):
 
     lock_age_s seeds the lock; session_starts_at makes one appear mid-loop, so
     the standoff TRANSITION is exercised and not just the steady states."""
-    with_temp_lock(lock_age_s)
+    fresh_state(lock_age_s)
     cap = cglib.CapturingLog("listener")
     fake = FakeHid()
     ticks = [0]
@@ -107,7 +95,7 @@ def drive(lock_age_s, stop_after, session_starts_at=None):
     def fake_sleep(_s):
         ticks[0] += 1
         if session_starts_at is not None and ticks[0] == session_starts_at:
-            with_temp_lock(0)            # a launch just took the lock
+            fresh_state(0)            # a launch just took the lock
         if ticks[0] >= stop_after:
             raise Stop()
 
@@ -127,18 +115,18 @@ def drive(lock_age_s, stop_after, session_starts_at=None):
 def main():
 
     # --- session_active: the arbiter the standoff rides on -------------------
-    with_temp_lock(None)
+    fresh_state(None)
     assert cglib.session_active() is False, "no lock must read as free"
 
-    with_temp_lock(10)
+    fresh_state(10)
     assert cglib.session_active() is True, "a fresh lock means the Puck is spoken for"
 
-    with_temp_lock(cglib.LOCK_STALE_S - 5)
+    fresh_state(cglib.LOCK_STALE_S - 5)
     assert cglib.session_active() is True, "just inside the window is still active"
 
     # THE deafness backstop: a lock nobody cleaned up must not permanently
     # deafen the load-bearing lane.
-    with_temp_lock(cglib.LOCK_STALE_S + 5)
+    fresh_state(cglib.LOCK_STALE_S + 5)
     assert cglib.session_active() is False, "a stale lock must read as free"
 
     # --- stand_off: lets go once, reports only the transition ----------------
@@ -153,7 +141,7 @@ def main():
 
     # --- the two composed: a live session leaves nothing open ----------------
     for age in (0, 10, cglib.LOCK_STALE_S - 1):
-        with_temp_lock(age)
+        fresh_state(age)
         puck, h = held_puck()
         if cglib.session_active():
             puck.stand_off()
