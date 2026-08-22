@@ -1,15 +1,14 @@
 # Session teardown: close Big Picture, restore OFFICE, release the Puck.
 # Runs as Scheduled Task \CouchGaming\Exit (Big Picture tile, Ctrl+Alt+E, or
 # Wake-Safety).
-# Teardown policy: plow through - every step is best-effort and the logon
-# failsafe converges anything this misses. Hence no $ErrorActionPreference = 'Stop'.
+# Every step is best-effort and the logon failsafe converges what this misses,
+# hence Continue rather than Stop.
 $ErrorActionPreference = 'Continue'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'exit'
 
-# Conflict rule: teardown wins. If a launch is mid-flight, stop it - this
-# script is the reconciler for whatever half-state the kill leaves (office,
-# Puck release, ready marker are all handled below).
+# Teardown wins: stop an in-flight launch. The steps below reconcile whatever
+# half-state the kill leaves.
 if (Test-CgTaskRunning 'Enter') {
     Log 'Enter task is running - stopping it (teardown wins)'
     Stop-CgTask 'Enter'
@@ -19,11 +18,11 @@ if (Test-CgTaskRunning 'Enter') {
     Stop-DisplayMagician
 }
 
-# Leave Big Picture FIRST, while still on the TV - Steam's window never gets
-# resolution-yanked mid-render (prevents a garbled desktop-Steam window)
+# Leave Big Picture FIRST, while still on the TV, so Steam's window is never
+# resolution-yanked mid-render (that leaves a garbled desktop-Steam window).
 Start-Process 'steam://close/bigpicture'
 Log 'closing Big Picture'
-Start-Sleep 2   # blind wait by design: Big Picture exposes no reliable closed signal
+Start-Sleep 2   # blind wait: Big Picture exposes no reliable closed signal
 
 # Office first: controller stays live during teardown
 $officeOk = Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 15 2 'ultrawide restored'
@@ -42,9 +41,8 @@ else {
 }
 
 # Repaint guard: minimize desktop Steam so it re-lays-out at the ultrawide's
-# resolution next time it opens, instead of coming back as the stale-4K
-# garbled window. Shared with Enter, which minimizes it for the OTHER reason
-# (see the lib): that window must never be what holds the controller.
+# resolution next time it opens, rather than returning as a stale-4K garbled
+# window. (Enter calls this for a different reason - see the lib.)
 Hide-DesktopSteam
 
 Clear-ReadyMarker

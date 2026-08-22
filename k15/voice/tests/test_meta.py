@@ -21,8 +21,8 @@ def main():
     real_sleep = time.sleep
     time.sleep = lambda s: None
 
-    # Incremental invariant: the cache is saved after EACH fetch, not once at
-    # the end, so a daemon-thread kill after item N leaves N on disk, not zero.
+    # The cache is saved after EACH fetch, so a kill after item N leaves N on
+    # disk, not zero.
     orig_save = library._save_meta
     sizes = []
 
@@ -35,7 +35,7 @@ def main():
     assert sizes == [1, 2, 3], f"saved at {sizes} - not incremental (batched saves once)"
     assert len(library.load_meta()) == 3
 
-    # Resume after a "kill": only the missing appids are fetched (top-up).
+    # Resume after a kill: only the missing appids are fetched.
     library._save_meta = orig_save
     fetched.clear()
     library.refresh_meta([1, 2, 3, 4, 5])

@@ -1,11 +1,7 @@
 """Blind test: the turn id - one id per user intent, carried from the wake
-word or the chord all the way to the gaming PC's scheduled task.
-
-The security case is the reason this file exists. On the far side the id
-reaches a FILENAME, so Dispatch.ps1's patterns are the boundary that stops a
-path-traversal string ever getting there. Those patterns are read OUT OF THE
-SHIPPING SCRIPT here rather than copied, so the test cannot drift away from
-what actually runs. Run:
+word or the chord to the gaming PC's scheduled task. On the far side the id
+reaches a FILENAME, so Dispatch.ps1's patterns are the path-traversal boundary;
+they are read out of the shipping script rather than copied. Run:
     .venv\\Scripts\\python tests\\test_turn.py
 """
 import re
@@ -30,16 +26,15 @@ HOSTILE = [
 
 
 def dispatch_patterns():
-    """Every verb pattern from the switch -Regex in Dispatch.ps1, read from
-    the file so this can never test a stale copy."""
+    """Every verb pattern from the switch -Regex in Dispatch.ps1, read from the
+    file so this can never test a stale copy."""
     text = DISPATCH.read_text(encoding="utf-8")
     return re.findall(r"^\s*'(\^[^']+)'", text, re.MULTILINE)
 
 
 def compile_ps(pattern):
-    """.NET spells absolute-end-of-string \\z; Python spells it \\Z (and has no
-    \\z at all). Same meaning, different dialect - translate rather than weaken
-    the shipping pattern to something both engines happen to accept."""
+    """.NET spells absolute-end-of-string \\z; Python spells it \\Z and has no
+    \\z. Translate rather than weaken the shipping pattern."""
     return re.compile(pattern.replace(r"\z", r"\Z"))
 
 
@@ -61,31 +56,24 @@ def main():
     print(f"  validate: rejected all {len(HOSTILE)} hostile strings")
 
     # -- Dispatch.ps1 is the real boundary -------------------------------------
-    # 13 PATTERNS across 11 verbs: nav alone is three (a front-page/library
-    # form, a game-page form with an appid, and a collection form), which is
-    # why this counts patterns, not verbs.
+    # 13 patterns across 11 verbs: nav alone is three (front-page/library,
+    # game-page with an appid, collection), so this counts patterns, not verbs.
     allpats = dispatch_patterns()
     assert len(allpats) == 13, f"expected 13 patterns, got {len(allpats)}: {allpats}"
     for p in allpats:
-        # \z, not $: in .NET '$' also matches before a trailing newline, and
-        # this file is the whole remote attack surface - read-only verbs too.
+        # \z, not $: in .NET '$' also matches before a trailing newline.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
 
     pats = [p for p in allpats if "--turn" in p]
-    # The FIVE mutating verbs take a turn - and nav is three of the patterns,
-    # so seven patterns carry one: enter, exit, launch, nav x3, stop.
+    # Five mutating verbs take a turn, and nav is three patterns, so seven
+    # patterns carry one: enter, exit, launch, nav x3, stop.
     assert len(pats) == 7, f"expected 7 turn-bearing patterns, got {pats}"
     for p in pats:
         assert "[0-9a-f]{1,8}" in p, f"pattern does not bound the turn: {p}"
 
-    # One bare example per turn-bearing form; each pattern must match at least
-    # one, and each match must accept a good turn and reject EVERY hostile one.
-    # A list (not a name->example dict) because nav's three patterns share the
-    # 'nav' prefix and each needs its own example.
-    # The collection examples are REAL id shapes off the rig - Steam's are
-    # base64-ish, and a tighter reading of that charset silently DENIED 3 of
-    # this rig's 11 collections (2026-08-14). Drill what the PC emits, not a
-    # tidy invention.
+    # One bare example per turn-bearing form (a list, since nav's three
+    # patterns share the prefix). The collection ids are real shapes off the
+    # rig: a tighter charset DENIED 3 of this rig's 11 (2026-08-14).
     bases = ["enter", "exit", "launch 12345", "nav downloads",
              "nav details 12345", "nav store 12345", "nav collection favorite",
              "nav collection uc-mkD+r+pfQ1hu", "nav collection uc-odwxN*+G1zDb*+",
@@ -96,8 +84,7 @@ def main():
         assert matched, f"{p} matches none of the example bases"
         for base in matched:
             assert rx.match(f"{base} --turn 9f2c1a"), f"{p} rejects a good turn on {base!r}"
-            # Every hostile string fails to match AT ALL, so Dispatch falls
-            # through to DENIED rather than passing it on. Fail closed.
+            # No match at all, so Dispatch falls through to DENIED.
             for bad in HOSTILE:
                 assert not rx.match(f"{base} --turn {bad}"), \
                     f"{p} MATCHED hostile turn {bad!r} on {base!r} - path traversal reachable"
@@ -114,8 +101,8 @@ def main():
         assert sent[-1] == "enter --turn 9f2c1a", sent[-1]
         events.reset(tok)
 
-        # A malformed id must not go on the wire: Dispatch fails CLOSED, so
-        # shipping one would turn a telemetry bug into a launch outage.
+        # A malformed id must not go on the wire: Dispatch fails closed, so a
+        # telemetry bug would become a launch outage.
         tok = events.context(turn="../../evil")
         couch.ssh_intent("enter")
         assert sent[-1] == "enter", f"malformed turn reached the wire: {sent[-1]!r}"
@@ -124,11 +111,10 @@ def main():
         couch.ssh_intent("exit")
         assert sent[-1] == "exit", sent[-1]
 
-        # -- THE TASK BOUNDARY -------------------------------------------------
+        # -- the task boundary -------------------------------------------------
         # A ContextVar is copied into a task when that task is CREATED, so a
-        # turn minted inside a running frame processor cannot reach the
-        # assistant's tool-dispatch task - a sibling holding an older snapshot.
-        # Ambient absent + explicit present must still tag the wire.
+        # turn minted in a running frame processor cannot reach the assistant's
+        # tool-dispatch task. Explicit-with-no-ambient must still tag the wire.
         couch.ssh_intent("exit", turn="4c1d0e")
         assert sent[-1] == "exit --turn 4c1d0e", \
             f"explicit turn lost when ambient is empty: {sent[-1]!r}"
@@ -149,9 +135,8 @@ def main():
     print("  wire: explicit turn survives an empty/stale ambient, still validated")
 
     # -- Dispatch hands the id over without the ContextVar ----------------------
-    # The same shape one layer up: with NO ambient turn, a Dispatch that was
-    # told the turn must still tag both machine-crossing verbs - which is what
-    # GrammarGate does when it mints the id.
+    # With no ambient turn, a Dispatch that was told the turn must still tag
+    # both machine-crossing verbs - what GrammarGate does when it mints the id.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import cglib
     import dispatch as dp
@@ -167,9 +152,8 @@ def main():
         assert sent[-1] == "exit --turn 4c1d0e", \
             f"voice-driven exit reached the PC uncorrelated: {sent[-1]!r}"
 
-        # The interleave the snapshot contract exists for: a SECOND utterance
-        # lands while the first's dispatch is still on the wire. Consumers
-        # snapshot at operation start, so the re-point cannot reach them.
+        # A second utterance lands while the first's dispatch is on the wire;
+        # consumers snapshot at operation start, so the re-point can't reach it.
         def ssh_mid_flight(cmd, **kw):
             sent.append(cmd)
             d.begin_utterance("bbbbbb", "never mind")   # barge-in mid-ssh

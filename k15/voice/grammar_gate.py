@@ -1,13 +1,12 @@
 """GrammarGate: Tier-1 deterministic intent matching as a Pipecat processor.
 
 Sits between STT and everything else. Every FINAL transcript is screened here
-FIRST - command matches are swallowed (the LLM lane never sees them), acked
-with a count-coded earcon, and dispatched. Non-matches flow downstream to the
-assistant lane (or dead-end with a fail earcon when no LLM key is configured).
-
-Both ways out of a session end here, by pushing EndWorkerFrame downstream: a
-Tier-1 exit phrase ends it on the spot, and the assistant's stop_listening
-tool arms request_stop() so it ends once the goodbye has been spoken.
+first - matches are swallowed (the LLM lane never sees them), acked, and
+dispatched; non-matches flow downstream to the assistant lane, or dead-end
+with a fail earcon when no LLM key is configured. Both ways out of a session
+end here by pushing EndWorkerFrame downstream: a Tier-1 exit phrase ends it on
+the spot, and stop_listening arms request_stop() so it ends once the goodbye
+has been spoken.
 """
 import asyncio
 import time
@@ -34,33 +33,27 @@ GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
 GREETINGS = {"hey", "hi", "ok", "okay"}
 _PUNCT = ",.!?"
 
-# A joined pair is only a SPLIT anchor if its second half is a fragment. When
-# that half already IS the whole anchor, the first token is a real word sitting
-# in front of it and the anchor is not leading at all - "a jarvis" joins to
-# 92.3, "my jarvis" and "is jarvis" to 85.7, "the jarvis" to exactly 80.0, and
-# every one of them would eat the word in front. A genuine split cannot look
-# like this: its second half only ever scores as a fragment ("fred" is 80
-# against "alfred"), which is why the bar sits above 80 and not at it.
-# Measured with rapidfuzz 2026-08-16; "fred" at exactly 80 is what decides it.
+# A joined pair is only a SPLIT anchor if its second half is a fragment; if
+# that half already IS the anchor, joining would eat the real word in front
+# ("a jarvis" 92.3, "my/is jarvis" 85.7, "the jarvis" exactly 80.0). A genuine
+# split's second half only scores as a fragment ("fred" is 80 against
+# "alfred"), so the bar sits above 80. Measured with rapidfuzz 2026-08-16.
 _WHOLE_ANCHOR = 90
 
 
 def strip_wake(text, anchor="jarvis"):
     """Remove a leading wake phrase ("hey jarvis", "jarvis", mishears like
-    "jervis") from a transcript. The pre-roll buffer deliberately includes the
-    wake phrase - Flux transcribes the whole utterance and text-side stripping
-    is more reliable than trimming it out of the audio. Fuzzy on the anchor
-    word only, >=80 (mishears like "jervis" score ~83; real words like
-    "travis" ~67); greeting optional; repeated, so a stuttered "hey jarvis
-    hey jarvis volume up" still cleans up. Leading only - a mid-sentence
-    "jarvis" is content.
-    STT can also split the anchor across two tokens: "hey alfred" arrived as
-    "Hey, all. Fred," (2026-08-15) and neither half clears 80 alone ("all"
-    ~67; "fred" is 80 but sits unreachable behind it). So the two leading
-    tokens are also tried JOINED - "allfred" ~92 against "alfred", while
-    non-wake pairs stay under the bar ("all for" ~67, "play jarvis" ~75) -
-    guarded by _WHOLE_ANCHOR so the join can only ever assemble a split
-    anchor, never swallow a real word standing in front of an intact one."""
+    "jervis") from a transcript; the pre-roll buffer includes it. Fuzzy on the
+    anchor word only, >=80 (mishears like "jervis" ~83; real words like
+    "travis" ~67); greeting optional; repeated, so a stuttered "hey jarvis hey
+    jarvis volume up" still cleans up. Leading only - a mid-sentence "jarvis"
+    is content.
+
+    STT can split the anchor across two tokens ("hey alfred" -> "Hey, all.
+    Fred," 2026-08-15) and neither half clears 80 alone, so the two leading
+    tokens are also tried JOINED - "allfred" ~92 against "alfred", non-wake
+    pairs under the bar ("all for" ~67, "play jarvis" ~75), guarded by
+    _WHOLE_ANCHOR."""
     while True:
         toks = text.split()
         i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
@@ -80,13 +73,8 @@ def strip_wake(text, anchor="jarvis"):
 
 def stt_confidence(frame):
     """Mean per-word confidence off Flux's turn payload, or None when it did
-    not send words. Rounded to 2dp - this is a dashboard axis, not maths.
-
-    Recorded because nothing measured STT until now: every keyterm or
-    threshold change was judged by how the room felt that evening, and a bad
-    transcript ('thyroid core 6') and a good one were the same single log
-    line. Fail-soft like everything on an emit path - a shape change upstream
-    costs the field, never the turn."""
+    not send words. Rounded to 2dp - a dashboard axis, not maths. Fail-soft:
+    a shape change upstream costs the field, never the turn."""
     try:
         words = (frame.result or {}).get("words")
         scores = [w["confidence"] for w in words
@@ -106,9 +94,8 @@ class GrammarMatcher:
 
     def __init__(self, voice_cfg):
         # {game}/{collection} are wildcards - the fuzzy resolvers own those.
-        # {input} and {target} are fixed runtime lists. {target}'s VALUE is the
-        # nav kind (downloads/library/store), so the gate gets the kind straight
-        # from the slot with no second mapping.
+        # {input} and {target} are fixed runtime lists; {target}'s VALUE is
+        # the nav kind (downloads/library/store), so no second mapping.
         self.intents = load_intents()
         self.slot_lists = {
             "input": TextSlotList.from_tuples(
@@ -119,9 +106,8 @@ class GrammarMatcher:
         }
 
     def match(self, text):
-        """Returns (intent_name, slots dict) or None. Input goes through
-        spoken_form so 'armored core six' meets the slot variant
-        'armored core 6' on equal terms."""
+        """(intent_name, slots dict) or None. Input goes through spoken_form
+        so 'armored core six' meets the slot variant 'armored core 6'."""
         r = recognize(titles.spoken_form(text), self.intents,
                       slot_lists=self.slot_lists)
         if r is None:
@@ -132,17 +118,13 @@ class GrammarMatcher:
 class GrammarGate(FrameProcessor):
     """intent -> dispatch call; Result.earcon -> tone pushed to the speaker."""
 
-    # How long an assistant turn may stay "in flight" before the idle handler
-    # stops deferring for it. Covers a reasoning model's think-before-speak
-    # (GPT at low effort) and a tool call's 15s ssh; caps so a hung or errored
-    # turn can't pin the session open forever.
+    # Cap on an in-flight assistant turn before the idle handler stops
+    # deferring. Covers think-before-speak (GPT at low effort) and a 15s ssh.
     ASSISTANT_WAIT_S = 30
 
-    # A success earcon arriving while the wake chime is still ringing is one
-    # sound too many - a local command dispatches in ~100 ms, so the two used
-    # to run together. Fold it in: you just heard "got it", and nothing
-    # further means it worked. Anything longer (ssh, a launch) clears the
-    # window and acks normally, which is where "done" actually carries news.
+    # A local command dispatches in ~100 ms, so its ok earcon would land on
+    # the still-ringing wake chime; fold it in. Anything longer (ssh, a
+    # launch) clears the window and acks normally.
     ACK_COALESCE_S = 0.8
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
@@ -164,23 +146,17 @@ class GrammarGate(FrameProcessor):
         self._stop_after_reply = False          # stop_listening tool armed one
 
     def request_stop(self):
-        """The assistant's stop_listening tool asking for the mic back - "go
-        away, stop listening". ARMS the ending; the frame itself goes out from
-        process_frame, once the goodbye has actually been spoken.
-
-        It cannot end the session from here, for two reasons. A tool impl runs
-        on a worker thread (function_schemas hands every one of them to
-        asyncio.to_thread) and frames belong to the event loop. And it runs
-        BEFORE the model has said anything at all - the reply is generated
-        from this tool's result - so ending now would close the mic over the
-        goodbye. Called from that thread, so it does nothing that can raise.
-        """
+        """stop_listening asking for the mic back. ARMS the ending; the frame
+        goes out from process_frame once the goodbye has been spoken. It
+        cannot end the session here: tool impls run on a worker thread
+        (asyncio.to_thread) while frames belong to the event loop, and it runs
+        BEFORE the model has said anything. Must not raise."""
         self._stop_after_reply = True
         self.log("session_stop_requested")
 
     async def _stop_if_armed(self, reason):
-        """End the session if stop_listening armed one - a helper because two
-        different frames can prove the goodbye is over."""
+        """End the session if stop_listening armed one. Two different frames
+        can prove the goodbye is over."""
         if not self._stop_after_reply:
             return
         self._stop_after_reply = False
@@ -188,10 +164,9 @@ class GrammarGate(FrameProcessor):
 
     def is_busy(self):
         """True while the user is mid-turn, a dispatch is running, or an
-        assistant answer is still in flight (LLM reasoning + tool calls +
-        TTS start, cleared when the bot starts speaking) - the idle handler
-        defers session-end until all are clear. Without the in-flight check,
-        a model slower than holdWindowS gets its session killed mid-answer."""
+        assistant answer is in flight (cleared when the bot starts speaking).
+        Without the in-flight check a model slower than holdWindowS is killed
+        mid-answer."""
         pending = (self._assistant_pending
                    and time.time() - self._assistant_pending < self.ASSISTANT_WAIT_S)
         return self._speaking or self._dispatching > 0 or bool(pending)
@@ -202,19 +177,15 @@ class GrammarGate(FrameProcessor):
             num_channels=1))
 
     async def _ack_wake(self):
-        """The wake chime, unless the capture watcher already played it while
-        the mic was still ours (it wins when you pause after "hey jarvis"; we
-        win on a one-breath command that outlasts the session build). Either
-        way it lands when your turn ENDS - on your last word, not over it, and
-        it fills the gap before the answer. Once per session: later turns get
-        action earcons only."""
+        """The wake chime, unless the capture watcher already played it (it
+        wins when you pause after "hey jarvis"; we win on a one-breath
+        command). Lands when the turn ENDS. Once per session."""
         if self.ack is not None and self.ack.claim():
             await self._earcon("wake")
 
     async def _result_earcon(self, name):
         """Ack a dispatch result - unless it is a plain success still landing
-        on the wake chime (see ACK_COALESCE_S). busy and fail always play:
-        they are news, and news is worth a second sound."""
+        on the wake chime (see ACK_COALESCE_S). busy and fail always play."""
         if (name == "ok" and self.ack is not None
                 and self.ack.age() < self.ACK_COALESCE_S):
             self.log("earcon_folded", earcon=name)
@@ -222,17 +193,14 @@ class GrammarGate(FrameProcessor):
         await self._earcon(name)
 
     async def _run_intent(self, intent, slots):
-        """Returns True if the utterance was consumed here (the usual case);
-        False = hand it to the assistant lane after all (unresolvable title).
-        Dispatch is blocking (ssh up to 15 s, serial) - run it off the event
-        loop so audio and the Flux socket keep flowing while it works."""
+        """True = consumed here; False = hand to the assistant lane after all
+        (unresolvable title). Dispatch is blocking (ssh up to 15 s, serial) -
+        run it off the event loop so audio and the Flux socket keep flowing."""
         d = self.dispatch
         if intent == "ExitSession":
             self.log("session_exit_phrase")
-            # No earcon here: the sleep chime now plays from the wake loop
-            # after teardown, so every way a session can end - exit phrase,
-            # stop_listening, idle, crash - sounds the same and marks the
-            # actual moment the mic goes dormant.
+            # No earcon here: the sleep chime plays from the wake loop after
+            # teardown, so every way a session can end sounds the same.
             await self.push_frame(EndWorkerFrame(reason="exit phrase"))
             return True
         if intent in ("TaskResult", "TaskDetail", "TaskCancel"):
@@ -271,9 +239,9 @@ class GrammarGate(FrameProcessor):
         return True
 
     async def _task_intent(self, intent):
-        """Background-task retrieval speaks through the session TTS (the
-        speech IS the feedback, no earcon); read only after it was spoken.
-        All jobs calls are quick local file reads - no thread hop needed."""
+        """Background-task retrieval speaks through the session TTS (no
+        earcon), marked read only after it was spoken. All jobs calls are
+        local file reads - no thread hop."""
         if intent == "TaskCancel":
             n, running = self.jobs.cancel_queued()
             self.log("task_cancel", cancelled=n, running=running)
@@ -282,8 +250,7 @@ class GrammarGate(FrameProcessor):
                     "One is already running - it will finish or time out. "
                     + (f"Cancelled {n} queued." if n else "")))
             else:
-                # Same fold rule as a dispatch ack: cancelling is a local file
-                # read, so its ok would land inside the wake chime.
+                # Local file read - the ok would land inside the wake chime.
                 await self._result_earcon("ok" if n else "fail")
             return True
         job = self.jobs.latest_result()
@@ -316,8 +283,7 @@ class GrammarGate(FrameProcessor):
 
     async def _show_collection(self, spoken):
         """Resolve a collection name -> id via titles; a miss goes to the
-        assistant (or a fail earcon with no assistant), exactly like a title
-        miss. On a hit, navigate Big Picture to that collection."""
+        assistant (or a fail earcon without one), like a title miss."""
         cid, name = (self.resolve_collection(spoken) if self.resolve_collection
                      else (None, None))
         if cid is None:
@@ -342,49 +308,39 @@ class GrammarGate(FrameProcessor):
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._assistant_pending = 0.0       # answer arrived; idle clock owns it now
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            # The goodbye is out of the speaker - pipecat emits this once per
-            # LLM response, off the TTSStoppedFrame that closes its audio
-            # context - so an armed stop can now end the session without
+            # The goodbye is out of the speaker (pipecat emits this once per
+            # LLM response), so an armed stop can end the session without
             # cutting it off. A model that calls the tool and says NOTHING
-            # produces no such frame, and the idle timeout ends that session
-            # instead (voice-testing.md reads that case out of the log).
+            # produces no such frame; the idle timeout ends that one instead.
             await self._stop_if_armed("stop listening")
         elif isinstance(frame, ErrorFrame):
             # Pipecat reports service failures (LLM 401/400, TTS death) via
-            # loguru to the console only - mirror them into couch.log so a
-            # silent assistant is diagnosable from the one log that matters.
+            # loguru to the console only - mirror them into couch.log.
             self.log.error("pipeline_error", err=str(frame.error))
             if self._assistant_pending:
-                # The answer isn't coming: say so with the honest earcon
-                # instead of trailing off into silence, and stop pinning the
-                # idle handler open.
+                # The answer isn't coming: earcon, and unpin the idle handler.
                 self._assistant_pending = 0.0
                 await self._earcon("fail")
-            # Someone asked to be left alone and the answer died on the way to
-            # the speaker: honour the ask anyway rather than holding the mic
-            # open to the idle timeout for a goodbye that is not coming.
+            # Honour a pending stop rather than holding the mic to the idle
+            # timeout for a goodbye that is not coming.
             await self._stop_if_armed("stop listening (answer failed)")
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text.strip()
             conf = stt_confidence(frame)
             if text:
-                # A final transcript IS a user intent, so this is where the
-                # turn id is born. Everything it causes - the gate decision,
-                # the dispatch, couch.py, the gaming PC's Enter task - carries
-                # it from here. The session id set at wake survives the merge.
+                # The turn id is born here and everything it causes carries
+                # it; the session id set at wake survives the merge.
                 turn = events.new_turn()
                 events.context(turn=turn)
                 # Backstop: a final transcript proves the turn ended even if
-                # no UserStoppedSpeakingFrame arrived. Silence here would mean
-                # no feedback at all until the action completes (up to 15 s of
-                # ssh), so never leave the chime to a single frame type.
+                # no UserStoppedSpeakingFrame arrived (otherwise no feedback
+                # until the action completes, up to 15 s of ssh).
                 await self._ack_wake()
             if text and self.wake_word:
                 stripped = strip_wake(text, self.wake_word)
                 if not stripped:
                     # Pre-roll means a pause-style wake transcribes as just
-                    # "hey jarvis": not a command, not assistant material -
-                    # swallow it and keep listening (no earcon, no LLM turn).
+                    # "hey jarvis": swallow it, no earcon, no LLM turn.
                     self.log("stt_final", text=text, outcome="wake_only",
                              confidence=conf)
                     return
@@ -393,12 +349,8 @@ class GrammarGate(FrameProcessor):
                     frame.text = stripped       # both lanes see the command only
                     text = stripped
             if text:
-                # THE utterance snapshot, handed to Dispatch explicitly -
-                # dispatch.Utterance is the one home for why a ContextVar
-                # cannot carry it. `asked` is post-strip, so it is the
-                # command and not "hey jarvis, ...": a queued job stores it
-                # beside the model's brief so a replay quotes the person
-                # (session_runtime.job_messages).
+                # The utterance snapshot (see dispatch.Utterance). `asked` is
+                # post-strip, so a queued job stores the command itself.
                 if self.dispatch is not None:
                     self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)

@@ -1,14 +1,8 @@
-"""Blind test: the chord listener's hands-off rule.
-
-The listener must hold NO handles on the Puck for as long as a session owns it:
-VirtualHere hands the device to the gaming PC, and a listener still reading its
-interfaces leaves an enumerated-but-dead controller. Both trigger paths ride
-the session lock.
-
-Two properties, one per risk:
-  * a fresh lock stands the listener off       - or the bug is not fixed
-  * a STALE lock reads as free                 - or the chord lane goes deaf
-    until someone deletes a file, which is far worse than the bug
+"""Blind test: the chord listener's hands-off rule. The listener must hold no
+handles on the Puck while a session owns it - VirtualHere hands the device to
+the gaming PC, and a listener still reading its interfaces leaves an
+enumerated-but-dead controller. A stale lock must still read as free, or the
+chord lane goes deaf until someone deletes a file.
 
 Run:  python tests\\test_standoff.py     (system python - no venv needed)
 """
@@ -21,8 +15,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-# The listener runs on SYSTEM python and `hid` is deliberately not in the voice
-# venv, so stub it: nothing here tests HID, only the decision to let go of it.
+# The listener runs on SYSTEM python and `hid` is not in the voice venv, so
+# stub it: nothing here tests HID, only the decision to let go of it.
 sys.modules.setdefault("hid", types.SimpleNamespace(
     enumerate=lambda *a, **k: [], device=object))
 
@@ -33,8 +27,8 @@ import chord_listener as cl
 _real_sleep = time.sleep
 _real_poll = cl.STANDOFF_POLL_S
 
-# main() owns two startup side effects that belong to RUNNING the lane, not to
-# exercising its loop: a log rotation and a heartbeat thread.
+# main()'s two startup side effects belong to running the lane, not to
+# exercising its loop.
 cglib.rotate_log = lambda *a, **k: None
 events.start_heartbeat = lambda *a, **k: None
 
@@ -65,16 +59,15 @@ def held_puck():
 
 
 # --- driving the real loop ----------------------------------------------------
-# The units above can all pass while main() wires them together wrongly, so the
-# loop is driven for real: a fake hid module, and a fake sleep that counts
-# iterations, starts a session part-way through, and finally breaks out.
+# The loop runs for real against a fake hid module and a fake sleep that counts
+# iterations, starts a session part-way through, and breaks out.
 class Stop(Exception):
     """Not OSError/ValueError - the loop's own handler must not swallow it."""
 
 
 class FakeHid:
-    """Stands in for the hid module. Records every enumerate() so a test can
-    assert the listener never even LOOKED at the device."""
+    """Stands in for the hid module, recording every enumerate() so a test can
+    assert the listener never LOOKED at the device."""
 
     def __init__(self, interfaces=3):
         self.enumerations = 0
@@ -96,9 +89,8 @@ class FakeHid:
 
 def drive(lock_age_s, stop_after, session_starts_at=None):
     """Run main()'s loop, counting sleeps. Returns (captured log, fake hid).
-
     lock_age_s seeds the lock; session_starts_at makes one appear mid-loop, so
-    the standoff TRANSITION is exercised and not just the steady states."""
+    the standoff transition is exercised, not just the steady states."""
     with_temp_lock(lock_age_s)
     cap = cglib.CapturingLog("listener")
     fake = FakeHid()
@@ -112,8 +104,8 @@ def drive(lock_age_s, stop_after, session_starts_at=None):
             raise Stop()
 
     cl.log, cl.hid, cl.time.sleep = cap, fake, fake_sleep
-    # Check the lock every pass: this test is about the transition, not the
-    # poll rate, and fake_sleep advances no real clock for the rate to use.
+    # Check the lock every pass: fake_sleep advances no real clock, and this
+    # is about the transition, not the poll rate.
     cl.STANDOFF_POLL_S = 0
     try:
         cl.main()
@@ -136,8 +128,7 @@ def main():
     with_temp_lock(cglib.LOCK_STALE_S - 5)
     assert cglib.session_active() is True, "just inside the window is still active"
 
-    # THE deafness backstop: a lock nobody cleaned up must not permanently
-    # deafen the load-bearing lane.
+    # A lock nobody cleaned up must not permanently deafen the chord lane.
     with_temp_lock(cglib.LOCK_STALE_S + 5)
     assert cglib.session_active() is False, "a stale lock must read as free"
 
@@ -161,8 +152,7 @@ def main():
         assert h.closed, f"handle left open at lock age {age}"
 
     # --- the real loop, wired as it ships ------------------------------------
-    # A session already owns the Puck: the listener must not so much as
-    # enumerate HID.
+    # A session already owns the Puck: the listener must not enumerate HID.
     cap, fake = drive(lock_age_s=10, stop_after=6)
     assert fake.enumerations == 0, "stood off but still went looking for the Puck"
     assert "puck_present" not in cap.events(), cap.events()

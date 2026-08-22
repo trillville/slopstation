@@ -1,12 +1,10 @@
 """Tier-3 job store + runner. state/jobs.json is the one home for job state,
-reconciled at startup (house rule: every piece of distributed state has a
-reconciler). One worker thread, small queue, truthful failures - a job can
-end DONE or FAILED, never vanish.
+reconciled at startup. One worker thread, small queue: a job ends DONE or
+FAILED, never vanishes.
 
-Read/unread is the announcement contract: a finished job is unread until its
-summary has actually been HEARD (full announcement playback, or a "what did
-you find" retrieval) - an aborted announcement leaves it unread, so the
-next-wake mention picks it up."""
+Read/unread is the announcement contract: a finished job stays unread until
+its summary has been HEARD (full playback, or a "what did you find"
+retrieval), so an aborted announcement is picked up at the next wake."""
 import json
 import threading
 import time
@@ -24,19 +22,14 @@ QUEUED, RUNNING, DONE, FAILED = "QUEUED", "RUNNING", "DONE", "FAILED"
 KEEP = 10                       # finished jobs retained in the file
 QUEUE_CAP = 3                   # queued-or-running ceiling; beyond = busy
 
-# What a session's assistant is told about recent background work. Bounded on
-# all three axes because it rides in every LLM turn of that session: only
-# results fresh enough that "which one was cheapest?" plausibly means THEM,
-# only the last couple, and only the readable head of a long report.
-# Freshness splits on read: an UNREAD result must survive until it is heard
-# ("what did you find" hours later is the announcement contract), but a HEARD
-# one has a conversational horizon - under one flat 6 h window, a report heard
-# at 18:21 was still opening every session at 20:37, never referenced again
-# (2026-08-15).
+# What a session's assistant is told about recent background work; bounded
+# because it rides in every LLM turn. An unread result must survive until it
+# is heard, but a heard one ages out fast - under one flat 6 h window a report
+# heard at 18:21 was still opening every session at 20:37 (2026-08-15).
 CONTEXT_AGE_S = 6 * 3600        # unread
 CONTEXT_READ_AGE_S = 15 * 60    # read (heard, or retrieved by asking)
-CONTEXT_JOBS = 2
-CONTEXT_DETAIL_CHARS = 1200
+CONTEXT_JOBS = 2                # only the last couple
+CONTEXT_DETAIL_CHARS = 1200     # only the readable head of a long report
 
 
 class JobStore:
@@ -44,9 +37,7 @@ class JobStore:
     on_done = fn(job dict), called off-thread when a job finishes."""
 
     # The codex lane keeps a shell (the claude lane has none), so --dry-run
-    # can't gate a worker the way Dispatch gates Tier 1/2. Telling it is the
-    # honest option: advisory, not enforcement, so a dry-run drill doesn't
-    # start sessions on a TV someone is watching.
+    # can't gate a worker the way Dispatch gates Tier 1/2. Advisory only.
     DRY_NOTE = ("[The couch system is in DRY-RUN: research and report only. "
                 "Do not run couch.py, exlink.py, or any other command that "
                 "changes system state.] ")
@@ -106,10 +97,8 @@ class JobStore:
                          name="job-worker").start()
 
     def enqueue(self, task, asked=None):
-        """-> (ok, spoken detail). Truthful busy beyond the cap. `asked` is
-        the user's own words (dispatch.Utterance) - an ARGUMENT, so this
-        store holds no mutable side channel; None on the chord lane and the
-        REPL, which have no transcript to quote."""
+        """-> (ok, spoken detail); busy beyond QUEUE_CAP. `asked` is the user's
+        own words (dispatch.Utterance), None on the chord lane and the REPL."""
         with self._lock:
             jobs = self._load()
             active = [j for j in jobs if j["status"] in (QUEUED, RUNNING)]
@@ -118,17 +107,13 @@ class JobStore:
             job = {"id": uuid.uuid4().hex[:8], "task": task, "status": QUEUED,
                    "provider": self.adapter.exe, "created": int(time.time()),
                    "summary": "", "detail": "", "read": True,
-                   # The conversation span that asked for this, frozen as a
-                   # W3C traceparent. Captured HERE because this is the last
-                   # moment it is still the active span - the worker runs on
-                   # another thread minutes later. None when tracing is off,
-                   # and it rides in the state file so a job that outlives a
-                   # restart still reports under the turn that queued it.
+                   # The asking span as a W3C traceparent - here is the last
+                   # moment it is active; the worker runs on another thread
+                   # minutes later. None when tracing is off.
                    "trace": tracing.carrier(),
                    "session": events.current().get("session"),
-                   # What the USER said, beside the brief the MODEL wrote.
-                   # Both, because the replay needs a true user turn and the
-                   # brief is not one (see session_runtime.job_messages).
+                   # The user's words beside the brief the model wrote: replay
+                   # needs a true user turn and the brief is not one.
                    "asked": asked}
             self._save(jobs + [job])
         self.log("job_queued", job=job["id"], task=task[:200])
@@ -173,8 +158,6 @@ class JobStore:
                              finished=int(time.time()),
                              summary=r["summary"], detail=r["detail"])
                 emit = self.log if r["ok"] else self.log.error
-                # What it cost and what it touched, not just that it ended -
-                # status alone leaves "what came back" unanswerable.
                 emit("job_done" if r["ok"] else "job_failed", job=job["id"],
                      status=status, dur_ms=round((time.time() - t0) * 1000),
                      session=job.get("session"), summary=r["summary"][:200],
@@ -195,10 +178,8 @@ class JobStore:
     # -- the voice surface ----------------------------------------------------
 
     def cancel_queued(self):
-        """Cancel every QUEUED job. A RUNNING subprocess is not killed - the
-        honest answer is that it finishes or times out, since killing an
-        agent's child process tree cleanly on Windows is real work for a rare
-        want. Returns (n_cancelled, running_now)."""
+        """Cancel every QUEUED job. A RUNNING subprocess is not killed; it
+        finishes or times out. Returns (n_cancelled, running_now)."""
         with self._lock:
             jobs = self._load()
             cancelled = 0
@@ -220,10 +201,9 @@ class JobStore:
                     if j["status"] in (DONE, FAILED) and not j.get("read")]
 
     def latest_result(self):
-        """Newest finished job BY COMPLETION TIME, unread first - the 'what
-        did you find' answer. File order won't do: _save regroups live-then-
-        done, so a job that finished last can sit earlier in the file. Does
-        NOT mark read; the caller does once it was spoken."""
+        """Newest finished job by COMPLETION TIME, unread first - the 'what did
+        you find' answer. Not file order: _save regroups live-then-done, so a
+        job that finished last can sit earlier. Does not mark read."""
         with self._lock:
             done = [j for j in self._load() if j["status"] in (DONE, FAILED)]
         if not done:
@@ -236,11 +216,9 @@ class JobStore:
         self._update(job_id, read=True)
 
     def for_context(self):
-        """Recent finished jobs, oldest first - what the assistant should
-        already know when you follow up on an announcement. Read jobs still
-        belong here - hearing a result is exactly when you're most likely to
-        ask about it - they just age out on the shorter window (the constants
-        up top carry the story)."""
+        """Recent finished jobs, oldest first - what the assistant should know
+        when you follow up on an announcement. Read jobs are included but age
+        out on the shorter CONTEXT_READ_AGE_S window."""
         now = time.time()
         with self._lock:
             done = [j for j in self._load()

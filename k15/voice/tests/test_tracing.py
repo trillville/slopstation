@@ -1,11 +1,7 @@
-"""Blind test: agent tracing wiring. Run:
+"""Blind test: agent tracing wiring - the auth header, endpoint and
+trace-level attributes Langfuse renders from, and the fail-soft rule that
+tracing must never cost a voice session. Run:
     .venv\\Scripts\\python tests\\test_tracing.py
-
-Everything Langfuse actually renders from is asserted here - the auth header,
-the endpoint, and the trace-level attributes - because none of it is visible
-until traces are already flowing wrongly. The rest of the file is the rule
-that matters more than any of it: tracing must never be able to cost a voice
-session, so every entry point is driven into failure and expected to shrug.
 """
 import base64
 import sys
@@ -28,7 +24,7 @@ def main():
     assert tracing.enabled(REAL)
     assert not tracing.enabled({})
     assert not tracing.enabled({"langfusePublicKey": REAL["langfusePublicKey"]})
-    # Template junk reads as absent, same rule as every other keyed lane.
+    # Template junk reads as absent, same as every other keyed lane.
     assert not tracing.enabled({"langfusePublicKey": "pk-lf-...",
                                 "langfuseSecretKey": "sk-lf-..."})
     print("  gate: both keys required, placeholders read as absent")
@@ -46,7 +42,6 @@ def main():
     assert us == "https://us.cloud.langfuse.com/api/public/otel/v1/traces", us
     assert tracing.endpoint({"voice": {"langfuseHost": "https://x.dev/"}}) \
         == "https://x.dev/api/public/otel/v1/traces"
-    # Missing/empty falls back rather than building a broken URL.
     assert tracing.endpoint({}) == tracing.DEFAULT_HOST + tracing.TRACES_PATH
     assert tracing.endpoint({"voice": {"langfuseHost": ""}}).startswith("https://")
     print(f"  endpoint: {us}")
@@ -70,15 +65,15 @@ def main():
     print("  attributes: name, session, user, tags; conversation id == session")
 
     # -- OTel attribute types --------------------------------------------------
-    # OTel accepts str/bool/int/float and homogeneous sequences of those. A
-    # dict or None is dropped at span creation, silently costing the field.
+    # OTel accepts str/bool/int/float and homogeneous sequences of those; a dict
+    # or None is dropped at span creation, silently costing the field.
     for k, v in tracing.span_attributes(session="s", turn="t").items():
         ok = isinstance(v, (str, bool, int, float)) or (
             isinstance(v, list) and all(isinstance(i, str) for i in v))
         assert ok, f"{k}={v!r} is not an OTel-legal attribute value"
     print("  types: every attribute is OTel-legal")
 
-    # -- fail-soft: the rule that outranks all of the above --------------------
+    # -- fail-soft --------------------------------------------------------------
     log = cglib.CapturingLog("voice")
 
     # No keys -> disabled quietly, NOT an error: the normal unconfigured state.
@@ -101,8 +96,8 @@ def main():
     assert log.find("tracing_setup_failed"), log.events()
     print("  fail-soft: missing keys and a throwing exporter both return False")
 
-    # Only meaningful once the venv has the OTel pins; skipped rather than
-    # failed without them, because that is the state setup() must survive.
+    # Only meaningful once the venv has the OTel pins; skipped without them,
+    # since that is the state setup() must survive.
     try:
         exp = tracing._exporter(
             {"voice": {"langfuseHost": "https://us.cloud.langfuse.com"}}, REAL)
@@ -113,9 +108,8 @@ def main():
         print("  exporter: SKIPPED - opentelemetry not installed in this venv")
 
     # -- background jobs: same trace, minutes later, another thread -----------
-    # The point of the whole mechanism: a job queued during a conversation must
-    # report UNDER that conversation, not as an orphan trace. Asserted on real
-    # trace ids from an in-memory exporter, never on how the UI looks.
+    # A job queued during a conversation must report UNDER that conversation,
+    # not as an orphan trace. Asserted on real trace ids, not on the UI.
     tracing._on = False
     assert tracing.carrier() is None            # off -> nothing to propagate
     with tracing.job_span("j1", "task", None) as j:
@@ -149,7 +143,7 @@ def main():
             parent_trace = conv.get_span_context().trace_id
             carrier = tracing.carrier()          # frozen while conv is active
         assert carrier and "traceparent" in carrier, carrier
-        # The conversation span has now ENDED - this is the real situation.
+        # The conversation span has now ENDED - the real situation.
         with tracing.job_span("j2", "research couch co-op", carrier,
                               session="36d22d", provider="claude") as j:
             j.step("WebSearch", "couch co-op 2026", "ten results")

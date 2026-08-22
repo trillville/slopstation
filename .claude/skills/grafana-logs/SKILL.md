@@ -6,28 +6,25 @@ description: Read the couch system's telemetry from Grafana Cloud Loki - launche
 # Reading the couch system's logs
 
 Every event from both machines lands in Grafana Cloud Loki. Query it from the
-terminal — never make the user open a browser to answer a question you can
-answer here.
+terminal — never send the user to a browser for something answerable here.
 
 ```bash
 python .claude/skills/grafana-logs/query.py '{service="k15", level="error"}' --since 24h
 ```
 
 Stack `narrownuthatch2355` (US West), `https://narrownuthatch2355.grafana.net`.
-When a query returns nothing and you suspect the pipeline rather than the
-query, [troubleshooting.md](../../../docs/troubleshooting.md) § *Telemetry
-stopped arriving* is the runbook.
+A query that returns nothing may mean the pipeline is down rather than the
+query being wrong: check Alloy is running on the machine in question, then
+that its `config.alloy` points at the stack above.
 
 Credentials come from `k15/secrets.json` (gitignored). **Worktrees have no
-copy of it**; the script falls back to the enclosing checkout's
-`k15/secrets.json` automatically, so run it from wherever you are — a
-credentials error means neither checkout has them (env
+copy of it**; the script falls back to the enclosing checkout's automatically,
+so a credentials error means neither checkout has them (env
 `GC_LOKI_USER`/`GC_LOKI_READ_TOKEN` also works).
 
-## The data model — read this before writing a query
+## The data model
 
-Four **labels**. Selecting on these is cheap and they are the only things
-allowed in `{...}`:
+Four **labels** — cheap to select on, and the only things allowed in `{...}`:
 
 | Label | Values |
 |---|---|
@@ -44,7 +41,7 @@ first: `event`, `turn`, `session`, `dur_ms`, `err`, `appid`, `score`, …
 {service="k15"} | json | turn="9f2c1a"    # field — needs the parser
 ```
 
-## The one move that matters: follow a `turn`
+## Follow a `turn`
 
 Every user intent — a chord press, a wake word — mints a 6-hex `turn` id that
 travels through dispatch, `couch.py`, the SSH boundary, and the gaming PC's
@@ -55,8 +52,7 @@ python .claude/skills/grafana-logs/query.py '{service=~"k15|gamepc"} | json | tu
 ```
 
 When investigating any failure: find the failing event, take its `turn`, then
-run that. Do not reconstruct a timeline by eyeballing timestamps — that is the
-exact problem this system was built to remove.
+run that. Do not reconstruct a timeline from timestamps.
 
 ## Recipes
 
@@ -86,44 +82,40 @@ Time to READY, the number the whole system is judged on:
 
 - **launch**: `launch_start` `wol_sent` `ssh_up` `tv_on` `tv_state_unknown` `enter_dispatched` `host_ready` `launch_failed` `launch_aborted` `exit_dispatched` `cancel_void_failed` `session_ended` `session_idle` `exlink_send` `exlink_nak` `enter_died` `enter_redispatched`
   - `launch_start` carries `tv` on rigs with `tvIp`: the set's RAW PowerState
-    as the launch found it — `on`, `standby` (shallow), `""` (deep: hours
-    off, still answering with the field drained) or `unreachable` (a
-    sentinel — the emitter drops None fields, so the read's own None cannot
-    ship). Whether `""` predicts a refused wake is the open measurement.
+    as the launch found it — `on`, `standby` (shallow), `""` (deep: hours off,
+    still answering with the field drained) or `unreachable` (a sentinel; the
+    emitter drops None fields, so the read's own None cannot ship). Whether
+    `""` predicts a refused wake is unmeasured.
   - `tv_on` is the TV evidence (couch.py `tv_poll`) confirming the set
-    REPORTS on. It rides the READY wait — Enter is dispatched immediately
-    and is never gated on it, so a healthy launch pays nothing. Its
-    `dur_ms` is elapsed-since-intent like every `dur_ms`, and polling
-    starts only after `ssh_up` — so cold boots censor it (the PC
+    REPORTS on. It rides the READY wait — Enter is never gated on it, so a
+    healthy launch pays nothing. Its `dur_ms` is elapsed-since-intent, and
+    polling starts only after `ssh_up`, so cold boots censor it (the PC
     dominates); read frame-to-lit from warm-PC launches only.
     `tv_state_unknown` (WARN) is the evidence standing down after
     consecutive unreadable answers — the launch proceeds on the legacy
-    blind path. Where it bites: while the set answers not-on it re-pokes
-    `power_on` every ~6 s (so a set that takes the second frame lights
-    inside Enter's own retry and no death is ever recorded), and after
-    `enter_died` the rescue waits for the set's "on" before spending its
-    one redispatch — a set that keeps ANSWERING not-on fails with
-    `launch_failed` err `TV never reported on` (~60-90 s all told)
-    instead of redispatching into the dark and burning the full window.
-  - `enter_died` means the PC's Enter task exited WITHOUT writing the marker —
-    the launch was lost at that moment, where before this event existed the
-    K15 just polled a dead task for the rest of its READY wait.
-    `enter_redispatched` is the rescue that follows it: another `power_on`,
-    another Enter. A turn carrying both and then `host_ready` is one the TV
-    refused to wake for on the first ask, so **`enter_died` counts the TV**,
-    not the PC — on rigs with `tvIp` the gate makes it rare (the TV story
-    moves to `tv_on`/`tv_state_unknown`), and on older deploys it stays the
-    closest thing to a TV-power metric there is.
+    blind path. While the set answers not-on it re-pokes `power_on` every
+    ~6 s (so a set that takes the second frame lights inside Enter's own
+    retry and no death is recorded), and after `enter_died` the rescue
+    waits for the set's "on" before spending its one redispatch — a set
+    that keeps answering not-on fails with `launch_failed` err
+    `TV never reported on` (~60-90 s all told).
+  - `enter_died` means the PC's Enter task exited WITHOUT writing the marker;
+    the launch was lost at that moment. `enter_redispatched` is the rescue
+    that follows: another `power_on`, another Enter. A turn carrying both and
+    then `host_ready` is one the TV refused to wake for on the first ask, so
+    **`enter_died` counts the TV**, not the PC — rare on rigs with `tvIp`
+    (the TV story moves to `tv_on`/`tv_state_unknown`), and on older deploys
+    the closest thing to a TV-power metric there is.
   - `launch_aborted` is a deliberate stop, not a failure: no `last_error`,
-    and the Puck is deliberately not buzzed. `err=KeyboardInterrupt` is
-    Ctrl-C in the launch console; `err=Cancelled` is a voice "end the
-    session" against an in-flight launch (the `state/cancel` marker), and
-    `cancelled_by` carries the cancelling utterance's turn so the two
-    stories join.
-- **manual**: `exlink_send` `exlink_nak` `exlink_probe` `tvremote_send` `tvremote_fail` — the same events from a hand-run
-  `python exlink.py <cmd>`, kept off the launch lane so operator probing does
-  not skew launch metrics. Drop the lane from a query to see every frame
-  whoever sent it: `| json | event="exlink_send"`
+    and the Puck is not buzzed. `err=KeyboardInterrupt` is Ctrl-C in the
+    launch console; `err=Cancelled` is a voice "end the session" against an
+    in-flight launch (the `state/cancel` marker), and `cancelled_by` carries
+    the cancelling utterance's turn.
+- **manual**: `exlink_send` `exlink_nak` `exlink_probe` `tvremote_send`
+  `tvremote_fail` — the same events from a hand-run `python exlink.py <cmd>`,
+  kept off the launch lane so operator probing does not skew launch metrics.
+  Drop the lane to see every frame whoever sent it:
+  `| json | event="exlink_send"`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat`
   - Room ducking (TvDucker): `tv_ducked` / `tv_unducked` (both carry `steps` =
     verified movement vs `asked`, plus `vol` and `ok`; `tv_unducked` may carry
@@ -134,23 +126,21 @@ Time to READY, the number the whole system is judged on:
     does not contain "tv_duck", so match `tv_` or the event names, never
     `|= "tv_duck"`.
   - `gate_match`/`gate_miss`/`stt_final` carry `confidence` (mean per-word, from
-    Flux) — the axis for "was that a bad transcript or a bad phrasing?", and
-    absent on turns where Flux sent no per-word data.
+    Flux) — bad transcript vs bad phrasing. Absent on turns where Flux sent no
+    per-word data.
   - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
     session build. Deepgram's ceiling is 100 keyterms (measured; 110 is a 400
     on connect) and `headroom` is what is left of it, so alert on
-    `headroom < 5` rather than waiting for `keyterms_capped`: by the time
-    truncation fires the room is already worse at game names.
+    `headroom < 5` rather than waiting for `keyterms_capped`.
   - `audio_device_wait` — the configured mic is not in the device table;
     `waited_s` is how long the agent has been deaf waiting for it. A rebuild
     never falls back to the system default, so this event standing still is
     the outage.
-- **voice, assistant lane**: `tool_call` — **one per tool the assistant ran**,
-  with `tool`, `ok` and truncated `args`; this is how you learn it called
-  `search_store` with `tags:["Co-op","Rogue-like"]` rather than guessing from
-  the reply. Nothing before 2026-08-14 has it. Also `tool_refused` (the
-  boundary rejecting a call, e.g. `reason=unknown_appid`), `job_requested`
-  (the background brief), `web_search` (provider-executed search).
+- **voice, assistant lane**: `tool_call` — one per tool the assistant ran, with
+  `tool`, `ok` and truncated `args`. Nothing before 2026-08-14 has it. Also
+  `tool_refused` (the boundary rejecting a call, e.g. `reason=unknown_appid`),
+  `job_requested` (the background brief), `web_search` (provider-executed
+  search).
 - **voice, couch verbs**: `nav_dispatched` `quit_dispatched` — both carry the
   host's `answer`, and `FAILED:1` on either means the PC-side scheduled task
   is not registered, not that the verb is broken. Plus `collection_resolved`
@@ -160,21 +150,20 @@ Time to READY, the number the whole system is judged on:
   `store_fetch_failed` `hltb_failed`
 - **listener**: `chord` `chord_busy` `chord_partial` `puck_present` `puck_vanished` `puck_standoff` `armed` `heartbeat`
   - `chord_partial` carries the button byte actually seen (`btn`) against the
-    one the chord needs (`want`), rate-limited to one per 10 s. It is the
-    answer to "the chord did nothing and the Puck never buzzed": partials
-    present means buttons ARE arriving and the press was wrong or too short;
-    `armed` with no partials at all means the Puck enumerates and rumbles but
-    reports nothing, which is a claim/firmware problem, not a hold problem.
+    one the chord needs (`want`), rate-limited to one per 10 s. When the chord
+    did nothing and the Puck never buzzed: partials present means buttons ARE
+    arriving and the press was wrong or too short; `armed` with no partials at
+    all is a claim/firmware problem, not a hold problem.
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
 - **background jobs**: `job_queued` `job_running` `job_done` `job_failed`
-  `job_announced` `job_orphaned` — these are on `lane="voice"`, not a lane of
-  their own: the JobStore logs through the voice agent's logger. Select them by
-  `event`, and `job_done` carries `cost_usd` / `turns` / `web_searches`.
+  `job_announced` `job_orphaned` — on `lane="voice"`, not a lane of their own
+  (the JobStore logs through the voice agent's logger), so select them by
+  `event`. `job_done` carries `cost_usd` / `turns` / `web_searches`.
 - **steam**: `enrolled` `token_mint_failed` `token_transfer_failed`
   `install_queued` `install_failed` — the account session. The lane label means
-  **hand-run**, exactly like `manual` does for `exlink.py`: the agent passes its
-  own logger in, so a session driven by voice files these under `lane="voice"`
-  and only `python steam_session.py …` at the console lands on `lane="steam"`.
+  **hand-run**, like `manual` does for `exlink.py`: the agent passes its own
+  logger in, so a voice-driven session files these under `lane="voice"` and
+  only `python steam_session.py …` at the console lands on `lane="steam"`.
   Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
 
@@ -185,15 +174,14 @@ Two fields that mislead if read at face value:
 
 - **`ack` on `exlink_send` is not confirmation.** It means the TV's serial
   receiver accepted the frame; Ex-Link here is send-only and nothing reads TV
-  power back. A `power_on` can ack and leave the set dark — that is exactly
-  what happened on 2026-08-13.
+  power back. A `power_on` can ack and leave the set dark (2026-08-13).
 - **`primary_height` on `enter_failed`** separates the two failure shapes: the
   desk's own height means the TV never came up, while anything else (or `-1`)
   means the failed apply detached the desktop and left no active display.
 
-When a launch fails on the profile, the gaming PC now also copies the
-interesting lines of DisplayMagician's own log next to the transcript, so it
-ships under `lane="pc-transcript"` like everything else in that folder:
+When a launch fails on the profile, the gaming PC copies the interesting lines
+of DisplayMagician's own log next to the transcript, so it ships under
+`lane="pc-transcript"`:
 
 ```logql
 {service="gamepc", lane="pc-transcript"} |= "DisplayMagician"
@@ -201,19 +189,14 @@ ships under `lane="pc-transcript"` like everything else in that folder:
 
 ## How to answer well
 
-1. **Start narrow, widen if empty.** `--since 6h` is the default; go wider
-   only when it returns nothing.
-2. **Lead with the finding, not the query.** "The 9:14pm launch failed because
-   the PC never reported READY — the Enter task threw on the TV-GAMING
-   profile" beats pasting 40 log lines.
-3. **Quote the few lines that prove it**, not the whole result.
-4. **`dur_ms` is measured from the chord or wake word**, not from when that
-   step started. It is elapsed-since-intent, so it always increases down a
-   launch.
-5. **A quiet result can be the answer.** No `heartbeat` means a dead lane; no
-   `launch_failed` means launches are fine. Say so rather than reporting
-   "nothing found".
-6. **`couch.log` on the K15 is the offline mirror.** If Loki has a gap, the
+1. **Start narrow, widen if empty.** `--since 6h` is the default.
+2. **Lead with the finding, not the query**, and quote only the few lines that
+   prove it.
+3. **`dur_ms` is measured from the chord or wake word**, not from when that
+   step started — elapsed-since-intent, so it always increases down a launch.
+4. **A quiet result can be the answer.** No `heartbeat` means a dead lane; no
+   `launch_failed` means launches are fine. Say so rather than "nothing found".
+5. **`couch.log` on the K15 is the offline mirror.** If Loki has a gap, the
    local JSONL (`k15/logs/k15-*.jsonl`) is the source of truth — lines read
    while the shipper was failing are dropped, not queued.
 

@@ -1,8 +1,5 @@
 """Blind test: structured events - the JSONL shape, levels, correlation
-context, the secret scrubber, daily rollover, and fail-soft.
-
-The scrubber test is the load-bearing one: events leave the house now, so a
-key reaching a field is a real leak, not a cosmetic bug. Run:
+context, the secret scrubber, daily rollover, and fail-soft. Run:
     .venv\\Scripts\\python tests\\test_events.py
 """
 import json
@@ -48,8 +45,7 @@ def main():
     assert "appid" not in r and r["status"] == "READY"
 
     # -- levels ----------------------------------------------------------------
-    # level is positional-only (see the collision test below), so it is passed
-    # positionally here too - the same way cglib._Log calls it.
+    # level is positional-only, so it is passed positionally, as cglib._Log does.
     r = events.emit("launch", "launch_failed", events.ERROR, err="boom")
     assert r["level"] == "error"
     assert events.human("launch_failed", events.ERROR, err="boom") \
@@ -58,10 +54,9 @@ def main():
         "info is the default and should not shout"
 
     # -- a caller field may be named ANYTHING ----------------------------------
-    # A caller kwarg colliding with an emitter key raises TypeError at argument
-    # BINDING - before any try/except inside emit can run, so it crash-loops
-    # the lane telemetry exists to describe. Hence positional-only parameters,
-    # emitter keys winning, and the caller's value kept under f_*.
+    # A colliding caller kwarg raises TypeError at argument BINDING, before any
+    # try/except inside emit - hence positional-only parameters, emitter keys
+    # winning, and the caller's value kept under f_*.
     log = cglib.CapturingLog("voice")
     for name in ("ts", "level", "env", "service", "lane", "event", "host",
                  "turn", "session", "job", "dur_ms", "err", "msg", "self"):
@@ -101,8 +96,7 @@ def main():
     print("  scrub: by value and by field name, in JSONL and the human line")
 
     # -- fail-soft -------------------------------------------------------------
-    # Unwritable dir (parent is a file) must not raise: telemetry never costs
-    # a session.
+    # Unwritable dir (parent is a file) must not raise.
     blocker = tmp / "blocker"
     blocker.write_text("", encoding="utf-8")
     events.LOG_DIR = blocker / "sub"
@@ -128,8 +122,7 @@ def main():
     assert not old.exists(), "expired daily file survived the rollover prune"
     print(f"  rollover: file older than {events.TTL_DAYS}d pruned, current kept")
 
-    # -- heartbeat -------------------------------------------------------------
-    # The signal absence is measured against, so it has to actually tick.
+    # -- heartbeat: the signal absence is measured against ---------------------
     events._last_day = None
     events.start_heartbeat("listener", interval_s=0.05, source="unit")
     time.sleep(0.3)
@@ -137,7 +130,7 @@ def main():
              if r["event"] == "heartbeat"]
     assert len(beats) >= 3, f"only {len(beats)} beats in 0.3s at 50ms"
     assert beats[0]["lane"] == "listener" and beats[0]["source"] == "unit"
-    # Daemon, or a dead agent would hang on exit instead of dying cleanly.
+    # Daemon, or a dead agent hangs on exit instead of dying cleanly.
     assert all(t.daemon for t in __import__("threading").enumerate()
                if t.name.startswith("heartbeat-"))
     print(f"  heartbeat: {len(beats)} ticks on a daemon thread, JSONL only")

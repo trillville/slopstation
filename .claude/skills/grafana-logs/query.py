@@ -5,9 +5,9 @@
     python query.py --lane voice --event gate_miss
     python query.py 'sum(count_over_time({service="k15"} | json | event="wake" [1h]))' --since 7d
 
-Prefer the flags. PowerShell strips double quotes when passing a raw LogQL
-string to a native process, which Loki reports as an error about a query you
-never typed; the flags compose it here instead.
+Prefer the flags: PowerShell strips double quotes when passing a raw LogQL
+string to a native process, and Loki then reports a syntax error for a query
+that was never typed.
 
 Stdlib only, so it runs from any checkout without a venv.
 
@@ -36,8 +36,7 @@ REPO = pathlib.Path(__file__).resolve().parents[3]
 def repo_roots():
     """This checkout first; then, when it is a worktree under
     <repo>/.claude/worktrees/<name>, the enclosing checkout - gitignored
-    files (secrets.json) exist only where a human put them, which is the
-    main checkout, not the worktree an agent session happens to run in."""
+    files (secrets.json) exist only in the main checkout."""
     roots = [REPO]
     if REPO.parent.name == "worktrees" and REPO.parent.parent.name == ".claude":
         roots.append(REPO.parent.parent.parent)
@@ -126,11 +125,7 @@ def render_line(stream, ts_ns, line):
 
 
 def build(a):
-    """Compose LogQL from flags, so the common questions need no quoting at
-    all. PowerShell strips the double quotes out of a raw '{service="k15"}'
-    when handing it to a native process, and Loki answers with
-    'unexpected IDENTIFIER, expecting STRING' - a confusing error about a
-    query the user never actually typed. Flags sidestep it entirely."""
+    """Compose LogQL from flags, so the common questions need no quoting."""
     labels = {}
     if a.service:
         labels["service"] = a.service
@@ -139,8 +134,8 @@ def build(a):
     if a.level:
         labels["level"] = a.level
     labels["env"] = a.env
-    # A turn or session spans both machines by definition, so widen unless
-    # the caller pinned a service.
+    # A turn or session spans both machines, so widen unless the caller
+    # pinned a service.
     if (a.turn or a.session) and "service" not in labels:
         labels["service"] = "k15|gamepc"
 

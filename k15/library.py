@@ -1,21 +1,12 @@
 """Game-library index builder.
 
-Layer 1: installed games - `ssh gamepc games` (the Dispatch verb) when run on
-the K15, or --local-steam (direct ACF scan) on the gaming PC itself. Layers 2-3
-(owned/playtime via Steam Web API, metadata via appdetails + SteamSpy) merge
-into the same file.
+Layer 1 (installed) comes from `ssh gamepc games`, or --local-steam (ACF scan)
+when run on the gaming PC. Layers 2-3 (owned/playtime via the Steam Web API,
+metadata via appdetails + SteamSpy) merge into the same file. Layer 4 is live
+store data (deals, search, reviews, news, how-long-to-beat), not the catalog.
 
-Output: state/library.json  {"refreshed": iso-utc, "installed": [rows]}
-written atomically (tmp + os.replace). Consumers: Flux keyterms, the grammar's
-{game} slot, fuzzy launch resolution, and the assistant's catalog.
-
-Layer 4 (the store questions - deals, search, reviews, news, how-long-to-beat)
-is live Steam data rather than the catalog, and has its own section below.
-
-The voice agent calls sync() on a background thread at startup and after each
-session - installed refreshes when the PC is awake, deals are keyless, and
-owned/metadata run whenever a Steam key is present. The CLI verbs below are for
-manual/dev use.
+Output: state/library.json, written atomically. sync() runs on a background
+thread at startup and after each voice session.
 
 CLI:
     python library.py sync                        (every layer, as the agent does)
@@ -46,7 +37,7 @@ log = cglib.make_log("library")
 
 
 def fetch_installed_ssh():
-    """The production path (K15): the gaming PC enumerates its own ACFs."""
+    """Production path (K15): the gaming PC enumerates its own ACFs."""
     from couch import ssh
     return parse_games_json(ssh("games", timeout=30))
 
@@ -59,8 +50,7 @@ def parse_games_json(text):
 
 
 def fetch_installed_local():
-    """Running ON the gaming PC: same fields, no ssh. Mirrors the Dispatch
-    `games` verb so blind tests validate both against each other."""
+    """Running ON the gaming PC: same fields as the Dispatch `games` verb."""
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
         steam = winreg.QueryValueEx(k, "SteamPath")[0].replace("/", "\\")
@@ -78,8 +68,7 @@ def fetch_installed_local():
                 m = re.search(f'"{key}"\\s+"([^"]*)"', text)
                 if m:
                     f[key] = m.group(1)
-            # ASCII-only names, same rule as the Dispatch verb (encoding-proof
-            # across ssh/shell hops; (tm) glyphs are noise to voice anyway).
+            # ASCII-only, as the Dispatch verb: encoding-proof over ssh.
             name = _ascii(f.get("name", ""))
             if f.get("appid") and name and f["appid"] not in seen:
                 seen.add(f["appid"])
@@ -101,9 +90,7 @@ def load():
 
 
 def installed_name(appid):
-    """Installed title for an appid, or None. The one home for the lookup:
-    the assistant's tools and dispatch's BUSY message both name games with
-    it, and load() already fail-softs to {} on a missing/corrupt index."""
+    """Installed title for an appid, or None."""
     for r in load().get("installed", []):
         if r["appid"] == appid:
             return r["name"]
@@ -111,7 +98,7 @@ def installed_name(appid):
 
 
 def save(index):
-    _atomic_write(LIBRARY, index)               # tmp + os.replace, one home below
+    _atomic_write(LIBRARY, index)               # tmp + os.replace
 
 
 def refresh(local=False):
@@ -129,17 +116,13 @@ def refresh(local=False):
 
 
 def fetch_collections_ssh():
-    """The PC's Big Picture collections as [{name, id}] - the `collections`
-    Dispatch verb reads them from the cloud-storage file. K15-only (needs the
-    PC awake), same as installed."""
+    """Big Picture collections as [{name, id}]. Needs the PC awake."""
     from couch import ssh
     return parse_games_json(ssh("collections", timeout=15))
 
 
 def refresh_collections():
-    """Sync collection name->id into the index so the voice grammar can resolve
-    'show my roguelikes'. PC-dependent, fail-soft when asleep (the whole point
-    of the layer-1 pattern)."""
+    """Collection name->id into the index. Fail-soft when the PC is asleep."""
     try:
         rows = fetch_collections_ssh()
     except Exception as e:
@@ -174,8 +157,8 @@ _CTRL = {28: "full", 18: "partial"}          # Steam category ids
 
 
 def fetch_owned(api_key, steamid):
-    """Steam Web API: account-global playtime + recency (the canonical
-    source - ACF LastPlayed is per-machine). One call, own key only."""
+    """Account-global playtime + recency (ACF LastPlayed is per-machine).
+    One call, own key only."""
     import requests
     r = requests.get(
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/",
@@ -194,8 +177,8 @@ def fetch_owned(api_key, steamid):
 
 
 def fetch_meta_one(appid):
-    """appdetails (genres/controller/desc/score/year) + SteamSpy tags.
-    Caller paces requests; results are cached forever."""
+    """appdetails (genres/controller/desc/score/year) + SteamSpy tags. Caller
+    paces the requests."""
     import requests
     meta = {}
     r = requests.get("https://store.steampowered.com/api/appdetails",
@@ -234,8 +217,8 @@ def _save_meta(cache):
 
 def refresh_meta(appids, limit=200):
     """Top up NEW appids only, ~1 req/2 s (appdetails' unofficial ceiling).
-    Saves after EACH fetch: the crawl runs on a daemon thread that dies with
-    the agent, so a batched save would re-crawl from zero every restart."""
+    Saves after EACH fetch: the daemon crawl thread dies with the agent, so
+    batching would re-crawl from zero every restart. Cached forever."""
     cache = load_meta()
     todo = [a for a in appids if str(a) not in cache][:limit]
     for i, appid in enumerate(todo):
@@ -263,19 +246,9 @@ def refresh_owned():
 
 
 # --- layer 4: store questions (deals, search, reviews, news, hltb) ------------
-# Live store/Web-API queries that answer "what should I play or buy" rather than
-# "what do I own". Same fail-soft idioms as layers 2-3, but every fetch routes
-# through _get so a test swaps ONE seam (the couch.ssh pattern in dispatch.py).
-# This whole section is the pre-drawn fault line for a future steamstore.py:
-# split it out as a pure move if it outgrows a sitting, not before.
-#
-# Endpoint-shape confidence, since these are undocumented-but-stable and we
-# cannot see them from a keyless checkout: /appreviews and GetNewsForApp are the
-# only officially-documented ones. GetItems, GetWishlist, featuredcategories,
-# GetMostPlayedGames and /search/results are community-stable - so the parses
-# below read defensively (.get chains, tolerate missing keys) and the whole
-# lane degrades to a spoken "couldn't reach the store", never a crash. The live
-# smoke test in the bring-up guide is what confirms the real shapes on the rig.
+# Live store/Web-API queries; every fetch routes through _get, the one test
+# seam. Only /appreviews and GetNewsForApp are officially documented, so parses
+# read defensively and the lane degrades rather than crashing.
 
 STORE = "https://store.steampowered.com"
 API = "https://api.steampowered.com"
@@ -289,9 +262,7 @@ NOT_GAMES = {228980}                        # Steamworks Common Redistributables
 
 
 def _get(url, params=None, timeout=20):
-    """The one HTTP seam for layer 4 - tests replace this to feed canned JSON.
-    Returns parsed JSON or None (never raises): a store hiccup must degrade a
-    voice answer to "couldn't reach the store", never take down a tool call."""
+    """One HTTP seam for layer 4 - tests swap it. JSON or None, never raises."""
     import requests
     try:
         r = requests.get(url, params=params or {}, timeout=timeout,
@@ -304,8 +275,7 @@ def _get(url, params=None, timeout=20):
 
 
 def _cc():
-    """Country code for prices, from config.location.country (defaults US).
-    One home, so every price call is in the same currency the assistant quotes."""
+    """Country code for prices, from voice.location.country (defaults US)."""
     try:
         return (cglib.load_config().get("voice", {})
                 .get("location", {}).get("country") or "US").upper()
@@ -314,32 +284,25 @@ def _cc():
 
 
 def _ascii(s):
-    """Names go ASCII-only, the same rule the catalog fetchers use (encoding-
-    proof across every hop, and (tm)-glyphs are noise to voice)."""
+    """ASCII-only: encoding-proof across every hop, (tm) glyphs are noise."""
     return re.sub(r"[^\x20-\x7E]", "", s or "").strip()
 
 
 def _tagkey(s):
-    """A store tag reduced to letters and digits, so spoken/model spellings
-    meet Steam's: rogue-like == Roguelike, 'co op' == Co-op."""
+    """Letters and digits only: rogue-like == Roguelike, 'co op' == Co-op."""
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
 def _store_items(appids, cc=None):
-    """IStoreBrowseService/GetItems - the batch name/price/discount workhorse,
-    keyless. {appid: {name, price, discount, final}} for the appids it could
-    resolve; missing ones are simply absent (fail-soft per item). Review scores
-    are deliberately NOT here: GetItems returns no review block (only an ESRB
-    game_rating), so per-game sentiment comes from fetch_reviews instead - one
-    call per title, too many to fold into a batch."""
+    """GetItems - batch name/price/discount, keyless. Unresolved appids are
+    simply absent. No review scores: GetItems returns no review block (only an
+    ESRB game_rating), so sentiment comes from fetch_reviews."""
     appids = [int(a) for a in appids if int(a) not in NOT_GAMES]
     if not appids:
         return {}
     cc = cc or _cc()
     out = {}
-    # GetItems caps a batch at 100 - CHUNK past it rather than truncate, or a
-    # 100+ wishlist silently loses every deal past the cap. Only refresh_deals
-    # (off-turn) ever sends more than one chunk; in-turn callers pass <=20.
+    # GetItems caps a batch at 100 - chunk, or a 100+ wishlist loses deals.
     for i in range(0, len(appids), 100):
         body = {
             "ids": [{"appid": a} for a in appids[i:i + 100]],
@@ -364,12 +327,10 @@ def _store_items(appids, cc=None):
 
 
 def fetch_wishlist_on_sale(steamid, cc=None):
-    """Keyless IWishlistService/GetWishlist -> GetItems for prices -> the ones
-    actually discounted, best deal first."""
+    """Keyless GetWishlist -> GetItems -> the discounted ones, best first."""
     d = _get(f"{API}/IWishlistService/GetWishlist/v1/", {"steamid": steamid})
     items = ((d or {}).get("response", {}) or {}).get("items", []) or []
-    # int() the appids: GetItems keys its result by int, so a string appid from
-    # the API would silently miss the price lookup and drop the game.
+    # GetItems keys by int; a string appid would silently drop the game.
     appids = [int(it["appid"]) for it in items if it.get("appid")]
     priced = _store_items(appids, cc)
     on_sale = [{"appid": a, **priced[a]} for a in appids
@@ -379,8 +340,7 @@ def fetch_wishlist_on_sale(steamid, cc=None):
 
 
 def fetch_specials(cc=None):
-    """Front-page specials feed (featuredcategories). Curated, ~a couple dozen -
-    the "what's on sale right now" starter, not an exhaustive sale list."""
+    """Front-page specials feed. Curated, ~a couple dozen, not exhaustive."""
     d = _get(f"{STORE}/api/featuredcategories",
              {"cc": cc or _cc(), "l": "english"})
     items = ((d or {}).get("specials", {}) or {}).get("items", []) or []
@@ -395,8 +355,7 @@ def fetch_specials(cc=None):
 
 
 def fetch_trending(cc=None):
-    """ISteamChartsService/GetMostPlayedGames -> names via GetItems. "What's
-    everyone playing" - keyless, top by concurrent players."""
+    """GetMostPlayedGames -> names via GetItems. Keyless, by concurrents."""
     d = _get(f"{API}/ISteamChartsService/GetMostPlayedGames/v1/")
     ranks = ((d or {}).get("response", {}) or {}).get("ranks", []) or []
     appids = [int(r["appid"]) for r in ranks[:20] if r.get("appid")]   # int keys, see wishlist
@@ -407,10 +366,7 @@ def fetch_trending(cc=None):
 
 
 def fetch_recently_played():
-    """GetRecentlyPlayedGames (last two weeks) - the honest "what have I been
-    playing". Own key only; empty without it. Two weeks is the whole window
-    Steam offers; a longer one would need daily playtime snapshots kept here,
-    which is a real feature and not a line to leave lying around unused."""
+    """GetRecentlyPlayedGames. Own key only. Two weeks is all Steam offers."""
     s = cglib.load_secrets()
     if not (cglib.real_key(s.get("steamApiKey")) and str(s.get("steamId64", "")).isdigit()):
         return []
@@ -424,8 +380,7 @@ def fetch_recently_played():
 
 def _tag_map():
     """{tag_name_lower: tagid} for turning a spoken genre into a search filter.
-    Cached weekly; keyless GetTagList is unavailable, so this needs the key and
-    fail-softs to {} (search then falls back to term-only)."""
+    Cached weekly; GetTagList needs the key, else {} and search goes term-only."""
     try:
         fresh = time.time() - TAGMAP.stat().st_mtime < TAGMAP_MAX_AGE_S
     except OSError:                             # missing or a stat race -> refetch
@@ -449,14 +404,9 @@ def _tag_map():
 
 
 def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=None):
-    """"Find me a co-op roguelike under $20 [on sale]". Keyless /search/results
-    for the filtered appid list, then GetItems for names/prices. Tag names ->
-    tagids via the cached map; unknown tags are dropped (term still applies)."""
-    # Match tags on letters and digits only. The model says what a person says
-    # ("Rogue-like", "Co op"); Steam's vocabulary is "Roguelike", "Co-op". An
-    # exact lookup dropped "Rogue-like" silently, leaving a co-op-only search
-    # that answered "a co-op roguelike under $20" with Dead by Daylight and
-    # Total War (2026-08-14) - a dropped filter is invisible in the result.
+    """Keyless /search/results for the appid list, then GetItems for names and
+    prices. Tag names -> tagids via the cached map; unknown tags are dropped."""
+    # An exact tag lookup dropped "Rogue-like" silently (2026-08-14).
     tmap = {_tagkey(k): v for k, v in _tag_map().items()}
     tagids = [str(tmap[_tagkey(t)]) for t in (tags or []) if _tagkey(t) in tmap]
     params = {"term": term or "", "cc": cc or _cc(), "l": "english",
@@ -485,8 +435,7 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
 
 
 def fetch_reviews(appid):
-    """Official /appreviews summary + a few recent snippets. The "what are people
-    saying about X / the new DLC" answer (query the DLC's own appid for that)."""
+    """/appreviews summary + recent snippets. For DLC, pass the DLC's appid."""
     d = _get(f"{STORE}/appreviews/{int(appid)}",
              {"json": 1, "language": "english", "filter": "recent",
               "num_per_page": 5, "purchase_type": "all"})
@@ -503,8 +452,7 @@ def fetch_reviews(appid):
 
 
 def fetch_news(appid, count=3):
-    """Official GetNewsForApp, patch notes preferred. "Any updates for X?" -
-    keyless, titles only (URLs are unspeakable and dropped)."""
+    """GetNewsForApp, patch notes preferred. Keyless, titles only."""
     d = _get(f"{API}/ISteamNews/GetNewsForApp/v2/",
              {"appid": int(appid), "count": count, "maxlength": 1,
               "tags": "patchnotes"})
@@ -519,10 +467,9 @@ def fetch_news(appid, count=3):
 
 
 def fetch_hltb(name):
-    """How-long-to-beat hours via the maintained howlongtobeatpy (it chases
-    HLTB's endpoint churn for us). Lazy + fail-soft on BOTH the import and the
-    call: the library is an optional pin (it drags in fake_useragent/bs4), and
-    beat-times never move, so results cache forever in FACET_CACHE."""
+    """Beat times via howlongtobeatpy, which chases HLTB's endpoint churn.
+    Lazy + fail-soft on BOTH import and call (the pin is optional, it drags in
+    fake_useragent/bs4). Beat-times never move, so results cache forever."""
     key = fuzzy_key(name)
     cache = _load_facets()
     if key in cache and "hltb" in cache[key]:
@@ -549,9 +496,7 @@ def fuzzy_key(name):
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 
-# -- caches (atomic tmp + os.replace) -----------------------------------------
-# The one home for the write idiom - save()/_save_meta() and the layer-4 caches
-# all route through it, so a JSON write is never half-flushed on a crash.
+# -- caches (every JSON write goes through _atomic_write: tmp + os.replace) ---
 
 def _atomic_write(path, obj):
     STATE.mkdir(exist_ok=True)
@@ -579,19 +524,14 @@ def load_deals():
 
 
 def refresh_deals():
-    """Precompute the feed answers into state/deals.json - list_games reads it
-    in ~0 ms, and worker_home reads the SAME file for grounded facts (no shell,
-    no re-scrape; AGENTS.md points at it). Own key only for the wishlist half;
-    specials is keyless, so a keyless rig still gets the sale feed."""
+    """Precompute the feed answers into state/deals.json, read by list_games
+    and worker_home. The wishlist half needs the key; specials is keyless."""
     s = cglib.load_secrets()
     steamid = str(s.get("steamId64", ""))
     specials = fetch_specials()
     wishlist = fetch_wishlist_on_sale(steamid) if steamid.isdigit() else []
-    # Both empty almost always means the store was unreachable, not that there
-    # is genuinely nothing on sale (specials is never empty on a live Steam).
-    # Don't stamp a poisoned snapshot: the staleness gate would then serve empty
-    # for DEALS_MAX_AGE_S. Skip, and the next sync retries - like refresh_owned,
-    # which also writes no stamp on failure.
+    # Both empty means the store was unreachable (specials is never empty on a
+    # live Steam); stamping it would serve empty for DEALS_MAX_AGE_S.
     if not specials and not wishlist:
         log.warn("sync_skipped", layer="deals", reason="no data (store unreachable?)")
         return 1
@@ -603,10 +543,9 @@ def refresh_deals():
     return 0
 
 
-# --- the sync orchestrator (all three layers, staleness- and key-gated) -------
-# Layer 1 (installed) needs the PC awake and fail-softs when it is asleep;
-# layers 2-3 come from the Steam cloud, so the catalog stays current even
-# while the rig sleeps.
+# --- the sync orchestrator (all layers, staleness- and key-gated) ------------
+# Layer 1 needs the PC awake and fail-softs when asleep; layers 2-3 come from
+# the Steam cloud, so the catalog stays current while the rig sleeps.
 OWNED_MAX_AGE_S = 6 * 3600      # playtime/recency drift slowly; one call/6h
 _sync_lock = threading.Lock()
 
@@ -621,24 +560,17 @@ def _iso_age(index, key):
 
 
 def sync(meta_limit=200):
-    """Full catalog refresh for the background thread: installed every call
-    (cheap, and install state changes), owned when stale >6h, metadata top-up
-    for any new appid. Steam layers are skipped without keys, never crash.
-    Non-reentrant: a second caller while one runs is a no-op, so rapid
-    session-boundary calls can't stack concurrent metadata crawls."""
+    """Full catalog refresh for the background thread: installed every call,
+    owned when stale >6h, metadata top-up for new appids. Steam layers are
+    skipped without keys. Non-reentrant, so calls can't stack meta crawls."""
     if not _sync_lock.acquire(blocking=False):
         return
     try:
-        # Layer 1b (collections) only when layer 1 SUCCEEDED - both need the PC
-        # awake, so gating on refresh()'s result spares a sleeping sync a second
-        # 15 s ssh timeout (and keeps the blind test offline: a mocked refresh
-        # returns non-zero, so this never reaches ssh there).
+        # Layer 1b only when layer 1 SUCCEEDED - both need the PC awake, so
+        # gating spares a sleeping sync (and the blind test) a 15 s ssh wait.
         if refresh() == 0:                          # layer 1 (fail-softs asleep)
             refresh_collections()                   # layer 1b (PC-dependent too)
-        # Layer 4 (deals) is keyless - GetWishlist/GetItems/featuredcategories
-        # all are - so it runs BEFORE the key gate: a rig with only a steamId64
-        # still gets "anything on my wishlist on sale". A handful of calls, not
-        # a per-appid crawl, so it needs no pacing under the lock.
+        # Layer 4 is keyless, so it runs BEFORE the key gate.
         d_age = _iso_age(load_deals(), "refreshed")
         if d_age is None or d_age > DEALS_MAX_AGE_S:
             refresh_deals()
@@ -661,10 +593,8 @@ def sync(meta_limit=200):
 
 
 def query_terms(limit=30):
-    """The words people use to ASK about games: distinct tags/genres across
-    the catalog, frequency-ranked. Fed to Flux as extra keyterms - titles
-    alone don't teach the STT this vocabulary, which is how a spoken "mech
-    games" transcribed as "met games"."""
+    """Distinct tags/genres, frequency-ranked, fed to Flux as keyterms: titles
+    alone don't teach the STT this vocabulary ("mech games" -> "met games")."""
     counts = {}
     for m in load_meta().values():
         for term in (m.get("tags") or []) + (m.get("genres") or []):
@@ -674,8 +604,8 @@ def query_terms(limit=30):
 
 
 def catalog_lines():
-    """Compact rows for the assistant's context - one line per game,
-    installed first. appid|name|tags|genres|hours|lastPlayed|installed|ctrl"""
+    """Compact rows for the assistant's context, installed first:
+    appid|name|tags|genres|hours|lastPlayed|installed|ctrl"""
     index = load()
     meta = load_meta()
     owned = {k: v for k, v in index.get("owned", {}).items()
@@ -692,11 +622,8 @@ def catalog_lines():
     for appid, name in rows.items():
         o = owned.get(str(appid), {})
         m = meta.get(str(appid), {})
-        # Day precision, not month: with two games both reading "2026-08"
-        # the model guessed at "what did I play last" and guessed wrong,
-        # then had to disown the answer as month-only data (2026-08-15).
-        # The store timestamp is exact; three more chars per row buy the
-        # question back.
+        # Day precision: month-only rows made the model guess wrong about
+        # what was played last (2026-08-15).
         last = (time.strftime("%Y-%m-%d", time.localtime(o["last"]))
                 if o.get("last") else "never")
         lines.append((appid in installed_ids, o.get("hours", 0), (
@@ -717,9 +644,8 @@ def catalog():
 
 
 def probe(args):
-    """Manual layer-4 smoke test - the one that confirms live endpoint shapes a
-    keyless checkout cannot see. `python library.py probe deals|search <terms>|
-    reviews <appid>|news <appid>|hltb <name>|trending|recent`."""
+    """Manual layer-4 smoke test: confirms live endpoint shapes a keyless
+    checkout cannot see. Verbs as in usage()."""
     what = args[0] if args else "deals"
     if what == "deals":
         refresh_deals(); out = load_deals()

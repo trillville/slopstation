@@ -1,17 +1,9 @@
-"""Game-title normalization: the bridge between what Steam calls a game
-(ARMORED CORE(tm) VI FIRES OF RUBICON) and what a human says on a couch
-("play armored core six").
+"""Game-title normalization: Steam's title string <-> what a human says.
 
-Two normal forms:
-  spoken_form  - light: lowercase, trademark junk stripped, roman numerals and
-                 number words unified to digits, apostrophes KEPT (transcripts
-                 have them). Feeds hassil {game} slot variants - hassil matches
-                 exact token sequences, so variants must look like transcripts.
-  fuzzy_norm   - aggressive: spoken_form minus all punctuation. Feeds rapidfuzz.
-
-Variant expansion per title: full form + subtitle-stripped form (text before
-":" or " - ") + trailing-number-stripped form. Variants claimed by more than
-one title are dropped as ambiguous (fuzzy resolution still sees full names).
+spoken_form feeds hassil {game} slot variants; hassil matches exact token
+sequences, so variants must look like transcripts - hence apostrophes KEPT and
+numerals unified to digits, which is what numerals=true makes Flux emit.
+fuzzy_norm drops the rest of the punctuation and feeds rapidfuzz.
 """
 import re
 
@@ -51,31 +43,14 @@ def variants(title):
 
 
 def keyterm_forms(title):
-    """The forms of one title worth teaching the STT, most-specific first.
+    """STT keyterms for one title, most-specific first.
 
-    A keyterm is matched against what the model EMITS, so it has to look like
-    a transcript rather than a store page. Sending Steam's own string taught
-    Flux nothing about "armored core six": ARMORED CORE VI FIRES OF RUBICON
-    boosted a phrase nobody says, half-fired, and produced ARMORED CORSICS /
-    ARMORED COSTS / ARMOR CORE 6 - 11 of 12 launches missed. spoken_form is
-    the normalisation the grammar and the fuzzy resolver already agree on
-    (and it emits digits, which is what numerals=true makes Flux write), so
-    all three now describe a title the same way.
-
-    Derived here rather than taken from variants() because the two want
-    different things. variants() is the resolver's key space, where an extra
-    key is free (ambiguity gets culled downstream); a keyterm is not free, it
-    spends boost, and the set has to cover the SHORT name a person actually
-    says even when Steam never writes it:
-
-      a lone digit with title text after it ends the name proper, so
-      'armored core 6 fires of rubicon' also teaches 'armored core 6' - the
-      whole reason the launch kept missing. One digit only: 40,000 is a
-      number, not a sequel, and cutting it yields 'warhammer 40'.
-
-      the trailing-number strip ('hades 2' -> 'hades', which is also how the
-      plain Hades gets covered) is skipped when what remains still ends in a
-      digit, for the same reason."""
+    Matched against what Flux EMITS, so spoken_form, not Steam's raw string
+    (which cost 11 of 12 launches). Unlike variants(), must cover the short
+    name a person says: a lone digit mid-title ends the name proper ('armored
+    core 6 fires of rubicon' -> 'armored core 6'). One digit only, and the
+    trailing-number strip is skipped when what remains still ends in a digit -
+    else 'warhammer 40,000' becomes 'warhammer 40'."""
     out = []
 
     def add(v):
@@ -98,11 +73,10 @@ def keyterm_forms(title):
 
 
 def variant_map(titles):
-    """variant -> canonical title, two-pass: every title's FULL spoken form
-    always claims its own key (Portal must not lose 'portal' to Portal 2's
-    number-stripped variant); derived variants (subtitle/number-stripped) only
-    claim unclaimed keys, and derived-vs-derived collisions drop the key
-    (ambiguous - fuzzy scoring handles those phrases instead)."""
+    """variant -> canonical title. A title's FULL spoken form always claims its
+    own key (Portal must not lose 'portal' to Portal 2's number-stripped
+    variant); derived variants claim only unclaimed keys, and
+    derived-vs-derived collisions drop the key as ambiguous."""
     out = {}
     for t in titles:
         full = spoken_form(t)
@@ -120,12 +94,9 @@ def variant_map(titles):
 
 
 def _resolver_from(by_name, threshold, margin=5):
-    """The fuzzy resolver over any {name: id} map. Fuzzy over the culled variant
-    space; a near-tie between DIFFERENT entries (token_set_ratio scores subsets
-    at 100, so 'warhammer' ties every 40K title) resolves to nothing rather than
-    a coin flip - saying no beats picking wrong. Shared by installed-title and
-    collection-name resolution: the machinery is identical, only the map's ids
-    differ (appid vs collection id)."""
+    """Fuzzy resolver over any {name: id} map. A near-tie between DIFFERENT
+    entries resolves to nothing: token_set_ratio scores subsets at 100, so
+    'warhammer' ties every 40K title."""
     if not by_name:
         return None
     vmap = {fuzzy_norm(v): canon
@@ -135,12 +106,11 @@ def _resolver_from(by_name, threshold, margin=5):
 
     def resolve(spoken):
         q = fuzzy_norm(spoken)
-        if q in vmap:                           # exact variant: no fuzz, no
-            canon = vmap[q]                     # ambiguity ('hades 2' must
-            return by_name[canon], canon        # never lose to 'hades')
-        # A bare pronoun/stopword ("it", "the") is a token-subset of some
-        # name and would score 100 on token_set_ratio - refuse short
-        # single-token queries so "play it" falls through to the assistant.
+        if q in vmap:                           # exact variant wins: 'hades 2'
+            canon = vmap[q]                     # must never lose to 'hades'
+            return by_name[canon], canon
+        # A bare pronoun ("it", "the") is a token-subset of some name and
+        # scores 100 - refuse it so "play it" reaches the assistant.
         if len(q.split()) == 1 and len(q) <= 3:
             return None, None
         hits = process.extract(q, keys, scorer=fuzz.token_set_ratio, limit=3)
@@ -163,9 +133,8 @@ def build_resolver(threshold, margin=5):
 
 
 def build_collection_resolver(threshold, margin=5):
-    """spoken -> (collection id, canonical name) or (None, None), over the
-    library's Big Picture collections (synced from the PC's `collections` verb).
-    None when there are no collections yet (asleep PC, or none created)."""
+    """spoken -> (collection id, canonical name) or (None, None), over Big
+    Picture collections. None when there are none yet."""
     rows = library.load().get("collections", [])
     return _resolver_from({r["name"]: r["id"] for r in rows
                            if r.get("name") and r.get("id")}, threshold, margin)

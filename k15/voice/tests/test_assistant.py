@@ -1,6 +1,6 @@
-"""Blind test: catalog + system prompt from the REAL library, tool-impl
-validation (unknown appids REFUSED at the boundary), pipecat/anthropic
-constructions with dummy keys, and a tolerant live metadata fetch. Run:
+"""Blind test: catalog + system prompt from the real library, tool-impl
+validation, pipecat/anthropic constructions with dummy keys, and a tolerant
+live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
 """
 import sys
@@ -35,12 +35,10 @@ def main():
     assert "CATALOG" in si and str(real_appid) in si
     # Mishear-repair: the model must know its input is STT, not typed text.
     assert "speech-to-text" in si and "mishears" in si
-    # Dynamic tail: the facts only config knows, each stated exactly once -
-    # the date (so "lately" resolves), input names, volume clamp, mute-is-blind.
+    # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
-    # A date with no zone is half a fact - the model closed the gap toward UTC
-    # and dated briefs tomorrow. CFG_MIN ships an empty location, which is a
-    # real deployment shape, so it must still say the day is local.
+    # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
+    # location is a real deployment shape and must still say the day is local.
     assert "local time" in si
     zoned = {**CFG_MIN["voice"],
              "location": {**CFG_MIN["voice"]["location"],
@@ -66,8 +64,7 @@ def main():
     assert not impls["control"]({"action": "self_destruct"})["ok"]
     r = impls["control"]({"action": "set_volume"})     # no level -> refused
     assert not r["ok"] and "level" in r["error"]
-    # stop_listening with nothing to stop (the REPL, the probes): refused
-    # truthfully rather than reporting a mic it never closed.
+    # stop_listening with nothing to stop (REPL, probes): refused, not faked.
     r = impls["stop_listening"]({})
     assert not r["ok"] and "nothing is listening" in r["error"], r
     stops = []
@@ -75,10 +72,9 @@ def main():
                                   on_stop_listening=lambda: stops.append(1))
     r = simpls["stop_listening"]({})
     assert r["ok"] and stops == [1], (r, stops)
-    # now_playing answers BOTH halves: what the PC runs, and whether the rig
-    # is busy. The lock is the launch-aware half - mid-launch the PC says 0
-    # and only session_active stops that reading as "idle" (2026-08-21, turn
-    # 0b785e: the bare 0 talked the user into cancelling their own launch).
+    # now_playing answers both halves: what the PC runs, and whether the rig is
+    # busy. Mid-launch the PC says 0, and only session_active stops that
+    # reading as idle (2026-08-21, turn 0b785e).
     import os
     import tempfile
     import time as _time
@@ -107,7 +103,7 @@ def main():
     d.begin_utterance("4c1d0e", "find me co-op deals")   # what the gate writes
     r = jimpls["background_task"]({"task": "find coop deals"})
     assert r["ok"] and "queued" in r["detail"]
-    # The user's words ride the utterance snapshot into the job record - the
+    # The user's words ride the utterance snapshot into the job record: the
     # tool call runs in a task whose ambient context predates the utterance.
     assert fake.asked == "find me co-op deals", fake.asked
     assert not jimpls["background_task"]({"task": "  "})["ok"]
@@ -127,8 +123,8 @@ def main():
     assert not r["ok"] and "unknown source" in r["error"], r
     r = impls["list_games"]({"source": "downloading"})     # no account session here
     assert not r["ok"] and "enrolled" in r["error"], r
-    # install_game is offered with OR without the account session: without one
-    # it navigates to the game's page so the controller can finish the job.
+    # install_game is offered with or without the account session: without one
+    # it navigates to the game page so the controller can finish the job.
     assert "install_game" in impls
     import types
     fake_steam = types.SimpleNamespace(available=lambda: True,
@@ -140,39 +136,39 @@ def main():
     r = impls["search_store"]({})                           # neither term nor tags
     assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
     # steamDataTools off -> the two store tools vanish from impls AND schemas,
-    # so the model stops SEEING them (selection pressure), not just calling them.
+    # so the model stops seeing them, not just calling them.
     gated = assistant.tool_impls(d, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated   # action tools aren't gated
     # 11 tools minus the two store ones the kill switch drops.
     assert len(assistant.function_schemas(gated)) == 9, len(assistant.function_schemas(gated))
-    # The facts-vs-judgment split is written into the descriptions the model reads.
+    # The facts-vs-judgment split lives in the descriptions the model reads.
     assert "not background_task" in str(assistant.TOOL_DEFS)
     print("  list_games/search_store: routed, refused cleanly, kill-switch gates")
 
     # --- fail-soft: an impl that RAISES must return an error, never propagate -
-    # (the audit's HIGH: an expired/revoked token has available()==True, then
-    # the steam call raises; the tool must answer, not break the turn.)
+    # A revoked token still has available()==True, then the steam call raises;
+    # the tool must answer, not break the turn.
     class RaisingSteam:
         def available(self): return True
         def install(self, a): raise RuntimeError("token revoked")
         def download_status(self): raise RuntimeError("token revoked")
     rimpls = assistant.tool_impls(d, log, steam=RaisingSteam())
     _isn, _nav = library.installed_name, d.nav
-    library.installed_name = lambda a: None      # not-installed -> reaches steam.install
+    library.installed_name = lambda a: None      # not installed -> steam.install
     navd = []
     d.nav = lambda kind, arg=None: (navd.append((kind, arg)),
                                     types.SimpleNamespace(ok=True, detail="showing"))[1]
     inst = rimpls["install_game"]({"appid": real_appid})
     library.installed_name, d.nav = _isn, _nav
-    # A DEAD token must not end the request: it falls through to the TV path.
+    # A dead token must not end the request: it falls through to the TV path.
     assert inst["ok"] and "press Install" in inst["detail"], inst
     assert navd == [("details", real_appid)], navd
     dl = rimpls["list_games"]({"source": "downloading"})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())
-    # And the function_schemas backstop: a handler whose impl raises still calls
-    # result_callback (with an error) instead of leaving the turn hung.
+    # function_schemas backstop: a handler whose impl raises still calls
+    # result_callback with an error instead of leaving the turn hung.
     import asyncio as _a
     def boom(_): raise ValueError("kaboom")
     sch = assistant.function_schemas({"get_now_playing": boom})[0]
@@ -184,10 +180,8 @@ def main():
     assert got and got[0]["ok"] is False, got
 
     # --- every tool call is RECORDED, including the ones that raise ----------
-    # Neither telemetry system could say which tool ran with what args (a
-    # tool-calling llm span traces as output:null), so function_schemas is the
-    # one home that emits it. A raising impl must still be recorded - that is
-    # exactly the call someone goes looking for.
+    # A tool-calling llm span traces as output:null, so function_schemas is the
+    # one place that emits which tool ran with what args.
     tlog = cglib.CapturingLog("voice")
     calls = {"n": 0}
     def spy(kind, query, status=None): calls["n"] += 1
@@ -211,8 +205,7 @@ def main():
     # log=None (REPL/bench/tests) stays quiet rather than crashing.
     assistant.function_schemas({"get_now_playing": boom})[0]
 
-    # --- nav tool: target->kind remap + catalog guard (only dispatch.nav was
-    # covered before, in test_dispatch) --------------------------------------
+    # --- nav tool: target->kind remap + catalog guard ------------------------
     seen = []
     d.nav = lambda kind, arg=None: (seen.append((kind, arg)),
                                     types.SimpleNamespace(ok=True, detail="showing"))[1]
@@ -222,20 +215,16 @@ def main():
     assert navimpls["nav"]({"target": "downloads"})["ok"]
     assert seen == [("details", real_appid), ("store", real_appid), ("downloads", None)], seen
     assert not navimpls["nav"]({"target": "bogus"})["ok"]
-    # An UNOWNED appid: the LIBRARY page is refused (they have no such page),
-    # the STORE page is NOT - that is exactly who a store page is for. The
-    # couch refused "open the store page for Big Walk" over this, and with the
-    # install dialog needing a button press either way, this IS the install
-    # path (2026-08-14).
+    # An unowned appid: the library page is refused, the store page is not -
+    # with the install dialog needing a button press, that IS the install path
+    # (2026-08-14).
     assert not navimpls["nav"]({"target": "game_page", "appid": 999999999})["ok"]
     assert navimpls["nav"]({"target": "store_page", "appid": 1478500})["ok"]
     assert seen[-1] == ("store", 1478500), seen[-1]
     assert not navimpls["nav"]({"target": "store_page", "appid": 0})["ok"]
 
-    # Collections by NAME, with the miss handing back the real list. STT turned
-    # "mech" into "neck" on the couch; with no collection path at all the
-    # assistant answered by navigating to the library three times while the
-    # user repeated themselves (2026-08-14).
+    # Collections by name, with the miss handing back the real list (STT turns
+    # "mech" into "neck", 2026-08-14).
     _load = library.load
     library.load = lambda: {"collections": [{"name": "mech", "id": "uc-m1"},
                                             {"name": "RPG", "id": "uc-r1"}]}
@@ -245,8 +234,7 @@ def main():
     assert not r["ok"] and set(r["collections"]) == {"mech", "RPG"}, r
     library.load = _load
 
-    # --- list_games success routing + get_game_details hltb-fallback (offline
-    # via mocked fetchers; test_deals covers the fetchers themselves) ---------
+    # --- list_games routing + get_game_details hltb-fallback, fetchers mocked -
     saved = (library.load_deals, library.fetch_trending, library.fetch_recently_played,
              library._store_items, library.fetch_hltb)
     library.load_deals = lambda: {"specials": [{"appid": 1, "name": "S"}],
@@ -258,16 +246,14 @@ def main():
     assert fresh["list_games"]({"source": "wishlist_on_sale"})["games"][0]["name"] == "W"
     assert fresh["list_games"]({"source": "trending"})["games"][0]["name"] == "T"
     assert fresh["list_games"]({"source": "recently_played"})["games"][0]["name"] == "R"
-    # hltb for a game with no catalog name resolves the name from the store,
-    # instead of the old "unknown appid" dead end.
+    # hltb for a game with no catalog name resolves the name from the store.
     hltb_calls = []
     library._store_items = lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}}
     library.fetch_hltb = lambda name: hltb_calls.append(name) or {"main": 20}
     r = fresh["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
     assert r["ok"] and r.get("hltb") == {"main": 20} and hltb_calls == ["Some Unowned Game"], r
-    # EVERY facet ask resolves a missing name now, not just hltb: nameless
-    # review payloads made the model match results to titles from memory
-    # (2026-08-15).
+    # Every facet ask resolves a missing name, not just hltb: nameless review
+    # payloads made the model match results to titles from memory (2026-08-15).
     _fr = library.fetch_reviews
     library.fetch_reviews = lambda a: {"desc": "Very Positive"}
     r = fresh["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
@@ -285,12 +271,12 @@ def main():
     assert all(t["type"] == "function" and "parameters" in t and "function" not in t
                for t in ot)
     assert all("input_schema" in t for t in at)
-    # Single-source-of-truth: the volume range lives in the prompt (clamped),
-    # not the tool def; session-start semantics live on launch_game.
+    # The volume range lives in the prompt (clamped), not the tool def;
+    # session-start semantics live on launch_game.
     assert "0-100" not in str(assistant.TOOL_DEFS)
     assert "never call start_session" in str(assistant.TOOL_DEFS)
-    # Closing the mic must never read as ending the session on the TV - the
-    # contrast is spelled out in BOTH places the model reads it.
+    # Closing the mic must never read as ending the session on the TV - spelled
+    # out in both places the model reads.
     assert "NOT end_session" in str(assistant.TOOL_DEFS)
     assert "never end the gaming session for them" in si
     assert set(assistant.BACKENDS) == {"anthropic", "openai"}
@@ -298,8 +284,8 @@ def main():
     assert assistant.BACKENDS["openai"].key == "openaiApiKey"
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
-    # Server-side search: knob off -> absent everywhere, prompt included; knob
-    # on -> each provider's NATIVE entry NEXT TO, never instead of, the tools.
+    # Server-side search: knob off -> absent everywhere; knob on -> each
+    # provider's native entry next to, not instead of, the tools.
     voice_off = CFG_MIN["voice"]
     assert assistant.server_tools(voice_off, "anthropic") == []
     assert assistant.server_tools(voice_off, "openai") == []
@@ -317,14 +303,13 @@ def main():
                                      "timezone": ""}}
     assert "user_location" not in assistant.server_tools(bare, "openai")[0]
     si_on = assistant.system_instruction({**CFG_MIN, "voice": voice_on})
-    # Two spoken-register guardrails: no citations in TTS, no narrating search.
+    # Spoken-register guardrails: no citations in TTS, no narrating search.
     assert "search the web" in si_on and "NO citations" in si_on
     assert "Never announce or offer to search" in si_on
     print("  server_tools: knob-gated, provider-native shapes, location folding")
 
-    # pause_turn (a long server-side search pauses the turn): the partial
-    # assistant content is re-sent as-is and the text accumulates - the
-    # API's documented contract.
+    # pause_turn: the partial assistant content is re-sent as-is and the text
+    # accumulates - the API's documented contract.
     import types
     b = assistant.AnthropicBackend({"anthropicApiKey": "x" * 24},
                                    "claude-haiku-4-5", voice=voice_on)
@@ -347,10 +332,9 @@ def main():
     assert calls[1]["messages"][-1]["role"] == "assistant"   # partial re-sent
     print("  pause_turn: continuation re-sent as-is, text accumulated")
 
-    # Pipecat constructions with dummy keys (no network at init), both
-    # providers, built through the PRODUCTION _make_llm: a test-local copy can
-    # pass a dict for `reasoning`, which the settings accept silently and only
-    # live inference rejects.
+    # Pipecat constructions with dummy keys, through the PRODUCTION _make_llm:
+    # a local copy can pass a dict for `reasoning`, which only live inference
+    # rejects.
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 11       # the full surface; install_game is always on
     import session_runtime
@@ -377,7 +361,7 @@ def main():
                                  voice="aura-2-thalia-en"))
     assert ua and aa and llm_a and llm_o and tts
     # Native tools ride ToolsSchema.custom_tools through the OpenAI Responses
-    # adapter VERBATIM, after the function tools - the shape run_session builds.
+    # adapter verbatim, after the function tools.
     from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
     ts = ToolsSchema(standard_tools=schemas,
                      custom_tools={AdapterType.OPENAI:

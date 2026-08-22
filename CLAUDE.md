@@ -1,17 +1,17 @@
 # Working in this repo
 
-Read `README.md` — especially **§ Code architecture** — before any structural
-change. The architecture rules live there (one home per README's "one home"
-principle); this file holds only the process rules an agent session needs.
+Read `README.md` first — it describes the machines, the components, and how to
+run and deploy them. This file holds the process rules an agent session needs.
 
 ## Non-negotiables
 
-- **The comments are load-bearing.** They carry incident history and
-  constraints, not narration. Never strip them, never let a refactor orphan
-  them — a moved function's comments move with it, verbatim.
-- **Moves are pure.** A commit that relocates code changes zero behavior.
-  Land behavior first, moves second, never both in one commit (README § Code
-  architecture has the module-extraction rule itself).
+- **Comments state constraints, not narration.** Keep them terse: the measured
+  number, the hardware quirk, the ordering that must hold. No rationale essays,
+  no debugging stories, no restating the code. A comment that would cause a bug
+  if deleted stays; one that only explains a past decision does not. A moved
+  function's comments move with it.
+- **Moves are pure.** A commit that relocates code changes zero behavior. Land
+  behavior first, moves second, never both in one commit.
 - **Tests assert on events, never prose.** Event names are the interface —
   dashboards group by them and alerts fire on them — so rewording a message
   is free and renaming an event must break a test. `cglib.CapturingLog` is
@@ -72,22 +72,3 @@ devices) only run on the K15.
   `doctor.py` compares (`ssh gamepc version`) to catch skew.
 - After either: `python doctor.py` on the K15 should end `0 fail`.
 
-## Design notes
-
-A design doc is written for work that is NOT yet built and is deleted once it
-is — the code and its comments become the record. Two survive, and they are
-the genre: what was tried, what the measurements showed, what gates the next
-step. `docs/resume-game-design.md` (nothing built, two designs refuted, one
-open question) and `docs/custom-wakeword-design.md` (built and vendored, not
-deployed — so what is left is a deploy and a couch ladder). Each
-names its own delete condition; honour it — `tv-power-detection-design.md`
-met its own on 2026-08-21 when the launch-path wiring landed, and its residue
-lives in `couch.py`'s TV-wake gate, README's open/closed lists, and
-`cglib.tv_power_state`. README § Deliberately not doing carries the
-standing "don't re-litigate this" list, and § Still genuinely open the short
-list of things that are neither shipped nor closed.
-
-When a doc's work ships, the doc goes and its live residue moves into the code
-it describes — not into a second doc. That is why `workers.py` carries the
-worker-boundary reasoning and `session_runtime.job_messages` carries the part
-of it that is still open.

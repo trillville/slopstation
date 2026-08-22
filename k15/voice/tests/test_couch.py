@@ -1,33 +1,5 @@
 """Blind test: couch.py's orchestration state machine, with every side effect
-stubbed at its documented seam (ssh, exlink, wol, wait_port). What it pins:
-
-  * the lock is taken ATOMICALLY - two racers, exactly one winner - and
-    release refuses a successor's lock;
-  * READY identity: our turn verifies, a foreign one is waited out, a
-    timestamp is legacy-accepted, and a changed one supersedes the watcher;
-  * the one rule - the TV input switch happens only after READY, never on a
-    failure path, which also leaves last_error for the listener;
-  * the TV-asleep rescue: exactly one extra power_on inside the READY wait,
-    and it never becomes an input switch;
-  * the Enter-died rescue: two idle reads (never one - that is the
-    write-then-exit race) buy one re-poke and one re-dispatch, a second death
-    fails immediately rather than waiting out the window, and a PC that cannot
-    answer `enterstate` at all falls back to exactly the old timeout;
-  * Ctrl-C is a BaseException: it still releases the lock, and deliberately
-    does NOT leave last_error for the listener to buzz;
-  * a voice cancel (state/cancel) aborts the same way, is consumed rather
-    than left for the next launch, beats the enter_redispatched rescue even
-    when it lands as the death is being proven, and a STALE one is voided
-    at launch start;
-  * TV evidence rides the READY wait: Enter goes out immediately (zero tax
-    on a healthy launch), the enter_died rescue waits for the set's own
-    "on" and redispatches only against a lit panel, a set that keeps
-    ANSWERING standby fails with the TV named, an UNREADABLE set stands
-    down to the legacy blind path, and a rig with no tvIp never reads;
-  * watch() rides out ssh blips and dies honestly on a run of them;
-  * reconcile resumes a live session and clears a dead one, TV untouched.
-
-Run:
+stubbed at its seam (ssh, exlink, wol, wait_port). Run:
     .venv\\Scripts\\python tests\\test_couch.py
 """
 import os
@@ -70,8 +42,7 @@ def fresh_state(lock_age_s=None, lock_content="x"):
 
 def wire(script, default=None):
     """Replace couch's seams. script = [(verb_prefix, reply-or-exception)],
-    consumed in order and verb-checked, so the test dies loudly the moment
-    couch.py's call sequence drifts. default handles unbounded polls (the
+    consumed in order and verb-checked. default handles unbounded polls (the
     READY wait is time-bound, not count-bound). Returns (log, exlink_calls)."""
     log = cglib.CapturingLog("launch")
     couch.log = log
@@ -79,7 +50,7 @@ def wire(script, default=None):
 
     def fake_exlink(name, **kw):
         sent.append(name)
-        log("exlink_send", cmd=name, **kw)       # so event ORDER proves the one rule
+        log("exlink_send", cmd=name, **kw)       # event ORDER proves the one rule
 
     def fake_ssh(cmd, timeout=15):
         if script:
@@ -89,9 +60,8 @@ def wire(script, default=None):
             reply = default(cmd)
         else:
             raise AssertionError(f"unscripted ssh call: {cmd!r}")
-        # BaseException, not Exception: KeyboardInterrupt is the one this
-        # harness most needs to be able to express, and it is not an Exception
-        # - the narrower check quietly RETURNED it as a status string instead.
+        # BaseException, not Exception: KeyboardInterrupt is not an Exception,
+        # and the narrower check returned it as a status string.
         if isinstance(reply, BaseException):
             raise reply
         return reply
@@ -124,9 +94,8 @@ def main():
             threads = [threading.Thread(target=racer, args=(i,)) for i in (0, 1)]
             for t in threads: t.start()
             for t in threads: t.join()
-            # One True AND one False: the loser must ANSWER busy, not crash.
-            # Windows raises a sharing violation, not FileExistsError; a
-            # crashed racer would leave None here.
+            # The loser must ANSWER busy, not crash: Windows raises a sharing
+            # violation, not FileExistsError. A crashed racer leaves None.
             assert sorted(results) == [False, True], (seed_age, results)
     print("  acquire: 50 two-way races (empty + stale recycle), one winner each")
 
@@ -163,21 +132,16 @@ def main():
     assert sent == ["power_on", "hdmi4", "power_off"], sent
     assert "game_launch" in ev and "session_ended" in ev and "session_idle" in ev
     assert log.find("game_launch")[0]["level"] == "info"      # OK: a clean launch
-    # A timestamp marker is the LEGACY shape (pre-turn-stamping PC): accepted
-    # so either machine can deploy first, but flagged as unverified.
+    # A timestamp marker is the legacy shape (pre-turn-stamping PC): accepted,
+    # but flagged unverified.
     assert log.find("host_ready")[0]["verified"] is False
     assert not cglib.LOCK.exists(), "session end must release the lock"
     assert not cglib.LAST_ERROR.exists(), "success must clear last_error"
     print("  start: input switch strictly after READY, appid queued, lock released")
 
     # --- ALREADY is a degraded launch, not a clean one -----------------------
-    # The PC answers ALREADY when the appid is already up from an EARLIER
-    # session, which is the shape that leaves Big Picture on the TV and
-    # undrivable from the couch (2026-08-13, turn 14852d). It read as a
-    # flawless launch from here. Asserting on the LEVEL rather than the event
-    # is the exception the interface rule earns: renaming game_launch already
-    # breaks the happy path above, but sliding back to info would be silent,
-    # and info is exactly the bug.
+    # ALREADY = the appid was already up from an earlier session: Big Picture
+    # on the TV, undrivable (2026-08-13, turn 14852d). Level, not event.
     fresh_state()
     log, _ = wire([
         ("enter", "OK"),
@@ -256,10 +220,8 @@ def main():
     print("  no READY: timed out, lock released, input untouched")
 
     # --- the TV-asleep rescue: a second power_on, and only ever one -----------
-    # Every case above sends power_on exactly once because the default retry
-    # threshold sits far past the 0.3 s test READY wait. Bring it inside that
-    # window and the re-send appears - once, however many times the poll spins,
-    # which is the whole point of the latch.
+    # Default retry threshold sits past the 0.3 s test READY wait; inside it
+    # the re-send appears once, however many times the poll spins.
     fresh_state()
     couch.WAKE_RETRY_S = 0.05
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
@@ -270,11 +232,8 @@ def main():
     print("  wake retry: one extra power_on inside the READY wait, input alone")
 
     # --- Enter dies mid-wait: detected, re-poked, re-dispatched ---------------
-    # The failure this exists for: on 2026-08-13, 08-16 and 08-19 the TV acked
-    # power_on, stayed dark, Enter gave up on the profile, and the K15 spent
-    # the rest of its 120 s polling a task that had already exited. Two
-    # (NOTREADY, IDLE) pairs are the evidence of death; a second power_on and a
-    # second Enter are the rescue.
+    # TV acks power_on, stays dark, Enter gives up, K15 polls a dead task for
+    # 120 s (2026-08-13/16/19). Two (NOTREADY, IDLE) pairs prove death.
     fresh_state()
     couch.ENTER_SETTLE_S = 0
     couch.READY_WAIT_S = 5
@@ -296,9 +255,6 @@ def main():
     print("  enter died: two idle reads -> re-poke + re-dispatch -> launch rescued")
 
     # --- the retry dies too: fail NOW, do not sit out the window --------------
-    # The bound on the whole scheme. Once the rescue Enter is also proven gone
-    # there is nothing left to wait for, and the fail buzz should reach the
-    # couch while whoever pressed the chord is still holding the controller.
     fresh_state()
     couch.READY_WAIT_S = 30                # long enough that only the raise ends it
     log, sent = wire([
@@ -322,8 +278,7 @@ def main():
 
     # --- the write-then-exit race: one idle read is not death -----------------
     # Enter writes the marker and THEN exits, so a lone (NOTREADY, IDLE) pair
-    # can be those two instants seen in the wrong order. Re-dispatching there
-    # would tear down the session that had just come up.
+    # can be those two instants read in the wrong order.
     fresh_state()
     log, sent = wire([
         ("enter", "OK"),
@@ -339,11 +294,10 @@ def main():
     print("  enter idle once: race re-read wins, no re-dispatch over a live session")
 
     # --- a PC that predates the verb: no information is not death -------------
-    # enterstate answers DENIED on an un-deployed gaming PC, and an ssh blip
-    # raises. Both must leave the old timeout behaviour exactly as it was -
-    # reading either as "Enter is dead" would fight a healthy launch.
-    couch.READY_WAIT_S = 0.3               # back to the short window: this case
-                                           # must time out, not be rescued
+    # enterstate answers DENIED on an un-deployed gaming PC; an ssh blip
+    # raises. Both must leave the old timeout behaviour unchanged.
+    couch.READY_WAIT_S = 0.3               # short window: must time out, not
+                                           # be rescued
     for label, reply in (("DENIED", "DENIED"), ("blip", RuntimeError("blip"))):
         fresh_state()
         log, sent = wire([("enter", "OK")], default=lambda cmd, r=reply:
@@ -359,10 +313,8 @@ def main():
     print("  enterstate unknown (old PC, ssh blip): no re-dispatch, timeout unchanged")
 
     # --- Ctrl-C in the launch console is not an Exception ----------------------
-    # 2026-08-16 turn b43b74: dispatched Enter, then emitted nothing ever again
-    # - no terminal event, no fail buzz, and a lock left for staleness to
-    # recycle. KeyboardInterrupt is a BaseException, so `except Exception`
-    # never saw it. No last_error on purpose: whoever pressed the key knows.
+    # KeyboardInterrupt is a BaseException, so `except Exception` missed it: no
+    # terminal event, no buzz, lock left to staleness (2026-08-16, turn b43b74).
     fresh_state()
     log, sent = wire([("enter", "OK"), ("status", KeyboardInterrupt())])
     assert couch.start() == 1
@@ -374,10 +326,8 @@ def main():
     print("  ctrl-C: launch_aborted, lock released, no fail buzz, TV alone")
 
     # --- voice cancel: end_session's marker aborts the launch ------------------
-    # 2026-08-21 turn 0b785e: "end the session" against an in-flight launch
-    # could only ssh `exit`, which stops a RUNNING Enter - the first Enter had
-    # already died, so the exit raced the enter_redispatched rescue and won on
-    # timing alone. The marker is the channel that reaches THIS process.
+    # ssh `exit` only stops a RUNNING Enter, so it raced the redispatch rescue
+    # (2026-08-21, turn 0b785e). The marker reaches THIS process.
     fresh_state()
     couch.READY_WAIT_S = 5                 # only the cancel may end this wait
 
@@ -396,10 +346,8 @@ def main():
     aborted = log.find("launch_aborted")[0]
     assert aborted["err"] == "Cancelled", aborted
     assert aborted["cancelled_by"] == "aaaaaa", aborted
-    # Enter had left for the host, so the abort dispatches its OWN exit - the
-    # canceller's exit stops only a RUNNING Enter, and one still inside the
-    # schtasks trigger gap when that exit finishes would otherwise run to
-    # completion with no watcher alive.
+    # The abort dispatches its OWN exit: an Enter still inside the schtasks
+    # trigger gap would otherwise run to completion with no watcher alive.
     exits = log.find("exit_dispatched")
     assert exits and exits[0]["reason"] == "cancel_after_enter", ev
     assert not cglib.LOCK.exists(), "a cancelled launch still releases the lock"
@@ -410,10 +358,8 @@ def main():
           "exit chases the sent Enter")
 
     # --- cancel beats the rescue: no redispatch over a teardown ----------------
-    # The exact interleave from 0b785e: the cancel lands while the death is
-    # being proven, one iteration too late for the loop-top check. The
-    # last-instant check inside the idle_seen branch is what must catch it -
-    # before the re-poke, before the second Enter.
+    # Cancel lands as the death is proven, too late for the loop-top check; the
+    # idle_seen branch must catch it before the re-poke and the second Enter.
     fresh_state()
     couch.ENTER_SETTLE_S = 0
     reads = {"n": 0}
@@ -459,11 +405,8 @@ def main():
     couch.TV_WAIT_S = 0.2
     couch.TV_POKE_S = 0.05
 
-    # A set that keeps ANSWERING standby is refusing. Enter still goes out
-    # immediately (the zero-tax rule) and dies as it always did; the change
-    # is what happens next - the rescue refuses to redispatch into the dark,
-    # and the failure finally NAMES the TV instead of 'host never reported
-    # READY'.
+    # A set that keeps answering standby is refusing: Enter still goes out at
+    # once, but the rescue won't redispatch into the dark and the fail names it.
     fresh_state()
     couch.ENTER_SETTLE_S = 0
     couch.READY_WAIT_S = 5
@@ -505,8 +448,7 @@ def main():
     assert "hdmi4" in sent and sent.count("power_on") == 1, sent
     print("  tv evidence: Enter immediately, tv_on mid-wait, launch lands")
 
-    # Enter dies but the set HAD answered on: the TV is not the problem, so
-    # the rescue redispatches immediately - the pre-evidence behavior.
+    # Enter dies but the set HAD answered on: the rescue redispatches at once.
     fresh_state()
     couch.ENTER_SETTLE_S = 0
     cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: "on"
@@ -524,8 +466,8 @@ def main():
     assert log.find("host_ready")[0]["verified"] is True
     print("  tv evidence: confirmed-on set -> rescue redispatches at once")
 
-    # A set that cannot be READ is not a refused one: stand down to the
-    # legacy blind path rather than fail a launch that would have worked.
+    # A set that cannot be READ is not a refused one: stand down to the legacy
+    # blind path.
     fresh_state()
     couch.ENTER_SETTLE_S = 10
     cglib.tv_power_state = lambda ip, timeout=2.0, raw=False: None
@@ -540,9 +482,8 @@ def main():
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_state_unknown" in ev and "host_ready" in ev, ev
-    # A SENTINEL, not None: events.emit drops None-valued fields, so logging
-    # the read's own None would make an unreachable set byte-identical in
-    # Loki to a rig with no tvIp at all.
+    # A sentinel, not None: events.emit drops None-valued fields, so an
+    # unreachable set would look identical to a rig with no tvIp.
     assert log.find("launch_start")[0]["tv"] == "unreachable"
     print("  tv evidence: unreadable set -> stand down, legacy launch unharmed")
 

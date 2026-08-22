@@ -1,15 +1,11 @@
-"""One set of hands: every voice-triggered side effect lives here.
-GrammarGate (Tier 1) and the assistant's tools (Tier 2) call the same
-functions - there is no second dispatch path to drift.
+"""Every voice-triggered side effect: GrammarGate (Tier 1) and the
+assistant's tools (Tier 2) call the same functions.
 
-Actions return a Result the caller acks with: `earcon` names the count-coded
-tone to play, `detail` explains what happened. Tier 1 acks with the earcon
-alone (speech there would cost a TTS round trip), so `detail` is BOTH the log
-line and the only thing the assistant lane's tools report back to the model -
-write it as an explanation a stranger could act on, never a bare status code.
+Actions return a Result: `earcon` names the count-coded tone, `detail` is
+both the log line and the only thing the assistant lane reports to the model
+- prose a stranger could act on, not a status code.
 
-dry_run=True logs intent instead of acting - the blind-test mode. The lock
-check stays live even then (local, deterministic, side-effect-free).
+dry_run=True logs intent instead of acting; the lock check stays live.
 """
 import subprocess
 import sys
@@ -21,28 +17,20 @@ import couch
 import events
 import library
 # couch.ssh / couch.ssh_intent are reached through the MODULE, never imported
-# by name: one implementation and ONE SEAM, so swapping couch.ssh intercepts
-# every verb. `from couch import ssh` would create a second binding that such
-# a swap silently misses - i.e. a test patching an unpatched path.
+# by name: `from couch import ssh` makes a second binding that patching
+# couch.ssh would miss.
 
 COUCH = cglib.BASE / "couch.py"
 
 Result = namedtuple("Result", "ok earcon detail")
 
-# THE per-utterance context, and the one home for this story. One utterance
-# = one immutable snapshot: its correlation id, and the user's words (post
+# Per-utterance context: correlation id plus the user's words (post
 # wake-strip; None on lanes with no transcript - the chord, the REPL).
-#
-# Handed over EXPLICITLY because a ContextVar cannot do it: one is copied
-# into a task at task creation, so the gate setting it never reaches the
-# assistant's tool dispatch - a sibling task already running. When this rode
-# the ambient copy, voice-driven exits reached the gaming PC uncorrelated.
-#
-# A namedtuple so the pair swaps atomically: no reader can see one
-# utterance's turn beside another's words. The contract it rides on is that
-# one utterance is acted on at a time (transcripts reach the gate serially);
-# a second one landing mid-dispatch re-points the attribute, so consumers
-# snapshot at operation START (test_turn drills that interleave).
+# Passed explicitly, not via ContextVar: a ContextVar is copied at task
+# creation, so the gate setting it never reaches the assistant's tool
+# dispatch, a sibling task already running. A namedtuple so the pair swaps
+# atomically; a second utterance landing mid-dispatch re-points the
+# attribute, so consumers snapshot at operation START (test_turn drills it).
 Utterance = namedtuple("Utterance", "turn asked")
 
 
@@ -59,10 +47,7 @@ def _fail(detail):
 
 
 def _no_task(out):
-    """NOTASK:<name> - the PC says that scheduled task does not exist. A setup
-    step someone skipped, not a fault, so say the fix out loud: the raw
-    FAILED:1 this replaced taught nobody anything, and a whole couch test read
-    it as "nav is broken" (2026-08-14)."""
+    """NOTASK:<name> - a scheduled task the PC never had registered."""
     return _fail(f"the {out.split(':', 1)[1]} task isn't registered on the "
                  "gaming PC - it needs the one-time Register-ScheduledTask "
                  "from the setup guide")
@@ -70,8 +55,7 @@ def _no_task(out):
 
 def _name(appid):
     """appid -> installed title, falling back to the bare id. Never raises:
-    the index is a cache (empty on a fresh K15, stale after an install), and
-    a naming miss must never turn a working launch into a failure."""
+    the index is a cache (empty on a fresh K15, stale after an install)."""
     try:
         appid = int(appid)
     except (TypeError, ValueError):
@@ -85,14 +69,11 @@ class Dispatch:
         self.voice = cfg["voice"]
         self.log = log
         self.dry_run = dry_run
-        # The utterance being acted on (see Utterance above). One Dispatch
-        # per session, so this attribute is exactly as isolated as the
-        # ContextVar it stands in for.
+        # See Utterance above; one Dispatch per session.
         self.utterance = Utterance(None, None)
 
     def begin_utterance(self, turn, asked=None):
-        """GrammarGate's one write per final transcript. A method so the
-        snapshot's shape has one home."""
+        """GrammarGate's one write per final transcript."""
         self.utterance = Utterance(turn, asked)
 
     # -- internals -------------------------------------------------------------
@@ -102,8 +83,7 @@ class Dispatch:
         return _ok(f"dry-run: {what}")
 
     def _exlink(self, what, frame_hex):
-        """TV serial send; COM-port contention retry lives in cglib so
-        couch.py's power/input sends get the same protection."""
+        """TV serial send; COM-port contention retry lives in cglib."""
         if self.dry_run:
             return self._would(f"exlink {what} ({frame_hex})")
         try:
@@ -117,9 +97,7 @@ class Dispatch:
     # -- session ---------------------------------------------------------------
 
     def start_session(self, appid=None):
-        """Advisory busy check - same predicate as the chord, answered
-        without spawning a console. The REAL arbiter is couch.py's atomic
-        acquire_lock, which owns the whole sequence (and the one rule)."""
+        """Advisory busy check; the real arbiter is couch.py's acquire_lock."""
         age = cglib.lock_age()
         if cglib.session_active(age):
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))
@@ -128,10 +106,9 @@ class Dispatch:
         if self.dry_run:
             return self._would(what)
         args = [sys.executable, str(COUCH), "start"] + ([str(appid)] if appid else [])
-        # couch.py runs in its own console, so the id travels as an argument
-        # (a ContextVar survives neither a process nor a task boundary - see
-        # Utterance). Without it couch.py mints its own and the user's
-        # sentence joins the launch it caused by nothing but a clock reading.
+        # couch.py runs in its own console, so the turn id travels as an
+        # argument; without it couch.py mints its own and only clock time
+        # joins the utterance to the launch it caused.
         turn = self.utterance.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
@@ -145,18 +122,11 @@ class Dispatch:
         turn = self.utterance.turn            # snapshot at operation start
         if self.dry_run:
             return self._would("ssh exit")
-        # The K15-side half of "teardown wins", earned on 2026-08-21 turn
-        # 0b785e: Exit can only stop an Enter that is RUNNING when it lands.
-        # That launch's first Enter had already died, so the exit raced
-        # couch.py's enter_redispatched rescue and lost only by timing - the
-        # rescue re-claimed the Puck and re-applied TV-GAMING two seconds
-        # into the teardown. The marker reaches the process the ssh verb
-        # cannot: couch.py consumes it at every wait and stands down instead
-        # of rescuing a launch nobody wants. Written BEFORE the ssh so the
-        # K15 side stops even if the exit itself cannot get through, and
-        # only when the lock says something is actually running - with the
-        # rig idle there is nothing the marker could stop, and couch.py
-        # voids stale ones at the next launch's start anyway.
+        # K15-side half of "teardown wins" (2026-08-21): the host Exit only
+        # stops an Enter that is RUNNING when it lands, so it loses to
+        # couch.py's enter_redispatched rescue; the marker reaches that
+        # process, which consumes it at every wait. Written BEFORE the ssh so
+        # the K15 side stops even if the exit never gets through.
         cancelled = False
         if cglib.session_active():
             try:
@@ -168,10 +138,8 @@ class Dispatch:
             out = couch.ssh_intent("exit", turn=turn)
         except Exception as e:
             if cancelled:
-                # Mid-launch the PC can be mid-wake and unreachable - and a
-                # PC that never got its Enter has nothing to tear down, so
-                # the marker alone IS the whole teardown. Not reaching the
-                # host here is the expected shape, not a failure.
+                # A PC mid-wake is unreachable and has nothing to tear down
+                # anyway: the marker alone is the whole teardown.
                 self.log("end_session_dispatched", turn=turn, via="cancel")
                 return _ok("stopping the launch - the PC wasn't up yet")
             self.log.error("end_session_failed", err=str(e), turn=turn)
@@ -184,7 +152,7 @@ class Dispatch:
 
     def now_playing(self):
         """RunningAppID via the `playing` verb. The one Result whose detail is
-        data rather than prose - assistant.get_now_playing parses it."""
+        data, not prose: assistant.get_now_playing parses it."""
         if self.dry_run:
             return self._would("ssh playing")
         try:
@@ -194,17 +162,15 @@ class Dispatch:
         return _ok(out if out.isdigit() else "0")
 
     def play_game(self, appid):
-        """Session live -> direct host launch (Dispatch verb answers
-        truthfully: OK/ALREADY/BUSY/NOTREADY). No session -> full couch
-        launch with the game queued for after READY."""
+        """Session live -> direct host launch (OK/ALREADY/BUSY/NOTREADY).
+        No session -> full couch launch, game queued for after READY."""
         if not cglib.session_active():
             return self.start_session(appid)
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            # Explicit turn (see Utterance): leaning on the ambient one
-            # shipped Tier-2 launches uncorrelated, while the Tier-1 path -
-            # same task as the gate - quietly worked.
+            # Explicit turn: the Tier-2 path runs in a different task than
+            # the gate, so the ambient one is absent (see Utterance).
             out = couch.ssh_intent(f"launch {appid}", turn=self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))
@@ -215,11 +181,7 @@ class Dispatch:
         if out == "ALREADY":
             return _ok(f"{_name(appid)} is already running")
         if out.startswith("BUSY:"):
-            # Name the blocker: the assistant lane sees only `detail`, so a
-            # bare appid leaves it saying "something else is running" with no
-            # way to say WHAT to quit. The raw code stays for the log. Since
-            # quit_game landed, the blocker is now quittable by voice - the
-            # message offers it instead of the old "needs the controller".
+            # Name the blocker: the assistant lane sees only `detail`.
             return _busy(f"{_name(out.split(':', 1)[1])} is already running - "
                          f"it has to be quit first, which I can do if you ask ({out})")
         if out == "NOTREADY":
@@ -233,11 +195,8 @@ class Dispatch:
         return _fail(f"the launch failed (ssh launch: {out})")
 
     def quit_game(self, appid):
-        """Quit the running game on the host. The appid MUST be the one running
-        - the host re-checks RunningAppID and refuses (BUSY) otherwise, the same
-        truthfulness play_game has, so a raced or wrong id never kills the wrong
-        game. This is the voice path out of the "a game left running steals the
-        next session" trap that play_game's BUSY message used only to describe."""
+        """Quit the running game. The host re-checks RunningAppID and answers
+        BUSY on a mismatch, so a raced id never kills the wrong game."""
         appid = int(appid)
         if self.dry_run:
             return self._would(f"ssh stop {appid}")
@@ -252,9 +211,7 @@ class Dispatch:
         if out == "NOTRUNNING":
             return _ok("nothing is running to quit")
         if out.startswith("BUSY:"):
-            # A different game is up: name it, don't touch it. The user asked to
-            # quit one thing; quitting another is the wrong-game bug play_game's
-            # BUSY exists to avoid.
+            # A different game is up: name it, don't touch it.
             return _busy(f"{_name(out.split(':', 1)[1])} is what's running, not "
                          f"{_name(appid)} - nothing was quit ({out})")
         if out.startswith("NOTASK:"):
@@ -266,10 +223,9 @@ class Dispatch:
     NAV_KINDS = {"downloads", "library", "store", "details", "collection"}
 
     def nav(self, kind, arg=None):
-        """Fire a steam:// navigation into Big Picture via the host `nav` verb.
-        Low-level and shared: the assistant tool and the grammar both map a
-        spoken target to (kind, arg) and call here. Session-gated on the host
-        (NOTREADY with no session - nothing to navigate)."""
+        """Fire a steam:// navigation into Big Picture via the host `nav`
+        verb. Shared by the assistant tool and the grammar; host-gated on
+        the session."""
         kind = str(kind).strip().lower()
         if kind not in self.NAV_KINDS:
             return _fail(f"there's no navigation target called '{kind}'")
@@ -286,10 +242,8 @@ class Dispatch:
             return _ok(f"showing {self._nav_label(kind, arg)}")
         if out == "NOTREADY":
             # start_session is fire-and-forget (Popen), so "start a session
-            # and open X" chains into nav while couch.py is still coming up -
-            # and "start one first" told the model to start the session it
-            # had JUST started, which it relayed as a shrug and the user had
-            # to re-ask (2026-08-15). A fresh lock means starting, not absent.
+            # and open X" chains into nav while couch.py is still coming up:
+            # a fresh lock means starting, not absent.
             if cglib.session_active():
                 return _busy("the session is still starting - "
                              "try again in a moment")
@@ -299,7 +253,7 @@ class Dispatch:
         return _fail(f"the navigation failed (ssh {cmd}: {out})")
 
     def _nav_label(self, kind, arg):
-        """Spoken-friendly name for what we navigated to."""
+        """Spoken-friendly name for a navigation target."""
         if kind == "details" and arg:
             return _name(arg)
         if kind == "store" and arg:
@@ -309,13 +263,10 @@ class Dispatch:
 
     # -- TV --------------------------------------------------------------------
 
-    # CAUTION, measured 2026-08-21: with sound output on the eARC soundbar,
-    # the TV ACKS every Ex-Link volume/mute frame and then refuses it with an
-    # on-screen "Not Available" - these four verbs currently move nothing the
-    # couch can hear. The write path that works is remote keys relayed over
-    # CEC (tv_remote.py; TvDucker below already uses it). Migrating these
-    # verbs is deliberately separate work: they are Tier-1 grammar surface,
-    # and this file's session ended at the duck.
+    # CAUTION, measured 2026-08-21: with audio on the eARC soundbar the TV acks
+    # every Ex-Link volume/mute frame and then refuses it on screen ("Not
+    # Available"), so these four verbs move nothing the couch can hear. The
+    # write path that works is remote keys over CEC (tv_remote.py).
     def _vol_steps(self, name, steps=None):
         step = int(self.voice["volumeStep"]) if steps is None else int(steps)
         if self.dry_run:
@@ -334,8 +285,8 @@ class Dispatch:
         return self._vol_steps("vol_down")
 
     def volume_set(self, level):
-        """Absolute set, clamped to volumeMax - a misheard number must never
-        blast the room. Also the mute-desync escape hatch."""
+        """Absolute set, clamped to volumeMax so a misheard number cannot
+        blast the room. Also the mute-desync resync."""
         vmax = int(self.voice["volumeMax"])
         clamped = max(0, min(vmax, int(level)))
         if clamped != int(level):
@@ -343,27 +294,22 @@ class Dispatch:
         return self._exlink(f"vol_set {clamped}", cglib.vol_set_frame(clamped))
 
     def mute_toggle(self):
-        """Blind toggle, permanently: the S90C exposes no discrete mute
-        on/off, and its status query returns a canned echo that is
-        byte-identical across volume and mute states - there is no state to
-        read, so none is tracked. 'mute' means toggle; vol_set is the
-        resync."""
+        """Blind toggle: the S90C has no discrete mute on/off and its status
+        query returns a canned echo, byte-identical across volume and mute
+        states, so no state is trackable."""
         return self._exlink("mute_toggle", cglib.EXLINK_FRAMES["mute_toggle"])
 
     def switch_input(self, spoken_name):
         """Config owns the spoken-name -> input map. The GAMING input means
-        "get me gaming": with no session it STARTS one, mid-launch it answers
-        "still starting", with a READY session it flips instantly. The one
-        rule holds either way - couch.py switches the input only at READY, so
-        nothing dead is ever shown. Other inputs switch freely, like a
-        remote."""
+        "get me gaming": no session starts one, mid-launch answers "still
+        starting", a READY session flips instantly. Other inputs switch
+        freely."""
         cmd = self.voice["inputs"].get(spoken_name.strip().lower())
         if cmd is None:
             return _fail(f"there is no input called '{spoken_name}'")
         if cmd == self.cfg["tvGamingCmd"]:
             if not cglib.session_active():
-                # Local lock check first: a sleeping PC costs no ssh timeout
-                # before the launch kicks off.
+                # Lock check first: no ssh timeout against a sleeping PC.
                 self.log("input_starts_session", input=cmd)
                 return self.start_session()
             if self.dry_run:
@@ -384,41 +330,21 @@ class Dispatch:
 
 
 class TvDucker:
-    """Drop the room's volume for the length of a voice session; put it back
-    on close. One per agent process (the ledger spans sessions), every call
-    made from the wake loop's duck() thread under its lock; synchronous.
+    """Drop the room's volume for a voice session; restore it on close. A
+    talker on the couch reaches the mic 10-20 dB below TV dialogue.
 
-    Ducking is the one lever that attacks the actual problem - a talker on
-    the couch reaches the mic 10-20 dB BELOW dialogue from the TV, and no
-    model or threshold recovers a signal that far under. It cannot help the
-    wake word (nothing knows to duck until it has fired) but it hands the
-    STT a quiet room for every command after it.
+    One per agent process, synchronous, every call from the wake loop's
+    duck() thread under its lock. The ledger spans sessions but dies with the
+    process, so a restart between duck and unduck loses it.
 
-    Two incidents shaped this class, one mechanism each:
+    Gate: duck() runs only when cglib.tv_power_state says "on" (it answers
+    from standby too); anything else, unknown included, skips (2026-08-16).
 
-    - 2026-08-16, duckSteps' first morning: every Ex-Link burst fired at a
-      TV that was never on - into standby ahead of a cold launch, into the
-      middle of a wake the set was refusing - and the morning ended with the
-      only receiver silence on record and an unduck abandoned on its first
-      frame. Hence THE GATE: duck() asks the TV whether it is ON first
-      (cglib.tv_power_state answers from standby); anything else, unknown
-      included, means skip. Skipping is always safe - the whole cost is one
-      session of loud TV.
-    - 2026-08-21, the eARC discovery: with audio on the soundbar the TV
-      ACKS every direct volume write and refuses it on screen, so send-and-
-      hope is not just fragile, it can be theater. Hence THE READBACK:
-      writes are remote keys relayed over CEC (tv_remote.press - the one
-      thing the eARC path honours, benched same day), and the TV's
-      pairing-free UPnP volume (cglib.tv_volume - it mirrors the BAR's
-      level) is ground truth for what actually happened. The ledger holds
-      only VERIFIED movement, so restore restores exactly what moved, a
-      shortfall carries as debt the next session's close pays off, and a
-      human working the remote mid-session is DETECTED (the readback is not
-      where we left it) - the duck stands down rather than stomp their
-      choice.
-
-    The ledger dies with the process; that gap (restart between duck and
-    unduck) is documented at the caller and unchanged."""
+    Readback: writes are remote keys over CEC (tv_remote.press, the only path
+    the eARC setup honours) and the pairing-free UPnP volume (cglib.tv_volume,
+    mirroring the soundbar) is ground truth. The ledger holds only VERIFIED
+    movement, so a shortfall carries as debt to the next close and a human
+    moving the remote mid-session is detected (2026-08-21)."""
 
     TOPUPS = 2            # extra key rounds when the readback comes up short
     POLLS = 6             # readback polls per settle, POLL_GAP_S apart
@@ -426,11 +352,8 @@ class TvDucker:
 
     def __init__(self, steps, tv_ip, log, dry_run=False, to_pct=None,
                  probe=None, read=None, press=None, pause=time.sleep):
-        # to_pct (1-99) wins over steps: duck TO that percent of the
-        # pre-duck level, so the drop scales with how loud the room
-        # actually is. Only expressible at all because the readback exists
-        # - a blind channel cannot take a fraction of a level it cannot
-        # read, which is why the Ex-Link design never had this knob.
+        # to_pct (1-99) wins over steps: duck TO that percent of the pre-duck
+        # level, so the drop scales with how loud the room is.
         self.steps = int(steps)
         self.to_pct = int(to_pct) if to_pct else None
         self.log = log
@@ -460,11 +383,8 @@ class TvDucker:
 
     def _drive(self, direction, now, target):
         """Press toward target, verify by readback, top up what got lost.
-        Returns the last level actually SEEN - `now` if nothing verified,
-        which is the honest answer when keys or readback die mid-drive: a
-        press that raises still counts for nothing until the readback moves.
-        Bounded rounds, so a dead relay gets a couple of bursts, never a
-        storm (the 08-16 lesson, kept)."""
+        Returns the last level actually SEEN - `now` if nothing verified.
+        Rounds are bounded so a dead relay gets bursts, not a storm."""
         best = now
         for _ in range(1 + self.TOPUPS):
             need = abs(target - best)
@@ -512,9 +432,7 @@ class TvDucker:
                  ok=final == target)
 
     def unduck(self):
-        """Restore everything on the ledger - this session's duck plus any
-        debt an earlier shortfall left behind. Quiet when the ledger is
-        empty (a skipped duck owes nothing)."""
+        """Restore the ledger: this session's duck plus any earlier debt."""
         if not self.out:
             return
         want = self.out
@@ -524,16 +442,15 @@ class TvDucker:
             return
         now = self.read()
         if now is None:
-            # TV gone (off, DMR asleep with the panel): keys would not
-            # relay anyway. Keep the debt; the next close retries.
+            # TV gone (off, DMR asleep with the panel): keys would not relay.
+            # Keep the debt; the next close retries.
             self.log("tv_unducked", steps=0, asked=want, ok=False,
                      reason="no_readback")
             self.log.warn("tv_duck_deficit", steps=self.out)
             return
         if self.expect is not None and now != self.expect:
-            # A human moved the volume mid-session. They have chosen a
-            # level; adding our delta back lands ABOVE their choice. Only
-            # the readback makes this detectable - stand down, owe nothing.
+            # A human moved the volume mid-session: adding our delta back
+            # would land above their chosen level. Stand down.
             self.log("tv_unducked", steps=0, asked=want, ok=True,
                      reason="user_adjusted", vol=now)
             self.out, self.expect = 0, None

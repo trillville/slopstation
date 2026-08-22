@@ -1,7 +1,7 @@
 """Blind test: library.sync orchestration - layer 1 always, deals (layer 4)
 keyless and staleness-gated, owned gated on staleness + key, metadata top-up
-only, and the non-reentrant guard so rapid session-boundary calls can't stack
-concurrent crawls. All layer fns are mocked; no network. Run:
+only, and the non-reentrant guard against stacked crawls. All layer fns are
+mocked; no network. Run:
     .venv\\Scripts\\python tests\\test_sync.py
 """
 import sys
@@ -24,9 +24,7 @@ def main():
     calls = {"installed": 0, "owned": 0, "meta": 0, "deals": 0, "collections": 0}
     state = {"index": {}, "refresh_rc": 0}
 
-    # refresh returns 0 on success (PC awake); sync gates collections on that,
-    # so the mock returns state["refresh_rc"] and a test can flip it to 1 to
-    # simulate a sleeping PC. Everything is mocked - no ssh, no store.
+    # refresh returns 0 on success (PC awake); sync gates collections on it.
     def mock_refresh(**k):
         calls["installed"] += 1
         return state["refresh_rc"]
@@ -57,7 +55,7 @@ def main():
     state["index"] = {"installed": [{"appid": 1}]}
     library.sync()
     assert calls == {"installed": 1, "owned": 0, "meta": 0, "deals": 1, "collections": 1}, calls
-    state["deals"] = {"refreshed": fresh}          # restore fresh for the rest
+    state["deals"] = {"refreshed": fresh}
 
     # --- key present, owned stale (no timestamp) -> all three -----------------
     cglib.load_secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
@@ -92,10 +90,9 @@ def main():
     state["deals"] = {"refreshed": fresh}
 
     # --- PC asleep (refresh != 0) -> collections is SKIPPED (the gate) --------
-    # Both need the PC awake, so a failed installed refresh must not spend a
-    # second ssh timeout on collections.
+    # Both need the PC awake; don't spend a second ssh timeout here.
     reset(calls)
-    state["refresh_rc"] = 1                         # refresh reports failure
+    state["refresh_rc"] = 1
     state["index"] = {"installed": []}
     library.sync()
     assert calls["installed"] == 1 and calls["collections"] == 0, calls

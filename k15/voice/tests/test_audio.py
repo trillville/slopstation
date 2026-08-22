@@ -1,8 +1,5 @@
 """Blind test: device resolution never substitutes the system default for a
-configured device that is merely absent. No PortAudio, no hardware - a fake
-device table stands in, because the bug being pinned here is a decision, not
-a driver.
-
+configured device that is merely absent. Fake device table, no PortAudio. Run:
     .venv\\Scripts\\python tests\\test_audio.py
 """
 import sys
@@ -72,9 +69,9 @@ def test_announcer_keeps_the_lenient_answer():
 
 
 def test_open_audio_waits_rather_than_binding_the_wrong_endpoint():
-    """THE incident: the array drops off USB, and every 5 s the recovery path
-    'succeeds' onto the system default, reports recovery, and stays deaf -
-    62 rounds, 5 min 10 s. open_audio must return only the real device."""
+    """Recovery that resolves onto the system default reports success and
+    stays deaf (62 rounds, 5 min 10 s). open_audio must return the real
+    device or keep waiting."""
     log = cglib.CapturingLog()
     table = ["Realtek"]                         # array not back yet
     calls = []
@@ -112,8 +109,8 @@ def test_open_audio_waits_rather_than_binding_the_wrong_endpoint():
 
 
 def test_build_audio_terminates_the_instance_it_could_not_use():
-    """open_audio retries every RETRY_S for as long as the outage lasts, so a
-    PyAudio instance stranded on the raise path is a handle leak per round."""
+    """open_audio retries every RETRY_S for the whole outage, so an instance
+    stranded on the raise path leaks a handle per round."""
     made = []
 
     class FakePyAudioModule:

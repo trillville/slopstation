@@ -3,7 +3,7 @@
     python exlink.py power_on|power_off|hdmi1..4|vol_up|vol_down|mute_toggle
     python exlink.py vol_set <0-100>
 
-Frames and the COM port come from cglib/config.json - one home for both.
+Frames and the COM port come from cglib/config.json.
 """
 import sys
 
@@ -12,16 +12,10 @@ import events
 
 
 def _emit(cmd, ack=None, err=None, **extra):
-    """Put hand-run TV commands in the same stream as the launch lane's, under
-    lane=manual.
+    """Emit hand-run TV commands into the same stream as the launch lane's.
 
-    Reconstructing an incident means knowing what a person did to the TV
-    mid-session, and this CLI used to say nothing at all: on 2026-08-13 five
-    hand-run power_on tests left no trace anywhere, so there was no way to line
-    them up against the launch that had just failed. lane=manual rather than
-    lane=launch so an operator's probing cannot skew launch-health metrics,
-    while `event="exlink_send"` still finds every frame ever sent regardless of
-    who sent it."""
+    lane=manual so operator probing does not skew launch-health metrics;
+    event="exlink_send" still matches every frame sent by either lane."""
     if err is None:
         events.emit("manual", "exlink_send", cmd=cmd, ack=ack, **extra)
     else:

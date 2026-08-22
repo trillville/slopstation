@@ -1,7 +1,5 @@
-"""Blind test: the vocabulary handed to Flux. Offline - no Deepgram, no audio.
-The live counterpart is bench/probe_stt.py, which speaks these at the real
-model; this one pins the list's SHAPE, which is where the bug actually was.
-
+"""Blind test: the vocabulary handed to Flux - offline, no Deepgram, no audio.
+Pins the list's shape; bench/probe_stt.py is the live counterpart. Run:
     .venv\\Scripts\\python tests\\test_keyterms.py
 """
 import sys
@@ -51,7 +49,7 @@ def test_forms_do_not_cut_a_multi_token_number():
 
 
 def test_trailing_sequel_number_yields_the_bare_name():
-    # How plain 'Hades' gets covered at all - only Hades II is installed.
+    # Only Hades II is installed, so this is how plain 'Hades' is covered.
     assert titles.keyterm_forms("Hades II") == ["hades 2", "hades"]
     print("  OK  'Hades II' also teaches 'hades'")
 
@@ -87,9 +85,8 @@ def test_the_cap_is_announced_not_silent():
 
 
 def test_the_cap_never_exceeds_deepgram_s_measured_ceiling():
-    """100 connect, 110 are refused with HTTP 400 at the handshake (measured
-    2026-08-15). One term over is not a worse transcript, it is every session
-    failing to open - so this is a ceiling, not a tuning knob."""
+    """100 keyterms connect, 110 are refused with HTTP 400 at the handshake
+    (measured 2026-08-15). Over the cap, every session fails to open."""
     assert session_runtime.MAX_KEYTERMS <= 100, session_runtime.MAX_KEYTERMS
     print("  OK  cap stays at or under the measured hard limit of 100")
 

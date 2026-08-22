@@ -1,26 +1,14 @@
 """Wake pre-roll: keep mic audio flowing across the wake->pipeline gap.
 
-Without it, "hey jarvis volume up" spoken as one sentence loses "volume up" -
-the wake stream closes at detection and the session transport reopens the mic
-~0.5-2 s later, so the command lands in dead air. Two pieces close the gap:
-
-  WakeCapture   - at detection the wake stream is NOT closed; a thread keeps
-                  reading it (seeded with a rolling pre-detection ring, so the
-                  wake phrase itself is included) until run_session stops it
-                  right before the transport reopens the mic.
-  PrerollFeeder - a pipeline stage between transport.input() and Flux that
-                  replays the captured PCM during its StartFrame processing.
-                  Frame ordering does the correctness work: processors handle
-                  frames serially through one input queue, so Flux sees
-                  [StartFrame, pre-roll, live mic] in order, and its own
-                  StartFrame handling holds queued audio until the websocket
-                  handshake is confirmed.
+The session transport reopens the mic ~0.5-2 s after detection, so without
+this "hey jarvis volume up" loses "volume up". WakeCapture keeps reading the
+wake stream; PrerollFeeder, a stage between transport.input() and Flux,
+replays that PCM during StartFrame processing - frames move serially through
+one queue, so Flux sees [StartFrame, pre-roll, live mic] in order, and Flux
+holds queued audio until its websocket handshake is confirmed.
 
 The transcript therefore starts with the wake phrase; grammar_gate.strip_wake
-removes it text-side, which is more reliable than trimming the audio.
-
-The capture window is also where the wake chime is timed from (WakeAck) - the
-only place that can hear you between the wake word and the pipeline.
+removes it text-side.
 """
 import threading
 import time
@@ -43,13 +31,10 @@ def _rms(chunk):
 
 
 class WakeAck:
-    """One wake chime per session, claimed by whichever side first sees the
-    user stop talking: the capture watcher below (mic still ours, chime played
-    straight to PyAudio) or GrammarGate once the pipeline owns the mic (chime
-    pushed as a frame). Those are different threads, hence the lock.
-
-    It also remembers WHEN, which is what lets the gate fold a success earcon
-    landing on top of the chime into it."""
+    """One wake chime per session, claimed by whichever of the capture watcher
+    below and GrammarGate first sees the user stop talking - different
+    threads, hence the lock. The timestamp lets the gate fold a success earcon
+    landing on the chime into it."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -64,15 +49,14 @@ class WakeAck:
             return True
 
     def age(self):
-        """Seconds since the chime was claimed; inf while unclaimed, so a
-        caller asking "did it just chime?" gets a truthful no."""
+        """Seconds since the chime was claimed; inf while unclaimed."""
         with self._lock:
             return float("inf") if self._at is None else time.monotonic() - self._at
 
 
 class WakeCapture:
     """Owns the wake stream from detection until stop(). stop() is idempotent
-    and returns all PCM captured (pre-detection ring + everything since)."""
+    and returns all PCM captured (pre-detection ring included)."""
 
     MAX_S = 30              # runaway guard: stop growing if a session build stalls
     QUIET_MS = 350          # end-of-speech gap that earns the wake chime
@@ -86,24 +70,17 @@ class WakeCapture:
         self._on_quiet = on_quiet
         self._t0 = time.monotonic()
         self._quiet = 0
-        # The wake phrase is in the ring, so it sets the scale for "this is
-        # what speech sounds like here" - no absolute threshold to calibrate.
+        # The wake phrase in the ring sets the speech scale.
         self._peak = max([_rms(c) for c in self._chunks] or [0.0]) if on_quiet else 0.0
         self._stopping = threading.Event()
         self._thread = threading.Thread(target=self._pump, daemon=True)
         self._thread.start()
 
     def _watch(self, chunk):
-        """Fire the wake chime once you STOP talking, not the instant the
-        wake word lands: a chime over the tail of "hey jarvis put on Elden
-        Ring" is the jarring part, and end-of-speech also masks the wait
-        before the answer. Levels are relative to the wake phrase itself, so
-        a loud TV doesn't read as talking nor a quiet room as silence; too
-        loud to call chimes at CHIME_BY_S anyway. Whoever loses the race
-        leaves the ack for GrammarGate to play at end of turn.
-
-        Playback on its own thread: stalling the pump for a chime would drop
-        the mic audio this module exists to keep."""
+        """Fire the wake chime at end of speech, not at detection. Levels are
+        relative to the wake phrase, so a loud TV doesn't read as talking;
+        too loud to call chimes at CHIME_BY_S. Playback on its own thread -
+        stalling the pump would drop mic audio."""
         if self._on_quiet is None:
             return
         level = _rms(chunk)
@@ -121,7 +98,7 @@ class WakeCapture:
                 chunk = self._stream.read(
                     CHUNK_SAMPLES, exception_on_overflow=False)
             except OSError:
-                break       # device vanished (BT flap) - keep what we already have
+                break       # device vanished (BT flap) - keep what we have
             self._chunks.append(chunk)
             self._watch(chunk)
 
@@ -140,9 +117,8 @@ class WakeCapture:
 
 
 class PrerollFeeder(FrameProcessor):
-    """Replays wake-capture PCM ahead of live mic audio. pcm is assigned late
-    (right before the runner starts) so the capture covers as much of the
-    session build as possible."""
+    """Replays wake-capture PCM ahead of live mic audio. pcm is assigned right
+    before the runner starts, so capture covers most of the session build."""
 
     def __init__(self, log):
         super().__init__()

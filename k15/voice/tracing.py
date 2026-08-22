@@ -1,37 +1,12 @@
-"""Agent traces: the voice pipeline's spans, shipped to Langfuse.
+"""Ships the voice pipeline's Pipecat spans to Langfuse.
 
-Pipecat emits the whole tree itself once tracing is on - conversation -> turn
--> stt/llm/tts - with token counts, TTFB per service, transcripts and TTS
-character counts already on the spans. So this module is *only* plumbing:
-build an exporter, hand it to Pipecat, and make every part of that fail soft.
-Almost nothing here is our own instrumentation, which is the point - the
-framework's spans are better than ours would be and they cannot drift from
-the pipeline they describe.
-
-WHAT LANDS IN LANGFUSE
-    conversation                one voice session (Pipecat's model: one trace
-    |                           IS one conversation, not one turn)
-    +- turn                     turn.number, turn.duration_seconds,
-    |  |                        turn.was_interrupted
-    |  +- stt                   transcript, ttfb
-    |  +- llm                   model, gen_ai.usage.*_tokens, ttfb
-    |  +- tts                   voice_id, text, character_count, ttfb
-
-THE RULES THIS OBEYS
-    * Telemetry never costs a session. A missing key, a bad key, a dead
-      uplink, or opentelemetry not being installed at all must degrade to
-      "no traces" and never to "no voice". Every entry point returns a bool
-      and swallows everything.
-    * Off by default in the absence of keys, exactly like the assistant and
-      worker lanes - real_key() decides, no extra config flag to forget.
-
-PRIVACY: spans carry transcripts and completions verbatim - the recorded
-decision is to ship content, since a trace without the words is not worth
-having in a single-household system. events.scrub() does NOT apply here: it
-guards our own JSONL fields, and these attributes are built by Pipecat.
-Acceptable because no secret is ever a span attribute - what flows is speech,
-model names, token counts and timings. Keep it that way: an API key or the
-VirtualHere PIN reaching a span would leave the house unredacted.
+Pipecat emits the tree itself - conversation (one voice session) -> turn ->
+stt/llm/tts, with token counts, TTFB, transcripts and TTS character counts
+already attached; this module is only plumbing. Enabled by the presence of
+keys; every entry point returns a bool and swallows everything, so a bad key
+or a dead uplink costs traces, never voice. Spans carry transcripts and
+completions verbatim - events.scrub() does not apply (Pipecat builds these
+attributes) and no secret may become a span attribute.
 """
 import base64
 import contextlib
@@ -41,20 +16,18 @@ import os
 import cglib
 import events
 
-# Region matters: Langfuse is per-account and the US host is a different
-# domain, not a path. EU is cloud.langfuse.com, US is us.cloud.langfuse.com.
+# Region is a domain, not a path (EU: cloud.langfuse.com).
 DEFAULT_HOST = "https://us.cloud.langfuse.com"
 
-# Signal-specific path. The base OTLP endpoint gets "/v1/traces" appended by
-# the SDK only when it comes from OTEL_EXPORTER_OTLP_ENDPOINT; an explicit
-# endpoint= is used verbatim, so it has to be the full path.
+# Full signal path: the SDK appends "/v1/traces" only to
+# OTEL_EXPORTER_OTLP_ENDPOINT; an explicit endpoint= is used verbatim.
 TRACES_PATH = "/api/public/otel/v1/traces"
 
 _on = False
 
 
 def is_on():
-    """True once setup() has succeeded. run_session gates on this rather than
+    """True once setup() has succeeded. Callers gate on this rather than
     re-deriving, so a mid-run key change cannot half-enable the pipeline."""
     return _on
 
@@ -65,13 +38,9 @@ def enabled(secrets):
 
 
 def auth_header(public_key, secret_key):
-    """Basic auth over the key pair, as Langfuse's OTLP endpoint expects.
-
-    Note the plain space: the '%20' that Langfuse's docs show belongs to the
-    OTEL_EXPORTER_OTLP_HEADERS *environment variable* format, where a literal
-    space would split the header list. We pass a dict straight to the
-    exporter, so the value is used verbatim and the escape would corrupt it.
-    """
+    """Basic auth over the key pair. Plain space, not the '%20' in Langfuse's
+    docs - that escape belongs to the OTEL_EXPORTER_OTLP_HEADERS env-var
+    format; a dict value is used verbatim."""
     token = base64.b64encode(
         f"{public_key}:{secret_key}".encode("utf-8")).decode("ascii")
     return f"Basic {token}"
@@ -83,9 +52,8 @@ def endpoint(cfg):
 
 
 def _exporter(cfg, secrets):
-    """Langfuse over OTLP/HTTP. HTTP is not a preference - Langfuse does not
-    accept gRPC at all, and Pipecat's own example imports the gRPC exporter,
-    so this is the single easiest thing to get silently wrong."""
+    """OTLP/HTTP: Langfuse does not accept gRPC (Pipecat's own tracing example
+    imports the gRPC exporter)."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter)
     return OTLPSpanExporter(
@@ -100,12 +68,8 @@ def _exporter(cfg, secrets):
 
 
 def setup(cfg, secrets, log):
-    """Wire Pipecat's tracing to Langfuse. Returns True if traces will flow.
-
-    Safe to call when opentelemetry is not installed (the venv predates the
-    pins) - that is a warn and a False, not a crash, so a K15 that pulled the
-    code but has not rebuilt its venv still runs voice normally.
-    """
+    """Wire Pipecat's tracing to Langfuse. True if traces will flow; missing
+    opentelemetry is a warn and a False, not a crash."""
     global _on
     if not enabled(secrets):
         log("lane_disabled", what="tracing",
@@ -114,18 +78,13 @@ def setup(cfg, secrets, log):
     try:
         from pipecat.utils.tracing.setup import setup_tracing
 
-        # Langfuse's "Env" badge reads the deployment.environment RESOURCE
+        # Langfuse's "Env" badge reads the deployment.environment resource
         # attribute, which pipecat builds from os.getenv("ENVIRONMENT",
-        # "development") - without this every real session files under
-        # "development". events.ENV keeps ONE vocabulary across Loki and
-        # Langfuse; setdefault so an explicit shell value still wins.
+        # "development"). setdefault so an explicit shell value still wins.
         os.environ.setdefault("ENVIRONMENT", events.ENV)
 
-        # Export failures stay VISIBLE. Silencing this logger to CRITICAL
-        # quiets a dead uplink's per-minute stack trace, but also hides the
-        # only message that says "wrong keys" or "wrong region" - noise is
-        # recoverable, a silent misconfiguration is not. WARNING keeps the
-        # per-export chatter down without touching the errors that matter.
+        # WARNING, not CRITICAL: export errors (wrong keys, wrong region) are
+        # the only signal that traces are misconfigured.
         logging.getLogger("opentelemetry").setLevel(logging.WARNING)
 
         ok = setup_tracing(service_name="slopstation-voice",
@@ -151,13 +110,9 @@ def setup(cfg, secrets, log):
 
 def span_attributes(session=None, turn=None):
     """Attributes for the conversation (root) span - the only one Pipecat
-    applies them to, and the one Langfuse reads trace-level fields from.
-    Without langfuse.trace.name every trace in the list reads "conversation"
-    or a bare UUID.
-
-    Both spellings of session/user are set: langfuse.* is what Langfuse
-    reads, session.id/user.id are the OTel-conventional names another backend
-    would look for."""
+    applies them to, and where Langfuse reads trace-level fields. Without
+    langfuse.trace.name traces list as "conversation" or a bare UUID. Both
+    spellings: langfuse.* for Langfuse, session.id/user.id for OTel."""
     ctx = events.current()
     session = session or ctx.get("session")
     turn = turn or ctx.get("turn")
@@ -172,42 +127,31 @@ def span_attributes(session=None, turn=None):
         attrs["langfuse.session.id"] = session
         attrs["session.id"] = session
     if turn:
-        # The turn that OPENED the session. Later turns get their own ids in
-        # the JSONL; Pipecat numbers its own turn spans independently, so this
-        # is the join back to the logs, not a per-turn label.
+        # The turn that OPENED the session: the join back to the JSONL, not a
+        # per-turn label (Pipecat numbers its turn spans independently).
         attrs["couch.turn"] = turn
     return attrs
 
 
 def conversation_id():
-    """Pipecat's conversation id = our session id, so one voice session is one
-    Langfuse trace AND one `session` in the JSONL. That shared value is what
-    lets you jump from a trace to the logs around it."""
+    """Pipecat's conversation id = our session id: one voice session is one
+    Langfuse trace and one `session` in the JSONL."""
     return events.current().get("session") or events.new_turn()
 
 
 # --- Tier-3 background jobs ---------------------------------------------------
 #
-# A job is queued during a conversation and finishes minutes later on the
-# worker thread, long after the conversation's spans have closed - and the
-# worker is a subprocess outside the pipeline Pipecat traces, so "what did
-# the agent actually DO for three minutes" had no answer in either system.
-#
-# W3C trace context fixes it: carrier() freezes the span active when the tool
-# fired, job_span() re-parents the worker's spans onto it. Same mechanism as
-# cross-service tracing, across a thread and a few minutes instead.
-#
-# ONE CONSEQUENCE, accepted: the conversation's trace latency becomes
-# wall-clock to job completion, so a 91 s conversation that queued a 3-minute
-# job reads as ~3 minutes. Truer (the request was not finished until the
-# announcement), but not the number that was there before.
+# A job finishes minutes after the conversation's spans close, in a worker
+# subprocess outside the pipeline Pipecat traces. W3C trace context bridges
+# it: carrier() freezes the span active when the tool fired, job_span()
+# re-parents the worker's spans onto it. So the conversation's trace latency
+# reads as wall-clock to job completion.
 
 
 def carrier():
     """Freeze the active span context into a W3C traceparent dict, or None.
-
-    Stored on the job record, so it also survives a restart mid-job - the
-    reconciler picks the job back up and its spans still find their parent."""
+    Stored on the job record, so a job resumed after a restart still finds its
+    parent."""
     if not _on:
         return None
     try:
@@ -234,9 +178,8 @@ class _Job:
         self._tracer, self._span = tracer, span
 
     def step(self, tool, arg="", result=""):
-        """One tool call the worker made. The CLI's stream carries no
-        per-tool timings, so these are point-in-time spans in call order -
-        WHAT it did and with what, not how long each took."""
+        """One tool call the worker made. Point-in-time, in call order: the
+        CLI's stream carries no per-tool timings."""
         try:
             with self._tracer.start_as_current_span(f"tool: {tool}") as s:
                 s.set_attribute("langfuse.observation.type", "tool")
@@ -257,8 +200,7 @@ class _Job:
                     (f"{summary}\n\n{detail}" if detail else summary)[:8000])
             for k, v in (meta or {}).items():
                 self._span.set_attribute(f"couch.job.{k}", v)
-            # gen_ai.* as well, so the usage reads as usage rather than as
-            # opaque custom fields.
+            # gen_ai.* too, so usage reads as usage rather than custom fields.
             for src, dst in (("input_tokens", "gen_ai.usage.input_tokens"),
                              ("output_tokens", "gen_ai.usage.output_tokens"),
                              ("model", "gen_ai.request.model")):
@@ -269,12 +211,9 @@ class _Job:
 
 
 def tool_span(kind, query, status=None):
-    """A provider-executed tool call, recorded where it happened.
-
-    Point-in-time and parented to whatever span is open - inside the voice
-    pipeline that is Pipecat's llm span, so a search lands beside the turn
-    that ran it. Pipecat cannot do this itself: server-side tools are not in
-    its Responses handler at all (see llm_audit.py)."""
+    """A provider-executed tool call, parented to whatever span is open (in
+    the voice pipeline, Pipecat's llm span). Pipecat cannot do this itself:
+    server-side tools are not in its Responses handler (see llm_audit.py)."""
     if not _on:
         return
     try:
@@ -292,11 +231,9 @@ def tool_span(kind, query, status=None):
 
 @contextlib.contextmanager
 def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
-    """Span for one background job, re-parented onto the conversation.
-
-    Never raises and never suppresses: a tracing failure yields _NullJob and
-    the job runs exactly as before, while an exception from the job body
-    propagates untouched."""
+    """Span for one background job, re-parented onto the conversation. Never
+    raises and never suppresses: a tracing failure yields _NullJob, an
+    exception from the job body propagates untouched."""
     cm = helper = None
     if _on:
         try:
@@ -313,9 +250,8 @@ def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
                 span.set_attribute("couch.job.provider", str(provider))
             sess = session or events.current().get("session")
             if sess:
-                # Repeated on the span on purpose: Langfuse filters sessions
-                # off whatever spans carry it, and a job that outlived its
-                # conversation must still land in the same session.
+                # Repeated on the span: Langfuse filters sessions off whatever
+                # spans carry it, and a job can outlive its conversation.
                 span.set_attribute("langfuse.session.id", sess)
                 span.set_attribute("session.id", sess)
             helper = _Job(tracer, span)
@@ -331,9 +267,7 @@ def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
                 pass
 
 
-# TODO(E5b): dual-export the same spans to Grafana Tempo. The datasource and
-# the traces:write scope already exist; what is missing is the OTLP endpoint
-# from the stack's OpenTelemetry tile. setup_tracing takes ONE exporter, so
-# this means grabbing the provider afterwards and adding a second
-# BatchSpanProcessor - deliberately deferred rather than half-built, because
-# Langfuse is where these traces actually get read.
+# TODO(E5b): dual-export to Grafana Tempo. Datasource and traces:write scope
+# exist; missing is the OTLP endpoint from the stack's OpenTelemetry tile.
+# setup_tracing takes ONE exporter, so this needs the provider grabbed
+# afterwards and a second BatchSpanProcessor added.

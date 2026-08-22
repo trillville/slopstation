@@ -1,11 +1,10 @@
 """Blind test: provider-executed tool calls (OpenAI web_search). Run:
     .venv\\Scripts\\python tests\\test_llm_audit.py
 
-Pipecat 1.7 ignores server-side tool items entirely, so this module tees the
-event stream to see them. That tee sits in the path of every token of every
-conversation, which sets the bar: it must pass every event through unchanged
-and in order, and no failure inside it may reach the pipeline. Both are
-asserted here with fakes - no network, no keys.
+Pipecat 1.7 ignores server-side tool items, so llm_audit tees the event
+stream. The tee sits in the path of every token of every conversation: it
+must pass events through unchanged and in order, and never raise into the
+pipeline. Fakes only - no network, no keys.
 """
 import asyncio
 import sys
@@ -107,8 +106,8 @@ def main():
     assert tracing.spans == [("web_search_call", "couch co-op 2026", "completed")]
     print("  search: logged once and spanned, with its query")
 
-    # added + done both carry the item; recording both would double every
-    # search, so only `done` counts - where the query is final.
+    # Both `added` and `done` carry the item; only `done` counts, and that
+    # is where the query is final.
     svc2 = FakeService(FakeStream([
         ev("response.output_item.added", search_item("q")),
         ev("response.output_item.done", search_item("q")),
@@ -134,7 +133,7 @@ def main():
     print("  search: matches the family, not one literal type")
 
     # -- the model gets told, on the NEXT turn --------------------------------
-    # Mid-stream mutation corrupts a conversation, so the note lands next turn.
+    # Mid-stream mutation corrupts a conversation, so the note waits.
     assert ctx.messages == [], "context was mutated mid-turn"
     asyncio.run(svc._process_context(ctx))
     assert len(ctx.messages) == 1, ctx.messages
@@ -171,9 +170,7 @@ def main():
     print("  close: forwarded, so no socket outlives the turn")
 
     # -- against the REAL pipecat class ---------------------------------------
-    # Everything above runs on fakes, so it would keep passing after a pipecat
-    # upgrade moved _client and left production silently unaudited. Assert the
-    # shape on the real service.
+    # Fakes would survive a pipecat move of _client; check the real one.
     try:
         from pipecat.services.openai.responses.llm import (
             OpenAIResponsesHttpLLMService, OpenAIResponsesReasoningConfig)

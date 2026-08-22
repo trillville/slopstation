@@ -1,14 +1,8 @@
 """K15 chain diagnosis: python doctor.py
 
-Read-only except one haptic chirp, and that only runs when the chord listener
-is stopped (doctor detects it and skips - the one-process Puck rule is
-enforced here, not by the operator). Run when the chord "does nothing", after
-Windows/controller-firmware updates, or as a preflight.
-
-Voice rows at the end are WARN-only: voice is an overlay, never load-bearing,
-so its problems must not turn the chain diagnosis red.
-
-Exit code = number of FAILs.
+Read-only except one haptic chirp, skipped when the chord listener is running
+(one process owns the Puck). Voice and telemetry rows are WARN-only; only the
+chord chain can FAIL. Exit code = number of FAILs.
 """
 import json, subprocess, sys, time
 
@@ -162,8 +156,7 @@ def check_ssh():
     except Exception as e:
         report(WARN, "ssh dispatch", str(e), "transient? status check above is the primary signal")
 
-    # Deploy skew. Two update mechanisms (Deploy.ps1 there, git pull here),
-    # so drift is normal unless something measures it - this is that.
+    # Deploy skew: Deploy.ps1 updates the PC, git pull updates here.
     try:
         pcbuild = ssh("version")
     except subprocess.CalledProcessError as e:
@@ -217,16 +210,10 @@ def check_session_state():
 
 
 def _steam_mint_probe(days):
-    """Can the refresh token actually MINT? Returns a report() tuple.
+    """Can the refresh token actually mint? Returns a report() tuple.
 
-    ASKS THE REAL CODE rather than re-implementing it: `steam_session.py token`
-    runs the actual mint the agent uses and exits 0 when it works. The mint is
-    a multipart transfer-login flow with cookies, so a stdlib re-do here would
-    be both long and free to drift - and drift is the failure being guarded
-    against. Doctor runs on SYSTEM python, so this shells out to the VOICE VENV.
-
-    Offline is not a verdict on the token, so anything that stops the check
-    from producing an answer stays a PASS with the caveat named.
+    Shells `steam_session.py token` (exit 0 = mint works) in the voice venv,
+    since doctor runs on system python. No answer (no venv, offline) = PASS.
     """
     vpy = cglib.BASE / "voice" / ".venv" / "Scripts" / "python.exe"
     script = cglib.BASE / "voice" / "steam_session.py"
@@ -251,11 +238,8 @@ def _steam_mint_probe(days):
 
 
 def check_voice(cfg):
-    """Voice overlay health - WARN-only by design: voice is never load-bearing,
-    so a broken voice lane must not turn the chain doctor red (exit code =
-    FAILs, and the chord's chain is what that number means). Filesystem +
-    process checks only - doctor runs on system python, which deliberately
-    does not have the voice venv's deps."""
+    """Voice overlay health - WARN-only, never FAIL. Filesystem and process
+    checks only; doctor runs on system python, without the voice venv deps."""
     voice_dir = cglib.BASE / "voice"
     if not (cfg and isinstance(cfg.get("voice"), dict)):
         report(WARN, "voice config", "no voice section in config.json",
@@ -278,8 +262,7 @@ def check_voice(cfg):
     if (voice_dir / ".venv" / "deps-ok").exists():
         report(PASS, "voice venv", "bootstrapped (deps-ok sentinel present)")
         model = cfg["voice"].get("wakeModel", "")
-        # Same order the agent resolves in (audio.py _resolve_model), so this
-        # answers which copy WOULD load rather than whether one exists.
+        # Same resolution order as audio.py _resolve_model.
         vendored = voice_dir / "models" / f"{model}.onnx"
         onnx = (voice_dir / ".venv" / "Lib" / "site-packages" / "openwakeword"
                 / "resources" / "models" / f"{model}.onnx")
@@ -308,11 +291,8 @@ def check_voice(cfg):
         report(WARN, "voice library", f"unreadable ({e})",
                "delete state\\library.json; the agent rebuilds it")
 
-    # Deals precompute (wishlist-on-sale + specials). The agent refreshes it
-    # every ~6h; a stale file when the agent is up means the store sync is
-    # failing, which silently serves empty "anything on sale?" answers. WARN
-    # only past 24h so a normally-sleeping rig doesn't nag; absent is silent
-    # (optional, keyless, fills on first sync).
+    # Deals precompute: the agent refreshes ~6h, so stale means the store sync
+    # is failing. WARN past 24h; absent is silent (fills on first sync).
     deals = cglib.BASE / "state" / "deals.json"
     if deals.exists():
         age_h = (time.time() - deals.stat().st_mtime) / 3600
@@ -322,29 +302,22 @@ def check_voice(cfg):
         else:
             report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
 
-    # Config sanity: a spoken name in BOTH inputs and navTargets would let
-    # "show <name>" double-match SwitchInput and Nav. Cheap to catch here (the
-    # grammar's disjointness is otherwise only vocabulary-enforced).
+    # A spoken name in both inputs and navTargets makes "show <name>"
+    # double-match SwitchInput and Nav; nothing else enforces disjointness.
     v = cfg.get("voice", {})
     clash = set(map(str.lower, v.get("inputs", {}))) & set(map(str.lower, v.get("navTargets", {})))
     if clash:
         report(WARN, "voice config", f"inputs/navTargets overlap: {', '.join(sorted(clash))}",
                "rename one side - a shared spoken name double-matches in the grammar")
 
-    # Web search puts UNTRUSTED page text into the same turn that can quit a
-    # game or queue an install. Deliberate and defensible (the tools validate
-    # appids and quit confirms first), but it is the one config choice that
-    # weakens the "the lane reading the web cannot act" split - so it gets
-    # SAID, once, rather than living only in someone's memory. Not a WARN: it
-    # is a chosen setting, and a permanent nag is how warnings stop being read.
+    # Web search puts untrusted page text into the tool-calling turn.
+    # PASS, not WARN - it is a chosen setting.
     if v.get("assistantWebSearch"):
         report(PASS, "voice web search", "on - page text reaches the "
                "tool-calling turn (set assistantWebSearch false to split them)")
 
-    # Account session (install-by-voice). WARN-only, and only speaks up when a
-    # token IS present but unusable or nearing death - a re-scan is a HUMAN
-    # action, so it earns a heads-up before movie night finds it, not after.
-    # Absent is silent (the lane is optional). Stdlib only, like the CLI.
+    # Account session (install-by-voice). Speaks up only when a token is
+    # present but unusable or near expiry; absent is silent. Stdlib only.
     secrets = cglib.load_secrets()
     tok = secrets.get("steamRefreshToken")
     if cglib.real_key(tok):
@@ -361,26 +334,19 @@ def check_voice(cfg):
                 report(WARN, "steam session", f"token expires in {days:.0f} days",
                        "re-scan soon: steam_session.py enroll")
             else:
-                # An unexpired token is NOT a working one. On 2026-08-14 this
-                # probe said "good for 211 days" while every mint came back
-                # AccessDenied, and the failure surfaced on the couch instead:
-                # the QR enrollment had produced a WEB-audience token
-                # (aud=[web,renew,derive]), which cannot derive a client-app
-                # token. A PASS that a live install contradicts is worse than
-                # no probe, so ask Steam rather than the clock.
+                # Unexpired != working: QR enrolment can yield a web-audience
+                # token (aud=[web,renew,derive]) that AccessDenies every mint
+                # while reading as good for months (2026-08-14).
                 report(*_steam_mint_probe(days))
         except Exception as e:
             report(WARN, "steam session", f"token unreadable ({e})",
                    "re-run steam_session.py enroll")
 
-    # Tier-3 worker lane - stdlib checks only, same WARN-only posture:
-    # background tasks off must never redden the chain doctor.
+    # Tier-3 worker lane - stdlib checks only, WARN-only.
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
     if wp:
-        # provider -> CLI name lives in workers.py and nowhere else; it is
-        # stdlib-only, so system python can import it (voice venv deps are
-        # still off-limits here).
+        # provider -> CLI name lives only in workers.py, which is stdlib-only.
         sys.path.insert(0, str(voice_dir))
         try:
             from workers import WORKERS
@@ -399,8 +365,8 @@ def check_voice(cfg):
                        f"npm i -g the {exe} CLI and log in once, "
                        "as the autologon user")
         if wp == "openai":
-            # Codex keeps a shell, so on this lane the boundary is AGENTS.md
-            # policy rather than the harness (see workers.py).
+            # Codex keeps a shell: the boundary here is AGENTS.md policy,
+            # not the harness (see workers.py).
             report(WARN, "worker isolation",
                    "codex keeps a shell (sandbox confines writes, not reads)",
                    "structural research-only isolation is the anthropic lane")
@@ -436,11 +402,7 @@ def check_voice(cfg):
 
 
 def check_telemetry():
-    """Is the event stream actually being written, and is anything shipping it?
-
-    WARN-only, like voice: losing telemetry costs you the ability to diagnose
-    from the couch, never the ability to launch. But it has to be VISIBLE -
-    a silent shipper is the failure that makes every later dashboard a lie."""
+    """Event stream written, and anything shipping it? WARN-only."""
     import events
     today = events._path(time.strftime("%Y%m%d"))   # local date, like events
     try:
@@ -452,11 +414,9 @@ def check_telemetry():
         report(WARN, "event stream", f"{today.name} not written yet",
                "normal on a quiet boot; suspicious if the lanes are up")
 
-    # Retention runs on the first emit of a process and at rollover, so a pile
-    # of old files means the prune never ran - i.e. nothing has emitted since
-    # midnight on some past day. Scan archive/ too: expired files are moved
-    # there at ARCHIVE_DAYS and deleted from there at TTL_DAYS, so checking
-    # only the top level would make this probe silently always pass.
+    # Retention runs on a process's first emit and at rollover, so old files
+    # mean the prune never ran. Scan archive/ too - files move there at
+    # ARCHIVE_DAYS and are deleted at TTL_DAYS.
     try:
         stale = [f.name for f in
                  list(events.LOG_DIR.glob("*.jsonl")) +
@@ -468,7 +428,7 @@ def check_telemetry():
     except OSError:
         pass
 
-    # The shipper (E2). Absent is fine and expected until Alloy is installed.
+    # The shipper. Absent is expected until Alloy is installed.
     try:
         out = subprocess.run(["sc", "query", "Alloy"], capture_output=True,
                              text=True, timeout=10).stdout

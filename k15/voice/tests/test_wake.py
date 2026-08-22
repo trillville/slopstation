@@ -1,18 +1,10 @@
-"""Blind test: the wake model detects SYNTHESIZED speech - no mic,
-no human. Windows SAPI speaks the CONFIGURED wake phrase in two different
-voices (oWW was trained on synthetic TTS, so this is a legitimate detection
-test), plus negative phrases that must NOT fire. Downloads the oWW models on
-first run.
+"""Blind test: the wake model detects SYNTHESIZED speech - no mic, no human.
+Windows SAPI speaks the CONFIGURED wake phrase in two voices (oWW trains on
+synthetic TTS), plus negatives that must NOT fire. Follows config.json rather
+than pinning hey_jarvis; the model ships in from the gaming PC. Downloads the
+oWW models on first run. SAPI may mispronounce an invented phrase, so a low
+score here alongside good live trials is the test's limit, not the model's.
     .venv\\Scripts\\python tests\\test_wake.py
-
-It follows config.json rather than pinning hey_jarvis, because the model is
-the one piece that arrives from another machine entirely (trained on the
-gaming PC, shipped by git) and a custom wake word nothing blind-tests is
-coverage in name only.
-
-Caveat for an invented phrase: SAPI may pronounce it nothing like a person
-would, so a low score here with good live trials is the test's limit rather
-than the model's - see docs/custom-wakeword-design.md.
 """
 import json
 import subprocess
@@ -30,8 +22,7 @@ from audio import WakeListener
 
 
 def deployed_model():
-    """config.example.json is the fallback so a fresh checkout - no
-    config.json yet - still runs the suite instead of erroring."""
+    """config.example.json is the fallback so a fresh checkout still runs."""
     for path in (cglib.BASE / "config.json", cglib.BASE / "config.example.json"):
         try:
             return json.loads(path.read_text(encoding="utf-8-sig"))["voice"]["wakeModel"]
@@ -41,8 +32,8 @@ def deployed_model():
 
 
 MODEL = deployed_model()
-# The same derivation the agent uses (session_runtime.py): the filename IS
-# the phrase, so this breaks loudly if a model is named off-convention.
+# Same derivation as session_runtime.py: the filename IS the phrase, so an
+# off-convention model name breaks here loudly.
 PHRASE = MODEL.rsplit("_v", 1)[0].replace("_", " ")
 VOICE_CFG = {"wakeModel": MODEL}
 CHUNK = WakeListener.CHUNK

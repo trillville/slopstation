@@ -1,6 +1,6 @@
-"""Blind test: dispatch.py logic with every side effect mocked -
-lock arbiter, dry-run, volume stepping + clamp, mute, input map + the
-READY-gate on the gaming input, serial retry, ssh outcomes. Run:
+"""Blind test: dispatch.py logic with every side effect mocked - lock arbiter,
+dry-run, volume stepping + clamp, mute, input map + the READY-gate on the
+gaming input, serial retry, ssh outcomes. Run:
     .venv\\Scripts\\python tests\\test_dispatch.py
 """
 import sys
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cglib
-import couch                 # THE ssh seam - dispatch reaches it through the module
+import couch                 # the ssh seam - dispatch reaches it via the module
 import dispatch as dp
 
 CFG = {
@@ -32,8 +32,7 @@ class Harness:
 
 def with_temp_lock(age_s):
     """Point cglib.LOCK at a temp file with the given age; None = absent.
-    CANCEL rides along: end_session writes it next to the lock, and leaving
-    it at the repo path would land test cancels in the real state dir."""
+    CANCEL rides along, or test cancels land in the real state dir."""
     tmp = Path(tempfile.mkdtemp()) / "session.lock"
     if age_s is not None:
         tmp.write_text("x")
@@ -60,8 +59,7 @@ def main():
     h = Harness(dry_run=True)
     r = h.d.start_session(appid=12345)
     assert r.ok and "couch.py start 12345" in r.detail, r
-    # Assert on the EVENT, not its prose: rewording is free, renaming is not
-    # (alerts and dashboards group by event name).
+    # Assert on the EVENT, not its prose: dashboards group by event name.
     assert "dry_run_would" in h.log.events(), h.log.records
 
     with_temp_lock(999)                               # stale lock = launchable
@@ -92,9 +90,8 @@ def main():
     sent.clear()
     assert h.d.mute_toggle().ok and sent == [cglib.EXLINK_FRAMES["mute_toggle"]]
 
-    # (duck/unduck left Dispatch on 2026-08-21: with eARC audio the TV
-    # refuses Ex-Link volume writes, so ducking moved to remote-key relay +
-    # readback - TvDucker, drilled by test_ducking.py.)
+    # duck/unduck left Dispatch on 2026-08-21: with eARC audio the TV refuses
+    # Ex-Link volume writes, so ducking is remote-key relay + readback.
 
     # --- serial send raises -> fail earcon (COM retry now lives in cglib) ----
     def always_down(frame, port): raise OSError("dead")
@@ -109,8 +106,8 @@ def main():
     assert h.d.switch_input("Apple TV ").ok
     assert sent == [cglib.EXLINK_FRAMES["hdmi1"]]
 
-    # No session: "switch to the pc" means "start a session" - it spawns the
-    # full couch launch and never touches the TV (couch.py flips at READY).
+    # No session: "switch to the pc" means "start a session" - spawns the full
+    # couch launch and never touches the TV (couch.py flips at READY).
     with_temp_lock(None)
     sent.clear(); spawned.clear()
     r = h.d.switch_input("the pc")
@@ -122,7 +119,6 @@ def main():
     sent.clear()
     r = h.d.switch_input("the pc")
     assert not r.ok and r.earcon == "busy" and not sent, r
-    # Live READY session: flips instantly.
     couch.ssh = lambda cmd, **kw: "2026-08-10T20:00:00"  # READY timestamp
     assert h.d.switch_input("the pc").ok and sent == [cglib.EXLINK_FRAMES["hdmi4"]]
     # Fresh lock but host unreachable: honest fail, no switch.
@@ -132,10 +128,8 @@ def main():
     assert not h.d.switch_input("the pc").ok and not sent
 
     # --- end session over ssh outcomes ---------------------------------------
-    # With the rig busy (fresh lock = a launch or session in flight), ending
-    # also writes the cancel marker couch.py consumes - BEFORE the ssh, so
-    # the launch stands down even when the exit can't get through (0b785e:
-    # the exit that raced the rescue Enter).
+    # With the rig busy, ending writes the cancel marker couch.py consumes
+    # BEFORE the ssh, so the launch stands down even if the exit never lands.
     with_temp_lock(10)
     couch.ssh = lambda cmd, **kw: "OK"
     h = Harness()
@@ -166,8 +160,8 @@ def main():
     assert h.d.play_game(1).ok
     couch.ssh = lambda cmd, **kw: "BUSY:42"
     r = h.d.play_game(1)
-    # The blocker is named for the assistant lane (detail is all it sees);
-    # an index miss degrades to the bare id, never to a crash.
+    # The blocker is named for the assistant lane; an index miss degrades to
+    # the bare id, never to a crash.
     assert not r.ok and r.earcon == "busy" and "BUSY:42" in r.detail, r
     dp.library.installed_name = lambda a: {42: "Baldur's Gate 3"}.get(a)
     r = h.d.play_game(1)
@@ -197,7 +191,7 @@ def main():
     h.d.begin_utterance("9f2c1a", "quit the game")
     r = h.d.quit_game(1888160)
     assert r.ok and "quitting" in r.detail, r
-    # The appid rides the verb AND the turn tags it - a stop is a mutating verb.
+    # The appid rides the verb and the turn tags it: a stop is mutating.
     assert wire[-1] == "stop 1888160 --turn 9f2c1a", wire[-1]
     assert "quit_dispatched" in h.log.events()
     couch.ssh = lambda cmd, **kw: "NOTRUNNING"
@@ -226,8 +220,8 @@ def main():
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy", r
     assert "start one first" in r.detail, r
-    # Mid-start (fresh lock), the busy names the situation: "start one first"
-    # told the model to start the session it had JUST started (2026-08-15).
+    # Mid-start (fresh lock) the busy names the situation: "start one first"
+    # told the model to start the session it had just started (2026-08-15).
     with_temp_lock(10)
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
@@ -241,9 +235,8 @@ def main():
     assert Harness().d.nav("downloads").earcon == "fail"
 
     # --- an UNREGISTERED task says so, on every verb that fires one ----------
-    # Every nav in the first couch test answered the old FAILED:1 and read as
-    # "nav is broken", when the fix was one Register-ScheduledTask
-    # (2026-08-14). The reply now names the task AND the fix.
+    # The old FAILED:1 read as "nav is broken" when the fix was one
+    # Register-ScheduledTask (2026-08-14); the reply names the task and the fix.
     h = Harness()
     dp.library.installed_name = lambda a: None
     with_temp_lock(5)          # a live session, so play_game takes the ssh path

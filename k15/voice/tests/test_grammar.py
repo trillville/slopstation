@@ -1,6 +1,5 @@
-"""Blind test: the Tier-1 grammar, offline - utterance -> intent+slots
-table, negatives that MUST fall through to the assistant lane, and the
-risky-command narrowness rule. Run:
+"""Blind test: the Tier-1 grammar, offline - utterance -> intent+slots,
+negatives that must fall through to the assistant lane. Run:
     .venv\\Scripts\\python tests\\test_grammar.py
 """
 import sys
@@ -24,9 +23,8 @@ TABLE = [
     ("let's play", "StartSession", {}),
     ("end the session", "EndSession", {}),
     ("end session", "EndSession", {}),
-    # "exit ..." are statements of intent nobody says by accident. The
-    # mishears that showed up beside them in the logs ("end of session",
-    # "access session") are NOT phrasings and stay out - see grammar.yaml.
+    # "exit ..." are statements of intent nobody says by accident; the mishears
+    # beside them in the logs ("end of session", "access session") stay out.
     ("exit session", "EndSession", {}),
     ("exit the gaming session", "EndSession", {}),
     ("exit gaming mode", "EndSession", {}),
@@ -49,33 +47,31 @@ TABLE = [
     ("go back to the playstation", "SwitchInput", {"input": "playstation"}),
     ("switch to ps5", "SwitchInput", {"input": "ps5"}),
     ("show the apple tv", "SwitchInput", {"input": "apple tv"}),
-    # Nav: {target}'s VALUE is the nav kind, and the vocabulary is disjoint from
-    # {input}, so these never cross ("show the apple tv" above stays SwitchInput).
+    # {target}'s value is the nav kind, and its vocabulary is disjoint from
+    # {input}, so these never cross with SwitchInput.
     ("show downloads", "Nav", {"target": "downloads"}),
     ("show me the downloads", "Nav", {"target": "downloads"}),
     ("open the store", "Nav", {"target": "store"}),
     ("go to my library", "Nav", {"target": "library"}),
     ("take me to downloads", "Nav", {"target": "downloads"}),
-    # Polite lead-in: nav is what gets asked politely, and it cannot widen
-    # anything because {target} is still an exact list.
+    # Polite lead-in: widens nothing, {target} is still an exact list.
     ("can you show me the downloads", "Nav", {"target": "downloads"}),
     ("could you open the store", "Nav", {"target": "store"}),
     ("can you go to my library", "Nav", {"target": "library"}),
-    # ShowCollection: wildcard, resolved on the box; the "my"/"collection"
-    # marker keeps a bare "show me <game>" out (that falls through, below).
+    # ShowCollection: wildcard resolved on the box; the "my"/"collection"
+    # marker keeps a bare "show me <game>" out.
     ("show my roguelikes", "ShowCollection", {"collection": "roguelikes"}),
     ("show me the co-op collection", "ShowCollection", {"collection": "co op"}),
     ("open my mech games collection", "ShowCollection", {"collection": "mech games"}),
-    # {game} is a wildcard: the slot carries the (normalized) spoken text;
-    # title->appid resolution is titles.py's job, tested in test_library.
+    # {game} is a wildcard carrying normalized spoken text; title->appid
+    # resolution is titles.py, tested in test_library.
     ("play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("launch elden ring", "PlayGame", {"game": "elden ring"}),
     ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),
     ("start elden ring", "PlayGame", {"game": "elden ring"}),
     ("play some music", "PlayGame", {"game": "some music"}),
-    # Conversational lead-ins. These were the two commonest launch phrasings
-    # in the logs and both fell through to the LLM with an empty slot, even on
-    # a transcript where the STT had heard the title perfectly.
+    # Conversational lead-ins: the commonest launch phrasings in the logs, and
+    # they used to fall through to the LLM with an empty slot.
     ("i want to play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("i wanna play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("i would like to play elden ring", "PlayGame", {"game": "elden ring"}),
@@ -83,16 +79,14 @@ TABLE = [
     ("let's play elden ring", "PlayGame", {"game": "elden ring"}),
     ("can you play elden ring", "PlayGame", {"game": "elden ring"}),
     ("wanna launch elden ring", "PlayGame", {"game": "elden ring"}),
-    # "can you START x" is deliberately NOT a PlayGame form: StartSession
-    # has no polite variant to claim it first, so this matched with
-    # game="the session" and logged a title_miss on its way to the LLM.
+    # "can you START x" is deliberately not a PlayGame form: StartSession has
+    # no polite variant to claim it first, so it matched game="the session".
     ("can you start the session", None, {}),
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
     ("cancel", "ExitSession", {}),          # bare cancel stays conversation-close
-    # Safe to widen where EndSession is not: closes the conversation, touches
-    # nothing in the room.
+    # Safe to widen where EndSession is not: touches nothing in the room.
     ("go away", "ExitSession", {}),
     ("leave me alone", "ExitSession", {}),
     # Background-task surface - narrow by design.
@@ -128,8 +122,8 @@ TABLE = [
     ("what did you find in the garage", None, {}),
 ]
 
-# Wake-prefix stripping (pre-roll makes transcripts start with the wake
-# phrase): (transcript, what the lanes should see; "" = swallowed entirely).
+# Wake-prefix stripping, since pre-roll makes transcripts start with the wake
+# phrase: (transcript, what the lanes should see; "" = swallowed entirely).
 STRIP = [
     ("hey jarvis volume up", "volume up"),
     ("Hey, Jarvis, volume up.", "volume up."),
@@ -146,8 +140,8 @@ STRIP = [
     ("hey jar vis volume up", "volume up"),             # split anchor, joined
 ]
 
-# Same stripper, "alfred" anchor - the split-mishear incident (2026-08-15)
-# and the join staying under 80 for real phrases.
+# Same stripper, "alfred" anchor: split mishears (2026-08-15), and the join
+# staying under 80 for real phrases.
 STRIP_ALFRED = [
     ("hey alfred volume up", "volume up"),
     ("Hey, all. Fred, take me home.", "take me home."),  # joined "allfred" ~92
@@ -155,12 +149,9 @@ STRIP_ALFRED = [
     ("all for one", "all for one"),                      # joined "allfor" ~67
 ]
 
-# The two-token join, both directions: (text, anchor, want). It has to
-# ASSEMBLE a split anchor, and it must never swallow a real word standing in
-# front of an INTACT one. The second group is the half that only _WHOLE_ANCHOR
-# holds back - every one of them joins high enough to strip on its own
-# ("a jarvis" 92.3, "my jarvis" and "is jarvis" 85.7, "the jarvis" exactly
-# 80.0), and stripping any of them deletes a word the user actually said.
+# The two-token join, both directions: (text, anchor, want). The second group
+# is held back only by _WHOLE_ANCHOR - each joins high enough to strip on its
+# own ("a jarvis" 92.3, "my jarvis"/"is jarvis" 85.7, "the jarvis" exactly 80).
 STRIP_JOIN = [
     ("hey al fred play hades", "alfred", "play hades"),
     ("al fred volume up", "alfred", "volume up"),
@@ -216,9 +207,8 @@ def main():
     if m.match(stripped) is None or m.match(stripped)[0] != "VolumeUp":
         failures.append(f"stripped {stripped!r} no longer matches VolumeUp")
 
-    # is_busy: an assistant turn in flight defers the idle timeout (a model
-    # slower than holdWindowS must not be killed mid-answer), but a hung turn
-    # expires after ASSISTANT_WAIT_S so it can't pin the session open.
+    # is_busy: an assistant turn in flight defers the idle timeout, but a hung
+    # turn expires after ASSISTANT_WAIT_S so it can't pin the session open.
     import time as _t
 
     from grammar_gate import GrammarGate
@@ -232,9 +222,8 @@ def main():
     if g.is_busy():
         failures.append("expired assistant turn must not pin the session")
 
-    # Tier 2's way out: the stop_listening tool ARMS the gate, and the session
-    # ends only once the goodbye has been spoken - the tool itself runs before
-    # the model has said a word, so ending there would close the mic over it.
+    # The stop_listening tool ARMS the gate; the session ends only once the
+    # goodbye is spoken, since the tool runs before the model has said a word.
     import asyncio
 
     import cglib
@@ -243,8 +232,8 @@ def main():
     from pipecat.processors.frame_processor import FrameDirection
 
     def drive(frames, arm):
-        """Feed frames to a fresh gate with push_frame stubbed (there is no
-        pipeline here); return the EndWorkerFrames it pushed, and its log."""
+        """Feed frames to a fresh gate with push_frame stubbed; return the
+        EndWorkerFrames it pushed, and its log."""
         glog = cglib.CapturingLog("voice")
         gate = GrammarGate(m, None, glog)
         pushed = []
@@ -277,8 +266,8 @@ def main():
     if len(ended) != 1:
         failures.append("a failed answer must still honour an armed stop")
 
-    # An assistant turn is SILENT while it works: the only sounds around an
-    # answer are the answer itself and, if it errors, the fail earcon.
+    # An assistant turn is silent while it works: the only sounds are the
+    # answer itself and, on error, the fail earcon.
     import earcons
     if "think" in earcons.SPECS:
         failures.append("the think earcon is back - it was removed on purpose")

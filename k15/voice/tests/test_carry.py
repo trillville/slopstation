@@ -1,6 +1,6 @@
-"""Blind test: _trim_carry must never hand the next session a
-tool_result without its tool_use (Anthropic 400s on that). It trims the
-carried slice to whole exchanges starting at a plain user turn. Run:
+"""Blind test: _trim_carry trims the carried slice to whole exchanges starting
+at a plain user turn - a tool_result without its tool_use is a 400 from
+Anthropic. Run:
     .venv\\Scripts\\python tests\\test_carry.py
 """
 import sys
@@ -33,22 +33,22 @@ def no_dangling_tail(msgs):
 
 
 def main():
-    # Slice starting on an orphaned tool result -> front-trimmed away.
+    # Orphaned tool result at the head -> trimmed away.
     m = _trim_carry([TOOL_RES, A, U, A])
     assert first_is_plain_user(m), m
 
-    # Slice ending on an assistant tool_call with no result -> tail dropped.
+    # Assistant tool_call with no result at the tail -> dropped.
     m = _trim_carry([U, A, U, A_TOOL])
     assert no_dangling_tail(m) and first_is_plain_user(m), m
 
     whole = [U, A_TOOL, TOOL_RES, A]
     assert _trim_carry(whole) == whole
 
-    # Degenerate: all-orphan slice collapses to empty (safe, not a crash).
+    # All-orphan slice collapses to empty, not a crash.
     assert _trim_carry([TOOL_RES, A_TOOL]) == []
     assert _trim_carry([]) == []
 
-    # Real shape: two tool turns + a plain "thanks" turn, sliced to 8.
+    # Two tool turns + a plain turn, sliced to 8.
     convo = [U, A_TOOL, TOOL_RES, A, U, A_TOOL, TOOL_RES, A, U, A]
     m = _trim_carry(convo[-8:])
     assert first_is_plain_user(m) and no_dangling_tail(m), m

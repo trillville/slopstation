@@ -1,8 +1,6 @@
-"""Blind test: the worker lane minus real CLIs - reply parsing
-(contract JSON, fences, prose fallback), adapter argv/extract shapes from
-canned fixtures, JobStore lifecycle on a temp state file (enqueue -> run ->
-DONE, cap, cancel, unread flow), the restart reconciler, and the announcer's
-defer/abort gates with playback stubbed. Run:
+"""Blind test: the worker lane minus real CLIs - reply parsing, adapter
+argv/extract shapes, JobStore lifecycle on a temp state file, the restart
+reconciler, and the announcer gates with playback stubbed. Run:
     .venv\\Scripts\\python tests\\test_jobs.py
 """
 import json
@@ -52,16 +50,15 @@ def main():
     cw.path = r"C:\x\claude.cmd"
     argv = cw._argv()
     assert argv[:3] == ["cmd.exe", "/c", r"C:\x\claude.cmd"]     # .cmd shim
-    # stream-json: the tool calls exist only in the stream, and plain json
-    # leaves just the final text. --verbose is required alongside it.
+    # stream-json: tool calls exist only in the stream; plain json leaves just
+    # the final text. --verbose is required alongside it.
     assert "-p" in argv and "--output-format" in argv
     assert "stream-json" in argv and "--verbose" in argv
     cw.stream = False                            # the usage-error fallback
     assert "json" in cw._argv() and "stream-json" not in cw._argv()
     cw.stream = True
     assert "--model" not in argv                 # empty = the CLI's own
-    # One vocabulary across both lanes, a model key per vendor: a claude alias
-    # can never reach codex, and neither lane hides an undiscoverable default.
+    # One vocabulary across both lanes, a model key per vendor.
     assert set(workers.WORKERS) == set(workers.MODEL_KEY) == {"anthropic",
                                                               "openai"}
     assert workers.WORKERS["anthropic"].exe == "claude"
@@ -84,8 +81,8 @@ def main():
     assert r["summary"]
 
     # -- the stream: tool calls, their results, and the discarded metadata ----
-    # Field names verified against the real CLI (2026-08-12); they are not in
-    # the published reference, so this test is where they are pinned.
+    # Field names verified against the real CLI (2026-08-12); not published
+    # anywhere, so this is where they are pinned.
     stream = "\n".join(json.dumps(e) for e in [
         {"type": "system", "subtype": "init"},
         {"type": "assistant", "message": {"content": [
@@ -102,11 +99,9 @@ def main():
          "result": '{"summary": "Three picks.", "detail": "The long form."}',
          "total_cost_usd": 0.073279, "num_turns": 4, "stop_reason": "end_turn",
          "session_id": "2c18b2b6", "duration_api_ms": 2514,
-         # server_tool_use counts the API's OWN server-executed searches, but
-         # this CLI's WebSearch/WebFetch are harness tools, so it reports
-         # zeros while the stream carries real tool_use blocks - observed on a
-         # live job that made six searches and logged "web_searches=0"
-         # (2026-08-14). The fixture mirrors that; the counts come from steps.
+         # server_tool_use counts the API's own server-executed searches; this
+         # CLI's WebSearch/WebFetch are harness tools, so it reports zeros while
+         # the stream carries real tool_use blocks (2026-08-14).
          "usage": {"input_tokens": 2, "output_tokens": 12,
                    "cache_read_input_tokens": 20938,
                    "server_tool_use": {"web_search_requests": 0,
@@ -127,8 +122,8 @@ def main():
     assert m["denials"] == 1 and m["model"] == "claude-opus-5"
     assert m["cache_read_tokens"] == 20938 and m["cli_session"] == "2c18b2b6"
 
-    # Churn resistance: junk lines, a half-written line, and an unknown event
-    # type must cost tool spans at most - never the answer.
+    # Junk lines, a half-written line and an unknown event type cost tool spans
+    # at most, never the answer.
     messy = ("banner text\n" + stream.splitlines()[1] + "\n"
              '{"type": "mystery", "whatever": 1}\n{"type": "assist\n'
              + stream.splitlines()[-1])
@@ -141,7 +136,7 @@ def main():
     assert "exec" in argv and "--output-last-message" in argv
     assert argv[-1] == "-"                                       # prompt=stdin
     # Codex carries effort as a TOML -c override, not an env var; its own
-    # default is medium, tuned for interactive work rather than this lane.
+    # default is medium.
     assert 'model_reasoning_effort="high"' in argv
     assert xw._env() is None                     # flag-carried, not env
     xw_bare = workers.CodexWorker()
@@ -193,19 +188,16 @@ def main():
     store = jobs_mod.JobStore(log, fake, timeout_s=5, on_done=done_hook.append)
     store.start()
 
-    # --dry-run can't gate a worker's shell the way Dispatch gates Tier 1/2,
-    # so the task itself carries the notice (advisory, and logged).
+    # --dry-run can't gate a worker's shell, so the task text carries the
+    # notice (advisory, and logged).
     dry = jobs_mod.JobStore(log, fake, timeout_s=5, dry_run=True)
     assert dry._task_text({"task": "x"}) == jobs_mod.JobStore.DRY_NOTE + "x"
     assert store._task_text({"task": "x"}) == "x"
     ok, detail = store.enqueue("find coop games")
     assert ok and "queued" in detail
 
-    # This store has a DOUBLE in bench/harness.py, and a double that drifts is
-    # worse than no double: when `asked` arrived here, the tool called the fake
-    # with a keyword it did not take, the trial loop's `except Exception` read
-    # the TypeError as an API blip, and probe_task_brief failed every trial on
-    # briefs it had never been handed. Pinned where the real signature lives.
+    # bench/harness.py doubles this store; a drifted signature reads as an API
+    # blip inside the trial loop's `except Exception`, so pin the two together.
     import inspect
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
     import harness
@@ -270,7 +262,7 @@ def main():
     ann.submit(store.latest_result())
     time.sleep(0.4)
     assert store.unread(), "an aborted announcement must stay unread"
-    # speak() is the whole out-of-session path: what --announce-test rehearses.
+    # speak() is the out-of-session path --announce-test rehearses.
     ann._play = lambda pcm: played.append(len(pcm)) or True
     played.clear()
     assert ann.speak("bench line") and played
@@ -291,8 +283,8 @@ def main():
 
     # Job results ride into the assistant as prior conversation.
     import session_runtime
-    # The replay must never put the MODEL's words in the USER's mouth: a brief
-    # attributed to the user is a standing instruction for CONTEXT_AGE_S.
+    # A brief attributed to the user is a standing instruction for
+    # CONTEXT_AGE_S, so the model's words must never be replayed as the user's.
     pre, post = session_runtime.job_messages(store, 0)       # 0 = all post
     msgs = pre + post
     assert msgs and len(msgs) <= 2 * jobs_mod.CONTEXT_JOBS
@@ -303,8 +295,8 @@ def main():
                 "the model's own brief is being replayed as the user's words"
     assert session_runtime.job_messages(None, 0) == ([], [])  # worker lane off
 
-    # With a transcript: a true exchange, quoting the person. `asked` is an
-    # argument (dispatch's utterance snapshot), not store state.
+    # With a transcript: quotes the person. `asked` is an argument (dispatch's
+    # utterance snapshot), not store state.
     store.enqueue("Research couch co-op titles, excluding owned games.",
                   asked="find me some couch co-op games")
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
@@ -318,8 +310,8 @@ def main():
                        "content": "find me some couch co-op games"}, pair
     assert "Found three." in pair[1]["content"]
 
-    # Without one (chord lane, REPL, or a record predating `asked`): stated
-    # as history, not as something the user said.
+    # Without one (chord lane, REPL, or a record predating `asked`): stated as
+    # history, not as something the user said.
     store.enqueue("Some brief nobody spoke aloud.")
     job = [j for j in store._load() if j["status"] == jobs_mod.QUEUED][-1]
     store._update(job["id"], status=jobs_mod.DONE, read=True,
@@ -334,10 +326,8 @@ def main():
     print("  announcer: defers for sessions, marks read only after full playback")
 
     # Clock order: a job finished BEFORE the carry snapshot seeds ahead of the
-    # carried turns, one finished AFTER seeds behind them. The old
-    # everything-first order put a finished report above the carried turn that
-    # queued it, and the model denied a result it had delivered (2026-08-15).
-    # Also drilled here: the detail cut lands on a word and says it cut.
+    # carried turns, one AFTER seeds behind them - everything-first made the
+    # model deny a result it had delivered (2026-08-15).
     t_now = time.time()
     seed_base = {"task": "t", "status": jobs_mod.DONE, "provider": "fake",
                  "created": 0, "read": True}
@@ -356,8 +346,8 @@ def main():
     assert len(said) < len("word " * 400)
     print("  job_messages: clock-ordered against the carry; cuts on a word")
 
-    # A READ result ages out of context fast; an UNREAD one holds the full
-    # window - "what did you find" hours later is the announcement contract.
+    # A read result ages out of context fast; an unread one holds the full
+    # window, so "what did you find" still works hours later.
     stale = t_now - jobs_mod.CONTEXT_READ_AGE_S - 60
     jobs_mod.JOBS_FILE.write_text(json.dumps([
         {**seed_base, "id": "j-heard", "finished": stale,
@@ -369,9 +359,8 @@ def main():
     assert got == ["Unheard."], got
     print("  for_context: heard results age out fast, unheard ones hold")
 
-    # latest_result orders by COMPLETION time, not file position: _save
-    # regroups live-then-done, so a job that finished last can sit earlier in
-    # the file - which is why this fixture's newer row comes first.
+    # latest_result orders by completion time, not file position: _save
+    # regroups live-then-done, so the newer row can sit earlier in the file.
     base = {"task": "t", "status": "DONE", "provider": "fake", "created": 0,
             "detail": "d", "read": True}
     jobs_mod.JOBS_FILE.write_text(json.dumps([

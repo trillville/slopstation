@@ -1,19 +1,10 @@
-"""Earcon synthesis: the count vocabulary as audio, plus the session bookends
-and the background lane's announcement cue. Synthesized at import from specs;
-no binary assets in the repo. All PCM is SAMPLE_RATE mono s16le, ready to
-wrap in an OutputAudioRawFrame.
+"""Earcon synthesis: count vocabulary, session bookends, announcement cue.
+Synthesized from specs; no binary assets. All PCM is SAMPLE_RATE
+mono s16le, ready to wrap in an OutputAudioRawFrame.
 
 The counts are the contract, mirroring the haptic thuds: 1 = accepted,
-2 = busy, 3 = failed. Pitch, contour and level are taste, tuned so the six
-sound like one family - bookends quietest, acks above them, the announcement
-cue on top since it alone has to carry across the room unasked.
-
-Everything is a bell: a few light partials with exponential decay. A decaying
-note reads far softer than a flat one of the same peak, so these are quieter
-than their amplitudes suggest.
-
-Tier-1 acks must be instant: never synthesize speech for them, never wait on
-anything - pcm() is a dict lookup after first use.
+2 = busy, 3 = failed. Tier-1 acks must be instant - never synthesize speech
+for them; pcm() is a dict lookup after first use.
 """
 import numpy as np
 
@@ -23,17 +14,16 @@ ATTACK_MS = 5        # per-note fade-in (click prevention)
 RELEASE_MS = 10      # per-note fade-out to true zero - a decaying note still
                      # clicks if it is simply truncated
 
-# Bell timbre: partials decaying faster the higher they are, as a struck
-# object does. Enough harmonic content to sound like a thing, not a test tone.
+# Bell timbre: partials decaying faster the higher they are.
 PARTIALS = ((1, 1.00), (2, 0.22), (3, 0.07))
 
 GAIN = 1.0           # global volume knob, config voice.earconGain
 
 
 def _seq(bursts, gap_ms=GAP_MS):
-    """Counted earcon -> notes at start offsets. The SILENCE between bursts
-    is what makes the count recoverable, by ear and by test_earcons, so these
-    never overlap."""
+    """Counted earcon -> notes at start offsets. Bursts never overlap: the
+    silence between them is what makes the count recoverable, by ear and by
+    test_earcons."""
     notes, t = [], 0
     for freq, dur in bursts:
         notes.append((freq, t, dur))
@@ -44,21 +34,15 @@ def _seq(bursts, gap_ms=GAP_MS):
 # name -> (peak amplitude, decay tau as a fraction of note duration,
 #          [(freq_hz, start_ms, dur_ms), ...])
 SPECS = {
-    # Bookends: an ascending fifth to open, the same fifth descending to
-    # close - the sleep sound is the wake sound backwards, so it needs no
-    # learning.
+    # Bookends: ascending fifth to open, the same fifth descending to close.
     "wake":  (3800, 0.32, [(784.0, 0, 200), (1174.7, 70, 310)]),
     "close": (2400, 0.32, [(1174.7, 0, 200), (784.0, 70, 340)]),
-    # The count vocabulary. Count IS the message, so contour is free to make
-    # each distinctive: ok = one bell on the note the wake chime landed on,
-    # busy = the same note struck twice like a knock at a shut door, fail =
-    # three falling. Levels sit just above the wake chime - ok fires on every
-    # command, so it has to be an answer, not an alarm.
+    # The count vocabulary: ok = one bell on the wake chime's note, busy = the
+    # same note twice, fail = three falling.
     "ok":    (5200, 0.30, _seq([(1174.7, 260)])),
     "busy":  (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
     "fail":  (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
-    # Loudest: it arrives unasked, across the room. A rising third sounds
-    # like a question opening rather than an answer closing.
+    # Loudest: it arrives unasked, across the room.
     "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
 
@@ -66,8 +50,7 @@ _cache = {}
 
 
 def set_gain(gain):
-    """Global earcon volume (config voice.earconGain; 1.0 = as spec'd). Clears
-    the cache so it takes effect even if something already played."""
+    """Global earcon volume (config voice.earconGain; 1.0 = as spec'd)."""
     global GAIN
     gain = max(0.0, float(gain))
     if gain != GAIN:
@@ -76,9 +59,8 @@ def set_gain(gain):
 
 
 def _note(freq, dur_ms, decay):
-    """One note as a float array peaking near 1.0, silent at both ends. `decay`
-    is the tau as a fraction of the duration - every SPEC sets one, and a flat
-    tone is not an option the vocabulary wants (it reads as an alarm)."""
+    """One note as a float array peaking near 1.0, silent at both ends.
+    `decay` is tau as a fraction of the duration."""
     n = int(SAMPLE_RATE * dur_ms / 1000)
     t = np.arange(n) / SAMPLE_RATE
     tau = decay * dur_ms / 1000
@@ -104,8 +86,8 @@ def samples(name):
         mix = np.zeros(max(i + len(w) for i, w in zip(starts, waves)))
         for i, w in zip(starts, waves):
             mix[i:i + len(w)] += w
-        # Normalize to the spec'd peak so an amplitude means the same thing
-        # across earcons however many partials or overlapping notes built it.
+        # Normalize to the spec'd peak: an amplitude means the same thing
+        # across earcons regardless of partial/note count.
         mix *= amp * GAIN / max(float(np.max(np.abs(mix))), 1e-9)
         _cache[name] = np.clip(mix, -32767, 32767).astype(np.int16)
     return _cache[name]

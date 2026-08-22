@@ -1,8 +1,8 @@
 """Haptic bench tool for the 2026 Steam Controller via the Puck.
 
-RULE: never run this while chord_listener.py is running - one process owns the
-Puck. Close the listener console first; restart it (Start-Listener.bat) when done.
-Wake the controller (tap any button) before running - writes need it awake.
+Never run while chord_listener.py is running - one process owns the Puck.
+Close the listener console first; restart it (Start-Listener.bat) when done.
+Wake the controller (tap any button) first - writes need it awake.
 
 Usage:
     python haptic_test.py [chirp|sustained|pulse|rumble|probe|audition] [gain]
@@ -19,8 +19,8 @@ Subcommands (try them in this order if the controller stays silent):
 Optional trailing integer = gain for tone commands (s8; default 120, a known
 loud value - firmware clamps; negative attenuates).
 
-Standing rule: after any controller firmware update, re-run calibrate.py AND
-`haptic_test.py chirp` (the protocol headers are a Valve snapshot, not a contract).
+After any controller firmware update, re-run calibrate.py AND `haptic_test.py
+chirp` - the protocol headers are a Valve snapshot, not a contract.
 """
 import sys, time
 
@@ -38,8 +38,8 @@ def log(msg):
 
 
 def w(dev, data, label):
-    """Write one output report and log the result. hidapi pads to the
-    interface's output-report length on Windows; exact-size packets are correct."""
+    """Write one output report and log the result. On Windows hidapi pads to
+    the interface's output-report length, so exact-size packets are correct."""
     n = dev.write(data)
     log(f"write {label}: {data.hex()} -> {n}")
     if n == -1:
@@ -50,10 +50,8 @@ def w(dev, data, label):
 
 
 def open_input_interface(timeout_s=2.0):
-    """Latch-by-content, same as the listener and SteamControllerBridge: the
-    interface that emits 0x42 state reports is also the haptic write target.
-    The Puck exposes ~13 interfaces and some error on read - cull those quietly,
-    exactly as the listener does."""
+    """The interface emitting 0x42 state reports is also the haptic write
+    target. The Puck exposes ~13 interfaces; some error on read - skip those."""
     for info in hid.enumerate(VID, PID):
         d = hid.device()
         try:
@@ -84,9 +82,8 @@ def chirp(dev, gain):
         w(dev, cglib.stop_report(side), f"stop side{side}")
 
 
-# The production vocabulary lives in cglib - count is the message: 1 launch,
-# 2 busy, 3 fail - and is played by the same engine the listener uses, so what
-# you audition here is exactly what ships.
+# Production vocabulary, from cglib, played by the listener's engine.
+# Count is the message: 1 launch, 2 busy, 3 fail.
 PATTERNS = {
     "launch": cglib.PATTERN_LAUNCH,
     "busy":   cglib.PATTERN_BUSY,
@@ -95,7 +92,7 @@ PATTERNS = {
 
 
 def audition(dev, gain):
-    """Labeled pass over the vocabulary. Run with gain 0 for production feel."""
+    """Labeled pass over the vocabulary; gain 0 gives the production feel."""
     for name, steps in PATTERNS.items():
         print(f"\n>>> {name}")
         time.sleep(1.0)

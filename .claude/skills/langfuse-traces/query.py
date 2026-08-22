@@ -14,10 +14,9 @@ On a worktree (<repo>/.claude/worktrees/<name>) the gitignored secrets and
 config files do not exist locally; the enclosing checkout's are read
 automatically.
 
-NOTE ON THE API: Langfuse has no /traces list endpoint. Traces are read
-through /api/public/v2/observations with isRootObservation=true - which is
-exactly what the UI's "Is Root Observation" filter does. One root observation
-== one conversation.
+API NOTE: Langfuse has no /traces list endpoint. Traces are read through
+/api/public/v2/observations with isRootObservation=true, the same filter the
+UI uses. One root observation == one conversation.
 """
 import argparse
 import base64
@@ -39,9 +38,7 @@ REPO = pathlib.Path(__file__).resolve().parents[3]
 def repo_roots():
     """This checkout first; then, when it is a worktree under
     <repo>/.claude/worktrees/<name>, the enclosing checkout - gitignored
-    files (secrets.json, config.json) exist only where a human put them,
-    which is the main checkout, not the worktree an agent session happens
-    to run in."""
+    files (secrets.json, config.json) exist only in the main checkout."""
     roots = [REPO]
     if REPO.parent.name == "worktrees" and REPO.parent.parent.name == ".claude":
         roots.append(REPO.parent.parent.parent)
@@ -115,8 +112,8 @@ def iso_ago(secs):
 
 
 def local(ts):
-    """Langfuse timestamps are ISO-8601 UTC; show them in local time, which is
-    what the couch.log lines the user is comparing against are stamped in."""
+    """Langfuse timestamps are ISO-8601 UTC; show local time, to match the
+    couch.log lines these get compared against."""
     try:
         t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         return t.astimezone().strftime("%m-%d %H:%M:%S")
@@ -145,10 +142,9 @@ def cmd_conversations(a):
               f"{str(_f(o,'sessionId',default='-'))[:9]:9} "
               f"{str(_f(o,'environment',default='-'))[:6]:6} "
               f"{_fmt_lat(o):>7}  {_f(o,'name',default='')}")
-    # No cost column, deliberately: a ROOT observation's cost fields are null.
-    # Cost lives on the GENERATION spans and the UI aggregates them, so showing
-    # it here would cost one extra API call per row. `trace` sums it instead,
-    # from spans it has already fetched.
+    # No cost column: a ROOT observation's cost fields are null - cost lives on
+    # the GENERATION spans, so it would take an extra API call per row. `trace`
+    # sums it from spans it has already fetched.
     print(f"\n{len(rows)} conversation(s). Cost and tokens: trace <trace id>")
 
 
@@ -159,9 +155,8 @@ def _fmt_lat(o):
 
 def _fmt_cost(o):
     v = _f(o, "calculatedTotalCost", "totalPrice", "totalCost")
-    # Blank, not $0.000000, for the spans that genuinely have no cost (stt,
-    # tts, turn, conversation). A column of zeros reads as "cost tracking is
-    # broken" when it actually means "this span is not a model call".
+    # Blank, not $0.000000, for spans that are not model calls (stt, tts,
+    # turn, conversation) - a column of zeros reads as broken cost tracking.
     return f"${v:.6f}" if isinstance(v, (int, float)) and v else ""
 
 
@@ -173,12 +168,10 @@ def _all_observations(trace_id):
     """Every observation in the trace, following Langfuse's pagination.
     Returns (rows, hit_cap).
 
-    WHY THIS PAGINATES (2026-08-14): limit=100 is the API's hard maximum, and
-    a 107-span session put the ROOT observation on page 2. Fetching only page
-    one printed an EMPTY TREE - the walker renders downward from the root, and
-    with no root every span was unreachable - while the header still printed a
-    span count and a cost, so it read as a sparse trace rather than a failed
-    render. Trust `meta.totalPages`, not the size of the first page.
+    limit=100 is the API's hard maximum and the ROOT observation can land on a
+    later page (2026-08-14: a 107-span session), which renders an empty tree
+    because the walker descends from the root. Trust `meta.totalPages`, not the
+    size of the first page.
     """
     rows, page = [], 1
     while page <= MAX_PAGES:
@@ -226,9 +219,8 @@ def cmd_trace(a):
             walk(_f(o, "id"), depth + 1)
 
     root = by_parent.get(None, [{}])[0]
-    # sessionId is a v2-only field, and it is the join key back to the Loki
-    # logs - worth one extra call rather than printing a dash for the most
-    # useful identifier on the page.
+    # sessionId is a v2-only field and the join key back to the Loki logs -
+    # worth one extra call rather than printing a dash.
     session = _f(root, "sessionId", default=None)
     if not session:
         peek = _f(get("v2/observations", traceId=a.trace_id,
@@ -245,15 +237,12 @@ def cmd_trace(a):
           f"env={_f(root,'environment',default='-')}  "
           f"started {local(_f(root,'startTime','timestamp'))}  "
           f"{_fmt_lat(root)}")
-    # Cached share is the number that explains the cost: the catalog sits in
-    # every prompt, and caching is the only reason that is affordable.
+    # Cached share explains the cost: the catalog sits in every prompt.
     share = f" ({cached / tin:.0%} cached)" if tin else ""
     print(f"  ${cost:.6f}   {tin:,} in{share} -> {tout:,} out   {len(rows)} spans\n")
     walk(None, 0)
     # Anything the walk could not reach - a parent that never shipped, or a
-    # trace still flushing. Print them FLAT rather than dropping them: a
-    # partial tree is an answer, a silently empty one is a lie (see
-    # _all_observations).
+    # trace still flushing. Printed flat rather than dropped.
     orphans = [o for o in rows if _f(o, "id") not in shown]
     if orphans:
         print(f"\n  {len(orphans)} span(s) with no reachable parent, flat:")
@@ -293,17 +282,16 @@ def cmd_session(a):
     for tid, obs in traces.items():
         print(f"  {tid}  {len(obs)} spans  "
               f"first {local(min(str(_f(o,'startTime','timestamp','')) for o in obs))}")
-    # Say when the page filled up: a truncated list that looks complete is how
-    # a missing trace gets read as "it was never traced" (see cmd_trace).
+    # Say when the page filled up - a truncated list that looks complete reads
+    # as "it was never traced".
     if len(rows) >= a.limit:
         print(f"\n! hit the {a.limit}-row limit - pass --limit to see more")
 
 
 def main():
-    # Transcripts and store names carry anything a person or a game title can
-    # say, and a Windows console is cp1252 by default - one CJK character in a
-    # --io dump crashed the whole render mid-tree (2026-08-14). Degrade the
-    # character, never the report.
+    # A Windows console is cp1252 by default and transcripts/game titles carry
+    # anything - one CJK character in a --io dump crashed the render mid-tree
+    # (2026-08-14).
     try:
         sys.stdout.reconfigure(errors="replace")
     except Exception:

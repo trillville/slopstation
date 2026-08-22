@@ -1,13 +1,13 @@
-# Unconditional OFFICE restore at every logon (Task \CouchGaming\ForceOfficeAtLogon).
+# OFFICE restore at every logon (Task \CouchGaming\ForceOfficeAtLogon).
 # Normal boots confirm office in one probe and exit; after a crash that left the
 # TV-primary topology it applies OFFICE with verified retries. Sends zero TV
-# commands - a TV that's off stays off, an Apple TV night stays undisturbed.
+# commands.
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'office-safety'
 
-# An in-flight session task owns the topology - stand down rather than stomp a
-# live couch launch (cold-boot corner: K15 dispatches Enter seconds after
-# logon; this task fires at logon+20s and would otherwise "recover" it).
+# An in-flight session task owns the topology. Cold-boot corner: the K15
+# dispatches Enter seconds after logon and this task fires at logon+20s, so
+# without the stand-down it would "recover" a live launch.
 if ((Test-CgTaskRunning 'Enter') -or (Test-CgTaskRunning 'Exit')) {
     Log 'Enter/Exit task running - standing down (session flow owns the displays)'
     Stop-Transcript
@@ -15,8 +15,8 @@ if ((Test-CgTaskRunning 'Enter') -or (Test-CgTaskRunning 'Exit')) {
 }
 
 if (-not (Test-TvIsPrimary)) {
-    # Fail-open by design: a broken probe reads as "office confirmed" rather
-    # than thrashing displays at every logon.
+    # Fail-open: a broken probe reads as "office confirmed" rather than
+    # thrashing displays at every logon.
     Log 'office confirmed'
 } elseif (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 25 3 'office restored')) {
     Log 'WARNING: OFFICE never took after 3 attempts'

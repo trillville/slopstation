@@ -1,7 +1,6 @@
 """Blind test: the frozen EXLINK_FRAMES literals, the checksum builder, and
-vol_set clamping must all agree. Rebuilds every table entry from its
-(c1, c2, c3, value) spec - if a literal was ever hand-typed wrong, or the
-builder's checksum math drifts, this fails. Run:
+vol_set clamping must agree - every table entry is rebuilt from its
+(c1, c2, c3, value) spec. Run:
     .venv\\Scripts\\python tests\\test_exlink.py
 """
 import sys
@@ -39,8 +38,7 @@ def main():
     assert cglib.vol_set_frame(-5) == cglib.vol_set_frame(0)      # clamp low
     assert cglib.vol_set_frame(250) == cglib.vol_set_frame(100)   # clamp high
 
-    # COM-port contention retry: one SerialException retries after a settle;
-    # a second one propagates.
+    # COM contention: retry once after a settle, then propagate.
     import types
     calls = {"n": 0}
 

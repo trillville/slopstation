@@ -1,14 +1,12 @@
 """Rediscover the controller's HID button bytes: python calibrate.py
 
-Valve does not document the 2026 Steam Controller's report format, so the
-chord's RID_INPUT / BTN_BYTE / CHORD in chord_listener.py are measured values,
-not a contract. Re-run this after any controller firmware update - the symptom
-of a shuffled layout is a listener that prints `armed` and never fires.
+Valve does not document the 2026 Steam Controller's report format, so
+chord_listener.py's RID_INPUT / BTN_BYTE / CHORD are measured, not a contract.
+Re-run after a controller firmware update; a shuffled layout shows up as a
+listener that prints `armed` and never fires.
 
-It learns which bytes are sensor noise over a 3 s hands-off window, filters to
-the dominant report type, then prints only meaningful changes. Controller awake
-and flat, then press ONE input at a time. RULE: not while chord_listener.py is
-running - one process owns the Puck.
+Controller awake and flat for the 3 s noise window, then press ONE input at a
+time. Not while chord_listener.py is running - one process owns the Puck.
 """
 import time
 import hid

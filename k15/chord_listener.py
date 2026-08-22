@@ -11,14 +11,13 @@ CHORD    = 0x01 | 0x80            # Steam + right-trigger click
 HOLD_S   = 2.0
 COUCH    = cglib.BASE / "couch.py"
 
-# Haptic vocabulary (patterns in cglib, played via the same engine haptic_test's
-# audition uses): count is the message - 1 thud launch, 2 busy, 3 fail.
-# Re-bench after controller firmware updates.
+# Haptic vocabulary (patterns in cglib): count is the message - 1 thud launch,
+# 2 busy, 3 fail. Re-bench after controller firmware updates.
 HAPTIC_GAIN     = 0     # s8 dB-ish; 0 = natural level, 120 = clamped max
 BUSY_COOLDOWN_S = 5.0   # a held chord re-validates every ~2s; don't machine-gun the busy buzz
 FAIL_CHECK_S    = 2.0   # how often to look for couch.py's last_error marker
-PARTIAL_COOLDOWN_S = 10.0  # rate limit for chord_partial - someone idly holding
-                        # the controller must not be able to flood the lane
+PARTIAL_COOLDOWN_S = 10.0  # rate limit for chord_partial; an idle hand on the
+                        # controller must not flood the lane
 ERR_STALE_S     = 600   # failures older than this are history, not news
 STANDOFF_POLL_S = 0.5   # how often to ask the lock whether the Puck is spoken for
 
@@ -26,7 +25,7 @@ log = cglib.make_log("listener")
 
 
 def buzz(dev, pattern, what):
-    """Best-effort by rule: a haptic failure must never delay or block anything."""
+    """Best-effort: a haptic failure must never delay or block anything."""
     try:
         cglib.play_pattern(dev, pattern, HAPTIC_GAIN)
         log("buzz_sent", pattern=what)
@@ -38,8 +37,8 @@ def buzz(dev, pattern, what):
 
 def signal_last_error(dev):
     """couch.py writes state/last_error when a launch dies; tell the hands.
-    Marker is consumed on a successful buzz, retained for retry otherwise,
-    and discarded once it's too old to be news."""
+    The marker is consumed on a successful buzz, retained for retry otherwise,
+    discarded past ERR_STALE_S."""
     try:
         age = time.time() - cglib.LAST_ERROR.stat().st_mtime
     except OSError:
@@ -73,9 +72,8 @@ class Puck:
             except Exception: pass
         self.handles, self.active = [], None
     def stand_off(self):
-        """Let go of the device if we hold it. Returns True only on the
-        TRANSITION, so the caller logs the moment we let go rather than once
-        per poll for the length of a session."""
+        """Let go of the device if we hold it. True only on the TRANSITION, so
+        the caller logs once rather than every poll of a session."""
         if not self.handles:
             return False
         self.close()
@@ -106,11 +104,10 @@ class Puck:
 
 def main():
     cglib.rotate_log()
-    # Liveness for the LOAD-BEARING lane - the one whose silent death is the
-    # expensive failure, because a deaf chord is only discovered from the couch.
-    # A thread rather than a check in the read loop: the loop can block in
-    # hid.read or sit in the 3 s stand-by sleep, and a heartbeat that stops when
-    # the Puck is claimed would page during every normal session.
+    # Liveness for the load-bearing lane; a deaf chord is only discovered from
+    # the couch. A thread rather than a check in the read loop: the loop can
+    # block in hid.read or the 3 s stand-by sleep, and a heartbeat that stopped
+    # while the Puck is claimed would page during every normal session.
     events.start_heartbeat("listener")
 
     puck, held, armed = Puck(), None, False
@@ -122,16 +119,12 @@ def main():
     while True:
         # HANDS OFF while a session owns the Puck, launch included. The claim
         # is the fragile moment: VirtualHere unbinds the Puck from the K15's
-        # HID stack to forward it, and doing that while 13 interfaces are
-        # read at 200 Hz is a plausible cause of the controller that
-        # enumerates, rumbles, then ignores every button (unproven - the
-        # other candidate is Steam-side binding - but reading a device
-        # through its own handoff is not something to do on purpose).
-        #
-        # The chord path gets this free by closing before it dispatches; a
-        # VOICE launch comes from another process, so it needs the session
-        # lock as the shared signal - couch.py holds it from ~10 s before the
-        # claim, which is why no new IPC is required here.
+        # HID stack to forward it, and reading 13 interfaces at 200 Hz through
+        # that handoff is a plausible (unproven) cause of the controller that
+        # enumerates, rumbles, then ignores every button. The chord path closes
+        # before it dispatches; a VOICE launch is another process, so the
+        # session lock is the signal - couch.py holds it from ~10 s before the
+        # claim.
         if time.time() - last_session_check >= STANDOFF_POLL_S:
             last_session_check = time.time()
             standoff = cglib.session_active()
@@ -162,9 +155,7 @@ def main():
                     age = cglib.lock_age()
                     # Backstop, not the main gate - the standoff above
                     # normally catches a fresh lock first. Covers a launch
-                    # started inside that window: couch.py would refuse it,
-                    # so say "busy" rather than promise a launch that won't
-                    # happen.
+                    # started inside that window, which couch.py would refuse.
                     if cglib.session_active(age):
                         if time.time() - last_busy >= BUSY_COOLDOWN_S:
                             log("chord_busy", lock_age_s=round(age))
@@ -172,9 +163,9 @@ def main():
                             last_busy = time.time()
                         held = None
                     else:
-                        # The intent begins here, so the id is minted here
-                        # and handed to couch.py, which passes it to the
-                        # gaming PC. One chord, one story, two machines.
+                        # The intent begins here, so the turn id is minted
+                        # here and handed to couch.py, which passes it on to
+                        # the gaming PC.
                         turn = events.new_turn()
                         log("chord", turn=turn)
                         buzz(puck.active, cglib.PATTERN_LAUNCH, "launch")
@@ -187,17 +178,11 @@ def main():
                         time.sleep(20); held, armed = None, False
             else:
                 held = None
-                # Between `armed` and a COMPLETED chord this loop used to say
-                # nothing at all, and those are the two states a diagnosis
-                # actually has to separate: a Puck nobody touched looks exactly
-                # like one that enumerates, rumbles and never reports a button
-                # (the failure main() describes above). On 2026-08-19 a chord
-                # that produced no launch and no buzz could not be told apart
-                # from a short hold without stopping this lane and running
-                # calibrate.py - from the couch, at the time, that is the whole
-                # evening. The BYTE is the answer, not the count: it says
-                # whether buttons arrive at all and whether they still land
-                # where CHORD expects them after a firmware update.
+                # Separates a Puck nobody touched from one that enumerates,
+                # rumbles and never reports a button - which otherwise needs
+                # calibrate.py to tell apart (2026-08-19). The BYTE, not the
+                # count: whether buttons arrive, and whether they still land
+                # where CHORD expects after a firmware update.
                 b = r[BTN_BYTE] if len(r) > BTN_BYTE else 0
                 if b and time.time() - last_partial >= PARTIAL_COOLDOWN_S:
                     log("chord_partial", btn=f"{b:02x}", want=f"{CHORD:02x}")

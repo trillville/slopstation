@@ -1,7 +1,5 @@
-"""Blind test: TvDucker - the on-gate, the readback-verified ledger, key-loss
-top-ups, user-takeover detection, and the debt that makes a failed restore
-self-heal on a later close. The scenarios replay both incidents (08-16 blind
-bursts, 08-21 eARC ack-then-refuse) against the fix. Run:
+"""Blind test: TvDucker - on-gate, verified ledger, key-loss top-ups, user
+takeover, and the debt that self-heals a failed restore. Run:
     .venv\\Scripts\\python tests\\test_ducking.py
 """
 import sys
@@ -16,9 +14,8 @@ import dispatch as dp
 
 
 class FakeRoom:
-    """The TV+bar as the ducker sees them: a power state, the volume the
-    readback reports, and keys that move it - with scriptable loss, death,
-    and a human hand on the remote."""
+    """TV+bar as the ducker sees them: power state, readback volume, keys -
+    with scriptable key loss, readback death, and a hand on the remote."""
 
     def __init__(self, power="on", vol=14):
         self.power = power
@@ -57,25 +54,25 @@ def main():
     real_sleep = time.sleep
     time.sleep = lambda s: None                       # fast tests
 
-    # --- the gate: a set that is not on is not touched -----------------------
+    # --- gate: a set that is not on is not touched ---------------------------
     dk, room, log = ducker(room=FakeRoom(power="standby"))
     dk.duck()
     assert room.presses == [] and log.events() == ["tv_duck_skipped"], log.records
-    dk.unduck()                                       # nothing out, nothing owed
+    dk.unduck()
     assert room.presses == [] and log.events() == ["tv_duck_skipped"]
 
     dk, room, log = ducker(room=FakeRoom(power=None))  # unreachable = unknown
     dk.duck()
     assert room.presses == [] and log.find("tv_duck_skipped")[0]["state"] == "unknown"
 
-    # --- no readback = no duck: never move what cannot be verified -----------
+    # --- no readback = no duck -----------------------------------------------
     room = FakeRoom()
     room.readback_dead = True
     dk, room, log = ducker(room=room)
     dk.duck()
     assert room.presses == [] and log.find("tv_duck_skipped")[0]["reason"] == "no_readback"
 
-    # --- the happy pair: down to target, back to the exact start -------------
+    # --- happy pair: down to target, back to the exact start -----------------
     dk, room, log = ducker(steps=10)                  # vol 14
     dk.duck()
     assert room.vol == 4 and dk.out == 10
@@ -86,7 +83,7 @@ def main():
     u0 = log.find("tv_unducked")[0]
     assert u0["steps"] == 10 and u0["ok"] is True, u0
 
-    # --- clamp at zero: intent achieved counts as ok, delta stays honest -----
+    # --- clamp at zero: ok = intent achieved, delta stays honest -------------
     dk, room, log = ducker(steps=10, room=FakeRoom(vol=6))
     dk.duck()
     assert room.vol == 0 and dk.out == 6
@@ -95,7 +92,7 @@ def main():
     dk.unduck()
     assert room.vol == 6 and dk.out == 0
 
-    # --- lost keys: the readback notices, a top-up round finishes the job ----
+    # --- lost keys: readback notices, a top-up round finishes ----------------
     room = FakeRoom()
     room.drop = 3                                     # relay eats 3 of the burst
     dk, room, log = ducker(steps=10, room=room)
@@ -104,8 +101,7 @@ def main():
     assert room.presses == [("down", 10), ("down", 3)], room.presses
     assert log.find("tv_ducked")[0]["ok"] is True
 
-    # --- relay dead: nothing verified means nothing owed - the 08-21 ---------
-    # --- ack-then-refuse shape can no longer inflate the ledger --------------
+    # --- relay dead: nothing verified, nothing owed (08-21 ack-then-refuse) --
     room = FakeRoom()
     room.press_error = RuntimeError("ws down")
     dk, room, log = ducker(room=room)
@@ -113,32 +109,31 @@ def main():
     assert room.vol == 14 and dk.out == 0
     d0 = log.find("tv_ducked")[0]
     assert d0["steps"] == 0 and d0["ok"] is False, d0
-    assert log.find("tv_duck_failed"), log.records    # the press failure traced
+    assert log.find("tv_duck_failed"), log.records
     dk.unduck()                                       # ledger empty: no-op
     assert [e for e in log.events() if e == "tv_unducked"] == []
 
     # --- a human on the remote mid-session wins: detected, not stomped -------
     dk, room, log = ducker(steps=10)
-    dk.duck()                                         # 14 -> 4
+    dk.duck()
     room.vol = 20                                     # user turned it UP mid-game
     dk.unduck()
-    assert room.vol == 20 and dk.out == 0             # their choice stands
+    assert room.vol == 20 and dk.out == 0
     u0 = log.find("tv_unducked")[0]
     assert u0["reason"] == "user_adjusted" and u0["steps"] == 0 and u0["ok"] is True, u0
 
-    # --- debt: readback dies at close, and a LATER close restores the --------
-    # --- original level exactly ----------------------------------------------
+    # --- debt: readback dies at close, a LATER close restores exactly --------
     dk, room, log = ducker(steps=10)
-    dk.duck()                                         # 14 -> 4, out 10
+    dk.duck()
     room.readback_dead = True
     dk.unduck()                                       # cannot verify: keep debt
     assert dk.out == 10
     assert log.find("tv_unducked")[0]["reason"] == "no_readback"
     assert log.find("tv_duck_deficit")[0]["steps"] == 10
-    room.readback_dead = False                        # TV back; next session:
+    room.readback_dead = False
     dk.duck()                                         # 4 -> 0 (clamp), out 14
     assert dk.out == 14
-    dk.unduck()                                       # one close pays it all off
+    dk.unduck()
     assert room.vol == 14 and dk.out == 0, (room.vol, dk.out)
 
     # --- percentage mode: the drop scales with the pre-duck level ------------

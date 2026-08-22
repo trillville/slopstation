@@ -1,14 +1,7 @@
-"""Blind test: the wake pre-roll path.
-
-Part 1 (pure): WakeCapture pump/stop semantics against a fake stream -
-seed ring + pumped chunks in order, idempotent stop, stream closed, device
-death mid-pump keeps what we have, runaway cap - plus the wake chime's
-end-of-speech timing and the single-winner ack it is claimed through.
-
-Part 2 (real devices, like test_session_pipeline): a running PipelineWorker
-with [transport.input(), PrerollFeeder, collector] proves the ordering
-contract the feature rests on: StartFrame first, then the ENTIRE pre-roll,
-only then live mic audio - no interleave, no loss. Run:
+"""Blind test: the wake pre-roll path. Part 1 (pure): WakeCapture pump/stop
+against a fake stream, the wake chime's end-of-speech timing, the single-winner
+ack. Part 2 (real devices): a live PipelineWorker proves StartFrame first, then
+the ENTIRE pre-roll, only then live mic audio. Run:
     .venv\\Scripts\\python tests\\test_preroll.py
 """
 import asyncio
@@ -83,9 +76,8 @@ def test_capture_runaway_cap():
 
 
 def test_dead_wake_stream_surfaces_original_error():
-    """A -9999 mid-listen makes cleanup raise 'Stream not open', which would
-    replace the real error AND escape the handler. The listener must re-raise
-    the ORIGINAL OSError."""
+    """A -9999 mid-listen makes cleanup raise 'Stream not open', replacing the
+    real error and escaping the handler. The original OSError must survive."""
     import audio
 
     class DeadStream:
@@ -116,10 +108,9 @@ def test_dead_wake_stream_surfaces_original_error():
 
 
 def test_zombie_stream_trips_silence_watchdog():
-    """After a device flap the reopened stream can 'work' while delivering only
-    zeros - no error, no wake. A solid run of zero chunks must raise into the
-    same OSError recovery path as an honest stream death, and any real audio
-    must reset the counter (a live mic always carries a noise floor)."""
+    """After a device flap the reopened stream can deliver only zeros - no
+    error, no wake. A solid run of zeros must raise into the OSError recovery
+    path; real audio resets the count (a live mic has a noise floor)."""
     import numpy as np
     import audio
 
@@ -142,10 +133,8 @@ def test_zombie_stream_trips_silence_watchdog():
             pass
 
     class FakeModel:
-        # **kw so this stub tracks openWakeWord's real predict(), which also
-        # takes patience/threshold/debounce_time - score_chunk passes the
-        # first two on every hop and a positional-only fake would fail here
-        # for a reason that has nothing to do with the watchdog being drilled.
+        # **kw tracks openWakeWord's real predict(), which also takes
+        # patience/threshold/debounce_time - score_chunk passes the first two.
         def predict(self, chunk, **kw):
             return {"hey_jarvis": 0.0}
 
@@ -165,11 +154,8 @@ def test_zombie_stream_trips_silence_watchdog():
 
 
 def test_near_miss_reports_one_event_per_run_with_its_peak():
-    """Recall's only trace. A wake word that does not fire emits nothing, so
-    every missed "hey alfred" on 2026-08-15 was invisible and the threshold
-    argument could not be settled either way. One event per contiguous run
-    above the floor, carrying that run's high-water mark - per-hop events
-    would bury the one number worth reading."""
+    """Recall's only trace: a wake word that does not fire emits nothing.
+    One event per contiguous run above the floor, carrying that run's peak."""
     import numpy as np
 
     import audio
@@ -217,10 +203,8 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
 
 
 def test_clip_dump_writes_prunes_and_never_raises():
-    """The false-activation corpus openWakeWord's custom verifier trains its
-    negatives on. Capped because this writes on every single fire, and
-    fail-soft because a session is already being built behind the call - a
-    full disk owes us a log line, not a dead wake path."""
+    """The false-activation corpus openWakeWord's verifier trains negatives
+    on. Capped (writes on every fire) and fail-soft (a session is building)."""
     import tempfile
     import wave
 
@@ -237,13 +221,13 @@ def test_clip_dump_writes_prunes_and_never_raises():
         kept = sorted(audio.CLIPS_DIR.glob("wake-*.wav"))
         written = audio.log.find("wake_clip")
 
-        # keep=0 is the off switch, and it must not even make the directory.
+        # keep=0 is the off switch: not even the directory.
         audio.CLIPS_DIR = tmp / "off"
         audio.dump_clip(ring, 0.5, keep=0)
         off_made = (tmp / "off").exists()
 
-        # Fail-soft: a CLIPS_DIR that cannot be created (here: under a FILE)
-        # must log and return, never raise into the wake path.
+        # Fail-soft: a CLIPS_DIR that cannot be created (here, under a file)
+        # logs and returns, never raises into the wake path.
         blocker = tmp / "blocker"
         blocker.write_bytes(b"")
         audio.CLIPS_DIR = blocker / "wake"
@@ -254,8 +238,7 @@ def test_clip_dump_writes_prunes_and_never_raises():
 
     assert len(written) == 5, f"5 fires must log 5 clips, got {len(written)}"
     assert len(kept) == 3, f"keep=3 must prune to 3, got {len(kept)}"
-    # Pruning keeps the NEWEST, and names sort chronologically - so the three
-    # survivors are the last three scores written.
+    # Pruning keeps the newest, and names sort chronologically.
     assert [p.name.split("-")[-1] for p in kept] == ["0.220.wav", "0.230.wav",
                                                      "0.240.wav"], kept
     with wave.open(str(kept[0]), "rb") as w:
@@ -267,16 +250,15 @@ def test_clip_dump_writes_prunes_and_never_raises():
 
 
 def test_wake_chime_waits_for_the_end_of_speech():
-    """The point of the whole watcher: a chime landing over "hey jarvis put on
-    Elden Ring" is jarring, so loud chunks must hold it back and only a real
-    gap may release it - once."""
+    """A chime landing over the tail of an utterance is jarring: loud chunks
+    hold it back, only a real gap releases it, and only once."""
     import numpy as np
 
     def chunk(level):
         return np.full(CHUNK_SAMPLES, level, np.int16).tobytes()
 
     def watcher():
-        """_watch's state without a thread or a stream - the logic under test."""
+        """_watch's state without a thread or a stream."""
         cap = WakeCapture.__new__(WakeCapture)
         cap._t0, cap._quiet, cap._peak = time.monotonic(), 0, 0.0
         return cap
@@ -310,8 +292,8 @@ def test_wake_chime_waits_for_the_end_of_speech():
 
 
 def test_wake_ack_is_claimed_exactly_once():
-    """Capture watcher and GrammarGate race for it from different threads;
-    two winners means two chimes."""
+    """Capture watcher and GrammarGate race from different threads; two
+    winners means two chimes."""
     ack = WakeAck()
     wins = []
     ready = threading.Barrier(8)
@@ -327,7 +309,7 @@ def test_wake_ack_is_claimed_exactly_once():
         t.join()
     assert sum(wins) == 1, f"{sum(wins)} claimants won the wake chime"
     assert not ack.claim(), "a later claim must still lose"
-    # age() is what the gate folds a fast success earcon against.
+    # age() is what the gate folds a fast success against.
     assert 0 <= ack.age() < 1, f"age {ack.age()} after an immediate claim"
     assert WakeAck().age() == float("inf"), "unclaimed must not read as 'just chimed'"
     print("OK - wake ack: exactly one of 8 racing claimants wins, age tracks it")
@@ -346,8 +328,8 @@ def test_feeder_chunking():
 
 
 async def test_pipeline_ordering():
-    """The load-bearing claim: a live worker delivers StartFrame, then the
-    whole pre-roll, then live mic frames - strictly in that order."""
+    """A live worker delivers StartFrame, then the whole pre-roll, then live
+    mic frames - strictly in that order."""
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker

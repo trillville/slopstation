@@ -1,25 +1,21 @@
 """TV remote keys over IP - the volume write path that works on this rig.
 
-With sound output on the eARC soundbar (HW-Q990C), the TV refuses every
-direct volume write: Ex-Link vol frames ack and pop "Not Available" on
-screen, UPnP SetVolume answers 501 (both measured 2026-08-21). What DOES
-move the bar is what the physical remote does - volume keys, which the TV
-relays over CEC - and the WebSocket remote on port 8002 injects exactly
-those. Bench 2026-08-21: one KEY_VOLDOWN moved the bar one step and
-cglib.tv_volume's readback tracked it within a second.
+With sound output on the eARC soundbar (HW-Q990C) the TV refuses every direct
+volume write: Ex-Link vol frames ack and pop "Not Available", UPnP SetVolume
+answers 501 (both 2026-08-21). Only remote volume keys move the bar, relayed
+by the TV over CEC; the WebSocket remote on port 8002 injects those. Bench
+2026-08-21: one KEY_VOLDOWN = one step, tracked by cglib.tv_volume within a
+second.
 
-Voice lane only: samsungtvws lives in the voice venv, so nothing on the
-chord lane may import this module (the readback, which IS chord-safe,
-lives in cglib for that reason).
+Voice lane only - samsungtvws lives in the voice venv, so the chord lane may
+not import this (the chord-safe readback lives in cglib).
 
-The TV must allow this client once (Device Connection Manager). Run the
-pairing from the K15 before first use and accept the popup on the TV:
+The TV must allow this client once (Device Connection Manager): run `pair`
+from the K15 before first use and accept the popup on the TV.
+
+CLI (lane=manual):
 
     .venv\\Scripts\\python tv_remote.py pair
-
-CLI (lane=manual, exlink.py's rationale: hand-run probes must land in the
-same stream as the lanes'):
-
     .venv\\Scripts\\python tv_remote.py vol            read current volume
     .venv\\Scripts\\python tv_remote.py down|up [n]    n volume keys
 """
@@ -39,9 +35,8 @@ KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
 
 class TvRemote:
     """One connection per burst: open, N keys, close. The token rides
-    state\\tv-ws-token.txt (gitignored with the rest of state), written by
-    the library on the first allowed connect; with it cached, a connect is
-    ~1 s and popup-free. key_delay is the CEC relay pacing - 0.15 s per key
+    state\\tv-ws-token.txt, written on the first allowed connect; cached, a
+    connect is ~1 s and popup-free. key_delay is CEC relay pacing: 0.15 s
     matches a human holding the remote and benched clean."""
 
     def __init__(self, ip, name="slopstation-k15", key_delay=0.15, timeout=6):
@@ -52,8 +47,7 @@ class TvRemote:
         self.token = cglib.BASE / "state" / "tv-ws-token.txt"
 
     def press(self, direction, n):
-        """Send n volume keys. Raises on a dead/unpaired connection - the
-        caller (TvDucker) treats the readback as ground truth either way."""
+        """Send n volume keys. Raises on a dead/unpaired connection."""
         if n <= 0:
             return
         from samsungtvws import SamsungTVWS
@@ -76,8 +70,7 @@ def main(argv):
         print(cglib.tv_volume(ip))
         return 0
     if argv and argv[0] == "pair":
-        # Long timeout: a human has to find Allow on the TV. A token that
-        # already works makes this a silent no-op probe.
+        # Long timeout: a human has to find Allow on the TV.
         print("watch the TV - accept the popup if one appears...")
         remote = TvRemote(ip, timeout=45)
         try:

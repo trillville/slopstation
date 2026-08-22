@@ -1,31 +1,27 @@
-// Grafana Alloy - K15 log shipper. What it ships is read by the grafana-logs
-// skill (.claude/skills/grafana-logs/), which documents the label set below.
+// Grafana Alloy - K15 log shipper. Read by the grafana-logs skill
+// (.claude/skills/grafana-logs/), which documents the label set below.
 //
 // Copy to the install dir and restart the service:
 //   copy k15\alloy\config.alloy.example "%PROGRAMFILES%\GrafanaLabs\Alloy\config.alloy"
 //   Restart-Service Alloy
 //
-// Then set the two secrets ONCE as machine environment variables (they are not
-// in this file and must never be committed - same posture as secrets.json):
+// Then set the two secrets ONCE as machine environment variables (never
+// committed):
 //   [Environment]::SetEnvironmentVariable('GC_LOKI_USER','<instance id>','Machine')
 //   [Environment]::SetEnvironmentVariable('GC_LOKI_TOKEN','<token>','Machine')
-// Both come from the Grafana Cloud stack's Loki "Details" page. Restart the
-// service after setting them - a Windows service reads its environment at start.
+// Both from the stack's Loki "Details" page. Restart the service afterwards -
+// a Windows service reads its environment at start.
 //
-// WHAT THIS SHIPS: only the daily event stream. couch.log is deliberately NOT
-// tailed - it is the human mirror of the same events, and shipping both would
-// double the volume to say the same thing twice. Note the glob is k15-*.jsonl,
-// so blind-suite runs (which write test-*.jsonl) never leave the machine at all.
+// Ships only the daily event stream (couch.log is the human mirror of the same
+// events). The glob is k15-*.jsonl, so blind-suite runs writing test-*.jsonl
+// never leave the machine.
+//
+// When shipping stops silently, the Windows Application event log is where
+// Alloy says why - it carried the E2 401 all along.
 
-// OFF, and it should stay off. Two claims were made for it during bring-up
-// and both were wrong: it does not cost CPU (4.44% of one core before,
-// 4.53% after - no effect), and it did not help diagnose anything. The
-// component pages at http://localhost:12345 - Arguments, Exports, health -
-// work WITHOUT it; they are what showed file_match's resolved target. This
-// feature streams data through a component and is not even implemented for
-// the ones used here ("Live debugging is not yet available for this
-// component"). What actually solved the E2 outage was the Windows
-// Application event log, which carried the 401 all along.
+// OFF: measured no CPU effect (4.44% of one core before, 4.53% after) and
+// "Live debugging is not yet available" for the components used here. The
+// component pages at http://localhost:12345 work without it.
 livedebugging { enabled = false }
 
 local.file_match "events" {
@@ -38,17 +34,13 @@ local.file_match "events" {
 	}]
 	// The file rolls over at midnight (local date in the NAME, UTC inside)
 	// and events.py moves anything older than two days into logs/archive/,
-	// which this glob does not match. That move is a cost control, not
-	// tidiness: a tailed file costs ~0.04% of a core whether or not it can
-	// still change, and only today's file is ever appended to - so without it
-	// this glob grew to 14 tailers, 13 of them watching finished files. See
-	// the cost note in gaming-pc/alloy/config.alloy.example for the
-	// measurement, and for why the obvious way to measure it reads zero.
+	// which this glob does not match. Cost control: a tailed file costs ~0.04%
+	// of a core whether or not it can still change, and only today's file is
+	// ever appended to (measurement in gaming-pc/alloy/config.alloy.example).
 	//
-	// A move CAN pull a file out from under an open handle now. That is safe:
-	// Windows allows the rename and the handle follows the file, so anything
-	// half-read still gets read to EOF. Two days is the margin for Alloy
-	// having been down.
+	// A move can pull a file out from under an open handle; that is safe on
+	// Windows - the rename succeeds and the handle follows, so a half-read file
+	// still reaches EOF. Two days is the margin for Alloy having been down.
 	sync_period = "30s"
 }
 
@@ -59,9 +51,9 @@ loki.source.file "events" {
 
 loki.process "events" {
 	// Lift ONLY the four low-cardinality fields into labels. turn, session,
-	// appid, score and friends stay inside the line: they are what you filter
-	// by after selecting a stream (`| json | turn="9f2c1a"`), and promoting an
-	// id to a label would mint a new stream per launch and blow the index.
+	// appid, score and friends stay inside the line and are filtered after
+	// selecting a stream (`| json | turn="9f2c1a"`); promoting an id to a label
+	// would mint a new stream per launch and blow the index.
 	stage.json {
 		expressions = {
 			level   = "level",
@@ -81,10 +73,9 @@ loki.process "events" {
 		}
 	}
 
-	// Use the event's own UTC timestamp, not the moment Alloy read the file.
-	// Without this, a shipper that was down for an hour backfills everything
-	// stamped "now" and the launch you are trying to reconstruct loses its
-	// ordering.
+	// Use the event's own UTC timestamp, not the moment Alloy read the file:
+	// a shipper that was down would otherwise backfill everything stamped
+	// "now" and lose the ordering.
 	stage.timestamp {
 		source = "ts"
 		format = "RFC3339"
@@ -105,6 +96,6 @@ loki.write "grafana_cloud" {
 			password = sys.env("GC_LOKI_TOKEN")
 		}
 	}
-	// A dead uplink costs telemetry and nothing else: Alloy retries on its
-	// own, and nothing in the voice or chord lane ever waits on it.
+	// A dead uplink costs telemetry and nothing else: Alloy retries, and
+	// nothing in the voice or chord lane waits on it.
 }

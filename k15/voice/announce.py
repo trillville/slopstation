@@ -1,17 +1,11 @@
 """Proactive spoken announcements OUTSIDE any session: a finished background
-job plays a rising two-note earcon and speaks its summary immediately, movies
-included. The two gates:
+job plays the announce earcon and speaks its summary. Two gates:
+session_active (the pipeline owns the speaker, so wait for session close - a
+mid-session retrieval may consume the job first) and abort (a wake word kills
+playback; the job stays unread).
 
-- session_active: the pipeline owns the speaker, so an announcement arriving
-  mid-session waits for session close (and a mid-session "what did you find"
-  may consume it first).
-- abort: a wake word mid-announcement kills playback instantly - user intent
-  wins, and the job stays unread so the next-wake mention still surfaces it.
-
-Synthesis is one Aura-2 REST call (stdlib urllib, no SDK, no held socket);
-playback opens its own short-lived PyAudio world, never touching the wake
-listener's. Synth failure fail-softs to earcon-only and unread - the offline
-answer is the pull path, not a local TTS stack."""
+Playback opens its own short-lived PyAudio world, never touching the wake
+listener's. Synth failure fail-softs to earcon-only and unread."""
 import json
 import queue
 import threading
@@ -39,8 +33,8 @@ def synth(text, api_key, voice_model):
 
 
 class Announcer:
-    """Thread owning the announce queue. jobs is attached after construction
-    (the store needs the announcer as its on_done hook first)."""
+    """Thread owning the announce queue. jobs is attached after construction:
+    the store needs the announcer as its on_done hook first."""
 
     def __init__(self, voice_cfg, secrets, log):
         self.voice = voice_cfg
@@ -49,9 +43,8 @@ class Announcer:
         self.jobs = None                        # attached by main()
         self.session_active = threading.Event()
         self.abort = threading.Event()
-        # Set after a bulletin the user actually heard in full: the wake loop
-        # takes it as "open a session now", so the obvious follow-up needs no
-        # wake word. Config voice.followUpAfterAnnounce.
+        # Set after a bulletin heard in full; the wake loop takes it as "open
+        # a session now". Config voice.followUpAfterAnnounce.
         self.follow_up = threading.Event()
         self.follow_up_enabled = voice_cfg["followUpAfterAnnounce"]
         self._q = queue.Queue()
@@ -63,10 +56,8 @@ class Announcer:
         self._q.put(job["id"])
 
     def speak(self, text):
-        """Earcon + one synthesized line, outside any session. True = it
-        played to the end (a wake or a session start cuts it short). The
-        whole out-of-session audio path in one call, so --announce-test
-        rehearses exactly what a finished job will do."""
+        """Earcon + one synthesized line, outside any session. True = played
+        to the end (a wake or a session start cuts it short)."""
         pcm = synth(text, self.secrets["deepgramApiKey"],
                     self.voice["ttsVoice"])
         return self._play(earcons.pcm("announce") + pcm)
@@ -78,19 +69,15 @@ class Announcer:
 
     def _output_index(self, pa):
         """Output device index on a FRESH pa - resolving against an old
-        snapshot is the deafness bug audio.py exists for.
-
-        required=False on purpose, and this is the only caller that gets it:
-        a bulletin is a one-shot with nothing to wait for, so a missing
-        speakerphone should still try the default rather than block the
-        worker lane. Input has the opposite answer - see audio.open_audio."""
+        snapshot is the deafness bug audio.py exists for. The only
+        required=False caller: a missing speakerphone falls back to the
+        default rather than blocking the worker lane."""
         return audio.resolve_device(pa, self.voice.get("outputDeviceName"),
                                     want_input=False, log=None, required=False)
 
     def _play(self, pcm):
         """Own PyAudio world per announcement; chunked writes so abort and a
-        session start can cut playback within ~100 ms. Returns True if the
-        whole thing played."""
+        session start cut playback within ~100 ms. True if it all played."""
         import pyaudio
         pa = pyaudio.PyAudio()
         try:
@@ -113,8 +100,8 @@ class Announcer:
         while True:
             job_id = self._q.get()
             self.abort.clear()
-            # Session owns the speaker: wait it out (a mid-session retrieval
-            # may mark the job read meanwhile - then there's nothing to say).
+            # Session owns the speaker; a mid-session retrieval may mark the
+            # job read while we wait.
             while self.session_active.is_set():
                 time.sleep(0.5)
             job = next((j for j in (self.jobs.unread() if self.jobs else [])
@@ -124,9 +111,7 @@ class Announcer:
             try:
                 done = self.speak(job["summary"])
             except Exception as e:
-                # Offline, dead key, dead output device: say SOMETHING (the
-                # earcon alone still means "news"), keep the job unread, and
-                # let the next wake mention it.
+                # Earcon alone still means "news"; job stays unread.
                 self.log.warn("announce_failed", job=job_id, err=str(e),
                               fallback="earcon")
                 try:
@@ -138,8 +123,7 @@ class Announcer:
                 self.jobs.mark_read(job_id)
                 self.log("job_announced", job=job_id)
                 if self.follow_up_enabled:
-                    # Only after a bulletin heard in FULL - opening the mic
-                    # off an announcement nobody heard is just an open mic.
+                    # Only after a bulletin heard in FULL.
                     self.follow_up.set()
             else:
                 self.log("announce_cut_short", job=job_id)

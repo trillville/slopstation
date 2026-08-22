@@ -1,10 +1,8 @@
-"""Assistant lane: the catalog-in-context brain.
+"""Assistant lane: system prompt, tool schemas, and tool impls.
 
-One source of truth for the system prompt, the tool schemas, and the tool
-implementations - the Pipecat pipeline (voice) and the --text REPL (bench +
-model A/B instrument) both consume them, and every tool routes through the
-same dispatch.py as Tier 1. Client-side strictness: an appid that isn't in
-the index is refused at the tool boundary, whatever the model dreamt up.
+Shared by the Pipecat pipeline (voice) and the --text REPL (bench + model
+A/B); every tool routes through the same dispatch.py as Tier 1. An appid
+that isn't in the index is refused at the tool boundary.
 """
 import json
 import sys
@@ -19,7 +17,7 @@ import cglib                                    # noqa: E402
 import library                                  # noqa: E402
 import traces                                   # noqa: E402
 import tracing                                  # noqa: E402  (tool spans; the
-#                                    module self-gates, so REPL/bench are no-ops)
+#                                     module self-gates: REPL/bench are no-ops)
 
 RULES = (
     "You are the voice assistant for a couch gaming setup (Steam on a TV). "
@@ -80,18 +78,13 @@ RULES = (
 
 
 def system_instruction(cfg):
-    """RULES + a dynamic tail (the facts only config knows: date, spoken
-    input names, volume ceiling, mute semantics) + the catalog. Each fact
-    lives here and nowhere else; built once per session, so none of it
-    moves under the prompt cache."""
+    """RULES + a config-derived tail (date, spoken input names, volume
+    ceiling, mute semantics) + the catalog. Built once per session, so none
+    of it moves under the prompt cache."""
     voice = cfg["voice"]
     inputs = voice.get("inputs", {})
-    # The zone is half of the date. Naming only the day left the model to
-    # resolve the ambiguity, and it resolved toward UTC: from 5pm Pacific on,
-    # briefs went out dated tomorrow (observed 2026-08-13 in probe_task_brief).
-    # config's location already carries the zone for web search; empty is a
-    # normal deployment, so say the day is local rather than assert one we
-    # don't have.
+    # A day with no zone resolves toward UTC: from 5pm Pacific on, briefs went
+    # out dated tomorrow (2026-08-13). Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
     tail = [f"Today is {time.strftime('%Y-%m-%d')}"
             + (f" in {tz}." if tz else " local time.")]
@@ -131,21 +124,15 @@ def known_appids():
 
 def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                steam=None):
-    """name -> fn(args: dict) -> dict. Shared by pipeline and REPL. jobs is
-    the Tier-3 JobStore; None (REPL, or worker CLI missing) makes
-    background_task refuse truthfully instead of pretending.
-    on_stop_listening is GrammarGate.request_stop, and None refuses the same
-    way: only a live voice session has a mic to close.
+    """name -> fn(args: dict) -> dict. Shared by pipeline and REPL.
 
-    voice=cfg["voice"] lets the store data lane be switched OFF: when
-    steamDataTools is false, list_games/search_store are simply absent from the
-    returned dict, and function_schemas renders only what's present - so the
-    kill switch removes them from what the MODEL sees (selection pressure), not
-    just from what it can call. None (REPL/bench) keeps every tool.
-
-    steam=a SteamSession gates install_game and the download-status source the
-    same way: absent or un-enrolled -> install_game is not offered at all,
-    which is the token auto-gate (no config bool)."""
+    jobs is the Tier-3 JobStore and on_stop_listening is
+    GrammarGate.request_stop; None for either makes that tool refuse.
+    voice=cfg["voice"] with steamDataTools false drops list_games/
+    search_store, and function_schemas renders only what's present - so the
+    kill switch removes them from what the MODEL sees, not just from what it
+    can call; None (REPL/bench) keeps every tool. steam is a SteamSession,
+    used by install_game and the download-status source."""
     def launch_game(args):
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
@@ -168,18 +155,10 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         return {"ok": r.ok, "detail": r.detail}
 
     def install_game(args):
-        """Get an owned-but-not-installed game downloading. TWO paths, tried in
-        order, so this tool works with or without a credential:
-
-        1. the account session queues it silently (nothing to press), when that
-           lane is enrolled AND actually minting;
-        2. otherwise put the game's Big Picture page on the TV and let the user
-           press Install with the controller they are already holding.
-
-        (2) is not a consolation prize - it is how anyone installs in Big
-        Picture, and it needs no token, never expires, and cannot break when
-        Valve changes an undocumented endpoint. It does need a live session,
-        which is exactly the situation someone asking for this is in."""
+        """Get an owned-but-not-installed game downloading. Two paths, in
+        order: the account session queues it silently when that lane is
+        enrolled AND minting; otherwise put the game's Big Picture page on the
+        TV to press Install. The fallback needs no token, but a live session."""
         appid = int(args.get("appid", 0))
         if appid not in known_appids():
             log.warn("tool_refused", tool="install_game", reason="unknown_appid",
@@ -195,9 +174,8 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                 log.warn("install_fallback", appid=appid, why=r.get("error"))
             except Exception as e:
                 # available() proves the token is PRESENT, not that it still
-                # mints (a web-audience token never does - 2026-08-14). Don't
-                # break the turn and don't give up: fall through to the path
-                # that needs no credential at all.
+                # mints (a web-audience token never does - 2026-08-14). Fall
+                # through to the path that needs no credential.
                 log.error("install_error", appid=appid, err=str(e))
         r = dispatch.nav("details", appid)
         if r.ok:
@@ -207,13 +185,11 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
 
     def nav(args):
         """Big Picture navigation. downloads/library/store need no appid;
-        game_page needs an OWNED one, store_page any. Collections are a
-        voice-grammar concept (they resolve by name on the box), not here."""
+        game_page needs an OWNED one, store_page any."""
         target = args.get("target")
         appid = args.get("appid")
         if target == "game_page":
-            # The LIBRARY page. Only a game they own has one, so the catalog
-            # check is the right guard here.
+            # The LIBRARY page - only an owned game has one.
             appid = int(appid or 0)
             if appid not in known_appids():
                 log.warn("tool_refused", tool="nav", reason="unknown_appid",
@@ -221,23 +197,15 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                 return {"ok": False, "error": f"appid {appid} is not in the catalog"}
             r = dispatch.nav("details", appid)
         elif target == "store_page":
-            # NO catalog check, deliberately: a store page is exactly where you
-            # send someone for a game they do NOT own. "Open the store page for
-            # Big Walk" was refused on the couch for that reason (2026-08-14).
-            # A wrong appid costs one dud page on the TV; refusing costs the
-            # feature - and this is now the hands-free path to installing,
-            # since the install dialog needs a button press either way.
+            # No catalog check: a store page is for a game they do NOT own,
+            # and a catalog check refused exactly that ask (2026-08-14).
             appid = int(appid or 0)
             if appid <= 0:
                 return {"ok": False, "error": "I need the game's store appid"}
             r = dispatch.nav("store", appid)
         elif target == "collection":
-            # The grammar handles "show my roguelikes" when it hears the name
-            # right. When it MISHEARS ("neck" for "mech"), the miss falls here -
-            # and with no collection path this tool used to answer by navigating
-            # to the library, three times in a row, while the user repeated
-            # themselves (2026-08-14). So: resolve fuzzily, and on a miss hand
-            # back the real names, which is a thing the model can act on.
+            # Grammar mishears land here (2026-08-14): resolve fuzzily, and on
+            # a miss hand back the real names for the model to act on.
             rows = library.load().get("collections", [])
             if not rows:
                 return {"ok": False, "error": "no collections are synced yet - "
@@ -282,10 +250,9 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         return {"ok": r.ok, "detail": r.detail}
 
     def stop_listening(args):
-        """The one tool that acts on the CONVERSATION rather than the room.
-        Not dry-run gated, unlike everything in dispatch.py: closing our own
-        mic changes nothing on the TV or the PC, and a drill where "go away"
-        is answered but never obeyed would be testing the wrong thing."""
+        """Acts on the CONVERSATION rather than the room. Not dry-run gated,
+        unlike everything in dispatch.py: closing our own mic changes nothing
+        on the TV or the PC."""
         if on_stop_listening is None:
             return {"ok": False, "error": "there is no open voice session to "
                     "close - nothing is listening in the first place"}
@@ -294,19 +261,14 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                 "goodbye - the wake word is what reopens the mic"}
 
     def get_now_playing(args):
-        # The lock is the launch-aware half of this answer. The PC truthfully
-        # reports RunningAppID 0 all through a launch (nothing is running YET),
-        # and on 2026-08-21 (turn 0b785e) that bare 0 reached the couch as
-        # "nothing is playing" seven seconds before start_session answered
-        # "already starting" off the same rig - two contradictory answers that
-        # talked the user into cancelling a launch they wanted. session_active
-        # is the SAME predicate that refusal used (cglib.session_active, the
-        # one arbiter), so the two tools can no longer disagree.
+        # The PC reports RunningAppID 0 all through a launch, which read as
+        # "nothing is playing" while start_session said "already starting"
+        # (2026-08-21, turn 0b785e). session_active is the same predicate that
+        # refusal uses (cglib.session_active), so the two cannot disagree.
         active = cglib.session_active()
         r = dispatch.now_playing()
         if not r.ok:
-            # Mid-launch the PC can be mid-wake and unreachable. That is not
-            # "nothing playing" - the lock still answers, so carry it.
+            # Mid-launch the PC can be unreachable; the lock still answers.
             return {"ok": False, "error": r.detail, "session_active": active}
         appid = int(r.detail) if str(r.detail).isdigit() else 0
         return {"ok": True, "appid": appid,
@@ -321,15 +283,11 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         if not installed:
             o = library.load().get("owned", {}).get(str(appid))
             name = o.get("name") if o else None
-        # Facets are opt-in and for ANY appid (not just owned) - a store name
-        # comes from GetItems when the catalog can't supply one, so "tell me
-        # about <a game I don't own>" works. The independent ones run CONCURRENTLY
-        # (a multi-facet ask shouldn't serialize store round-trips into one
-        # spoken turn); hltb runs after, since it needs a name that price - or a
-        # fallback GetItems lookup - supplies. Each facet is INDEPENDENTLY
-        # fail-soft: one that raises drops to None, it never sinks the call.
-        # Facets are live store calls, so the steamDataTools kill switch gates
-        # them too (same lane as list_games/search_store).
+        # Facets are opt-in and work for ANY appid, not just owned. The
+        # independent ones run concurrently; hltb runs after, since it needs
+        # the name price (or a fallback GetItems lookup) supplies. Each facet
+        # is fail-soft: one that raises drops to None. Live store calls, so
+        # steamDataTools gates them too.
         store_on = voice is None or voice.get("steamDataTools", True)
         want = (args.get("facets") or []) if store_on else []
         tasks = {}
@@ -353,15 +311,8 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         if not name:
             name = (facets.get("price") or {}).get("name")
         if want and not name:
-            # Neither the catalog nor a requested price facet gave a name -
-            # resolve it from the store. hltb NEEDS one ("how long to beat
-            # <a game I don't own>" used to die as "unknown appid"), and
-            # every facet WANTS one: four nameless review payloads in one
-            # turn left the model matching results to titles from its own
-            # bookkeeping, and it misattributed a superlative (2026-08-15).
-            # A facet ask is already a live-store conversation, so one more
-            # GetItems call is in kind - and the kill switch already zeroed
-            # `want` if store calls are off.
+            # hltb needs a name, and nameless facet payloads let the model
+            # misattribute results across titles (2026-08-15).
             name = (library._store_items([appid]).get(appid) or {}).get("name")
         if "hltb" in want and name:
             facets["hltb"] = library.fetch_hltb(name)
@@ -371,19 +322,16 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                 **(meta or {}), **{k: v for k, v in facets.items() if v}}
 
     def list_games(args):
-        """The feed reader: sale/trending/recent lists. wishlist_on_sale and
-        specials come from the precomputed state/deals.json (~0 ms); trending
-        and recently_played are cheap live calls. downloading goes over the
-        account session (steam_session.py), which is optional and self-gates on
-        its refresh token - so it refuses truthfully rather than erroring when
-        that lane was never enrolled."""
+        """Sale/trending/recent lists. wishlist_on_sale and specials come from
+        the precomputed state/deals.json (~0 ms); trending and recently_played
+        are live calls. downloading goes over steam_session.py, which
+        self-gates on its refresh token."""
         source = args.get("source")
         if source == "wishlist_on_sale":
             rows = library.load_deals().get("wishlist_on_sale")
             if rows is None:
-                # Two honest causes for a missing key, don't guess between them:
-                # no steamId64 (refresh_deals never writes the key), or the
-                # first deals sync simply hasn't run yet.
+                # Two causes, indistinguishable here: no steamId64
+                # (refresh_deals never writes the key), or no sync yet.
                 return {"ok": False, "error": "no wishlist data - either the "
                         "steamId64 isn't set, or the store sync hasn't run yet"}
             return {"ok": True, "source": source, "games": rows[:10]}
@@ -409,10 +357,8 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
         return {"ok": False, "error": f"unknown source {source}"}
 
     def search_store(args):
-        """Steam's own filtered search - facts, in the same breath. NOT the
-        research worker (that's background_task, for judgment). Tag names come
-        from the caller (spoken genres); unknown ones are dropped, term still
-        applies."""
+        """Steam's own filtered search. Tag names come from the caller (spoken
+        genres); unknown ones are dropped, term still applies."""
         term = str(args.get("term", "")).strip()
         tags = args.get("tags") or []
         if not term and not tags:
@@ -431,9 +377,8 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                     "right now - answer from what you know instead"}
         # The user's words ride the gate's snapshot (see dispatch.Utterance).
         ok, detail = jobs.enqueue(task, asked=dispatch.utterance.asked)
-        # The generic tool_call event comes from function_schemas now (one
-        # home, every tool); this one keeps the TASK text, which the generic
-        # args field truncates and which is what a job post-mortem needs.
+        # function_schemas emits the generic tool_call; this one keeps the
+        # TASK text, which that event's args field truncates.
         log("job_requested", ok=ok, task=task[:200])
         return {"ok": ok, "detail" if ok else "error": detail}
 
@@ -448,11 +393,8 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
             impls.pop(gated, None)
-    # install_game is ALWAYS offered now: without the account session it falls
-    # back to putting the game's page on the TV, so it always does something
-    # useful. (It used to be dropped whenever the token was absent - which also
-    # meant a PRESENT-but-dead token left it offered and broken, the exact state
-    # the couch hit on 2026-08-14.)
+    # install_game is always offered: without the account session it falls
+    # back to putting the game's page on the TV, so it always does something.
     return impls
 
 
@@ -595,29 +537,19 @@ TOOL_DEFS = [
 
 
 def function_schemas(impls, log=None):
-    """Pipecat FunctionSchema list with auto-registering async handlers.
-    Tool impls call blocking dispatch (ssh/serial) - run them off the event
-    loop so audio and the Flux socket keep flowing during a tool call.
-
-    This is also the ONE place every assistant tool call passes through, so it
-    is where the call is RECORDED - see _record below. log=None (REPL, bench,
-    tests) keeps the Loki half quiet; the span half self-gates on tracing."""
+    """Pipecat FunctionSchema list with auto-registering async handlers. Tool
+    impls call blocking dispatch (ssh/serial) - run them off the event loop so
+    audio and the Flux socket keep flowing. Also the one place every tool call
+    is recorded (_record); log=None keeps the Loki half quiet."""
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     def _record(name, args, out, log=log):
-        """Emit the tool call to both telemetry sinks.
-
-        WHY BOTH, and why here (2026-08-14): neither system could answer "which
-        tool did it call, with what?" - Pipecat's llm span carries the
-        completion TEXT only, so a tool-calling turn traces as output:null, and
-        Loki only had the one hand-rolled event inside background_task. A live
-        search that returned junk took a local trace-mirror dig to explain.
-        The span puts it in the tree beside the turn's timings; the EVENT is
-        greppable, joins on turn, and outlives Langfuse's 30-day retention.
-        Fail-soft on both: telemetry never costs a session.
-        """
+        """Emit the tool call to both telemetry sinks. Pipecat's llm span
+        carries the completion TEXT only, so a tool-calling turn traces as
+        output:null; the event is greppable, joins on turn, and outlives
+        Langfuse's 30-day retention. Fail-soft on both."""
         try:
             tracing.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
         except Exception:
@@ -632,33 +564,28 @@ def function_schemas(impls, log=None):
             try:
                 out = await asyncio.to_thread(fn, args)
             except Exception as e:
-                # The fail-soft backstop for the whole tool surface: an impl
-                # that raises (a store shape drift, an expired-token mint
-                # failure) must never leave result_callback uncalled - that
-                # breaks the turn instead of answering. Log it and hand back a
-                # spoken error so the assistant says something.
+                # Fail-soft backstop for the whole tool surface: an impl that
+                # raises must never leave result_callback uncalled - that
+                # breaks the turn instead of answering.
                 print(f"  [tool-error] {name}: {e!r}")
                 out = {"ok": False, "error": "that didn't go through - "
                        "something upstream failed"}
-            # After the call, so the span carries the RESULT too. The await
-            # above suspends but does not lose the OTel context (contextvars
-            # are per-task), so this still parents onto Pipecat's llm span.
+            # After the call, so the span carries the RESULT. The await above
+            # does not lose the OTel context (contextvars are per-task), so
+            # this still parents onto Pipecat's llm span.
             _record(name, args, out)
             await params.result_callback(out)
         return handler
 
-    # Render only tools present in `impls` - the schema half of the gating
-    # tool_impls' docstring describes (a dropped tool leaves the model's view,
-    # not just its reach).
+    # Render only tools present in `impls` - the schema half of tool_impls'
+    # gating.
     return [FunctionSchema(name=n, description=d, properties=p, required=r,
                            handler=wrap(n, impls[n]))
             for n, d, p, r in TOOL_DEFS if n in impls]
 
 
-# `names` filters to the tools actually present in a given impls set, so the
-# REPL/bench renderers can't offer a tool that isn't callable (steam=None drops
-# install_game; steamDataTools=false drops the store tools) - a bare call
-# renders every TOOL_DEF, which is what the schema-shape tests check.
+# `names` filters to the tools present in a given impls set, so a renderer
+# can't offer a tool that isn't callable; None renders every TOOL_DEF.
 def anthropic_tools(names=None):
     return [{"name": n, "description": d,
              "input_schema": {"type": "object", "properties": p, "required": r}}
@@ -674,20 +601,17 @@ def openai_tools(names=None):
 
 
 def _user_location(voice):
-    """Non-empty location fields -> the 'approximate' user_location dict.
-    Both providers accept the identical shape; None when nothing is set."""
+    """Non-empty location fields -> the 'approximate' user_location dict, or
+    None when nothing is set. Both providers accept the identical shape."""
     loc = {k: v for k, v in voice["location"].items() if v}
     return {"type": "approximate", **loc} if loc else None
 
 
 def server_tools(voice, provider):
-    """Provider-NATIVE server-side tools (the provider executes them; nothing
-    in tool_impls), appended to the request next to the TOOL_DEFS renders.
-    Today: web search behind config.assistantWebSearch. The capability is
-    neutral, the entry is per-provider - same split as anthropic_tools()/
-    openai_tools(). Knob asymmetry is the vendors': Anthropic caps calls via
-    max_uses; OpenAI has no cap knob, so cost control there is prompt-side
-    plus search_context_size low (smallest/fastest retrieval)."""
+    """Provider-native tools (the provider executes them; nothing in
+    tool_impls), appended next to the TOOL_DEFS renders. Today: web search
+    behind config.assistantWebSearch. Anthropic caps calls via max_uses;
+    OpenAI has no cap knob, hence search_context_size low."""
     if not voice["assistantWebSearch"]:
         return []
     if provider == "openai":
@@ -702,8 +626,7 @@ def server_tools(voice, provider):
 
 
 # --- provider backends: one turn (with its tool loop) -> reply text -----------
-# System prompt, tool schemas, and tool impls are provider-neutral; only the
-# request/response shape differs. Each backend holds its own conversation state.
+# Each backend holds its own conversation state.
 
 
 class AnthropicBackend:
@@ -718,11 +641,11 @@ class AnthropicBackend:
         self.server_tools = server_tools(voice, "anthropic") if voice else []
 
     def turn(self, system_text, user_text, impls):
-        # cache_control on the system block caches tools+system together
-        # (render order is tools -> system -> messages; a breakpoint covers
-        # everything before it). CAVEAT: small models have a minimum cacheable
-        # prefix (4096 tokens on Haiku 4.5) below which the marker silently
-        # does nothing - the REPL prints cache w/r so w0/r0 is visible.
+        # cache_control on the system block caches tools+system together: a
+        # breakpoint covers everything before it, and the render order is
+        # tools -> system -> messages. Small models have a
+        # minimum cacheable prefix (4096 tokens on Haiku 4.5) below which the
+        # marker silently does nothing; the REPL's cache w/r makes that visible.
         system = [{"type": "text", "text": system_text,
                    "cache_control": {"type": "ephemeral"}}]
         self.messages.append({"role": "user", "content": user_text})
@@ -739,11 +662,9 @@ class AnthropicBackend:
             self.messages.append({"role": "assistant", "content": resp.content})
             text = " ".join(b.text for b in resp.content if b.type == "text")
             if resp.stop_reason == "pause_turn":
-                # A long server-side search paused the turn mid-flight; the
-                # documented contract is to re-send the partial assistant
-                # content as-is and let the model continue. Server tool
-                # blocks need no client-side result - only the accumulated
-                # text matters to the caller.
+                # Contract: re-send the partial assistant content as-is and
+                # let the model continue. Server tool blocks need no
+                # client-side result; only the accumulated text matters.
                 if text:
                     spoken.append(text)
                 continue
@@ -760,10 +681,9 @@ class AnthropicBackend:
 
 
 class OpenAIBackend:
-    """Responses API - the interface OpenAI recommends for reasoning models;
-    reasoning and tool calls coexist here (they don't cleanly on the legacy
-    chat-completions endpoint). State is server-side via previous_response_id,
-    which also threads reasoning items across tool calls for us."""
+    """Responses API: reasoning and tool calls coexist here, unlike the legacy
+    chat-completions endpoint. State is server-side via previous_response_id,
+    which also threads reasoning items across tool calls."""
     key = "openaiApiKey"
 
     def __init__(self, secrets, model, effort="low", voice=None):
@@ -791,9 +711,7 @@ class OpenAIBackend:
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
             # Server-side searches are ITEMS in resp.output, not function
             # calls: filtering to function_call drops them entirely and the
-            # trace then carries no evidence a lookup happened. That is not
-            # cosmetic - a model's own account of itself is not evidence,
-            # since it cannot tell afterwards whether a server-side tool ran.
+            # trace then carries no evidence a lookup happened.
             for o in resp.output:
                 if "search" in (getattr(o, "type", "") or ""):
                     action = getattr(o, "action", None)
@@ -820,8 +738,8 @@ class OpenAIBackend:
 BACKENDS = {"anthropic": AnthropicBackend, "openai": OpenAIBackend}
 
 
-# Model per vendor, spelled out in config - both stay populated so flipping
-# assistantProvider is the whole A/B, and neither lane hides behind a default.
+# Both keys stay populated in config so flipping assistantProvider is the
+# whole A/B, and neither lane hides behind a default.
 MODEL_KEY = {"anthropic": "assistantModelAnthropic",
              "openai": "assistantModelOpenai"}
 
@@ -831,10 +749,10 @@ def default_model(cfg, provider):
 
 
 def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
-    """--text mode: type transcripts, see replies + tool calls + latency. The
-    20-query canned set and the model A/B run through this - same system prompt,
-    tool schemas, and impls as the voice pipeline, either provider. Pick with
-    --provider anthropic|openai [--model <id>] [--effort none|low|medium|high]."""
+    """--text mode: type transcripts, see replies + tool calls + latency. Same
+    system prompt, tool schemas, and impls as the voice pipeline, either
+    provider. Pick with --provider anthropic|openai [--model <id>]
+    [--effort none|low|medium|high]."""
     from dispatch import Dispatch
 
     provider = provider or cfg["voice"]["assistantProvider"]
@@ -870,14 +788,13 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
                 text = backend.turn(system_text, q, impls)
             except Exception as e:
                 # A bad knob value (e.g. an unsupported reasoning effort) or a
-                # transient API error shouldn't kill the bench session - the
-                # error text is the answer to the probe.
+                # transient API error shouldn't kill the bench session.
                 print(f"API error ({time.time() - t0:.1f}s)> {e}")
                 continue
             note = f", {backend.cache_note}" if backend.cache_note else ""
             print(f"assistant ({time.time() - t0:.1f}s{note})> {text}")
     finally:
-        # Ctrl-C included: a bench conversation worth having is worth keeping.
+        # Save the transcript on every exit path, Ctrl-C included.
         traces.save(f"repl-{provider}", backend.messages,
                     {"model": backend.model, "dry_run": dry_run})
     return 0

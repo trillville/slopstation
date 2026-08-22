@@ -1,18 +1,15 @@
-# Voice venv constraints - the AS-BUILT transitive versions, enforced at
-# install (Start-Voice.bat passes `-c constraints.txt`), so a rebuild gets
-# the bytes proven on this rig rather than a fresh resolve. Not hypothetical:
-# a clean resolve on 2026-08-12 already picked deepgram-sdk 7.7.0 and openai
-# 2.54.0 over the as-built 7.6.0/2.53.0.
+# Voice venv constraints - as-built transitive versions, enforced at install
+# (Start-Voice.bat passes `-c constraints.txt`). A clean resolve on 2026-08-12
+# picked deepgram-sdk 7.7.0 and openai 2.54.0 over the as-built 7.6.0/2.53.0.
 #
 # Regenerate ON THE K15 after a deliberate upgrade:
 #   .venv\Scripts\python -m pip freeze > constraints.txt
 # and touch requirements.txt too - the supervisor's reinstall gate compares
 # THAT file alone, so a constraints-only change would not install itself.
 #
-# Seeded 2026-08-12 from requirements.txt's as-built comment; a real freeze
-# from the K15 venv should replace it (adding the deeper transitives).
-# semantic-conventions is 0.65b0 - it versions in lockstep with sdk 1.44.0
-# under its own 0.x scheme.
+# Seeded 2026-08-12 from requirements.txt; a real K15 freeze should add the
+# deeper transitives. semantic-conventions 0.65b0 is sdk 1.44.0's lockstep
+# partner under its own 0.x scheme.
 pyaudio==0.2.14
 onnxruntime==1.24.4
 deepgram-sdk==7.6.0

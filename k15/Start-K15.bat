@@ -1,26 +1,17 @@
 @echo off
-rem The one Startup shortcut for the whole K15 (shell:startup -> this file),
-rem and the one thing to run after a git pull. Both cases converge on the same
-rem state: both lanes running, on the code that is on disk right now.
+rem The K15's Startup shortcut (shell:startup -> this file) and the thing to
+rem run after a git pull: both lanes on the code on disk right now.
 rem   listener = the chord lane, load-bearing, system python
 rem   voice    = the overlay, its own venv, allowed to die
 rem
-rem Per lane, exactly one rule:
-rem   supervisor down -> start it (its agent comes up on current code anyway)
-rem   supervisor up   -> kill the AGENT; the supervisor relaunches it on
-rem                      current code after its 10s backoff
+rem Per lane: supervisor down -> start it; supervisor up -> kill the AGENT and
+rem let the supervisor relaunch it after its 10s backoff. Up/down comes from
+rem the fd-9 lock the supervisor holds for its window's lifetime.
 rem
-rem No flags and nothing to remember: at boot it starts both, after a pull it
-rem reloads both. Whether a lane is up is read from the fd-9 lock its
-rem supervisor holds for the window's lifetime - the same probe the
-rem supervisors use to bounce each other, so the two cannot disagree.
-rem
-rem Killing AGENTS rather than supervisor windows is load-bearing: couch.py
-rem runs in its own console, so killing the listener's window would orphan a
-rem live session's watch loop, and the replacement supervisor's `couch.py
-rem reconcile` would adopt that same session - two watch loops racing one
-rem teardown. reconcile runs at :main, outside the restart loop, so bouncing
-rem the agent alone cannot re-trigger it.
+rem Kill AGENTS, never supervisor windows: couch.py runs in its own console, so
+rem killing the listener's window orphans a live session's watch loop and the
+rem replacement's `couch.py reconcile` adopts that session - two watch loops
+rem racing one teardown. reconcile runs at :main, outside the restart loop.
 setlocal
 set "RELOADED="
 if not "%~1"=="" echo [start-k15] note: no arguments needed - this always reloads
@@ -45,10 +36,7 @@ if errorlevel 1 (
   call :reload voice_agent.py "voice agent" voice
 )
 
-rem Pause ONLY when something was reloaded, which is the double-click case: a
-rem .bat closes its window the instant it exits, and a reload you can't read
-rem looks identical to nothing happening. It cannot fire at boot - both lanes
-rem are down then, so both get started and nothing is reloaded.
+rem Pause ONLY on a reload (the double-click case); cannot fire at boot.
 if defined RELOADED (
   echo.
   echo [start-k15] reloaded - each supervisor relaunches its agent within ~10s.
@@ -66,12 +54,9 @@ if defined FREE (endlocal & exit /b 1)
 endlocal & exit /b 0
 
 :reload
-rem %~1 = agent script name, %~2 = label, %~3 = lane. Kills the python running that script
-rem so its supervisor relaunches it on fresh code. Name-filtered to python* so
-rem the powershell process running the match - whose own command line
-rem necessarily contains the script name - can never match itself. The exit
-rem code is the number of processes killed, so a stray duplicate agent is swept
-rem too and still reports honestly.
+rem %~1 = agent script, %~2 = label, %~3 = lane. Kills the python running that
+rem script. Name-filtered to python* so the matching powershell - whose command
+rem line contains the script name - cannot match itself. Exit code = kills.
 powershell -NoProfile -Command "$p = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*%~1*' }); $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; exit $p.Count"
 if errorlevel 1 (
   echo [start-k15] stopped the %~2 - its supervisor will relaunch it

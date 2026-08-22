@@ -1,17 +1,9 @@
-"""Tier-3 worker adapters: each vendor's agent harness as a headless,
-subscription-billed CLI subprocess. Contract: run(task, timeout) -> dict(ok,
-summary, detail). The adapters own every vendor-specific flag and output
-shape, so nothing above this file knows or cares which harness ran - swapping
-is config.workerProvider, exactly like assistantProvider (and keyed by the
-same vendor names: anthropic runs the claude CLI, openai runs codex).
+"""Tier-3 worker adapters: each vendor's agent CLI as a headless subprocess.
+Contract: run(task, timeout) -> dict(ok, summary, detail); run() never raises.
+Chosen by config.workerProvider (anthropic = claude CLI, openai = codex).
 
-Fail-soft, like every other lane: a missing CLI disables background tasks with
-a clear startup + doctor message, never a crash. run() never raises - every
-failure mode is a truthful FAILED result the voice lane can speak.
-
-Both CLIs read worker_home/AGENTS.md as the standing briefing; the prompt is
-fed via STDIN (both CLIs accept it), which sidesteps cmd.exe quoting for the
-.cmd shims npm installs."""
+Both CLIs read worker_home/AGENTS.md as the standing briefing; the prompt goes
+in on STDIN, which sidesteps cmd.exe quoting for npm's .cmd shims."""
 import json
 import os
 import re
@@ -33,19 +25,8 @@ PROMPT = (
 
 
 def _library_context():
-    """The user's catalog and today's Steam prices, INLINE in the prompt.
-
-    The worker has no file tools (ClaudeWorker.DENY), so the data it used to
-    Read is handed to it instead. That is the whole trade: `Read` served the
-    library AND `secrets.json`, cannot be path-scoped (drilled 2026-08-14 -
-    Read(**/x) is ignored), so the only way to keep one without the other is
-    to stop reading files and pass the data. Same move the assistant already
-    makes, and better input than the raw JSON it used to parse: these rows
-    carry tags and playtime.
-
-    Fail-soft: a job without the catalog is worse, a job that dies because
-    state was mid-write is unacceptable.
-    """
+    """Catalog and today's Steam prices, inline in the prompt - the worker has
+    no file tools (ClaudeWorker.DENY) to read them with. "" on any error."""
     try:
         import library
         rows = library.catalog_lines()
@@ -71,19 +52,17 @@ def _library_context():
 
 
 def _argv_for(path):
-    """subprocess can't spawn .cmd/.bat shims directly (CreateProcess wants a
-    real executable); route those through cmd.exe. Native .exe installs pass
-    through untouched."""
+    """CreateProcess can't spawn .cmd/.bat shims directly; route those through
+    cmd.exe."""
     if path.lower().endswith((".cmd", ".bat")):
         return ["cmd.exe", "/c", path]
     return [path]
 
 
 def parse_reply(text):
-    """The contract JSON out of a CLI's final text - tolerant of code fences
-    and surrounding prose (outermost {...} wins). Fallback: whole text as
-    detail, first sentence as summary, so a worker that ignored the contract
-    still yields something speakable."""
+    """The contract JSON out of a CLI's final text; tolerant of code fences and
+    prose (outermost {...} wins). If the worker ignored the contract: whole
+    text as detail, first sentence as summary."""
     m = re.search(r"\{.*\}", text or "", re.DOTALL)
     if m:
         try:
@@ -104,9 +83,7 @@ class _CliWorker:
     exe = ""                                    # shim/binary name on PATH
 
     def __init__(self, model="", effort=""):
-        # Both come from config, per vendor and spelled out there - no hidden
-        # adapter defaults to hunt for. Empty means "whatever this CLI is set
-        # to", which is a choice config states, not one this file makes.
+        # Both from config, per vendor. Empty = the CLI's own default.
         self.model = model
         self.effort = effort
         self.path = shutil.which(self.exe)
@@ -134,10 +111,8 @@ class _CliWorker:
                     "detail": f"{self.exe}: {e}"}
         if p.returncode != 0:
             tail = (p.stderr or p.stdout or "").strip()[-500:]
-            # Auth is the one failure needing a HUMAN rather than a retry:
-            # CLI tokens survive reboots but a password change or revocation
-            # invalidates them silently, and "the task failed" heard from
-            # across the room says nothing about what to do next.
+            # Auth is the one failure needing a human, not a retry: a password
+            # change or revocation kills a CLI token silently.
             need_login = any(w in tail.lower() for w in (
                 "not logged in", "log in", "login", "unauthorized",
                 "authenticate", "authentication", "401", "expired"))
@@ -150,8 +125,8 @@ class _CliWorker:
 
 
 def _short(v, n=300):
-    """A tool's input rendered for a span attribute - the search query or the
-    URL, not the whole argument blob."""
+    """A tool's input rendered for a span attribute - the query or URL, not the
+    whole argument blob."""
     if isinstance(v, dict):
         for k in ("query", "url", "pattern", "command", "file_path", "prompt"):
             if v.get(k):
@@ -161,10 +136,9 @@ def _short(v, n=300):
 
 
 def result_meta(d):
-    """Cost/usage fields `claude -p` returns alongside `result`. The names
-    are not in the published reference (verified against the CLI directly),
-    so anything absent is omitted rather than guessed - a rename costs a span
-    attribute and nothing else."""
+    """Cost/usage fields `claude -p` returns alongside `result`. Undocumented
+    names, so anything absent is omitted - a rename costs one span
+    attribute."""
     usage = d.get("usage") or {}
     server = usage.get("server_tool_use") or {}
     models = d.get("modelUsage") or {}
@@ -189,52 +163,23 @@ def result_meta(d):
 class ClaudeWorker(_CliWorker):
     """claude -p, restricted to research.
 
-    THE BOUNDARY IS --disallowedTools, NOT --allowedTools. That is the whole
-    lesson of 2026-08-14: --allowedTools is only an AUTO-APPROVE list in -p
-    mode, so listing six tools restricted nothing - a live job called Bash
-    (and TaskCreate, and ToolSearch), and `echo` ran when drilled directly.
-    This lane reads UNTRUSTED WEB CONTENT on the box holding secrets.json and
-    the gamepc key, so it ran for months on a promise the harness never made.
+    The boundary is --disallowedTools; in -p mode --allowedTools is only an
+    AUTO-APPROVE list and restricts nothing (2026-08-14). This lane reads
+    untrusted web content on the box holding secrets.json and the gamepc key.
+    DENY comes from a live tool enumeration and is guarded by
+    bench/probe_worker_surface.py - the CLI's tool set grows without notice.
 
-    What the enumeration actually showed (ask the CLI, do not assume): 33
-    tools, including TWO shells, Cron* (persistence), Artifact /
-    PushNotification / SendMessage / RemoteTrigger (outbound channels that
-    need no shell), and Agent / Workflow (spawn more agents). Several are
-    recent additions - PowerShell sits right next to Bash - which is why DENY
-    below is written from a live enumeration and guarded by
-    bench/probe_worker_surface.py: a denylist against a list someone else
-    grows is only honest if something MEASURES it. Actions still belong to
-    Tier 2, after the user asks.
-
-    This is mitigation, not the endgame. The mechanism-independent fix is the
-    one that does not care how many tools ship: run this as a separate
-    low-privilege Windows account with a deny ACL on secrets.json, or own the
-    loop outright (an API agent whose tools we define). CodexWorker below is
-    weaker still - its sandbox confines writes, not reads or shell - so doctor
-    warns whenever that lane is selected.
-
-    Output is stream-json so the TOOL CALLS are visible - with plain json the
-    only artefact of three minutes of research is the final text. The stream
-    is newline-delimited SDK messages (system / assistant / user / result):
-    tool_use blocks come off the assistant messages, the answer off the final
-    result object.
-
-    Format churn is the known risk, so the parse is defensive on both ends:
-    unrecognised lines are skipped, a stream with no result object falls back
-    to a whole-stdout parse, and a CLI that rejects the flags retries once in
-    legacy mode (see run). Churn costs tool spans, never the job."""
+    Output is stream-json so tool calls are visible: newline-delimited SDK
+    messages (system / assistant / user / result), tool_use blocks off the
+    assistant messages, the answer off the final result object. Format churn
+    costs only tool spans - see the fallbacks in _extract and run."""
     exe = "claude"
-    # The web, and nothing else. No file tools at all: `Read` served both
-    # library.json and secrets.json, and it CANNOT be path-scoped (drilled
-    # 2026-08-14: a Read(**/x) deny was ignored and the file read anyway), so
-    # the only way to keep the library without the secret is to stop reading
-    # files and pass the data in - see _library_context. Write goes for the
-    # same reason in reverse: it was unscoped too, so scratch space meant
-    # "overwrite anything on the box".
+    # No file tools: Read/Write CANNOT be path-scoped (2026-08-14: a Read(**/x)
+    # deny was ignored and the file read anyway), so the library is passed in
+    # instead - see _library_context.
     TOOLS = "WebSearch,WebFetch"
-    # Everything else the CLI offered on 2026-08-14, by name. Grouped by what
-    # each would BUY an injected instruction, so the next reader can judge an
-    # addition rather than pattern-match a list.
+    # Everything else the CLI offered on 2026-08-14, grouped by what it buys
+    # an injected instruction.
     DENY = ("Bash,PowerShell,"                                   # execution
             "Read,Glob,Grep,Write,"                              # the filesystem, at all
             "Edit,NotebookEdit,"                                 # writes outside worker_home
@@ -253,16 +198,15 @@ class ClaudeWorker(_CliWorker):
         argv = _argv_for(self.path) + ["-p"]
         argv += (["--output-format", "stream-json", "--verbose"] if self.stream
                  else ["--output-format", "json"])
-        # allowedTools auto-approves; disallowedTools is what actually removes
-        # the tool from the model's list. Both, so the intent reads either way.
+        # Both flags: allowedTools auto-approves, disallowedTools is what
+        # actually removes a tool from the model's list.
         argv += ["--allowedTools", self.TOOLS, "--disallowedTools", self.DENY]
-        # And NO MCP. The surface canary caught this on its first run: the
-        # subprocess inherits the desktop account's connectors, so the worker
-        # could read, overwrite, TRASH and publicly SHARE the user's Google
-        # Drive - from a lane whose whole input is untrusted web pages. Naming
-        # those eleven tools in DENY would fix Drive and miss the next
-        # connector, so cut it at the mechanism: an empty server set plus
-        # --strict-mcp-config means no config anywhere can add one back.
+        # No MCP: the subprocess otherwise inherits the desktop account's
+        # connectors - the surface canary caught eleven Drive tools on its
+        # first run, enough to read, overwrite, trash and publicly share the
+        # user's Drive. Naming those eleven in DENY would miss the next
+        # connector, so the config is emptied and --strict-mcp-config stops
+        # any config adding one back.
         argv += ["--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config"]
         if self.model:
             argv += ["--model", self.model]
@@ -273,9 +217,7 @@ class ClaudeWorker(_CliWorker):
         if r["ok"] or not self.stream:
             return r
         # A CLI that does not know these flags fails in milliseconds with a
-        # usage error - distinguish that from a real task failure and retry
-        # in the old format, so a CLI version skew costs tool spans rather
-        # than the whole lane.
+        # usage error; retry in the old format rather than lose the job.
         blurb = f"{r.get('detail', '')}".lower()
         if any(w in blurb for w in ("unknown option", "unrecognized",
                                     "invalid option", "usage:",
@@ -286,9 +228,7 @@ class ClaudeWorker(_CliWorker):
         return r
 
     def _env(self):
-        # Claude Code's depth knob is an env var, not a flag. Its own default
-        # is already high on the adaptive-reasoning models, so an empty
-        # workerEffort inherits that rather than fighting it.
+        # Claude Code's depth knob is an env var, not a flag.
         if not self.effort:
             return None
         return {**os.environ, "CLAUDE_CODE_EFFORT_LEVEL": self.effort}
@@ -321,8 +261,7 @@ class ClaudeWorker(_CliWorker):
                                      if isinstance(x, dict))
                     results[block.get("tool_use_id")] = str(c or "")[:2000]
         if final is None:
-            # Not a stream: legacy --output-format json, or a shape we don't
-            # know. Old behaviour verbatim.
+            # Legacy --output-format json, or an unknown shape.
             try:
                 final = json.loads(p.stdout)
             except ValueError:
@@ -333,11 +272,9 @@ class ClaudeWorker(_CliWorker):
             s["result"] = results.get(s.pop("id"), "")
         out = parse_reply(final.get("result", ""))
         out["meta"] = result_meta(final)
-        # Count the searches from the STEPS, not from usage.server_tool_use:
-        # that field counts the API's own server-executed web_search, while
-        # this CLI's WebSearch/WebFetch are harness tools, so it read 0 on a
-        # job with six real searches (2026-08-14) - and "0 web searches" reads
-        # as "the research lane did nothing", the opposite of what happened.
+        # Count searches from the STEPS: usage.server_tool_use only counts the
+        # API's server-side web_search, so it reads 0 for this CLI's
+        # harness-side WebSearch/WebFetch (2026-08-14).
         for field, tool in (("web_searches", "WebSearch"),
                             ("web_fetches", "WebFetch")):
             n = sum(1 for s in steps if s.get("tool") == tool)
@@ -349,9 +286,9 @@ class ClaudeWorker(_CliWorker):
 
 class CodexWorker(_CliWorker):
     """codex exec: prompt on stdin via the '-' sentinel; --output-last-message
-    writes the final text to a file of our choosing, which sidesteps its
-    JSONL event-shape churn entirely. Guardrail: the workspace-write sandbox
-    rooted here (network on - research needs it)."""
+    writes the final text to a file, sidestepping its JSONL event-shape churn.
+    The workspace-write sandbox (network on) confines writes but not reads or
+    shell, so doctor warns on this lane."""
     exe = "codex"
     LAST = WORKER_HOME / ".last-message.txt"
 
@@ -365,9 +302,8 @@ class CodexWorker(_CliWorker):
         if self.model:
             argv += ["--model", self.model]
         if self.effort:
-            # Codex defaults to medium - tuned for interactive work, which is
-            # the wrong trade in a lane where latency costs nothing. -c values
-            # are TOML, so the string needs its quotes.
+            # Codex defaults to medium. -c values are TOML, so the string
+            # needs its quotes.
             argv += ["-c", f'model_reasoning_effort="{self.effort}"']
         return argv + ["-"]
 
@@ -379,7 +315,7 @@ class CodexWorker(_CliWorker):
         return parse_reply(text)
 
 
-# Keyed by VENDOR, like assistantProvider - so one vocabulary spans both
-# lanes and workerProvider lines up with workerModel<Vendor>.
+# Keyed by vendor, like assistantProvider; workerProvider lines up with
+# workerModel<Vendor>.
 WORKERS = {"anthropic": ClaudeWorker, "openai": CodexWorker}
 MODEL_KEY = {"anthropic": "workerModelAnthropic", "openai": "workerModelOpenai"}

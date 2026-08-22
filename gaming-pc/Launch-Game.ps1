@@ -1,7 +1,6 @@
-# Launch-Game.ps1 - task \CouchGaming\LaunchGame, fired by Dispatch's `launch`
-# verb. The appid arrives via the launch-app marker file (schtasks /Run can't
-# pass arguments); Dispatch already did the READY/BUSY pre-checks, so this
-# script is deliberately dumb: read marker, delete it, re-validate, -applaunch.
+# Task \CouchGaming\LaunchGame, fired by Dispatch's `launch` verb. The appid
+# arrives via the launch-app marker file (schtasks /Run can't pass arguments);
+# Dispatch already did the READY/BUSY pre-checks.
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'launchgame'
@@ -10,17 +9,15 @@ try {
     if (-not (Test-Path $marker)) {
         Log 'no launch-app marker - nothing to do'
     } else {
-        # Stringify before trimming: Get-Content on an empty file returns $null
-        # in PS 5.1, and .Trim() on it would crash BEFORE the delete, stranding
-        # the marker. Read, delete, then validate the (possibly empty) string.
+        # Read, delete, then validate. Stringify before trimming: Get-Content on
+        # an empty file returns $null in PS 5.1 and .Trim() would throw before
+        # the delete, stranding the marker.
         $raw = Get-Content $marker -TotalCount 1
-        # Best-effort delete: the marker is written by the ELEVATED sshd
-        # forced-command context (owner BUILTIN\Administrators; Users get
-        # read-only), and this task runs with the limited token - so the delete
-        # is DENIED, and with ErrorActionPreference=Stop that killed the script
-        # before -applaunch. Dispatch clears the marker before every write, so
-        # one surviving here is overwritten anyway; the only cost is that a
-        # MANUAL task run would replay the last appid.
+        # Delete is best-effort: the marker is owned by the ELEVATED sshd
+        # forced-command context (BUILTIN\Administrators; Users read-only) and
+        # this task runs limited, so the delete is DENIED - fatal under
+        # ErrorActionPreference=Stop. Dispatch clears it before every write, so
+        # a survivor is overwritten; only a MANUAL task run replays the last id.
         try { Remove-Item $marker -Force } catch {
             Log 'marker not deletable from this token - Dispatch overwrites it next launch'
         }

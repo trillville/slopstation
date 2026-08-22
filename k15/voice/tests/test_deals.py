@@ -1,6 +1,6 @@
-"""Blind test: library layer-4 store-question parsers. Canned JSON is fed
-through the single _get seam (no network), so this pins the parse shapes a
-keyless checkout otherwise can't see - and the incremental hltb cache. Run:
+"""Blind test: library layer-4 store-question parsers. Canned JSON through the
+single _get seam (no network), pinning the parse shapes a keyless checkout
+can't otherwise see, plus the hltb cache. Run:
     .venv\\Scripts\\python tests\\test_deals.py
 """
 import json
@@ -13,7 +13,7 @@ import cglib
 import library
 
 # appid -> (name, discount_pct, final_cents, formatted). The fake GetItems
-# echoes back whatever appids the caller asked for, from this fixture.
+# echoes back whatever appids the caller asked for.
 ITEMS = {10: ("Wish One", 50, 500, "$5.00"),
          11: ("Wish Two", 0, 2000, "$20.00"),
          12: ("Wish Three", 75, 250, "$2.50"),
@@ -74,11 +74,8 @@ def main():
     library.FACET_CACHE = tmp / "facet-cache.json"
     library.TAGMAP = tmp / "store-tags.json"
     library._get = fake_get
-    # Pin the secrets BEFORE anything runs: several fetchers reach for a key
-    # (fetch_store_search -> _tag_map does). On a checkout that HAS a real
-    # secrets.json this took the keyed path, cached a tag map, and then failed
-    # the keyless assertion below - green on a bare worktree, red on the rig,
-    # which is the worst way for a blind test to behave. Same answer anywhere.
+    # Pin the secrets BEFORE anything runs: fetch_store_search -> _tag_map
+    # reaches for a key, and a real secrets.json takes the keyed path.
     cglib.load_secrets = lambda: {}
 
     # --- specials: parsed, NOT_GAMES filtered, cents -> dollars --------------
@@ -90,8 +87,8 @@ def main():
     items = library._store_items([10, 11, 999])
     assert set(items) == {10, 11}, items
     assert items[10] == {"name": "Wish One", "final": "$5.00", "discount": 50, "price": 500}, items[10]
-    # ...and CHUNKS past the 100-per-batch cap instead of truncating: id 12
-    # sits at position 120, so it only prices if a second batch was fetched.
+    # ...and chunks past the 100-per-batch cap: id 12 sits at position 120, so
+    # it only prices if a second batch was fetched.
     big = [10] + list(range(900000, 900119)) + [12]
     assert set(library._store_items(big)) == {10, 12}, "the >100 tail was dropped"
 
@@ -128,22 +125,17 @@ def main():
     assert tmap.get("roguelike") == 1716 and tmap.get("co-op") == 3843, tmap
     assert library.TAGMAP.exists()                          # cached to disk
 
-    # Tag matching ignores punctuation and case, in BOTH directions: the model
-    # says what a person says ("Rogue-like", "Co op"), Steam's vocabulary is
-    # "Roguelike"/"Co-op". An exact lookup dropped "Rogue-like" and silently
-    # widened the search to co-op-anything - which is how "a co-op roguelike
-    # under $20" came back Dead by Daylight and Total War (2026-08-14). A
-    # dropped filter is invisible in the results, so it gets a test.
+    # Tag matching ignores punctuation and case both ways ("Rogue-like"/"Co op"
+    # vs Steam's "Roguelike"/"Co-op"); an exact lookup dropped the tag and
+    # silently widened the search (2026-08-14).
     library.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
     assert SEARCH_PARAMS[-1].get("tags") == "1716,3843", SEARCH_PARAMS[-1]
     library.fetch_store_search(term="x", tags=["Not A Real Tag"])
     assert "tags" not in SEARCH_PARAMS[-1], "unknown tags must drop, not 404"
 
     # --- hltb: fail-soft when the optional lib is absent, then cache hit -----
-    # Force the import to FAIL regardless of the venv (requirements.txt pins
-    # howlongtobeatpy, so the rig's venv HAS it - a None sys.modules entry
-    # makes the import raise, keeping this offline everywhere): the raise ->
-    # None (never crashes). A pre-seeded cache entry returns without importing.
+    # A None sys.modules entry makes the import raise, so this stays offline
+    # even where requirements.txt's howlongtobeatpy is installed.
     sys.modules["howlongtobeatpy"] = None
     assert library.fetch_hltb("Some Game With No Lib") is None
     library._save_facets({library.fuzzy_key("Hades"): {"hltb": {"main": 21}}})

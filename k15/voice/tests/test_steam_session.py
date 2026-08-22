@@ -1,7 +1,7 @@
-"""Blind test: the account session's LOGIC with the HTTP seams mocked - token
-mint/cache/refresh, session pick, the empty-200 -> GetClientAppList VERIFY
-path, an X-eresult failure surfaced, download-status parse, and enrollment that
-persists the token WITHOUT ever logging it. No network. Run:
+"""Blind test: the account session with the HTTP seams mocked - token
+mint/cache/refresh, session pick, the empty-200 -> GetClientAppList verify
+path, X-eresult failures, download-status parse, and enrollment that persists
+the token without logging it. No network. Run:
     .venv\\Scripts\\python tests\\test_steam_session.py
 """
 import base64
@@ -44,9 +44,9 @@ def main():
     posts, gets, logins = [], [], []
 
     def fake_login_post(url, fields, headers=None):
-        """The mint, as it really works: finalizelogin hands back transfer
-        hosts, and each host answers with the steamLoginSecure cookie that IS
-        the access token, shaped '<steamid>||<token>'."""
+        """finalizelogin hands back transfer hosts, and each host answers with
+        the steamLoginSecure cookie that IS the access token, shaped
+        '<steamid>||<token>'."""
         logins.append((url, dict(fields)))
         if "finalizelogin" in url:
             return {"transfer_info": [
@@ -71,9 +71,8 @@ def main():
             return {"response": {"sessions": state["sessions"]}}, "1"
         if "GetClientAppList" in method:
             apps = state["apps"]
-            # Honour filters=changing like the real service: it is what the
-            # install VERIFY leans on, and only that call carries the progress
-            # fields at all (see app_list's shape note).
+            # Honour filters=changing like the real service: only that call
+            # carries the progress fields, and the install verify leans on it.
             if params.get("filters") == "changing":
                 apps = [a for a in apps if a.get("changing")]
             return {"response": {"apps": apps}}, "1"
@@ -86,9 +85,9 @@ def main():
     time.sleep = lambda n: None
 
     # --- token mint + cache + re-mint on expiry ------------------------------
-    # The mint is the TRANSFER-LOGIN flow, not GenerateAccessTokenForApp: that
-    # endpoint is gated to mobile-audience tokens and answers our web-audience
-    # one with eresult 15 AccessDenied (measured 2026-08-14).
+    # The mint is the transfer-login flow: GenerateAccessTokenForApp is gated
+    # to mobile-audience tokens and answers ours with eresult 15 AccessDenied
+    # (2026-08-14).
     t1 = s.access_token()
     s.access_token()                                        # cached, no 2nd mint
     def n_mints(): return sum("finalizelogin" in u for u, _ in logins)
@@ -107,17 +106,16 @@ def main():
     assert [x["instanceid"] for x in s.sessions()] == ["999", "111"]
     assert s._target("TILLMAN-DESKTOP")["instanceid"] == "111"   # matched, not first
     assert s._target()["instanceid"] == "999"                    # no name -> first
-    # A CONFIGURED machine name (self.machine) pins the target so install/status
-    # can't land on another signed-in box Steam happens to list first.
+    # A configured machine name pins the target, so install/status can't land
+    # on another signed-in box Steam happens to list first.
     s_pinned = ss.SteamSession({"steamId64": "76561190000", "steamRefreshToken": refresh},
                                log, machine_name="TILLMAN-DESKTOP")
     s_pinned._get, s_pinned._post = fake_get, fake_post
     s_pinned._access, s_pinned._access_exp = "tok", time.time() + 3600   # skip minting
     assert s_pinned._target()["instanceid"] == "111"             # self.machine wins over first
 
-    # --- 401 re-mint: a mid-life revocation 401s a not-yet-expired token; the
-    # real _get retries once with a fresh token (mocks replace _get, so this
-    # drives _session directly). ---------------------------------------------
+    # --- 401 re-mint: a revocation 401s a not-yet-expired token and _get
+    # retries once with a fresh one (driven via _session; mocks replace _get) --
     class FakeResp:
         def __init__(self, code): self.status_code = code; self.headers = {"X-eresult": "1"}
         def json(self): return {"response": {"sessions": []}}
@@ -148,8 +146,8 @@ def main():
     assert "install_queued" in log.events()
 
     # --- install that never showed up as changing -> ok but NOT verified -----
-    # The empty 200 is not proof, so "it did not appear in the changing list"
-    # is reported as verified=False rather than claimed as success.
+    # The empty 200 is not proof, so absence from the changing list reports
+    # verified=False rather than success.
     state["apps"] = [{"appid": 570, "app": "Dota", "installed": True,
                       "changing": False, "bytes_to_download": "0", "bytes_downloaded": "0"}]
     r = s.install(570)
@@ -194,13 +192,13 @@ def main():
     saved = json.loads(tmp.read_text())
     assert saved["steamRefreshToken"] == "REFRESH_TOKEN_SECRET_VALUE_123"
     assert saved["deepgramApiKey"] == "keep-me"             # other secrets preserved
-    # The credential must never reach the log - not the event, not any field.
+    # The credential must never reach the log - no event, no field.
     blob = json.dumps([r for r in log2.records], default=str)
     assert "REFRESH_TOKEN_SECRET_VALUE_123" not in blob, "enroll leaked the token to the log"
     assert "enrolled" in log2.events()
 
     # --- enroll REFUSES to clobber a present-but-corrupt secrets.json --------
-    # (writing {} over it would destroy every other secret to save one token)
+    # Writing {} over it would destroy every other secret to save one token.
     tmp.write_text('{"deepgramApiKey": "keep-me",')     # invalid JSON on disk
     s3 = ss.SteamSession({"steamId64": "76561190000", "steamRefreshToken": None}, log2)
     s3._post = fake_post

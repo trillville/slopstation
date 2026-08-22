@@ -1,31 +1,25 @@
 # Voice venv pins - frozen 2026-08-10 against PyPI, as-built on the K15.
-# Upgrades are deliberate, never casual: Pipecat moves weekly, so re-read the
-# new version's docs for every service used and re-run tests/ before bumping.
-# The chord listener stays on system python; this venv is voice's alone.
+# Pipecat moves weekly: re-read its docs for every service used and re-run
+# tests/ before bumping. The chord listener stays on system python.
 pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.7.0
-# Langfuse's OTLP endpoint is HTTP-only - it does not accept gRPC, and
-# pipecat's own tracing example imports the gRPC exporter. Pinning the
-# http one explicitly so the wrong import cannot be resolved by accident.
+# Langfuse's OTLP endpoint is HTTP-only (no gRPC), and pipecat's own tracing
+# example imports the gRPC exporter - pin http so it cannot resolve by accident.
 opentelemetry-exporter-otlp-proto-http==1.44.0
 openwakeword==0.6.0
 hassil==3.11.0
 rapidfuzz==3.14.5
 pyserial==3.5
 pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
-# how-long-to-beat hours for the assistant's game-details facet. library.py
-# imports it LAZILY and fail-soft, so an install that skips it only loses that
-# one facet - never the lane. It drags in fake_useragent + beautifulsoup4 (and,
-# annoyingly, aiounittest) as NEW transitives; aiohttp/requests were already
-# here. Add those to constraints.txt on the next K15 freeze.
+# how-long-to-beat hours (assistant game-details facet). library.py imports it
+# lazily and fail-soft. New transitives not yet in constraints.txt:
+# fake_useragent, beautifulsoup4, aiounittest.
 howlongtobeatpy==1.0.22
 # TV remote keys over WebSocket (tv_remote.py) - the volume write path that
-# works with eARC audio; imported LAZILY and fail-soft, so a broken install
-# costs ducking, never the lane. New transitives: websocket-client + yarl
-# (requests already here) - add to constraints.txt on the next K15 freeze.
+# works with eARC audio; imported lazily and fail-soft. New transitives not
+# yet in constraints.txt: websocket-client, yarl.
 samsungtvws==3.0.5
-# Transitive versions are ENFORCED via constraints.txt (the supervisor
-# installs with `-c constraints.txt`) - see its header for the regeneration
-# rule. The as-built, for the record: pyaudio 0.2.14 (cp313 win_amd64 wheel
-# exists), onnxruntime 1.24.4, deepgram-sdk 7.6.0, anthropic 0.121.0,
-# openai 2.53.0, numpy 2.4.6, opentelemetry-{api,sdk,proto} 1.44.0
-# (+ semantic-conventions 0.65b0, their lockstep partner).
+# Transitives are enforced via constraints.txt (the supervisor installs with
+# `-c constraints.txt`); its header has the regeneration rule. As-built:
+# pyaudio 0.2.14 (cp313 win_amd64 wheel exists), onnxruntime 1.24.4,
+# deepgram-sdk 7.6.0, anthropic 0.121.0, openai 2.53.0, numpy 2.4.6,
+# opentelemetry-{api,sdk,proto} 1.44.0 (+ semantic-conventions 0.65b0).

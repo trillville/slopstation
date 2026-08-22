@@ -1,24 +1,16 @@
 """Structured events: one JSON object per line, beside the human log.
 
-Every `log(...)` call in the couch system lands here twice - once as the
-human line in couch.log (unchanged, still the documented first move when
-something breaks) and once as a machine-readable record in
-logs/{service}-YYYYMMDD.jsonl, which is what Grafana Alloy tails.
+Every `log(...)` call lands twice - the human line in couch.log, and a record
+in logs/{service}-YYYYMMDD.jsonl that Grafana Alloy tails.
 
-Design constraints, in the order they mattered:
+Stdlib only and no import of cglib: the chord lane runs on system python, and
+cglib imports this, so the emit boundary cannot fail on a cycle (hence secrets
+are re-loaded here). Nothing here may add a dependency, open a socket, or
+block. Fail-soft throughout: a lost event never costs the
+caller. Daily files are never renamed - Alloy holds a read handle open on
+Windows - so the date is in the name and expired files are deleted.
 
-* **Stdlib only.** The chord lane is load-bearing and runs on system python.
-  Nothing here may add a dependency, open a socket, or block.
-* **No dependency on cglib.** cglib imports *this*, and this is the emit
-  boundary - the last place that should be able to fail on an import cycle.
-  That is why secrets are loaded again here in six lines instead of reused.
-* **Fail-soft, always.** A full disk, an unserializable object, or a locked
-  file costs the event, never the caller. Same rule traces.py already lives by.
-* **Daily files, never renamed.** Alloy holds a read handle open on Windows;
-  a rename under it is a fight worth not having. The date is in the name and
-  expired files are deleted, so no open handle is ever moved.
-
-Also a tiny CLI, so the cmd.exe supervisors can emit too:
+CLI, so the cmd.exe supervisors can emit too:
 
     python events.py emit supervisor restart code=1 what=listener
 """
@@ -38,48 +30,41 @@ from datetime import datetime, timezone
 BASE = pathlib.Path(__file__).resolve().parent
 LOG_DIR = BASE / "logs"
 TTL_DAYS = 14
-# Subdirectory NAME, not a path: LOG_DIR is monkeypatched to a tmpdir by the
-# blind suite, and a module-level LOG_DIR / "archive" would freeze the real
-# path at import time and let a test write into the live log directory.
+# Subdirectory NAME, not a path: the blind suite monkeypatches LOG_DIR, and a
+# module-level LOG_DIR / "archive" would freeze the real path at import time
+# and let a test write into the live log directory.
 ARCHIVE_NAME = "archive"
 ARCHIVE_DAYS = 2        # out of Alloy's glob; see _prune
 
-# The whole level vocabulary. It is a Loki label and alerts group on it, so it
-# stays small and every value has an emitter - see cglib._Log on why there is
-# no `debug`.
+# The whole level vocabulary. A Loki label alerts group on, so it stays small
+# and every value has an emitter (cglib._Log: no `debug`).
 INFO, WARN, ERROR = "info", "warn", "error"
 
-# Keys the EMITTER owns (emit builds them in order, so a raw line reads
-# left-to-right like a sentence). A caller field of the same name would
-# shadow a Loki label or make the record lie about itself, so it is renamed
-# rather than dropped - losing the value silently would be worse.
+# Keys the EMITTER owns. A caller field of the same name would shadow a Loki
+# label or make the record lie, so it is renamed rather than dropped.
 _EMITTER_OWNED = frozenset(("ts", "level", "env", "service", "lane", "event",
                             "host"))
 
-# Field names whose VALUE is always redacted, whatever it is. Belt to the
-# secrets.json braces below: a key that never reaches secrets.json (an OAuth
-# token in flight, say) is still caught by its name.
+# Field names whose VALUE is always redacted. Belt to the secrets.json braces
+# below: a key that never reaches secrets.json is still caught by its name.
 _SECRET_NAME_HINTS = ("key", "token", "secret", "password", "passwd", "pin",
                       "authorization", "auth")
 
-# Human-line values longer than this are elided. The JSONL keeps them whole -
-# this is only so a transcript does not wrap forty times in a console.
+# Human-line values longer than this are elided; the JSONL keeps them whole.
 _HUMAN_MAX = 80
 
 
 def _service():
-    """The role this box plays, and a Loki label - so it stays low-cardinality
-    and boring. Overridable for the bench; the hostname is a field, not this."""
+    """The role this box plays; a Loki label, so keep it low-cardinality.
+    Overridable for the bench; the hostname is a field, not this."""
     return os.environ.get("CG_SERVICE", "k15")
 
 
 def _env():
-    """prod unless we are demonstrably inside the blind suite.
-
-    Auto-detected rather than opt-in, because the failure being fixed is
-    exactly a test that forgot to say it was one: fail-soft cases wrote
-    couch.log lines indistinguishable from a real outage. Keyed on argv[0],
-    which is why the suite runs as scripts and not under pytest."""
+    """prod unless we are demonstrably inside the blind suite. Auto-detected,
+    not opt-in: a test that forgot to say so writes couch.log lines
+    indistinguishable from a real outage. Keyed on argv[0], which is why the
+    suite runs as scripts and not under pytest."""
     override = os.environ.get("CG_ENV")
     if override:
         return override
@@ -95,18 +80,17 @@ SERVICE = _service()
 ENV = _env()
 HOST = platform.node()
 
-# Correlation, set once per user intent and inherited by everything downstream
-# (E1 threads this from wake through to the gaming PC). A ContextVar rather
-# than a global so the voice agent's concurrent sessions cannot bleed into
-# each other; explicit kwargs always win over the ambient value.
+# Correlation, set once per user intent and inherited downstream. A ContextVar
+# rather than a global so the voice agent's concurrent sessions cannot bleed
+# into each other; explicit kwargs win over the ambient value.
 _ctx = contextvars.ContextVar("cg_event_ctx", default={})
 
 
-# One intent = one id, minted at the chord or the wake word and carried to
-# the far side of the SSH boundary. Hex-only and length-capped BY DESIGN:
-# Dispatch.ps1 writes it to a filename, so anything else is a path-traversal
-# primitive. The same shape is enforced again in the Dispatch regex - this
-# copy is convenience, that copy is the security boundary.
+# One intent = one id, minted at the chord or the wake word and carried across
+# the SSH boundary. Hex-only and length-capped BY DESIGN: Dispatch.ps1 writes
+# it to a filename, so anything else is a path-traversal primitive. The
+# Dispatch regex enforces the same shape and is the security boundary; this
+# copy is convenience.
 TURN_RE = re.compile(r"\A[0-9a-f]{1,8}\Z")
 
 
@@ -119,8 +103,8 @@ def valid_turn(value):
 
 
 def context(**fields):
-    """Set ambient correlation fields (turn=, session=, job=). Returns the
-    token so a caller can restore; most callers just set and forget."""
+    """Set ambient correlation fields (turn=, session=, job=); returns the
+    token for reset()."""
     merged = dict(_ctx.get(), **{k: v for k, v in fields.items() if v is not None})
     return _ctx.set(merged)
 
@@ -142,11 +126,9 @@ _redactions = None
 
 
 def _secret_values():
-    """Every real secret value, loaded once, so no key can ride out in a field.
-
-    Deliberately re-implements cglib.load_secrets rather than importing it:
-    cglib imports this module, and the emit boundary must not be the thing
-    that breaks on a cycle."""
+    """Every real secret value, loaded once, so no key can ride out in a
+    field. Re-implements cglib.load_secrets rather than importing it: cglib
+    imports this module."""
     global _redactions
     if _redactions is None:
         vals = set()
@@ -155,8 +137,8 @@ def _secret_values():
             for k, v in raw.items():
                 if k.startswith("_"):
                     continue
-                # Same placeholder rule as cglib.real_key: template junk is
-                # not a secret, and redacting "..." would black out prose.
+                # Same placeholder rule as cglib.real_key: redacting "..."
+                # would black out prose.
                 if (isinstance(v, str) and "..." not in v
                         and not v.upper().startswith("PLACEHOLDER")
                         and len(v.strip()) >= 15):
@@ -191,15 +173,13 @@ def _path(day):
 def _prune():
     """Archive closed daily files out of the shipper's glob, then delete the
     expired ones. Called on the first emit of a process and at date rollover,
-    not per line - a glob per event would cost real time for no benefit.
+    never per line.
 
-    The MOVE keeps Alloy cheap rather than tidy: its glob is k15-*.jsonl here
-    and a tailed file costs ~0.04% of a core whether or not it can still
-    change (A/B-measured, see gaming-pc/alloy/config.alloy.example), so at
-    TTL_DAYS=14 this directory held 13 tailers on files finished forever.
-    archive/ is outside the glob and nothing is deleted early - the delete
-    pass scans both folders. Moving a file Alloy holds open is safe: Windows
-    lets the rename through and the handle follows it."""
+    The move keeps Alloy cheap: its glob is k15-*.jsonl and a tailed file
+    costs ~0.04% of a core whether or not it can still change (A/B-measured),
+    so TTL_DAYS=14 meant 13 tailers on finished files. archive/ is outside the
+    glob and the delete pass scans both folders. Moving a file Alloy holds
+    open is safe: Windows lets the rename through and the handle follows."""
     now = time.time()
     archive = LOG_DIR / ARCHIVE_NAME
     try:
@@ -226,23 +206,18 @@ def _prune():
 
 def emit(lane, event, level=INFO, /, **fields):
     """Append one event. Never raises, never blocks on anything but a local
-    append. Returns the record (handy in tests); None if it could not be
-    built at all.
+    append. Returns the record (handy in tests); None if it could not be built.
 
     EVERY parameter is POSITIONAL-ONLY (the `/`), so no caller field name can
-    collide with one - they all land in **fields. Without it,
-    `log("lane_up", lane="assistant")` raises TypeError at call BINDING,
-    before any try/except in here can run, and takes the caller down with it.
-    Argument binding is the one failure this module cannot catch from the
-    inside, so it is designed out rather than guarded against."""
+    collide - they all land in **fields. Otherwise `log("lane_up",
+    lane="assistant")` raises TypeError at call BINDING, before any try/except
+    in here can run."""
     global _last_day
     try:
         now = datetime.now(timezone.utc)
         # Filename uses the LOCAL date; every ts inside stays UTC. Mixed on
-        # purpose: the line timestamps are for machines and must be
-        # unambiguous, but the filename is for a human opening the folder,
-        # and "today's log is named tomorrow" from 5pm onwards (UTC-7) is a
-        # genuinely confusing thing to hand someone at 9pm. Retention prunes
+        # purpose: timestamps must be unambiguous, but a filename dated
+        # tomorrow from 5pm onwards (UTC-7) confuses a human. Retention prunes
         # by mtime, so naming never affects correctness.
         day = time.strftime("%Y%m%d")
         ctx = _ctx.get()
@@ -263,9 +238,8 @@ def emit(lane, event, level=INFO, /, **fields):
         for k, v in fields.items():
             if v is None:
                 continue
-            # A caller field must never overwrite a label or make the record
-            # misdescribe itself; keep the value under a prefixed name so
-            # nothing is lost quietly.
+            # A caller field must never overwrite a label; keep the value
+            # under a prefixed name so nothing is lost quietly.
             rec["f_" + k if k in _EMITTER_OWNED else k] = scrub(k, v)
     except Exception:
         return None
@@ -290,28 +264,16 @@ HEARTBEAT_S = 60
 
 def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
     """Emit `heartbeat` from a daemon thread for as long as this process runs.
+    A dead process writes nothing, so silence and idle look identical. Writes
+    JSONL ONLY, not through cglib's logger: ~1440 lines/day would swamp
+    couch.log. Daemon thread, and the loop swallows everything.
 
-    This is the ONE signal logs cannot otherwise give you: a dead process
-    writes nothing, so silence and idle look identical. A tick every minute
-    makes absence measurable.
-
-    Deliberately writes JSONL ONLY - not through cglib's logger, so it never
-    reaches the console or couch.log. A line a minute would be ~1440/day of
-    pure noise in the one file a human reads, and couch.log's entire value is
-    that it is readable. Grafana wants the tick; people do not.
-
-    Daemon thread: it must never hold the process open at shutdown, and the
-    loop swallows everything - a liveness probe that can kill the thing it
-    probes is worse than none.
-
-    ALERTING NOTE, and the whole reason this signal exists: an absence rule
-    cannot be "heartbeat count < 1". A dead lane emits no lines, so the query
-    returns no series and a threshold never evaluates at all - it has to fire
-    through Grafana's *No data = Alerting* handling. Set to *No data = OK* the
-    two most important alerts in the system are permanently inert AND look
-    perfectly healthy in the UI, which is why the drill is to kill a lane and
-    confirm it actually pages (~7 min for the chord lane, ~10 for voice: the
-    5-minute count window has to empty before `for:` even starts).
+    ALERTING: an absence rule cannot be "heartbeat count < 1" - a dead lane
+    returns no series, so the threshold never evaluates and the rule must fire
+    through Grafana's *No data = Alerting*; under *No data = OK* the two most
+    important alerts are inert and look healthy. Drill: kill a lane and
+    confirm it pages (~7 min chord lane, ~10 voice - the 5-minute count window
+    has to empty before `for:` starts).
     """
     def tick():
         while True:
@@ -330,9 +292,8 @@ def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
 
 
 def human(event, level=INFO, /, **fields):
-    """Render an event the way couch.log has always read: the event, then its
-    fields as k=v. Values are elided at 80 chars so a transcript does not
-    swamp a console - the JSONL keeps them whole."""
+    """Render an event as couch.log reads it: the event, then fields as k=v.
+    Values are elided at _HUMAN_MAX; the JSONL keeps them whole."""
     parts = [event]
     for k, v in fields.items():
         if v is None or k in ("turn", "session", "job"):
@@ -340,9 +301,9 @@ def human(event, level=INFO, /, **fields):
         v = scrub(k, v)
         s = v if isinstance(v, str) else json.dumps(v, default=str)
         if len(s) > _HUMAN_MAX:
-            # ASCII on purpose: this line is printed to a cmd.exe console,
-            # where a cp1252 codepage turns a real ellipsis into a mojibake
-            # box at best and a UnicodeEncodeError at worst.
+            # ASCII on purpose: printed to a cmd.exe console, where a cp1252
+            # codepage turns a real ellipsis into mojibake or a
+            # UnicodeEncodeError.
             s = s[:_HUMAN_MAX - 3] + "..."
         if isinstance(v, str) and (" " in s or not s):
             s = f'"{s}"'
@@ -357,9 +318,7 @@ def human(event, level=INFO, /, **fields):
 def _cli(argv):
     """events.py emit <lane> <event> [--level warn] [k=v ...]
 
-    Exists so Start-Listener.bat and friends can report a crash-restart. That
-    line is currently a bare `echo >> couch.log` that nothing watches, which
-    makes a chord-lane crash loop - the load-bearing lane - invisible."""
+    So Start-Listener.bat and friends can report a crash-restart."""
     if not argv or argv[0] != "emit" or len(argv) < 3:
         print(__doc__.strip().splitlines()[-1].strip())
         return 2
@@ -372,14 +331,14 @@ def _cli(argv):
         elif "=" in a:
             k, _, v = a.partition("=")
             # cmd.exe hands everything over as text; a numeric-looking value
-            # is far more useful to a dashboard as a number (code=1 should be
-            # comparable, not just groupable).
+            # is more useful to a dashboard as a number (code=1 comparable,
+            # not just groupable).
             try:
                 fields[k] = int(v)
             except ValueError:
                 fields[k] = v
         # anything else is ignored: a supervisor must never die on its own
-        # telemetry, and cmd.exe quoting is a hostile environment.
+        # telemetry, and cmd.exe quoting is hostile.
     rec = emit(lane, event, level, **fields)        # positional: see emit()
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{lane}] "
           + human(event, level, **fields), flush=True)

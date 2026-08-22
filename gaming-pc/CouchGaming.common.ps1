@@ -1,6 +1,5 @@
 # CouchGaming.common.ps1 - shared library for the couch gaming session scripts.
 # Dot-source from a sibling script:   . "$PSScriptRoot\CouchGaming.common.ps1"
-# Every machine/build-specific value lives in $CG; the scripts contain only sequencing.
 
 $CG = @{
     Root        = $PSScriptRoot
@@ -11,26 +10,21 @@ $CG = @{
     Puck        = 'K15.5'                  # VirtualHere address; `vhui64 -t LIST` is the source of truth
     PuckHwId    = 'VID_28DE&PID_1304'      # Valve Steam Controller Puck
     TvEdid      = 'QCQ90S'                 # S90C's EDID name as Windows reports it
-    SteamWindow = 'Steam'                  # EXACT title of the desktop library
-                                           # window - the one window a session
-                                           # must never leave in the foreground
-    BpmWindow   = 'Steam Big Picture Mode' # ...and the one it should
+    SteamWindow = 'Steam'                  # EXACT title of the desktop library window
+    BpmWindow   = 'Steam Big Picture Mode' # EXACT title of the Big Picture window
     TvHeight    = 2160                     # see Test-TvIsPrimary
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
-    ReadyMarker = 'C:\ProgramData\CouchGaming\ready'   # cross-context state - deliberately not under Root
+    ReadyMarker = 'C:\ProgramData\CouchGaming\ready'   # cross-context state, not under Root
     TurnMarker  = 'C:\ProgramData\CouchGaming\turn'    # written by Dispatch, read here (schtasks can't pass args)
 }
 
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-# The K15's correlation id for whatever caused this run. Re-validated on read
-# even though Dispatch's regex enforced it: the value ends up in a filename,
-# and a cheap second check beats assuming nothing else can write there.
-# Absent or malformed = no correlation, never a failure. Age-gated because
-# the marker outlives its run (LaunchGame runs unelevated and cannot delete
-# what elevated Dispatch created), and a logon hours later must not tag
-# Office-Safety's events with a long-dead launch.
+# The K15's correlation id for this run; absent or malformed = no correlation,
+# never a failure. Re-validated on read (it ends up in a filename) and
+# age-gated (unelevated LaunchGame cannot delete elevated Dispatch's marker, so
+# a logon hours later must not tag its events with a long-dead launch).
 $script:CgTurnStaleSec = 300
 
 function Get-CgTurn {
@@ -44,8 +38,8 @@ function Get-CgTurn {
 }
 
 $script:CgTurn = Get-CgTurn
-# Lane defaults to the script that dot-sourced us, so a script with no
-# transcript (Office-Safety, Wake-Safety) still emits under a sensible label.
+# Lane defaults to the dot-sourcing script, so one with no transcript
+# (Office-Safety, Wake-Safety) still emits under a sensible label.
 $script:CgLane = if ($MyInvocation.PSCommandPath) {
     [IO.Path]::GetFileNameWithoutExtension($MyInvocation.PSCommandPath).ToLower()
 } else { 'pc' }
@@ -54,9 +48,7 @@ function Log($m) {
     Write-Host ("[+{0,5:n1}s] {1}" -f $script:CgStopwatch.Elapsed.TotalSeconds, $m)
 }
 
-# Structured twin of Log, for the MILESTONES a dashboard counts and an alert
-# fires on. The transcript stays the narrative - it catches the lines nobody
-# thought to instrument - and this catches the ones we did.
+# Structured twin of Log, for the milestones dashboards count and alerts fire on.
 function Write-CgEvent {
     param([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 'info')
     try {
@@ -71,11 +63,8 @@ function Write-CgEvent {
         if ($script:CgTurn) { $rec.turn = $script:CgTurn }
         $rec.host = $env:COMPUTERNAME
         $rec.dur_ms = [int]$script:CgStopwatch.Elapsed.TotalMilliseconds
-        # A caller field must never overwrite a key the emitter owns (Loki
-        # labels; a record that misdescribes itself is worse than a missing
-        # one), so it is prefixed rather than dropped - same rule as
-        # events.py, minus its binding hazard since fields arrive as a
-        # hashtable rather than splatted parameters.
+        # A caller field must never overwrite an emitter-owned key (they are
+        # Loki labels), so it is prefixed rather than dropped.
         $owned = @('ts','level','env','service','lane','event','host')
         foreach ($k in $Fields.Keys) {
             if ($owned -contains $k) { $rec["f_$k"] = $Fields[$k] }
@@ -83,10 +72,8 @@ function Write-CgEvent {
         }
         $file = Join-Path $CG.LogDir ("pc-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
         $line = ConvertTo-Json -InputObject $rec -Compress -Depth 4
-        # AppendAllText with a BOM-less encoder, NOT `Add-Content -Encoding
-        # utf8`: on PowerShell 5.1 that flag means UTF-8 WITH BOM, and those
-        # three bytes in front of the first '{' make the line unparseable
-        # JSON forever after.
+        # BOM-less encoder: PowerShell 5.1's `-Encoding utf8` means WITH BOM,
+        # and those three bytes before the first '{' break JSON parsing.
         [IO.File]::AppendAllText(
             $file, $line + [Environment]::NewLine,
             (New-Object System.Text.UTF8Encoding($false)))
@@ -96,8 +83,8 @@ function Write-CgEvent {
 function Start-CgTranscript([string]$Tag) {
     $script:CgLane = $Tag
     New-Item -ItemType Directory -Force -Path $CG.LogDir -ErrorAction SilentlyContinue | Out-Null
-    # The turn rides in the FILENAME too, so "which transcript belongs to the
-    # 9pm launch" is answerable by looking at the folder, not by opening files.
+    # The turn rides in the filename too, so a folder listing maps transcripts
+    # to launches.
     $stamp = Get-Date -Format yyyyMMdd-HHmmss
     $name = if ($script:CgTurn) { "{0}-{1}-{2}.log" -f $Tag, $stamp, $script:CgTurn }
             else                { "{0}-{1}.log" -f $Tag, $stamp }
@@ -115,8 +102,7 @@ function Wait-For([scriptblock]$Cond, [double]$TimeoutSec, [string]$What) {
 }
 
 # Display state must be probed from a fresh process: WMI display classes and
-# in-process GetSystemMetrics both report stale values inside windowless
-# scheduled tasks.
+# in-process GetSystemMetrics report stale values in windowless scheduled tasks.
 $script:CgProbe = @'
 Add-Type -Namespace W -Name N -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);'
 [void][W.N]::SetProcessDPIAware()
@@ -126,10 +112,9 @@ $script:CgProbeEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes
 
 function Get-PrimaryHeight { [int](& powershell.exe -NoProfile -EncodedCommand $script:CgProbeEnc | Select-Object -Last 1) }
 
-# THE topology sentinel for the whole system: primary-display height equals the
-# TV's. Holds because the desk ultrawide's height differs from 2160. Revisit
-# before ever pairing this rig with a 4K or 5K2K desk monitor (5120x2160 would
-# read as "TV is primary" at every logon).
+# Topology sentinel: primary-display height equals the TV's. Holds only because
+# the desk ultrawide is not 2160 tall - a 4K or 5K2K (5120x2160) desk monitor
+# would read as "TV is primary" at every logon.
 function Test-TvIsPrimary { (Get-PrimaryHeight) -eq $CG.TvHeight }
 
 function Get-TvNames {
@@ -151,29 +136,18 @@ function Get-VhList {
     (Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '
 }
 
-# A lingering DisplayMagician instance is what produces the frozen profile
-# window on the next apply - kill after every verified apply.
+# A lingering DisplayMagician instance produces the frozen profile window on
+# the next apply - kill after every apply.
 function Stop-DisplayMagician {
     Get-Process DisplayMagician -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
-# A failed profile apply only explains itself in DisplayMagician's OWN log -
-# "the graphics mode is not supported", the display config collapsing to no
-# valid paths at all - and that log lives outside this tree, under the user's
-# LOCALAPPDATA, where DisplayMagician rotates it away within hours. On
-# 2026-08-13 the log for that morning's failed launch was already gone by
-# lunchtime, taking the only account of what happened with it.
-#
-# Copying it beside the transcript puts it inside the shipper's existing
-# C:/CouchGaming/logs/*.log glob, so it reaches Loki with no Alloy change, and
-# Clear-OldLogs archives it on the same schedule as everything else here.
-#
-# Level-filtered rather than verbatim: a run is ~800 KB of TRACE, of which the
-# ERROR/WARN/INFO lines are ~5% - and those are every line that has ever
-# mattered in a post-mortem.
-#
-# Swallows everything. This is called from INSIDE Enter's try block, where an
-# exception would convert a launch the retry had just rescued into a failure.
+# A failed profile apply explains itself only in DisplayMagician's own log,
+# under LOCALAPPDATA, which it rotates away within hours (2026-08-13: gone by
+# lunchtime). Copying it beside the transcript puts it in the shipper's
+# C:/CouchGaming/logs/*.log glob and under Clear-OldLogs retention.
+# Level-filtered: a run is ~800 KB of TRACE, ERROR/WARN/INFO ~5%. Swallows
+# everything - it runs inside Enter's try block.
 function Copy-DisplayMagicianLog([string]$Tag) {
     try {
         $src = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'DisplayMagician\Logs\*.log') `
@@ -185,8 +159,7 @@ function Copy-DisplayMagicianLog([string]$Tag) {
                 else                { "dm-$stamp-$Tag.log" }
         $keep = Select-String -Path $src.FullName -Pattern '\|(ERROR|WARN|INFO)\|' |
                 ForEach-Object { $_.Line }
-        # BOM-less, for the same reason Write-CgEvent hand-rolls its encoder:
-        # PowerShell 5.1's `-Encoding utf8` means utf8 WITH BOM.
+        # BOM-less, for the same reason Write-CgEvent hand-rolls its encoder.
         [IO.File]::WriteAllLines((Join-Path $CG.LogDir $name), $keep,
                                  (New-Object System.Text.UTF8Encoding($false)))
         Log "captured DisplayMagician log -> $name ($($keep.Count) lines of $($src.Name))"
@@ -196,19 +169,16 @@ function Copy-DisplayMagicianLog([string]$Tag) {
 }
 
 # Steam's own record of what is running; 0 = nothing. Same registry value the
-# Dispatch `playing` verb answers from, so the PC cannot disagree with itself
-# about whether a game is up.
+# Dispatch `playing` verb answers from.
 function Get-RunningAppId {
     $id = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
     if ($id) { [int]$id } else { 0 }
 }
 
 if (-not ('CG.Win' -as [type])) {
-    # WindowByTitle rather than FindWindow(null, title): on this hardware
-    # FindWindow returns 0 for windows EnumWindows reports under exactly that
-    # title (Steam's UI is CEF, drawn by steamwebhelper.exe - which is also
-    # why steam.exe's MainWindowHandle reads 0). Enumerating is what works.
-    # Visible-only: closed to the tray there is nothing to put away.
+    # WindowByTitle, not FindWindow(null, title): FindWindow returns 0 for
+    # windows EnumWindows reports under exactly that title (Steam's UI is CEF,
+    # drawn by steamwebhelper.exe - also why steam.exe's MainWindowHandle is 0).
     Add-Type -Namespace CG -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
@@ -237,18 +207,11 @@ public static IntPtr WindowByTitle(string want) {
 '@
 }
 
-# THE window a couch session must never hand the controller to. Steam delivers
-# input to the FOCUSED window, so a session holding the desktop library window
-# plays a navigation sound per button press and moves nothing on the TV - while
-# the Steam button keeps working, because Steam Input handles that one
-# globally. That combination is what makes the failure baffling from the couch.
-#
-# Matched by EXACT title, not by steam.exe's MainWindowHandle (0 when closed
-# to the tray, so a handle-based guard never fires). An exact match also
-# cannot hit 'Steam Big Picture Mode', so this is safe to call at any point.
-#
-# Minimize rather than merely unfocus: a library window laid out at 4K comes
-# back garbled when reopened at the ultrawide's resolution.
+# Steam delivers input to the FOCUSED window, so a session left holding the
+# desktop library window moves nothing on the TV while the Steam button keeps
+# working (Steam Input handles that one globally). EXACT title, so it cannot
+# hit 'Steam Big Picture Mode' - safe to call at any point. Minimize, not
+# unfocus: a window laid out at 4K comes back garbled at the ultrawide's res.
 function Hide-DesktopSteam {
     $h = [CG.Win]::WindowByTitle($CG.SteamWindow)
     if ($h -ne [IntPtr]::Zero) {
@@ -257,16 +220,11 @@ function Hide-DesktopSteam {
     }
 }
 
-# What is ACTUALLY in front, as a string, for the ready event to carry.
-# Recorded rather than reasoned about: the dead-controller bug survived three
-# sessions because every signal we had said success - `focused=True` was in
-# the ready event while the controller was reaching nothing. One field naming
-# the window that really has the foreground makes that failure self-evident in
-# the first launch instead of the fourth.
+# What is actually in front, for the ready event to carry: `focused=True` once
+# rode in a ready event while the controller was reaching nothing.
 function Get-ForegroundTitle { [CG.Win]::ForegroundTitle() }
 
-# Steam's install path is the registry's business, not a hardcoded path.
-# Shared with Launch-Game, which needs the same exe for the same -applaunch.
+# Steam's install path, from the registry. Shared with Launch-Game.
 function Get-SteamExe {
     $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath -replace '/', '\'
     $exe = Join-Path $steam 'steam.exe'
@@ -275,10 +233,8 @@ function Get-SteamExe {
 }
 
 # Every steamapps library root: SteamPath plus each "path" in libraryfolders.vdf
-# (games live on any drive). The Dispatch `games`/`launch` verbs parse the same
-# vdf inline because Dispatch is deliberately dependency-free; this is the home
-# for the DOT-SOURCED consumers (Stop-Game), which is the "one home" rule as far
-# as it can reach across that boundary.
+# (games live on any drive). Dispatch parses the same vdf inline, since it must
+# stay dependency-free.
 function Get-SteamLibraryRoots {
     $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
     if (-not $steam) { return @() }
@@ -293,10 +249,8 @@ function Get-SteamLibraryRoots {
     $roots | Select-Object -Unique
 }
 
-# appid -> its full install directory (…\steamapps\common\<installdir>), from the
-# ACF, or $null. The `installdir` field is what nothing else here reads - the
-# games verb takes name/state, not this - so Stop-Game owns the need and this is
-# where the reader lives.
+# appid -> its full install directory (…\steamapps\common\<installdir>), from
+# the ACF's `installdir` field, or $null.
 function Get-AppInstallDir([int]$AppId) {
     foreach ($root in (Get-SteamLibraryRoots)) {
         $acf = Join-Path $root "steamapps\appmanifest_$AppId.acf"
@@ -310,17 +264,14 @@ function Get-AppInstallDir([int]$AppId) {
     $null
 }
 
-# The running processes that belong to a game: those whose image path sits under
-# its install dir. Steam exposes no appid->pid map, so the install dir is the
-# most robust join. .Path throws for processes this (unelevated) task can't open,
-# but the game runs as the same user, so it is reachable - guard and skip the
-# rest. Empty when the dir can't be resolved or nothing matches.
+# The processes belonging to a game: those whose image path sits under its
+# install dir (Steam exposes no appid->pid map). .Path throws for processes
+# this unelevated task can't open - guard and skip. Empty if unresolvable.
 function Get-GameProcess([int]$AppId) {
     $dir = Get-AppInstallDir $AppId
     if (-not $dir) { return @() }
-    # Match on the dir PLUS a trailing separator, so a sibling whose folder name
-    # is a string prefix of this one ("Half-Life 2" vs "Half-Life 2 Deathmatch",
-    # both in one library) can never cross-match and get force-killed with it.
+    # Dir PLUS a trailing separator, so a sibling whose folder name is a string
+    # prefix ("Half-Life 2" vs "Half-Life 2 Deathmatch") cannot cross-match.
     $prefix = $dir.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     Get-Process | Where-Object {
         try { $_.Path -and $_.Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) }
@@ -328,16 +279,12 @@ function Get-GameProcess([int]$AppId) {
     }
 }
 
-# NOTE: there is deliberately no Resume-Game here. One existed briefly and was
-# reverted - see docs/troubleshooting.md and the plan in the same commit. It
-# ran `-applaunch` on the already-running game just before the ready marker,
-# which put the game's 2160p re-init inside the exact window where the K15 is
-# still flipping the TV input: black screen, dead controller, ~40 s. Enter is
-# structurally the wrong place for it, because Enter cannot observe when the TV
-# actually goes live - only the K15 can.
+# No Resume-Game here: `-applaunch` on the already-running game just before the
+# ready marker puts its 2160p re-init inside the window where the K15 is still
+# flipping the TV input - black screen, dead controller, ~40 s. Only the K15
+# can observe when the TV actually goes live.
 
-# Apply a DisplayMagician profile shortcut, poll $Until to verify it took, and
-# kill DisplayMagician after every attempt - verified or not.
+# Apply a profile shortcut, verify with $Until, kill DisplayMagician either way.
 function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$TimeoutSec = 20, [int]$Attempts = 1, [string]$What = 'profile applied') {
     for ($i = 1; $i -le $Attempts; $i++) {
         Start-Process $Lnk
@@ -348,18 +295,16 @@ function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$Timeo
     return $false
 }
 
-# Claim the Puck, verified by Windows enumeration. A pre-existing (stale) claim
-# is released first for a fresh instance: VirtualHere re-acquires the device on
-# reconnect, and Steam holding handles to the old instance yields a
-# haptics-alive / inputs-dead controller.
+# Claim the Puck, verified by Windows enumeration. A stale claim is released
+# first: VirtualHere re-acquires the device on reconnect, and Steam holding
+# handles to the old instance yields a haptics-alive / inputs-dead controller.
 function Request-PuckClaim {
     if (Test-PuckPresent) {
         Log 'stale Puck claim detected - releasing for a fresh instance'
         & $CG.Vh -t "STOP USING,$($CG.Puck)" -r $CG.VhResult
         if (-not (Wait-For { -not (Test-PuckPresent) } 6 'stale claim released')) {
-            # Proceeding would let the claim gate pass on the stale, dead instance -
-            # reproducing the exact inputs-dead controller this recycle exists to
-            # prevent. A clean abort (TV untouched) beats a fake-successful launch.
+            # Proceeding would pass the claim gate on the stale, dead instance,
+            # reproducing the inputs-dead controller this recycle prevents.
             throw 'stale Puck claim would not release - aborting launch'
         }
     }
@@ -396,22 +341,16 @@ function Test-CgTaskRunning([string]$Name) {
 
 function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | Out-Null }
 
-# Transcript retention: one file per enter/exit/wake/logon adds up forever.
-# Called from Office-Safety (every logon) and Wake-Safety (every desk wake -
-# the real cadence, since sleep-centric use makes logons rare).
+# Transcript retention; called from Office-Safety (logon) and Wake-Safety (wake).
 function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
-    # Transcripts and daily jsonl move to archive\ after a couple of days and
-    # are deleted at $Days. The move is for the SHIPPER, not tidiness: Alloy
-    # tails every file its glob matches at ~0.04% of a core each (A/B
-    # measured - see alloy\config.alloy.example, which also records why the
-    # obvious way to measure it returns a silent zero), and only a running
-    # script's transcript or today's jsonl can still grow. 110 finished files
-    # was ~4.5% of a core to watch nothing happen.
+    # Transcripts and daily jsonl move to archive\ after $ArchiveAfterDays and
+    # are deleted at $Days. The move is for the SHIPPER: Alloy tails every file
+    # its glob matches at ~0.04% of a core each (110 finished files was ~4.5%),
+    # and only a running transcript or today's jsonl can still grow.
     $archive = Join-Path $CG.LogDir 'archive'
     New-Item -ItemType Directory -Force -Path $archive -ErrorAction SilentlyContinue | Out-Null
-    # Wildcard path + -Include and NO -Recurse: enumerates this directory's
-    # files only, so archive\ is never re-scanned and nothing moves twice.
-    # (-Filter takes one pattern, which is why this is not -Filter.)
+    # Wildcard path + -Include and NO -Recurse: this directory's files only, so
+    # archive\ is never re-scanned. (-Filter takes one pattern, hence -Include.)
     Get-ChildItem (Join-Path $CG.LogDir '*') -Include *.log, *.jsonl -File `
             -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$ArchiveAfterDays) } |
@@ -424,14 +363,11 @@ function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
-# The ready marker is the cross-machine session API: Enter writes it last, the
-# K15 switches the TV input only after seeing it, Exit/safeties remove it.
-#
-# CONTENT is the launch's turn id when one rode in with the enter verb: the
-# K15 treats a READY as verified only when it echoes the turn it sent, so a
-# stale marker can no longer satisfy a NEW launch's poll (which used to
-# switch the TV to a host still mid-Enter). No turn falls back to the
-# timestamp, accepted as a legacy READY, so either side may deploy first.
+# The cross-machine session API: Enter writes it last, the K15 switches the TV
+# input only after seeing it, Exit/safeties remove it. Content is the launch's
+# turn id, which the K15 must see echoed before it trusts a READY, so a stale
+# marker cannot satisfy a new launch's poll. No turn falls back to a timestamp,
+# accepted as a legacy READY, so either side may deploy first.
 function Set-ReadyMarker {
     New-Item -ItemType Directory -Force (Split-Path $CG.ReadyMarker) | Out-Null
     $stamp = if ($script:CgTurn) { $script:CgTurn } else { (Get-Date).ToString('o') }

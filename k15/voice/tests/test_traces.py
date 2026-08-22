@@ -24,7 +24,7 @@ def main():
     tmp = Path(tempfile.mkdtemp())
     traces.DIR = tmp
 
-    # Empty conversation -> no file (a wake with no exchange leaves nothing).
+    # Empty conversation -> no file.
     traces.save("voice", [])
     assert not list(tmp.glob("*.json"))
 
@@ -48,8 +48,7 @@ def main():
     assert not old.exists() and files[0].exists()
     print(f"  prune: {old.name} gone after {traces.TTL_DAYS}d TTL, fresh kept")
 
-    # Fail-soft: unwritable DIR (parent is a file) must not raise - a trace
-    # must never cost a session.
+    # Fail-soft: unwritable DIR (parent is a file) must not raise.
     blocker = tmp / "blocker"
     blocker.write_text("", encoding="utf-8")
     traces.DIR = blocker / "sub"

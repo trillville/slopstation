@@ -1,9 +1,8 @@
 """Blind test: a REAL session pipeline end-to-end minus STT -
 LocalAudioTransport on real devices, GrammarGate, dry-run dispatch, earcons
-through the actual speaker (wake chime included, plus the fold rule that keeps
-an instant success from doubling it), and the exit phrase ending the worker.
-Scripted TranscriptionFrames stand in for Flux (its own connect path needs the
-key). Brief tones will be audible. Run:
+through the actual speaker, and the exit phrase ending the worker. Scripted
+TranscriptionFrames stand in for Flux, whose connect path needs the key.
+Brief tones will be audible. Run:
     .venv\\Scripts\\python tests\\test_session_pipeline.py
 """
 import asyncio
@@ -18,9 +17,7 @@ from dispatch import Dispatch
 from grammar_gate import GrammarGate, GrammarMatcher
 from preroll import WakeAck
 
-# (utterance, event the gate must emit, intent field where the event carries one).
-# Asserting on events, not prose: rewording is free, renaming is caught -
-# dashboards and alerts group by event name.
+# (utterance, event the gate must emit, intent where the event carries one).
 SCRIPT = [
     ("volume up", "dispatch", "VolumeUp"),
     ("switch to the apple tv", "dispatch", "SwitchInput"),
@@ -41,9 +38,8 @@ async def run():
     log = cglib.CapturingLog("voice", echo=True)
 
     cfg = cglib.load_config()
-    # assistant_enabled without an LLM stage: the no-match line exercises the
-    # REAL handoff (the in-flight flag that defers the idle timeout, set inside
-    # a live pipeline); the transcript dead-ends at the output transport.
+    # assistant_enabled with no LLM stage: the no-match line exercises the
+    # real handoff, then dead-ends at the output transport.
     gate = GrammarGate(GrammarMatcher(cfg["voice"]),
                        Dispatch(cfg, log, dry_run=True), log,
                        assistant_enabled=True, ack=WakeAck())
@@ -68,8 +64,7 @@ async def run():
             text=text, user_id="test", timestamp="t"))
         await asyncio.sleep(0.9)       # let earcons play
 
-    # The no-match handoff left an answer "in flight": an ErrorFrame must clear
-    # the flag that pins the idle handler open, and play the fail earcon.
+    # ErrorFrame must clear the in-flight flag that pins the idle handler.
     from pipecat.frames.frames import ErrorFrame
     assert gate._assistant_pending, "handoff must mark an answer in flight"
     await worker.queue_frame(ErrorFrame(error="bench: synthetic LLM failure"))
@@ -91,9 +86,8 @@ async def run():
     # The lock arbiter ran for real (no lock on this machine = launchable).
     assert any("couch.py start" in r.get("action", "")
                for r in log.find("dry_run_would")), log.records
-    # The wake chime is claimed by the FIRST transcript, and only that first
-    # success is close enough to fold into it - the rest are 0.9 s behind
-    # (past ACK_COALESCE_S) and must ack normally.
+    # The first transcript claims the wake chime and folds into it; the rest
+    # are 0.9 s behind, past ACK_COALESCE_S, so they ack normally.
     folded = len(log.find("earcon_folded"))
     assert folded == 1, f"{folded} acks folded, want exactly the first"
     print("OK - session pipeline: gate matched/dry-dispatched/acked, first ok "
