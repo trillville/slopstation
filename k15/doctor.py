@@ -269,6 +269,14 @@ def check_voice(cfg):
     if missing:
         report(WARN, "voice config", f"missing {', '.join(missing)}",
                "the agent will not start without them - compare config.example.json")
+    # The ONE place the chord lane reaches into the voice lane, so it is the
+    # one place to read about it: two voice modules whose TOP LEVEL is stdlib
+    # + chord lane (test_lanes pins exactly that), imported here so system
+    # python can ask the real code - which CLI a workerProvider means, how to
+    # read a JWT's exp - instead of carrying a copy that is free to drift.
+    # Voice venv deps stay off-limits: nothing below imports pipecat or friends.
+    sys.path.insert(0, str(voice_dir))
+    from steam_session import jwt_exp
     try:
         secrets = cglib.load_secrets()
     except Exception as e:
@@ -357,10 +365,7 @@ def check_voice(cfg):
     tok = secrets.get("steamRefreshToken")
     if cglib.real_key(tok):
         try:
-            import base64
-            payload = tok.split(".")[1]
-            payload += "=" * (-len(payload) % 4)
-            exp = int(json.loads(base64.urlsafe_b64decode(payload)).get("exp", 0))
+            exp = jwt_exp(tok)                  # the agent's own reader
             days = (exp - time.time()) / 86400 if exp else -1
             if days < 0:
                 report(WARN, "steam session", "refresh token unreadable or expired",
@@ -386,10 +391,8 @@ def check_voice(cfg):
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
     if wp:
-        # provider -> CLI name lives in workers.py and nowhere else; it is
-        # stdlib-only, so system python can import it (voice venv deps are
-        # still off-limits here).
-        sys.path.insert(0, str(voice_dir))
+        # provider -> CLI name lives in workers.py and nowhere else (the
+        # voice-lane reach above is what makes it importable here).
         try:
             from workers import WORKERS
             exe = WORKERS[wp].exe

@@ -19,7 +19,7 @@ import steam_session as ss
 
 
 def make_jwt(exp):
-    """A JWT whose only readable claim is exp - all _jwt_exp needs."""
+    """A JWT whose only readable claim is exp - all jwt_exp needs."""
     p = base64.urlsafe_b64encode(json.dumps({"exp": int(exp)}).encode()).rstrip(b"=").decode()
     return f"eyJhbGciOiJIUzI1NiJ9.{p}.sig"
 

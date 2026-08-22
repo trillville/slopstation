@@ -67,9 +67,10 @@ PLATFORM_WEBBROWSER = 2
 log = cglib.make_log("steam")
 
 
-def _jwt_exp(token):
+def jwt_exp(token):
     """The `exp` (unix seconds) out of a JWT without verifying it - we minted
-    nothing, we just want to know when to re-mint. 0 if unreadable."""
+    nothing, we just want to know when to re-mint. 0 if unreadable. Public:
+    doctor.py reads the refresh token's expiry with it rather than a copy."""
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)        # restore base64 padding
@@ -175,7 +176,7 @@ class SteamSession:
             raise RuntimeError("could not mint an access token - the refresh "
                                "token may be expired or revoked; re-enroll")
         self._access = tok
-        self._access_exp = _jwt_exp(tok) or (time.time() + 23 * 3600)
+        self._access_exp = jwt_exp(tok) or (time.time() + 23 * 3600)
         return tok
 
     def _mint(self):
@@ -236,7 +237,7 @@ class SteamSession:
     def token_expiry(self):
         """Unix seconds the REFRESH token dies (0 if none/unreadable) - doctor
         warns as it nears, since only a human (a re-scan) fixes that."""
-        return _jwt_exp(self._refresh) if cglib.real_key(self._refresh) else 0
+        return jwt_exp(self._refresh) if cglib.real_key(self._refresh) else 0
 
     # -- ClientComm -----------------------------------------------------------
 
@@ -466,7 +467,7 @@ def _cli(argv):
         # only check was a JWT exp read (2026-08-14). Exit 0 == usable.
         try:
             t = s.access_token()
-            hours = (_jwt_exp(t) - time.time()) / 3600
+            hours = (jwt_exp(t) - time.time()) / 3600
             print(f"OK access token minted, good for {hours:.0f}h")
             return 0
         except Exception as e:

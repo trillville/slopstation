@@ -42,6 +42,11 @@ import statefile
 STATE = statefile.STATE
 LIBRARY = STATE / "library.json"
 
+# The two Steam hosts, named once: layers 2-4 below all talk to one of them
+# (two fetchers used to spell the URLs out in full, beside the constants).
+STORE = "https://store.steampowered.com"
+API = "https://api.steampowered.com"
+
 log = cglib.make_log("library")
 
 
@@ -176,7 +181,7 @@ def fetch_owned(api_key, steamid):
     source - ACF LastPlayed is per-machine). One call, own key only."""
     import requests
     r = requests.get(
-        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/",
+        f"{API}/IPlayerService/GetOwnedGames/v1/",
         params={"key": api_key, "steamid": steamid, "include_appinfo": 1,
                 "include_played_free_games": 1, "format": "json"}, timeout=30)
     r.raise_for_status()
@@ -196,7 +201,7 @@ def fetch_meta_one(appid):
     Caller paces requests; results are cached forever."""
     import requests
     meta = {}
-    r = requests.get("https://store.steampowered.com/api/appdetails",
+    r = requests.get(f"{STORE}/api/appdetails",
                      params={"appids": appid}, timeout=20)
     d = r.json().get(str(appid), {})
     if d.get("success"):
@@ -205,8 +210,7 @@ def fetch_meta_one(appid):
         meta.update({
             "genres": [g["description"] for g in data.get("genres", [])],
             "controller": next((v for k, v in _CTRL.items() if k in cats), "none"),
-            "desc": re.sub(r"[^\x20-\x7E]", "",
-                           data.get("short_description", ""))[:160],
+            "desc": _ascii(data.get("short_description", ""))[:160],
             "score": (data.get("metacritic") or {}).get("score"),
             "year": (data.get("release_date") or {}).get("date", "")[-4:],
         })
@@ -272,9 +276,6 @@ def refresh_owned():
 # lane degrades to a spoken "couldn't reach the store", never a crash. The live
 # smoke test in the bring-up guide is what confirms the real shapes on the rig.
 
-STORE = "https://store.steampowered.com"
-API = "https://api.steampowered.com"
-
 DEALS = STATE / "deals.json"                # wishlist-on-sale + specials snapshot
 DEALS_MAX_AGE_S = 6 * 3600                  # prices move at sale boundaries
 FACET_CACHE = STATE / "facet-cache.json"    # per-game how-long-to-beat (stable)
@@ -298,26 +299,29 @@ def _get(url, params=None, timeout=20):
         return None
 
 
+_CC = None
+
+
 def _cc():
     """Country code for prices, from config.location.country (defaults US).
-    One home, so every price call is in the same currency the assistant quotes."""
-    try:
-        return (cglib.load_config().get("voice", {})
-                .get("location", {}).get("country") or "US").upper()
-    except Exception:
-        return "US"
+    One home, so every price call is in the same currency the assistant quotes.
+    Read once per process: it used to re-read and re-parse config.json from
+    disk on every store call - one read per 100-item chunk of a wishlist
+    refresh - for a value that only changes with a restart anyway."""
+    global _CC
+    if _CC is None:
+        try:
+            _CC = (cglib.load_config().get("voice", {})
+                   .get("location", {}).get("country") or "US").upper()
+        except Exception:
+            _CC = "US"
+    return _CC
 
 
 def _ascii(s):
     """Names go ASCII-only, the same rule the catalog fetchers use (encoding-
     proof across every hop, and (tm)-glyphs are noise to voice)."""
     return re.sub(r"[^\x20-\x7E]", "", s or "").strip()
-
-
-def _tagkey(s):
-    """A store tag reduced to letters and digits, so spoken/model spellings
-    meet Steam's: rogue-like == Roguelike, 'co op' == Co-op."""
-    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
 def _store_items(appids, cc=None):
@@ -451,8 +455,8 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
     # exact lookup dropped "Rogue-like" silently, leaving a co-op-only search
     # that answered "a co-op roguelike under $20" with Dead by Daylight and
     # Total War (2026-08-14) - a dropped filter is invisible in the result.
-    tmap = {_tagkey(k): v for k, v in _tag_map().items()}
-    tagids = [str(tmap[_tagkey(t)]) for t in (tags or []) if _tagkey(t) in tmap]
+    tmap = {fuzzy_key(k): v for k, v in _tag_map().items()}
+    tagids = [str(tmap[fuzzy_key(t)]) for t in (tags or []) if fuzzy_key(t) in tmap]
     params = {"term": term or "", "cc": cc or _cc(), "l": "english",
               "count": 50, "infinite": 1, "json": 1}
     if tagids:
@@ -540,6 +544,10 @@ def fetch_hltb(name):
 
 
 def fuzzy_key(name):
+    """A name or store tag reduced to letters and digits, so spoken/model
+    spellings meet Steam's: rogue-like == Roguelike, 'co op' == Co-op - and
+    the key the facet cache files a title under. (It had a twin, _tagkey,
+    with the identical body.)"""
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 

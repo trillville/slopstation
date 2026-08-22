@@ -28,11 +28,12 @@ CHORD_EXTRAS = {"hid", "serial"}
 # inside functions - which is how library.py already imports them.
 SYSTEM_PYTHON_EXTRAS = CHORD_EXTRAS | {"winreg"}
 
-# doctor.py imports this ONE voice module on system python (to learn which CLI
-# a workerProvider means), so its top level has to stay stdlib + chord-lane.
-# The coupling is documented at doctor.py's import site; this is what keeps it
-# honest after the next `import requests` someone adds to workers.py.
-VOICE_IMPORTED_BY_DOCTOR = ("workers.py",)
+# doctor.py imports these voice modules on system python (which CLI a
+# workerProvider means; how to read a JWT's exp), so their top level has to
+# stay stdlib + chord-lane. The coupling is documented at doctor.py's import
+# site; this is what keeps it honest after the next `import requests` someone
+# adds to one of them.
+VOICE_IMPORTED_BY_DOCTOR = ("workers.py", "steam_session.py")
 
 
 def top_level_imports(path):
