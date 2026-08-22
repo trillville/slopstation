@@ -29,8 +29,9 @@ def _library_context():
     no file tools (ClaudeWorker.DENY) to read them with. "" on any error."""
     try:
         import library
+        import steamstore
         rows = library.catalog_lines()
-        deals = library.load_deals() or {}
+        deals = steamstore.load_deals() or {}
     except Exception:
         return ""
     if not rows:

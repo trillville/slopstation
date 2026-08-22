@@ -64,6 +64,19 @@ def main():
         # \z, not $: in .NET '$' also matches before a trailing newline.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
 
+    # gamepc.py mirrors the switch: one function per verb, the same set. And
+    # the answer words couch/dispatch compare against must all be spelled in
+    # the shipping script.
+    import gamepc
+    verbs = {re.match(r"\^(\w+)", p).group(1) for p in allpats}
+    assert verbs == set(gamepc.VERBS), f"verbs: Dispatch {sorted(verbs)} vs gamepc {sorted(gamepc.VERBS)}"
+    assert all(callable(getattr(gamepc, v)) for v in gamepc.VERBS)
+    text = DISPATCH.read_text(encoding="utf-8")
+    for word in ("OK", "NOTREADY", "ALREADY", "BUSY", "NOTINSTALLED", "NOTASK",
+                 "NOTRUNNING", "RUNNING", "IDLE", "DENIED", "FAILED"):
+        assert word in text, f"answer word {word} no longer in Dispatch.ps1"
+    print(f"  verbs: {len(verbs)} in Dispatch == gamepc.VERBS; 11 answer words present")
+
     pats = [p for p in allpats if "--turn" in p]
     # Five mutating verbs take a turn, and nav is three patterns, so seven
     # patterns carry one: enter, exit, launch, nav x3, stop.

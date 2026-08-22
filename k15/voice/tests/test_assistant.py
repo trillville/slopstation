@@ -12,6 +12,7 @@ import _bootstrap                               # noqa: F401,E402
 import assistant
 import cglib
 import library
+import steamstore
 from dispatch import Dispatch
 
 CFG_MIN = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
@@ -234,12 +235,12 @@ def main():
     library.load = _load
 
     # --- list_games routing + get_game_details hltb-fallback, fetchers mocked -
-    saved = (library.load_deals, library.fetch_trending, library.fetch_recently_played,
-             library._store_items, library.fetch_hltb)
-    library.load_deals = lambda: {"specials": [{"appid": 1, "name": "S"}],
+    saved = (steamstore.load_deals, steamstore.fetch_trending, steamstore.fetch_recently_played,
+             steamstore.store_items, steamstore.fetch_hltb)
+    steamstore.load_deals = lambda: {"specials": [{"appid": 1, "name": "S"}],
                                   "wishlist_on_sale": [{"appid": 2, "name": "W"}]}
-    library.fetch_trending = lambda: [{"appid": 3, "name": "T", "rank": 1}]
-    library.fetch_recently_played = lambda: [{"appid": 4, "name": "R", "hours2w": 2.0}]
+    steamstore.fetch_trending = lambda: [{"appid": 3, "name": "T", "rank": 1}]
+    steamstore.fetch_recently_played = lambda: [{"appid": 4, "name": "R", "hours2w": 2.0}]
     fresh = assistant.tool_impls(d, log)
     assert fresh["list_games"]({"source": "specials"})["games"][0]["name"] == "S"
     assert fresh["list_games"]({"source": "wishlist_on_sale"})["games"][0]["name"] == "W"
@@ -247,19 +248,19 @@ def main():
     assert fresh["list_games"]({"source": "recently_played"})["games"][0]["name"] == "R"
     # hltb for a game with no catalog name resolves the name from the store.
     hltb_calls = []
-    library._store_items = lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}}
-    library.fetch_hltb = lambda name: hltb_calls.append(name) or {"main": 20}
+    steamstore.store_items = lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}}
+    steamstore.fetch_hltb = lambda name: hltb_calls.append(name) or {"main": 20}
     r = fresh["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
     assert r["ok"] and r.get("hltb") == {"main": 20} and hltb_calls == ["Some Unowned Game"], r
     # Every facet ask resolves a missing name, not just hltb: nameless review
     # payloads made the model match results to titles from memory (2026-08-15).
-    _fr = library.fetch_reviews
-    library.fetch_reviews = lambda a: {"desc": "Very Positive"}
+    _fr = steamstore.fetch_reviews
+    steamstore.fetch_reviews = lambda a: {"desc": "Very Positive"}
     r = fresh["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
     assert r["ok"] and r["name"] == "Some Unowned Game", r
-    library.fetch_reviews = _fr
-    (library.load_deals, library.fetch_trending, library.fetch_recently_played,
-     library._store_items, library.fetch_hltb) = saved
+    steamstore.fetch_reviews = _fr
+    (steamstore.load_deals, steamstore.fetch_trending, steamstore.fetch_recently_played,
+     steamstore.store_items, steamstore.fetch_hltb) = saved
     print("  fail-soft backstop, nav remap+guard, list_games routing, facet name-fallback")
 
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()

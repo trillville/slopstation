@@ -100,6 +100,10 @@ def nav_cmd(kind, arg=None):
     return f"nav {kind}" + (f" {arg}" if arg not in (None, "") else "")
 
 
+# The verb surface, one name per Dispatch.ps1 switch arm (test_turn compares).
+VERBS = ("enter", "exit", "status", "enterstate", "version", "playing", "games",
+         "collections", "launch", "stop", "nav")
+
 # Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE DENIED, and
 # BUSY:<appid> NOTASK:<name> FAILED:<code> with an argument after the colon.
 def split_answer(out):
