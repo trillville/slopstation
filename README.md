@@ -71,7 +71,6 @@ and warns on drift.
 | `secrets.template.json` | Template for `secrets.json` (gitignored): Deepgram, Anthropic, OpenAI, Steam Web API, Langfuse, Grafana keys. |
 | `Start-K15.bat` | The Startup-folder target, and the one thing to run after a `git pull`. Per lane: supervisor down → start it; supervisor up → kill the *agent* so its supervisor relaunches it on new code. Never bounces a supervisor window, so a live session's watch loop survives. |
 | `Start-Listener.bat` | Chord-lane supervisor: `reconcile` once, then the listener in a 10 s restart loop. Single-instance. |
-| `Start-TV-Gaming.bat` | Manual recovery launcher: runs `couch.py start` in a window that stays open. |
 | `alloy/config.alloy.example` | Grafana Alloy config template — ships `logs\k15-*.jsonl` to Loki. Copy to `config.alloy` (gitignored). |
 
 ### Voice overlay (`k15/voice/`)
@@ -97,7 +96,7 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `tracing.py` / `traces.py` / `llm_audit.py` | Langfuse spans, per-conversation JSON dumps under `state/traces/`, and a record of provider-executed tool calls. |
 | `requirements.txt` / `constraints.txt` | Pinned deps, plus the as-built transitive versions passed to pip as `-c`. A constraints-only change must ride a `requirements.txt` touch or the dependency gate won't fire. |
 | `models/` | Vendored wake models. `config.json`'s `wakeModel` selects one; the default is stock `hey_jarvis_v0.1`. |
-| `bench/` | Hand-run probes: room recording and slicing, STT/intent/grounding/tool-select measurement, wake-model comparison, verifier training. |
+| `bench/` | Hand-run probes: room recording and slicing, STT measurement, wake-model comparison, worker tool-surface audit, verifier training. |
 | `tests/` | The blind suite — the tests that need neither machine nor hardware. See Tests below. |
 | `Start-Voice.bat` | Voice-lane supervisor, launched by `Start-K15.bat`: creates the venv on first run, then supervises the agent (single-instance, 10 s crash restart). The dependency gate lives inside the restart loop, so a `git pull` that changes pins installs them on the next agent launch. Args pass through — `Start-Voice.bat --dry-run` logs side effects instead of executing them. |
 
@@ -109,12 +108,10 @@ repo — data under `--root` (default `C:\Users\tillm\wake`), the venv wherever
 
 | File | Role |
 |---|---|
-| `pipeline.py` | Config → vendored model in one command. All four `.bat` files are wrappers around it. |
+| `pipeline.py` | Config → vendored model in one command. `Validate.bat` and `Train.bat` are wrappers around it. |
 | `alfred.yaml` | The training recipe. |
 | `Validate.bat` | Build the threshold optimiser's validation set from held-out room audio. Run before `Train.bat`. |
 | `Train.bat` | Train every size, or one. |
-| `Experiment.bat` | Five recipes × four seeds. |
-| `Continuations.bat` | Run-on positives: two cells × four seeds. |
 | `Bench.bat` / `bench_real.py` | Rank candidates on real room audio through openWakeWord, against the vendored incumbents. This is the eval that picks a model. |
 | `make_validation.py` | Featurizes the held-out audio `Validate.bat` points at. |
 

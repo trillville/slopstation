@@ -74,8 +74,8 @@ def job_messages(jobs, before_t):
 
     Open risk: worker text derives from untrusted web pages and is seeded as
     role:"assistant" in a context holding quit_game, install_game and nav,
-    bounded only by those tools' checks (quit confirms first, install validates
-    ownership, nav takes validated kinds only) and by bench/probe_intent.py.
+    bounded only by those tools' checks (quit confirms first, install
+    validates ownership, nav takes validated kinds only).
     Hardening the worker's tool surface does NOT close this - the channel is
     its OUTPUT. The untried fix: seed results as a user-role quote attributed
     to the worker, or mark them untrusted in the text, then measure that the

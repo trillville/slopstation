@@ -196,13 +196,6 @@ def main():
     ok, detail = store.enqueue("find coop games")
     assert ok and "queued" in detail
 
-    # bench/harness.py doubles this store; a drifted signature reads as an API
-    # blip inside the trial loop's `except Exception`, so pin the two together.
-    import inspect
-    import harness
-    real, fake_sig = (inspect.signature(jobs_mod.JobStore.enqueue),
-                      inspect.signature(harness.FakeJobs.enqueue))
-    assert real == fake_sig, f"bench double drifted: {fake_sig} vs {real}"
     assert wait_for(lambda: len(done_hook) == 1)
     assert done_hook[0]["status"] == "DONE"
     job = store.latest_result()
