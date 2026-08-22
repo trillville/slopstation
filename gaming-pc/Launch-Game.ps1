@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'launchgame'
 try {
-    $marker = 'C:\ProgramData\CouchGaming\launch-app'
+    $marker = $CG.LaunchMarker
     if (-not (Test-Path $marker)) {
         Log 'no launch-app marker - nothing to do'
     } else {

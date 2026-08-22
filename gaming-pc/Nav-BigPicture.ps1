@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'nav'
 try {
-    $marker = 'C:\ProgramData\CouchGaming\nav-target'
+    $marker = $CG.NavMarker
     if (-not (Test-Path $marker)) { Log 'no nav-target marker - nothing to do'; return }
     # Stringify before trimming (Get-Content on an empty file returns $null in
     # PS 5.1), and delete best-effort: the marker is written by the ELEVATED

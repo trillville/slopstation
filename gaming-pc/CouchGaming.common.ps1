@@ -20,6 +20,12 @@ $CG = @{
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
     ReadyMarker = 'C:\ProgramData\CouchGaming\ready'   # cross-context state - deliberately not under Root
     TurnMarker  = 'C:\ProgramData\CouchGaming\turn'    # written by Dispatch, read here (schtasks can't pass args)
+    # The task payloads, same arrangement: Dispatch writes, the task reads
+    # and re-validates. Dispatch.ps1 dot-sources nothing, so it carries its
+    # own copies of these five paths - the two lists must agree.
+    LaunchMarker = 'C:\ProgramData\CouchGaming\launch-app'   # appid -> LaunchGame
+    NavMarker    = 'C:\ProgramData\CouchGaming\nav-target'   # target -> Nav
+    StopMarker   = 'C:\ProgramData\CouchGaming\stop-app'     # appid -> StopGame
 }
 
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
@@ -44,8 +50,8 @@ function Get-CgTurn {
 }
 
 $script:CgTurn = Get-CgTurn
-# Lane defaults to the script that dot-sourced us, so a script with no
-# transcript (Office-Safety, Wake-Safety) still emits under a sensible label.
+# Lane defaults to the script that dot-sourced us, so anything emitted before
+# Start-CgTranscript names the lane still carries a sensible label.
 $script:CgLane = if ($MyInvocation.PSCommandPath) {
     [IO.Path]::GetFileNameWithoutExtension($MyInvocation.PSCommandPath).ToLower()
 } else { 'pc' }

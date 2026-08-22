@@ -20,6 +20,9 @@ if (-not (Test-TvIsPrimary)) {
     Log 'office confirmed'
 } elseif (-not (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 25 3 'office restored')) {
     Log 'WARNING: OFFICE never took after 3 attempts'
+    # The same alertable event Exit-TV emits for the same failure: a desk
+    # left in TV topology at logon used to be a transcript line only.
+    Write-CgEvent 'profile_apply_failed' @{ profile = 'OFFICE' } 'warn'
 }
 Stop-DisplayMagician
 Clear-ReadyMarker

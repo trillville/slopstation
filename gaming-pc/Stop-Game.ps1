@@ -22,7 +22,7 @@ Start-CgTranscript 'stopgame'
 
 $method = 'none'
 try {
-    $marker = 'C:\ProgramData\CouchGaming\stop-app'
+    $marker = $CG.StopMarker
     if (-not (Test-Path $marker)) { Log 'no stop-app marker - nothing to do'; return }
     $raw = Get-Content $marker -TotalCount 1
     try { Remove-Item $marker -Force } catch {
