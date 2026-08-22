@@ -86,7 +86,7 @@ Time to READY, the number the whole system is judged on:
     still answering with the field drained) or `unreachable` (a sentinel; the
     emitter drops None fields, so the read's own None cannot ship). Whether
     `""` predicts a refused wake is unmeasured.
-  - `tv_on` is the TV evidence (couch.py `tv_poll`) confirming the set
+  - `tv_on` is the TV evidence (couch.py `TvEvidence.poll`) confirming the set
     REPORTS on. It rides the READY wait — Enter is never gated on it, so a
     healthy launch pays nothing. Its `dur_ms` is elapsed-since-intent, and
     polling starts only after `ssh_up`, so cold boots censor it (the PC

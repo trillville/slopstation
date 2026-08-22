@@ -111,6 +111,155 @@ def wait_port(timeout=PORT_WAIT_S):
     return False
 
 
+class TvEvidence:
+    """The set's own word, read during start()'s READY wait on tvIp rigs.
+    Never gates Enter - the panel's ~5 s flip lag would tax every healthy
+    launch (36 of 38 land in a 9.1-12.9 s band). It re-pokes power_on early
+    (TV_POKE_S), so a set taking the second frame lights inside Enter's
+    retry-apply window, and it gates the enter_died rescue. Every recorded
+    refusal acked power_on and stayed dark - the serial receiver is powered
+    in standby - and the PC cannot see the panel either (EDID and all three
+    WMI monitor classes read identically awake or asleep, 2026-08-13).
+    Unreadable (no tvIp, IP drift, Wi-Fi blip) is not refused: fail open,
+    and fail closed only on the set's own word at the rescue. Idle duration
+    does not predict a refusal: failures at 11.8-20.0 h since the last
+    session, successes at 22+ h."""
+
+    def __init__(self, ip, first, ms):
+        self.ip = ip
+        self.confirmed = False      # the set answered "on" at least once
+        self.gave_up = False        # stood down: TV_UNKNOWN_N unreadable answers
+        self.last = first           # last raw answer, for the error text
+        self._unknowns = 0
+        self._poke_at = time.time() + TV_POKE_S
+        self._ms = ms               # elapsed-since-intent, for the milestones
+
+    def undecided(self):
+        """A tvIp rig whose set has neither answered "on" nor been given up on."""
+        return bool(self.ip) and not self.confirmed and not self.gave_up
+
+    def poll(self):
+        """One evidence step, called from waits that already loop: latch
+        "on", stand down on persistent silence, re-poke while not-on.
+
+        Tune TV_POKE_S / TV_WAIT_S against warm-PC launches only (ssh_up
+        ~0.2 s), where dur_ms approximates frame-to-lit."""
+        if not self.undecided():
+            return
+        self.last = tv.tv_power_state(self.ip, timeout=0.5, raw=True)
+        if self.last == "on":
+            self.confirmed = True
+            # dur_ms is elapsed-since-intent and polling starts only after
+            # wait_port, so a COLD boot censors it (~20-90 s of boot with
+            # the panel long since lit); warm-PC launches approximate
+            # frame-to-lit.
+            log("tv_on", dur_ms=self._ms())
+            return
+        if self.last is None:
+            self._unknowns += 1
+            if self._unknowns >= TV_UNKNOWN_N:
+                self.gave_up = True
+                log.warn("tv_state_unknown", dur_ms=self._ms())
+            return
+        self._unknowns = 0
+        if time.time() >= self._poke_at:
+            exlink("power_on", again=True)
+            self._poke_at = time.time() + TV_POKE_S
+
+
+def wait_ready(turn, evidence, dispatch_enter, ms):
+    """Poll the host until the READY marker echoes `turn`, re-dispatching a
+    DETECTED dead Enter once (ENTER_REDISPATCH); raises once the window
+    closes. `dispatch_enter` is start()'s closure, so its enter_sent reaches
+    the abort handler; `evidence` gates the rescue."""
+    end = time.time() + READY_WAIT_S
+    ready = False
+    foreign_seen = None
+    redispatches = ENTER_REDISPATCH
+    idle_seen = 0
+    settle_at = time.time() + ENTER_SETTLE_S
+    repoke_at = time.time() + WAKE_RETRY_S
+    while time.time() < end:
+        cglib.touch_lock()
+        raise_if_cancelled()
+        evidence.poll()
+        # Blind wake retry for a set that slept through the launch_start
+        # power_on. WAKE_RETRY_S lands the frame after Enter's first
+        # profile check has failed and before its retry apply, the only
+        # window where waking now still rescues this launch (Enter runs to
+        # ~66 s: 20 s check, OFFICE restore, retry up to 20 s).
+        if repoke_at and time.time() >= repoke_at:
+            exlink("power_on", again=True)
+            repoke_at = None
+        try:
+            st = gamepc.status()
+            # The marker echoes the turn Enter was given: ours = ready.
+            if st == turn:
+                log("host_ready", status=st, dur_ms=ms(), verified=True)
+                ready = True; break
+            if st != "NOTREADY":
+                if events.valid_turn(st):
+                    # Someone else's turn: a stale marker. Keep waiting,
+                    # our Enter overwrites it; treating any non-NOTREADY as
+                    # ready switched the TV to a host still mid-Enter.
+                    if st != foreign_seen:
+                        log.warn("ready_foreign", status=st)
+                        foreign_seen = st
+                else:
+                    # ISO timestamp: a PC deployed before turn-stamping.
+                    # Accept, but record unverified.
+                    log("host_ready", status=st, dur_ms=ms(),
+                        verified=False)
+                    ready = True; break
+        except Exception as e:
+            log.warn("status_poll_failed", err=str(e))
+            time.sleep(1); continue
+        # Still NOTREADY. An Enter no longer running will never write the
+        # marker, so the rest of the window is dead time: re-dispatch.
+        if (st == "NOTREADY" and time.time() >= settle_at
+                and gamepc.enter_running() is False):
+            # Enter writes the marker and THEN exits, so one (NOTREADY,
+            # task-idle) pair can be those instants read in the wrong
+            # order. Demand it twice: a marker that landed in between is
+            # taken by the next poll, and no redispatch hits a live session.
+            idle_seen += 1
+            if idle_seen >= 2:
+                log.warn("enter_died", dur_ms=ms())
+                # A cancel that landed while the death was being proven
+                # must win before the second Enter; the loop-top check is
+                # one iteration too coarse.
+                raise_if_cancelled()
+                if not redispatches:
+                    raise RuntimeError("Enter exited without READY")
+                # Spend the one redispatch on a lit panel; never "on"
+                # inside TV_WAIT_S is a refusal. Confirmed-on and
+                # unreadable rigs skip this wait.
+                rescue_by = time.time() + TV_WAIT_S
+                while evidence.undecided():
+                    if time.time() >= rescue_by:
+                        raise RuntimeError(
+                            f"TV never reported on (PowerState="
+                            f"{evidence.last!r} after {TV_WAIT_S}s of asking) "
+                            "- the set is refusing the wake, not "
+                            "missing the frame")
+                    cglib.touch_lock()
+                    raise_if_cancelled()
+                    evidence.poll()
+                    time.sleep(1)
+                exlink("power_on", again=True)
+                if not dispatch_enter("enter_redispatched", attempts=5):
+                    raise RuntimeError("Enter died and could not be re-triggered")
+                redispatches -= 1
+                idle_seen = 0
+                settle_at = time.time() + ENTER_SETTLE_S
+                # A full window of its own; leftovers cannot reach READY.
+                end = time.time() + READY_WAIT_S
+        else:
+            idle_seen = 0
+        time.sleep(1)
+    if not ready: raise RuntimeError("host never reported READY")
+
+
 def start(appid=None, turn=None):
     # One id per intent, minted upstream; a direct run mints its own.
     turn = turn if events.valid_turn(turn) else events.new_turn()
@@ -174,53 +323,7 @@ def start(appid=None, turn=None):
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
 
-        # --- TV evidence (tvIp rigs) ------------------------------------------
-        # Rides the READY wait; never gates Enter - the panel's ~5 s flip lag
-        # would tax every healthy launch (36 of 38 land in a 9.1-12.9 s band).
-        # It re-pokes power_on early (TV_POKE_S), so a set taking the second
-        # frame lights inside Enter's retry-apply window, and it gates the
-        # rescue below. Every recorded refusal acked power_on and stayed
-        # dark - the serial receiver is powered in standby - and the PC cannot
-        # see the panel either (EDID and all three WMI monitor classes read
-        # identically awake or asleep, 2026-08-13). Unreadable (no tvIp, IP
-        # drift, Wi-Fi blip) is not refused: fail open, and fail closed only on
-        # the set's own word at the rescue. Idle duration does not predict a
-        # refusal: failures at 11.8-20.0 h since the last session, successes at
-        # 22+ h.
-        tv_confirmed = False    # the set answered "on" at least once
-        tv_gave_up = False      # stood down: TV_UNKNOWN_N unreadable answers
-        tv_unknowns = 0
-        tv_last = tv0           # last raw answer, for the error text
-        tv_poke_at = time.time() + TV_POKE_S
-
-        def tv_poll():
-            """One evidence step, called from waits that already loop: latch
-            "on", stand down on persistent silence, re-poke while not-on.
-
-            Tune TV_POKE_S / TV_WAIT_S against warm-PC launches only (ssh_up
-            ~0.2 s), where dur_ms approximates frame-to-lit."""
-            nonlocal tv_confirmed, tv_gave_up, tv_unknowns, tv_last, tv_poke_at
-            if not tv_ip or tv_confirmed or tv_gave_up:
-                return
-            tv_last = tv.tv_power_state(tv_ip, timeout=0.5, raw=True)
-            if tv_last == "on":
-                tv_confirmed = True
-                # dur_ms is elapsed-since-intent and polling starts only after
-                # wait_port, so a COLD boot censors it (~20-90 s of boot with
-                # the panel long since lit); warm-PC launches approximate
-                # frame-to-lit.
-                log("tv_on", dur_ms=ms())
-                return
-            if tv_last is None:
-                tv_unknowns += 1
-                if tv_unknowns >= TV_UNKNOWN_N:
-                    tv_gave_up = True
-                    log.warn("tv_state_unknown", dur_ms=ms())
-                return
-            tv_unknowns = 0
-            if time.time() >= tv_poke_at:
-                exlink("power_on", again=True)
-                tv_poke_at = time.time() + TV_POKE_S
+        evidence = TvEvidence(tv_ip, tv0, ms)
 
         def dispatch_enter(event, attempts=ENTER_ATTEMPTS):
             """Trigger the Enter task; True once Dispatch answered OK.
@@ -246,92 +349,7 @@ def start(appid=None, turn=None):
 
         if not dispatch_enter("enter_dispatched"):
             raise RuntimeError("could not trigger Enter task")
-        end = time.time() + READY_WAIT_S
-        ready = False
-        foreign_seen = None
-        redispatches = ENTER_REDISPATCH
-        idle_seen = 0
-        settle_at = time.time() + ENTER_SETTLE_S
-        repoke_at = time.time() + WAKE_RETRY_S
-        while time.time() < end:
-            cglib.touch_lock()
-            raise_if_cancelled()
-            tv_poll()
-            # Blind wake retry for a set that slept through the launch_start
-            # power_on. WAKE_RETRY_S lands the frame after Enter's first
-            # profile check has failed and before its retry apply, the only
-            # window where waking now still rescues this launch (Enter runs to
-            # ~66 s: 20 s check, OFFICE restore, retry up to 20 s).
-            if repoke_at and time.time() >= repoke_at:
-                exlink("power_on", again=True)
-                repoke_at = None
-            try:
-                st = gamepc.status()
-                # The marker echoes the turn Enter was given: ours = ready.
-                if st == turn:
-                    log("host_ready", status=st, dur_ms=ms(), verified=True)
-                    ready = True; break
-                if st != "NOTREADY":
-                    if events.valid_turn(st):
-                        # Someone else's turn: a stale marker. Keep waiting,
-                        # our Enter overwrites it; treating any non-NOTREADY as
-                        # ready switched the TV to a host still mid-Enter.
-                        if st != foreign_seen:
-                            log.warn("ready_foreign", status=st)
-                            foreign_seen = st
-                    else:
-                        # ISO timestamp: a PC deployed before turn-stamping.
-                        # Accept, but record unverified.
-                        log("host_ready", status=st, dur_ms=ms(),
-                            verified=False)
-                        ready = True; break
-            except Exception as e:
-                log.warn("status_poll_failed", err=str(e))
-                time.sleep(1); continue
-            # Still NOTREADY. An Enter no longer running will never write the
-            # marker, so the rest of the window is dead time: re-dispatch.
-            if (st == "NOTREADY" and time.time() >= settle_at
-                    and gamepc.enter_running() is False):
-                # Enter writes the marker and THEN exits, so one (NOTREADY,
-                # task-idle) pair can be those instants read in the wrong
-                # order. Demand it twice: a marker that landed in between is
-                # taken by the next poll, and no redispatch hits a live session.
-                idle_seen += 1
-                if idle_seen >= 2:
-                    log.warn("enter_died", dur_ms=ms())
-                    # A cancel that landed while the death was being proven
-                    # must win before the second Enter; the loop-top check is
-                    # one iteration too coarse.
-                    raise_if_cancelled()
-                    if not redispatches:
-                        raise RuntimeError("Enter exited without READY")
-                    # Spend the one redispatch on a lit panel; never "on"
-                    # inside TV_WAIT_S is a refusal. Confirmed-on and
-                    # unreadable rigs skip this wait.
-                    rescue_by = time.time() + TV_WAIT_S
-                    while tv_ip and not tv_confirmed and not tv_gave_up:
-                        if time.time() >= rescue_by:
-                            raise RuntimeError(
-                                f"TV never reported on (PowerState="
-                                f"{tv_last!r} after {TV_WAIT_S}s of asking) "
-                                "- the set is refusing the wake, not "
-                                "missing the frame")
-                        cglib.touch_lock()
-                        raise_if_cancelled()
-                        tv_poll()
-                        time.sleep(1)
-                    exlink("power_on", again=True)
-                    if not dispatch_enter("enter_redispatched", attempts=5):
-                        raise RuntimeError("Enter died and could not be re-triggered")
-                    redispatches -= 1
-                    idle_seen = 0
-                    settle_at = time.time() + ENTER_SETTLE_S
-                    # A full window of its own; leftovers cannot reach READY.
-                    end = time.time() + READY_WAIT_S
-            else:
-                idle_seen = 0
-            time.sleep(1)
-        if not ready: raise RuntimeError("host never reported READY")
+        wait_ready(turn, evidence, dispatch_enter, ms)
         cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
         exlink(cglib.config()["tvGamingCmd"])
         if appid:
