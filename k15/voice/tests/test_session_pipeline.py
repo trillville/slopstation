@@ -95,4 +95,5 @@ async def run():
 
 
 if __name__ == "__main__":
+    _bootstrap.wants("audio")
     asyncio.run(run())

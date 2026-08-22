@@ -17,7 +17,7 @@ import tv
 import events
 
 import couch
-import gamepc                                     # noqa: E402  (needs LOG_DIR set)
+import gamepc
 
 CFG = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4", "tvIdleCmd": "hdmi1",
        "tvOffWhenDone": True, "sshHost": "gamepc",
@@ -194,6 +194,8 @@ def main():
     assert sent == ["power_on"], f"failure must never switch the input: {sent}"
     assert not cglib.LOCK.exists(), "failure must release the lock"
     assert "Enter" in cglib.LAST_ERROR.read_text()
+    # the refusal is logged once per distinct answer, not per retry
+    assert [r["answer"] for r in log.find("enter_refused")] == ["FAILED:1"], log.records
     print("  stale: recycled; failed Enter -> lock released, last_error, TV alone")
 
     # --- READY never appears: same guarantees ---------------------------------
@@ -519,7 +521,7 @@ def main():
     fresh_state(60)
     log, sent = wire([("status", "NOTREADY")])
     assert couch.reconcile() == 0
-    assert "reconcile_cleared" in log.events()
+    assert log.find("reconcile_cleared")[0]["reason"] == "dead_session"
     assert not sent, "a dead session's reconcile must not drive the TV"
     assert not cglib.LOCK.exists()
 
@@ -528,7 +530,9 @@ def main():
                       ("status", RuntimeError("boot")),
                       ("status", RuntimeError("boot"))])
     assert couch.reconcile() == 0
-    assert "reconcile_cleared" in log.events() and not cglib.LOCK.exists()
+    # never answered is not the same as answered NOTREADY
+    assert log.find("reconcile_cleared")[0]["reason"] == "unreachable"
+    assert not cglib.LOCK.exists()
 
     fresh_state(None)
     log, sent = wire([])
@@ -537,6 +541,20 @@ def main():
           "shrugs off boot-time errors")
 
     time.sleep = real_sleep
+    # --- a config doctor would FAIL is refused before the lock and the TV ------
+    fresh_state()
+    log, sent = wire([])
+    cglib.use_config({k: v for k, v in CFG.items() if k != "gamingPcMac"})
+    try:
+        assert couch.start() == 2
+    finally:
+        cglib.use_config(CFG)
+    inv = log.find("config_invalid")
+    assert inv and inv[0]["missing"] == ["gamingPcMac"], inv
+    assert not sent and "launch_start" not in log.events()
+    assert not cglib.LOCK.exists() and "gamingPcMac" in cglib.LAST_ERROR.read_text()
+    print("  config: a missing key is config_invalid + exit 2, before the lock and the TV")
+
     print("OK - couch: atomic acquire, ownership, one-rule ordering, failure "
           "release, watch death, reconcile paths")
 

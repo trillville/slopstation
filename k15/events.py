@@ -128,7 +128,7 @@ _redactions = None
 def load_secrets(path):
     """secrets.json as a dict; {} when absent. Raises ValueError when present
     but malformed (cglib's wrapper turns that into a console note). utf-8-sig
-    eats Notepad's BOM. Lives here because cglib imports this module."""
+    eats Notepad's BOM."""
     try:
         return json.loads(pathlib.Path(path).read_text(encoding="utf-8-sig"))
     except OSError:

@@ -55,7 +55,7 @@ def _exlink_txn(frame_hex, port):
 def exlink_send_hex(frame_hex, port):
     """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK, raises
     ExlinkNak on any other answer, never retries a NAK. serial imports lazily
-    so a box without pyserial can still import cglib. The 1 s retry is for
+    so a box without pyserial can still import tv. The 1 s retry is for
     PORT CONTENTION only: couch.py and the voice agent share this port."""
     import serial
     try:

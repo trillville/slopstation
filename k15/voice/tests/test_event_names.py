@@ -2,7 +2,7 @@
 alerts fire on it, so a name or a field key that disappears is a telemetry
 regression; a new one is fine (add it here). Scans the emitters from source
 (_events_scan), so it runs on any checkout. Run:
-    .venv\Scripts\python tests\test_event_names.py
+    .venv\\Scripts\\python tests\\test_event_names.py
 """
 import re
 
@@ -55,13 +55,14 @@ PYTHON = {
     "enter_retry": {"err"},
     "exit_dispatched": {"reason"},
     "exlink_nak": {"cmd", "err"},
-    "exlink_send": {"ack", "cmd"},
+    "exlink_send": {"ack", "again", "cmd"},
     "facet_failed": {"appid", "err", "facet"},
     "false_accept_soak_start": set(),
     "game_launch": {"appid", "result"},
     "game_launch_failed": {"appid", "err"},
     "gate_match": {"confidence", "intent", "text"},
     "gate_miss": {"confidence", "fallback", "reason", "text"},
+    "heartbeat": {"interval_s"},
     "hltb_failed": {"err", "name"},
     "host_ready": {"dur_ms", "status", "verified"},
     "idle_deferred": {"reason"},
@@ -75,8 +76,8 @@ PYTHON = {
     "intent_unknown": {"intent"},
     "job_announce_hook_failed": {"err", "job"},
     "job_announced": {"job"},
-    "job_done": {"dur_ms", "job", "session", "status", "summary", "tools"},
-    "job_failed": {"dur_ms", "err", "job", "session", "status", "summary", "tools"},
+    "job_done": {"cost_usd", "denials", "dur_ms", "job", "model", "session", "status", "stop_reason", "summary", "tools", "turns", "web_fetches", "web_searches"},
+    "job_failed": {"cost_usd", "denials", "dur_ms", "err", "job", "model", "session", "status", "stop_reason", "summary", "tools", "turns", "web_fetches", "web_searches"},
     "job_orphaned": {"job", "reason"},
     "job_queued": {"job", "task"},
     "job_requested": {"ok", "task"},
@@ -89,7 +90,7 @@ PYTHON = {
     "launch_dispatched": {"answer", "appid"},
     "launch_failed": {"appid", "dur_ms", "err"},
     "launch_failure_signaled": {"reason"},
-    "launch_start": {"appid"},
+    "launch_start": {"appid", "tv"},
     "lock_kept": {"reason"},
     "lock_recycled": {"lock_age_s"},
     "meta_failed": {"appid", "err"},
@@ -149,6 +150,8 @@ PYTHON = {
     "tv_on": {"dur_ms"},
     "tv_state_unknown": {"dur_ms"},
     "tv_unducked": {"asked", "ok", "reason", "steps", "vol"},
+    "tvremote_fail": {"cmd", "err", "n"},
+    "tvremote_send": {"cmd", "n", "ok", "vol_after", "vol_before"},
     "volume_clamped": {"asked", "max", "set"},
     "wake": {"score", "trigger"},
     "wake_clip": {"clip", "secs"},
@@ -196,11 +199,13 @@ POWERSHELL = {
 
 BAT = {
     "deps_installed": set(),
+    "lane_reloaded": set(),
+    "lane_started": set(),
     "restart": set(),
     "start": set(),
 }
 
-LANES = {'launch', 'library', 'steam', 'listener', 'traces', 'voice'}
+LANES = {'manual', 'launch', 'library', 'steam', 'traces', 'listener', 'voice'}
 
 
 def check(kind, frozen, now):

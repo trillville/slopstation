@@ -227,7 +227,7 @@ def start(appid=None, turn=None):
             `attempts` is per-call: the first dispatch also waits out logon
             after a cold boot, a re-dispatch must not spend the READY window."""
             nonlocal enter_sent
-            refused = None
+            refused = set()
             for _ in range(attempts):
                 cglib.touch_lock()
                 raise_if_cancelled()
@@ -236,9 +236,9 @@ def start(appid=None, turn=None):
                     if answer == "OK":
                         enter_sent = True
                         log(event, dur_ms=ms()); return True
-                    if answer != refused:       # NOTASK:Enter / FAILED:<code> / DENIED
+                    if answer not in refused:   # NOTASK:Enter / FAILED:<code> / DENIED
                         log.warn("enter_refused", answer=answer)
-                        refused = answer
+                        refused.add(answer)
                 except Exception as e:
                     log.warn("enter_retry", err=str(e))
                 time.sleep(1)

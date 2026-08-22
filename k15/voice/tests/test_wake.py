@@ -31,8 +31,8 @@ def deployed_model():
 
 
 MODEL = deployed_model()
-# Same derivation as session_runtime.py: the filename IS the phrase, so an
-# off-convention model name breaks here loudly.
+# audio.wake_phrase, the production derivation: the filename IS the phrase, so
+# an off-convention model name breaks here loudly.
 PHRASE = wake_phrase(MODEL)
 VOICE_CFG = {"wakeModel": MODEL}
 CHUNK = WakeListener.CHUNK

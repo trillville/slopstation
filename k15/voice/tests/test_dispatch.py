@@ -13,7 +13,6 @@ from _bootstrap import fresh_state              # noqa: E402
 
 import cglib
 import tv
-import couch
 import gamepc                 # the ssh seam - dispatch reaches it via the module
 import dispatch as dp
 
@@ -82,7 +81,7 @@ def main():
     # duck/unduck left Dispatch on 2026-08-21: with eARC audio the TV refuses
     # Ex-Link volume writes, so ducking is remote-key relay + readback.
 
-    # --- serial send raises -> fail earcon (COM retry now lives in cglib) ----
+    # --- serial send raises -> fail earcon (COM retry lives in tv.exlink_send_hex) --
     def always_down(frame, port): raise OSError("dead")
     tv.exlink_send_hex = always_down
     r = h.d.mute_toggle()

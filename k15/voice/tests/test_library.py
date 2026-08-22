@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import _bootstrap                               # noqa: F401,E402
+from _bootstrap import fresh_state              # noqa: E402
 
 import library
 import titles
@@ -27,6 +28,8 @@ def ps_games():
 
 
 def main():
+    _bootstrap.wants("steam")
+    fresh_state()
     assert library.refresh(local=True) == 0
     rows = library.load()["installed"]
     assert rows, "no installed games found"

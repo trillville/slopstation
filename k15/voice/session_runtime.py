@@ -176,8 +176,7 @@ def _make_llm(voice, secrets, system_text):
 class Session:
     """One voice session, from a wake to idle or an exit phrase: build the
     pipeline (mic -> Flux -> GrammarGate -> speaker, plus the LLM lane), run
-    it, then save the transcript and the carry. Heavy imports stay inside
-    run() so importing this module is cheap."""
+    it, then save the transcript and the carry."""
 
     def __init__(self, cfg, secrets, matcher, dry_run, input_idx, output_idx,
                  capture=None, jobs=None, ack=None, steam=None):

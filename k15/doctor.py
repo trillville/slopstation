@@ -134,6 +134,11 @@ def check_ssh():
     import gamepc
     ssh = gamepc.ssh
     try:
+        cglib.config()["sshHost"]
+    except Exception as e:
+        report(FAIL, "ssh", f"config.json has no usable sshHost ({e})", "config broken? see above")
+        return
+    try:
         st = ssh("status")
         report(PASS, "ssh status", f"-> {st!r} (key, forced command, sshd, firewall all good)")
     except subprocess.TimeoutExpired:

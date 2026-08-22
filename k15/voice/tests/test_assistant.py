@@ -1,4 +1,4 @@
-"""Blind test: catalog + system prompt from the real library, tool-impl
+"""Blind test: catalog + system prompt from a fixture index, tool-impl
 validation, pipecat/anthropic constructions with dummy keys, and a tolerant
 live metadata fetch. Run:
     .venv\\Scripts\\python tests\\test_assistant.py
@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import _bootstrap                               # noqa: F401,E402
+from _bootstrap import fresh_state              # noqa: E402
 
 import assistant
 import assistant_repl
@@ -26,6 +27,19 @@ CFG_MIN = {"tvComPort": "COMX", "tvGamingCmd": "hdmi4",
 
 def main():
     log = cglib.CapturingLog("assistant")
+    fresh_state()
+    cglib.write_json(library.LIBRARY, {
+        "refreshed": "2026-08-22T00:00:00",
+        "installed": [{"appid": 892970, "name": "Valheim", "state": 4,
+                       "size": 1, "lastPlayed": 1700000000},
+                      {"appid": 1245620, "name": "ELDEN RING", "state": 4,
+                       "size": 1, "lastPlayed": 0}],
+        "owned": {"892970": {"hours": 12.0, "hours2w": 0, "last": 1700000000,
+                             "name": "Valheim"},
+                  "413150": {"hours": 3.0, "hours2w": 0, "last": 0,
+                             "name": "Stardew Valley"}},
+        "collections": [{"name": "Co-op", "id": "uc-abc"}],
+    })
     d = Dispatch(CFG_MIN, log, dry_run=True)
     impls = assistant.tool_impls(d, log)
 

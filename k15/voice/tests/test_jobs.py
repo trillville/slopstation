@@ -11,6 +11,7 @@ import types
 from pathlib import Path
 
 import _bootstrap                               # noqa: F401,E402
+from _bootstrap import fresh_state              # noqa: E402
 
 import announce
 import cglib
@@ -29,6 +30,7 @@ def wait_for(pred, timeout=5.0):
 
 def main():
     log = cglib.CapturingLog("jobs")
+    fresh_state()
 
     # -- parse_reply: contract, fenced, prose fallback ------------------------
     r = workers.parse_reply('{"summary": "Two picks.", "detail": "Long text."}')
@@ -167,8 +169,7 @@ def main():
     xw.LAST.unlink()
     print("  adapters: argv shapes (.cmd routing, stdin prompt), extract fixtures")
 
-    # -- JobStore on a temp state file ---------------------------------------
-    jobs_mod.JOBS_FILE = Path(tempfile.mkdtemp()) / "jobs.json"
+    # -- JobStore on the tmp state file (fresh_state) --------------------------
 
     class FakeAdapter:
         exe = "fake"
@@ -368,7 +369,31 @@ def main():
     assert store.latest_result()["summary"] == "newer"
     print("  latest_result: completion-time ordering beats file order")
 
-    print("OK - jobs: parsing, adapters, store lifecycle, reconcile, announcer gates")
+    # -- an adapter that raises: the thread survives, the job fails out loud ----
+    class Boom:
+        exe = "boom"
+
+        def run(self, task, timeout):
+            raise RuntimeError("adapter exploded")
+    crash_log = cglib.CapturingLog("jobs")
+    crashy = jobs_mod.JobStore(crash_log, Boom(), timeout_s=5)
+    crashy.start()
+    assert crashy.enqueue("crash me")[0]
+    for _ in range(200):
+        if any(j["task"] == "crash me" and j["status"] == "FAILED"
+               for j in crashy.unread()):
+            break
+        time.sleep(0.02)
+    row = next(j for j in crashy.unread() if j["task"] == "crash me")
+    assert row["status"] == "FAILED" and "exploded" in row["detail"], row
+    failed = crash_log.find("job_failed")
+    assert failed and "exploded" in failed[0]["err"], failed
+    assert failed[0]["summary"] == "the task crashed" and failed[0]["level"] == "error"
+    assert crashy.enqueue("still alive")[0]          # the worker thread lives
+    print("  crash: a raising adapter -> FAILED row, job_failed err=, thread survives")
+
+    print("OK - jobs: parsing, adapters, store lifecycle, reconcile, announcer gates, "
+          "crash path")
 
 
 if __name__ == "__main__":

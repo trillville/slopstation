@@ -16,12 +16,9 @@ import time
 import cglib
 import library
 
-# Same lane as the catalog: these events predate the split.
+# The lane is a Loki label: store events ship as "library" (test_event_names
+# pins the set).
 log = cglib.make_log("library")
-
-# Live store/Web-API queries; every fetch routes through _get, the one test
-# seam. Only /appreviews and GetNewsForApp are officially documented, so parses
-# read defensively and the lane degrades rather than crashing.
 
 STORE = "https://store.steampowered.com"
 API = "https://api.steampowered.com"

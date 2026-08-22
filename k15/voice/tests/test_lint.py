@@ -3,7 +3,7 @@ class py_compile misses; run_session and the --text repl open audio/network,
 so no unit test exercises them. Plus the lane rule, read off the AST: the
 modules that run on system python import only stdlib + each other (+ hid and
 serial) at top level, and nothing in k15/ imports voice/ at top level. Run:
-    .venv\Scripts\python tests\test_lint.py
+    .venv\\Scripts\\python tests\\test_lint.py
 """
 import ast
 import io

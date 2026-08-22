@@ -45,7 +45,7 @@ def main():
         time.sleep(0.002)
 
     # group by report type (byte 0), keep the most common type only
-        rid = Counter(r[0] for r in reports).most_common(1)[0][0]
+    rid = Counter(r[0] for r in reports).most_common(1)[0][0]
     reports = [r for r in reports if r[0] == rid]
     n = min(len(r) for r in reports)
     base = reports[-1]

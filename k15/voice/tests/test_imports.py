@@ -28,9 +28,16 @@ def modules():
             yield p
 
 
-def attr_refs(path):
-    """(module_alias, attr, lineno) for every `alias.attr` where alias is an
-    imported module name in this file."""
+def walked():
+    """Every file whose module.attr references are checked: the modules plus
+    bench/, which imports them but is not imported here."""
+    yield from modules()
+    yield from sorted((VOICE / "bench").glob("*.py"))
+
+
+def attr_refs(path, ours):
+    """(module, attr, lineno) for every `alias.attr` where alias is an imported
+    module, and for every `from <our module> import name`."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     aliases = {}
     for node in ast.walk(tree):
@@ -42,6 +49,10 @@ def attr_refs(path):
                     aliases[a.asname] = a.name
                 else:
                     aliases[a.name.split(".")[0]] = a.name.split(".")[0]
+        elif (isinstance(node, ast.ImportFrom) and node.level == 0
+                and node.module in ours):
+            for a in node.names:
+                yield node.module, a.name, node.lineno
     for node in ast.walk(tree):
         if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
                 and node.value.id in aliases):
@@ -64,8 +75,8 @@ def main():
     print(f"  import: {len(loaded)} modules, no config.json, hid/serial stubbed")
 
     bad = []
-    for p in modules():
-        for mod, attr, line in attr_refs(p):
+    for p in walked():
+        for mod, attr, line in attr_refs(p, set(loaded)):
             target = loaded.get(mod) or sys.modules.get(mod)
             if target is None or mod in ("hid", "serial"):
                 continue                    # third-party or stubbed: not ours to check
@@ -74,7 +85,8 @@ def main():
     for b in bad:
         print("FAIL", b)
     assert not bad, f"{len(bad)} unresolved module attribute(s)"
-    print("OK - imports: every module loads without config or hardware; every module.attr resolves")
+    print("OK - imports: every module loads without config or hardware; every "
+          "module.attr and from-import resolves (bench included)")
 
 
 if __name__ == "__main__":

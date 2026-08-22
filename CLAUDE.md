@@ -58,9 +58,11 @@ The blind suite runs as scripts, not pytest — `events._env()` detects tests
 by `sys.argv[0]`, so pytest would mislabel events as env=prod:
 
     .venv\Scripts\python tests\run.py      (from k15\voice\; --all forces the
-                                            machine-bound tests)
+                                            machine-bound tests; on the K15
+                                            set CG_TEST_AUDIO=1 first)
 
-Every test begins with `import _bootstrap`. The rules above are tests:
+Every test that touches the K15 modules begins with `import _bootstrap`
+(`test_ps_parse` is stdlib-only). The rules above are tests:
 `test_event_names` (the frozen vocabulary - a new event is added there, a
 rename is a deliberate edit there), `test_imports` (imports without config or
 hardware; every `module.attr` resolves - run it after any move), `test_lint`

@@ -29,7 +29,7 @@ Four **labels** — cheap to select on, and the only things allowed in `{...}`:
 | Label | Values |
 |---|---|
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
-| `lane` | k15: `voice`, `launch`, `listener`, `library`, `steam`, `traces`, `supervisor`, `manual` — gamepc: `enter`, `exit`, `launchgame`, `nav`, `stopgame`, `wake-safety`, `office-safety`, `pc-transcript` |
+| `lane` | k15: `voice`, `launch`, `listener`, `library`, `steam`, `traces`, `supervisor`, `manual` — gamepc: `enter`, `exit`, `launchgame`, `nav`, `stopgame`, `wake-safety`, `office-safety`, `dispatch`, `pc-transcript` |
 | `level` | `info`, `warn`, `error` — the whole set; there is no `debug` |
 | `env` | `prod`, `test` — **always filter `env="prod"`** unless investigating the blind suite |
 
@@ -173,15 +173,16 @@ Time to READY, the number the whole system is judged on:
   `turn` it carried; a `DENIED` command lands at `level="warn"` with
   `answer=DENIED` and the first 60 chars as `cmd`. The read-only polls stay
   silent.
-- Newer names on existing lanes: launch `config_invalid` (a config doctor would
-  FAIL, refused before the lock and before `power_on`), `enter_refused` (a
-  non-OK answer to `enter`, once per distinct answer - today the K15 retried
-  in silence), `reconcile_cleared reason=unreachable` (the PC did not answer
-  at boot; `dead_session` now means it answered NOTREADY); voice `tool_error`
-  (a tool impl raised; pairs with the `tool_call ok=false` for the same call);
-  gamepc `profile_applied` / `profile_apply_failed` on `lane="office-safety"`
-  (a logon that had to restore OFFICE) and `wake_cleanup` on
-  `lane="wake-safety"`.
+- launch, also: `config_invalid` (a config doctor would FAIL - refused before
+  the lock and before `power_on`; carries `missing` or `err`), `enter_refused`
+  (a non-OK answer to `enter` - `NOTASK:Enter`, `FAILED:<code>` - once per
+  distinct answer), `reconcile_cleared` with `reason=dead_session` (the PC
+  answered NOTREADY) or `reason=unreachable` (it never answered at boot).
+- voice, also: `tool_error` (a tool impl raised; pairs with the `tool_call
+  ok=false` for the same call).
+- gamepc, also: `profile_applied` / `profile_apply_failed` on
+  `lane="office-safety"` (a logon that had to restore OFFICE), `wake_cleanup`
+  on `lane="wake-safety"`.
 
 The frozen list - every name, its field keys and its lane - is
 `k15/voice/tests/test_event_names.py`; a rename is a deliberate edit there.

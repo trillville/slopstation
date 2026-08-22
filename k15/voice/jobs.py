@@ -145,7 +145,8 @@ class JobStore:
                     # finishes would otherwise wait for the next restart.
                     self.log.error("job_failed", job=job["id"], status=FAILED,
                                    dur_ms=round((time.time() - t0) * 1000),
-                                   session=job.get("session"), err=repr(e))
+                                   session=job.get("session"),
+                                   summary="the task crashed", err=repr(e))
                     try:
                         self._update(job["id"], status=FAILED, read=False,
                                      finished=int(time.time()),

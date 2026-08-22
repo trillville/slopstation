@@ -1,8 +1,9 @@
 """Shared test setup. `import _bootstrap` first in every test.
 
 Paths for k15/ and k15/voice/ on sys.path; events.LOG_DIR to a tempdir; a
-config fixture so the suite imports on a checkout with no config.json. Helpers
-replace the per-file copies of the temp-lock and fast-sleep idioms.
+config fixture so the suite imports on a checkout with no config.json.
+fresh_state() points every state-file constant into a tempdir; freeze_sleep()
+makes time.sleep a no-op; wants() skips a test the machine cannot run.
 """
 import json
 import os
@@ -30,9 +31,10 @@ cglib.use_config(json.loads(json.dumps(CONFIG)))
 
 
 def wants(*needs):
-    """Skip unless this machine has every need. Needs: steam (a local Steam
-    install + PowerShell), audio (real devices), models (wake models may be
-    fetched). CG_TEST_HAS lists what the runner found; unset = everything."""
+    """Skip unless this machine has every need: steam (a local Steam install +
+    PowerShell, detected by run.py), audio (real devices: set CG_TEST_AUDIO=1).
+    run.py passes what it found in CG_TEST_HAS; unset (a direct run, or
+    run.py --all) means everything."""
     have = os.environ.get("CG_TEST_HAS")
     if have is None:
         return True
@@ -46,8 +48,9 @@ def wants(*needs):
 def fresh_state(lock_age_s=None, lock_content="x"):
     """Point every state-file constant into a new tempdir. lock_age_s seeds a
     session lock of that age (None = absent). Returns the tempdir."""
-    import library
     import jobs
+    import library
+    import steamstore
     import traces
     import workers
     tmp = Path(tempfile.mkdtemp(prefix="cg-test-state-"))
@@ -58,15 +61,9 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     library.STATE = tmp
     library.LIBRARY = tmp / "library.json"
     library.META_CACHE = tmp / "metadata-cache.json"
-    try:
-        import steamstore
-        steamstore.DEALS = tmp / "deals.json"
-        steamstore.FACET_CACHE = tmp / "facet-cache.json"
-        steamstore.TAGMAP = tmp / "store-tags.json"
-    except ImportError:
-        library.DEALS = tmp / "deals.json"
-        library.FACET_CACHE = tmp / "facet-cache.json"
-        library.TAGMAP = tmp / "store-tags.json"
+    steamstore.DEALS = tmp / "deals.json"
+    steamstore.FACET_CACHE = tmp / "facet-cache.json"
+    steamstore.TAGMAP = tmp / "store-tags.json"
     jobs.JOBS_FILE = tmp / "jobs.json"
     traces.DIR = tmp / "traces"
     workers.WORKER_HOME = tmp / "worker_home"

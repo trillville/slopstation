@@ -108,7 +108,9 @@ function Write-Event([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 
     foreach ($k in $Fields.Keys) {
       if ($owned -contains $k) { $rec["f_$k"] = $Fields[$k] } else { $rec[$k] = $Fields[$k] }
     }
-    $file = Join-Path $PSScriptRoot ("logs\pc-dispatch-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
+    $dir = Join-Path $PSScriptRoot 'logs'
+    [IO.Directory]::CreateDirectory($dir) | Out-Null
+    $file = Join-Path $dir ("pc-dispatch-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
     [IO.File]::AppendAllText(
       $file, (ConvertTo-Json -InputObject $rec -Compress -Depth 4) + [Environment]::NewLine,
       (New-Object System.Text.UTF8Encoding($false)))

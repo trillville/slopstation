@@ -11,22 +11,33 @@ PC = REPO / "gaming-pc"
 NOT_EVENTS = {"event"}                       # cglib's docstring example
 
 # Names built at runtime, listed by hand. Field keys come from the call site.
+_META = {"cost_usd", "turns", "web_searches", "web_fetches", "denials", "model",
+         "stop_reason"}                      # jobs.py passes them by **splat
 DYNAMIC = {
     "enter_dispatched": {"dur_ms"}, "enter_redispatched": {"dur_ms"},
-    "job_failed": {"job", "status", "dur_ms", "session", "summary", "tools"},
+    "job_done": _META,
+    "job_failed": {"job", "status", "dur_ms", "session", "summary", "tools"} | _META,
+    "exlink_send": {"again"},                # couch.exlink(**fields) passthrough
 }
 PC_DYNAMIC = {f"{t}_start": set() for t in (
     "enter", "exit", "launchgame", "nav", "stopgame", "office-safety", "wake-safety")}
 
 # Python call shapes. Group 'name' is the event; the scan then reads the
-# argument list that follows for `key=` tokens.
-_PY = re.compile(
-    r"(?:(?<![\w.])log|self\.log|self\._log|events\.emit\(\s*\"\w+\"\s*,\s*"
-    r"(?=\")|(?<![\w.])emit)"
-    r"(?:\.(?:warn|error|info))?\(\s*\"(?P<name>[a-z][a-z0-9_]*)\"")
+# argument list that follows for `key=` tokens and dict-literal keys.
+#   log("x" ...) / self.log("x") / self._log("x") / .warn .error .info
+#   events.emit("lane", "x" ...) / emit(lane_var, "x" ...)   (the CLI, heartbeat)
+#   emit("x" ...)   (a local bound to log or log.warn)
+_PY = [
+    re.compile(r"(?:(?<![\w.])log|self\.log|self\._log)(?:\.(?:warn|error|info))?"
+               r"\(\s*\"(?P<name>[a-z][a-z0-9_]*)\""),
+    re.compile(r"(?<![\w.])(?:events\.)?emit\(\s*(?:\"(?P<lane>\w+)\"|\w+)\s*,\s*"
+               r"\"(?P<name>[a-z][a-z0-9_]*)\""),
+    re.compile(r"(?<![\w.])emit\(\s*\"(?P<name>[a-z][a-z0-9_]*)\""),
+]
 _PS = re.compile(r"Write-(?:Cg)?Event\s+'(?P<name>[a-z][a-z0-9_]*)'")
-_BAT = re.compile(r"events\.py emit \w+ (?P<name>[a-z][a-z0-9_]*)")
+_BAT = re.compile(r"events\.py\"?\s+emit\s+(?P<lane>\w+)\s+(?P<name>[a-z][a-z0-9_]*)")
 _KEY = re.compile(r"(?<![\w.])([a-z][a-z0-9_]*)\s*=(?!=)")
+_DICT_KEY = re.compile(r"\"([a-z][a-z0-9_]*)\"\s*:")
 
 
 def _args(text, start):
@@ -52,13 +63,14 @@ def scan_python():
     out = {}
     for path in python_files():
         text = path.read_text(encoding="utf-8")
-        for m in _PY.finditer(text):
-            name = m.group("name")
-            if name in NOT_EVENTS:
-                continue
-            args = _args(text, m.end())
-            keys = set(_KEY.findall(args))
-            out.setdefault(name, set()).update(keys)
+        for rx in _PY:
+            for m in rx.finditer(text):
+                name = m.group("name")
+                if name in NOT_EVENTS:
+                    continue
+                args = _args(text, m.end())
+                keys = set(_KEY.findall(args)) | set(_DICT_KEY.findall(args))
+                out.setdefault(name, set()).update(keys)
     for name, keys in DYNAMIC.items():
         out.setdefault(name, set()).update(keys)
     return out
@@ -89,9 +101,12 @@ def scan_bat():
 
 
 def scan_lanes():
+    """Lane literals: make_log("...") and the events.emit("...") callers."""
     lanes = set()
     for path in python_files():
-        lanes.update(re.findall(r"make_log\(\"(\w+)\"\)", path.read_text(encoding="utf-8")))
+        text = path.read_text(encoding="utf-8")
+        lanes.update(re.findall(r"make_log\(\"(\w+)\"\)", text))
+        lanes.update(m.group("lane") for m in _PY[1].finditer(text) if m.group("lane"))
     return lanes
 
 

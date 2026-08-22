@@ -14,11 +14,10 @@ STATE = BASE / "state"
 LOCK = STATE / "session.lock"
 LOCK_STALE_S = 300          # a live session touches the lock every few seconds
 LAST_ERROR = STATE / "last_error"   # written by couch.py on launch failure
-CANCEL = STATE / "cancel"   # one line: the cancelling turn (may be
-                                    # empty). Written by voice end_session,
-                                    # unlinked by couch.py at every launch
-                                    # wait; stale copies voided at the next
-                                    # launch's start.
+CANCEL = STATE / "cancel"   # one line: the cancelling turn (may be empty).
+                            # Written by voice end_session, unlinked by
+                            # couch.py at every launch wait; stale copies
+                            # voided at the next launch's start.
 
 
 def lock_age():
@@ -180,10 +179,9 @@ def use_config(cfg):
 
 REQUIRED_CONFIG = ("gamingPcMac", "gamingPcIp", "sshHost", "tvComPort",
                    "tvGamingCmd", "tvIdleCmd", "tvOffWhenDone")
-# Missing any of these fails the voice agent at startup, not per-wake. Every
-# other voice key is optional with an inert default: config.json is
-# per-machine and gitignored, so a key made mandatory in code is an agent
-# that will not start after a git pull.
+# Missing any of these fails the voice agent at startup, not per-wake; every
+# other voice key has an inert default (config.json is per-machine: a key made
+# mandatory in code is an agent that will not start after a git pull).
 REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "eotThreshold", "eagerEotThreshold", "keytermCount",
                   "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
