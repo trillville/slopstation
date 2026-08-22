@@ -317,7 +317,7 @@ Ring=TXD from the adapter side — a straight match, no crossover needed.
 
 **Frame format**, for reference: `08 22 c1 c2 c3 value` + checksum, where
 checksum = `(0x100 - sum(first 6)) & 0xFF`. The table is frozen in
-[`k15/cglib.py`](../k15/cglib.py) and cross-checked against the builder by
+[`k15/tv.py`](../k15/tv.py) and cross-checked against the builder by
 `voice/tests/test_exlink.py`, because **a one-byte slip in the volume family is
 `power_off`**.
 

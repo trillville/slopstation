@@ -84,7 +84,12 @@ Time to READY, the number the whole system is judged on:
 
 ## Event vocabulary
 
-- **launch**: `launch_start` `wol_sent` `ssh_up` `enter_dispatched` `host_ready` `launch_failed` `launch_aborted` `session_ended` `session_idle` `exlink_send` `exlink_nak` `enter_died` `enter_redispatched`
+- **launch**: `launch_start` `wol_sent` `ssh_up` `enter_dispatched` `host_ready` `launch_failed` `launch_aborted` `session_ended` `session_idle` `exlink_send` `exlink_nak` `enter_died` `enter_redispatched` `config_invalid`
+  - `config_invalid` (ERROR, carries `missing`) is a launch refused before the
+    lock and before any side effect because config.json lacks a required key
+    — nothing was sent to the TV or the PC, and `last_error` was left so the
+    Puck buzzed it. The voice agent emits the same event (lane=voice) when it
+    refuses to start.
   - `enter_died` means the PC's Enter task exited WITHOUT writing the marker —
     the launch was lost at that moment, where before this event existed the
     K15 just polled a dead task for the rest of its READY wait.
@@ -124,8 +129,12 @@ Time to READY, the number the whole system is judged on:
   with `tool`, `ok` and truncated `args`; this is how you learn it called
   `search_store` with `tags:["Co-op","Rogue-like"]` rather than guessing from
   the reply. Nothing before 2026-08-14 has it. Also `tool_refused` (the
-  boundary rejecting a call, e.g. `reason=unknown_appid`), `job_requested`
-  (the background brief), `web_search` (provider-executed search).
+  boundary rejecting a call, e.g. `reason=unknown_appid`), `tool_error` (ERROR:
+  a tool impl RAISED — `tool`, `err` — where the `tool_call` beside it says
+  only `ok=false`; nothing before 2026-08-22 has it, such failures reached the
+  console only), `job_requested` (the background brief), `web_search`
+  (provider-executed search), `worker_catalog_failed` (WARN: a background job
+  was briefed without the catalog because it could not be built).
 - **voice, couch verbs**: `nav_dispatched` `quit_dispatched` — both carry the
   host's `answer`, and `FAILED:1` on either means the PC-side scheduled task
   is not registered, not that the verb is broken. Plus `collection_resolved`
@@ -140,7 +149,11 @@ Time to READY, the number the whole system is judged on:
     present means buttons ARE arriving and the press was wrong or too short;
     `armed` with no partials at all means the Puck enumerates and rumbles but
     reports nothing, which is a claim/firmware problem, not a hold problem.
-- **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
+- **supervisor**: `start` `restart` `lane_started` `lane_reloaded` (carries
+  `killed` = the number of agent processes Start-K15 actually stopped — 0 means
+  the lane was already down) `deps_installed` `venv_failed` `deps_failed` (both
+  ERROR: the voice supervisor died before the agent ever ran; its window is
+  minimized, so this line is the only sign)
 - **background jobs**: `job_queued` `job_running` `job_done` `job_failed`
   `job_announced` `job_orphaned` — these are on `lane="voice"`, not a lane of
   their own: the JobStore logs through the voice agent's logger. Select them by
@@ -151,7 +164,13 @@ Time to READY, the number the whole system is judged on:
   own logger in, so a session driven by voice files these under `lane="voice"`
   and only `python steam_session.py …` at the console lands on `lane="steam"`.
   Select on `event` when you want both.
-- **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
+- **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed` `profile_apply_failed` (Exit-TV's OFFICE restore, and since 2026-08-22 Office-Safety's at logon too) `wake_cleanup` (Wake-Safety found a session abandoned before sleep and fired Exit)
+  - **gamepc, lane=dispatch**: `dispatch` — one per `ssh gamepc <verb>` call since
+    2026-08-22, carrying `cmd`, `answer` (the word the K15 got back, or
+    `payload` for games/status/collections) and `turn` when the verb carried
+    one; `answer=DENIED` is level warn. It is the one record on the PC that an
+    unknown or refused verb ever arrived, so "did the K15 ever ask?" is now
+    answerable from this side too.
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.

@@ -84,28 +84,33 @@ checkout runs without its local config/keys ever fighting `git pull`:
 
 | File | Role |
 |---|---|
-| `cglib.py` | Shared module: Ex-Link frame table, Puck VID/PID, config loading, and the per-lane logger (`log("event", field=…)` → console + `couch.log` + structured JSONL). |
+| `cglib.py` | Shared module: Puck VID/PID and haptic reports, the session lock, `config.json` (and the `REQUIRED_*` lists that say what it must contain), secrets, and the per-lane logger (`log("event", field=…)` → console + `couch.log` + structured JSONL). Each section header is a fault line; split along one when size hurts. |
 | `events.py` | The event core, stdlib-only so the chord lane gains no dependency: JSONL writer, daily files, secret scrubber, the `turn` correlation id, and an `emit` CLI the `.bat` supervisors call so a crash-restart loop is visible. |
+| `tv.py` | The S90C from the K15, stdlib-only: the Ex-Link frame table, checksum builder and send-and-ack transport (`couch.py` and the voice agent share one COM port through it), the `/api/v2/` power probe, and the UPnP volume readback — the read half only; with eARC audio the set refuses every direct volume write, and the write path that works is `voice/tv_remote.py`. |
+| `verbs.py` | The gaming PC's answers (`OK`, `NOTREADY`, `BUSY:<appid>`…) named once for `couch.py`, `dispatch.py` and `doctor.py`; `test_turn.py` scrapes the same words out of the shipping `Dispatch.ps1` and fails if the two sets differ. |
+| `statefile.py` | The `state/` JSON idioms: `load_json` (fail-soft, default-factory) and `atomic_write` (tmp + `os.replace`) — `library.json`, `jobs.json` and the store caches all go through it. |
 | `couch.py` | Orchestrator: Ex-Link TV power → WoL → `ssh enter` → poll READY → switch input → watch loop. `reconcile` subcommand re-adopts or clears a session lock that survived a K15 restart. |
 | `chord_listener.py` | Watches the Puck's HID stream for Steam + right-trigger held 2 s and answers through the controller — 1 thud = launching, 2 = busy, 3 = the launch failed — then fires `couch.py start`. Logs to `couch.log` as `[listener]`. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports (chirp/pulse/rumble variants). Run only with the listener stopped; re-run after firmware updates. |
 | `doctor.py` | On-demand chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (auto-skipped while the listener owns the Puck), ssh contract, session state, voice overlay (WARN-only). |
 | `exlink.py` | Manual Ex-Link TV control: power/inputs/volume/mute; COM port from config. |
-| `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json`; auto-synced by the voice agent. Also the layer-4 store-question fetchers (search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat) and the `state/deals.json` precompute the voice tools and the worker read. |
+| `library.py` | Game catalog: installed (over ssh), owned + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json`; `sync()` runs every layer (the voice agent calls it in the background) and drives the store's deals refresh. Also `catalog_lines`/`query_terms` — the catalog as the assistant and the STT see it. |
+| `steamstore.py` | The store, live: the two Steam hosts and the one HTTP seam, name hygiene (`ascii_only`, `NOT_GAMES`), `store_items` and the fetchers behind the assistant's store tools (search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat), the `state/deals.json` precompute the worker reads, and a `probe` CLI for the live endpoint shapes a keyless checkout cannot see. |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after firmware changes. |
 | `config.json` | Orchestrator config (MAC, IPs, COM port, input mapping, voice tuning). |
 | `Start-TV-Gaming.bat` | Manual recovery launcher: runs `couch.py start` in a window that stays open. |
 | `Start-K15.bat` | **The** Startup-folder shortcut target, and the one thing to run after a `git pull` — both converge on "both lanes running current code". Per lane: supervisor down → start it; supervisor up → kill the *agent* so its supervisor relaunches it on new code. Never bounces a supervisor window, so a live session's watch loop (and `reconcile`) are untouched. |
 | `Start-Listener.bat` | Chord-lane supervisor: `reconcile` once, then the listener in a 10 s restart loop. Single-instance (a second launch bounces). |
-| `voice/` | The voice overlay: `voice_agent.py` (composition root + wake loop), `audio.py` (the PortAudio world: devices, recovery, wake listener), `session_runtime.py` (one session's Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane, + cross-session carry), `grammar.yaml` + `titles.py` (command grammar + fuzzy title/collection resolution), `dispatch.py` (every voice side effect — session, TV, launch, quit, Big Picture nav — shared by both lanes, + the per-utterance snapshot), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain, the store-data + nav + quit + install tools, optional web search, + `--text` REPL), `steam_session.py` (optional signed-in account session: install-by-voice + download status over ClientComm, token-gated), `workers.py`/`jobs.py`/`announce.py` + `worker_home/` (Tier-3 background tasks: claude/codex CLI adapters, job store, proactive spoken results), `tests/` (blind suite). Own venv, own pins. |
+| `voice/` | The voice overlay: `voice_agent.py` (composition root + wake loop), `audio.py` (the PortAudio world: devices, recovery, wake listener), `session_runtime.py` (one session's Pipecat pipeline: Flux STT → grammar gate → dispatch, with an LLM assistant lane, + cross-session carry), `grammar.yaml` + `titles.py` (command grammar + fuzzy title/collection resolution), `dispatch.py` (every voice side effect — session, TV, launch, quit, Big Picture nav — shared by both lanes, + the per-utterance snapshot), `ducking.py` (the soundbar duck for the length of a session: on-gate, remote keys over CEC, readback-verified ledger), `preroll.py` (no-pause wake buffer), `assistant.py` (catalog-in-context brain: system prompt, the store-data + nav + quit + install tools, optional web search), `assistant_repl.py` (the `--text` REPL and its two API clients — the bench and model-A/B instrument), `steam_session.py` (optional signed-in account session: install-by-voice + download status over ClientComm, token-gated), `workers.py`/`jobs.py`/`announce.py` + `worker_home/` (Tier-3 background tasks: claude/codex CLI adapters, job store, proactive spoken results), `tests/` (the blind suite — `tests\run.py` runs it, `_bootstrap.py` is its one home). Own venv, own pins. |
 | `voice/Start-Voice.bat` | Voice-lane supervisor (launched by `Start-K15.bat`): creates the venv on first run, then supervises the agent (single-instance, 10 s crash restart). The dependency gate lives *inside* the restart loop and compares `requirements.txt` against a copy of itself, so a `git pull` that changes pins installs them on the next agent launch rather than needing a cold start. |
 
 ## Code architecture
 
 - **Shared code lives in one place per machine**: `CouchGaming.common.ps1`
-  (dot-sourced) and `cglib.py` (imported). Every magic value — the `2160`
-  sentinel, `K15.5`, hardware IDs, Ex-Link frames, timeouts — has exactly one
-  home.
+  (dot-sourced) and, on the K15, `cglib.py` with the small stdlib modules
+  beside it — `events.py`, `tv.py`, `verbs.py`, `statefile.py` — imported,
+  never copied. Every magic value — the `2160` sentinel, `K15.5`, hardware
+  IDs, Ex-Link frames, the PC's answer words, timeouts — has exactly one home.
 - **The `2160` sentinel** (`Test-TvIsPrimary`): "primary display height equals
   the TV's" is how every PC script reads the topology. It holds only while the
   desk monitor's height differs — revisit before pairing this rig with a 4K or
@@ -128,8 +133,16 @@ checkout runs without its local config/keys ever fighting `git pull`:
   failure domain (how `voice/audio.py` earned its name), (b) a duplication
   exists only to break an import cycle, or (c) the file no longer fits in one
   sitting. Never to satisfy a diagram, and never speculatively. `cglib.py`'s
-  section headers are the pre-drawn fault lines: split along them when size
-  actually hurts, not before.
+  section headers are the pre-drawn fault lines: the TV was the first to go
+  (`tv.py`, once it had two dated incidents and five files — rule (a)), and
+  `library.py` named `steamstore.py` the same way before the file existed
+  (rule (c)); split along the next one when size actually hurts, not before.
+- **The lane rule is a test, not a reminder**: `tests/test_lanes.py` reads
+  every module's top-level imports from the AST (chord lane stdlib-only,
+  `k15/` never imports `voice/`, the voice modules `doctor.py` reaches stay
+  stdlib), and `tests/test_imports.py` imports all of them with the
+  `config.json`/`secrets.json` reads tripwired. `tests\run.py` is the gate
+  (CLAUDE.md § Running the tests).
 - **Moves are pure**: a commit that relocates code changes zero behavior, and
   every incident-history comment travels with its code — the comments are this
   repo's institutional memory. Land behavior changes first, moves second,
@@ -147,13 +160,13 @@ with the reasoning; if the premise changes, reopen it deliberately.
 |---|---|
 | **Services, a database, or merging the voice and chord lanes** | The process split *is* the failure isolation. File-backed state a human can inspect and delete at 2am is the feature. |
 | **Session phases/snapshots on disk** | Optimistic software state. The probes — display, PnP, Steam registry, ready marker — already answer every phase question truthfully. The lock got atomicity and identity, not a state machine. |
-| **A typed config layer, a `pc_client`/`tv` extraction, splitting `cglib.py`** | The verb responses mean different things per call site; presence-checks plus `config_suspect` warnings catch the failure that actually occurs. Revisit only when size hurts. |
+| **A typed config layer, a `pc_client` extraction, splitting `cglib.py` further** | Presence checks live in one place (`cglib.REQUIRED_CONFIG` / `REQUIRED_VOICE` / `missing_config` — checked by `couch.py` before its first side effect, by the voice agent at startup, and by `doctor.py`) and `config_suspect` warnings catch the value errors that actually occur. The verb responses still mean different things per call site; `verbs.py` names the words, not the meanings. The `tv` extraction happened (2026-08-22, `tv.py`) once the TV had two incidents spread over five files — README's own rule (a); the rest of `cglib.py` waits for size to hurt. |
 | **JSON envelopes for the PC marker files** | Four one-line files (`launch-app`, `nav-target`, `stop-app`, `turn`), each written and read by code that sits either side of one `schtasks` call. Every one of them is re-validated downstream anyway, and a lost turn costs a log label. |
 | **Self-hosting telemetry on the K15** | It is the thing being observed, and it runs a latency-sensitive audio pipeline. A dashboard that dies with its subject is not a dashboard. |
 | **Sentry, a metrics SDK, span sampling, session replay, audio upload** | This code catches almost everything by design, so Sentry would receive very little; the rest do not earn their complexity at one household's volume. Revisit Sentry if unhandled `voice_agent` crashes become a theme. |
 | **Tracing library sync and metadata crawls** | Those are logs. Nobody is waiting on them. |
 | **A custom status page** | Grafana and Langfuse are the web app. If one is ever wanted it reads their query APIs and stores nothing. |
-| **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. The `sys.path` inserts are the price and it is already paid. |
+| **Packaging `k15/voice` (pyproject, installs)** | Double-clicking a `.bat` from a checkout is the product. Each entry point pays two `sys.path` inserts; the tests pay them once, in `tests/_bootstrap.py`. A `python -m` package layout would touch every entry point, both supervisors and every command in the docs for a cosmetic gain — not worth it on a live rig. |
 | **Pausing/resuming downloads by voice** | Voice can *see* download progress (ClientComm `download_status`) and *start* installs, but not pause/resume. Deliberately cut: it is a rare want, and the couch is for playing, not managing a queue. The CDP `Downloads.*` verbs exist if this is ever revisited. |
 
 Still genuinely open, worst first:
@@ -177,6 +190,17 @@ Still genuinely open, worst first:
 - **Tempo dual-export** (`TODO(E5b)` in `voice/tracing.py`) and **barge-in**,
   which pipecat 1.7 does not give us for free — the mechanism and the revival
   recipe are in `voice/session_runtime.py`.
+- **One turn marker for every task on the PC.** `Dispatch.ps1` writes the
+  turn to a single file while the payloads (`launch-app`, `nav-target`,
+  `stop-app`) are per task, so two overlapping dispatches can cross-label each
+  other's events. Bounded — the 300 s staleness gate in `Get-CgTurn`, and the
+  turn now lands only after a verb's guards pass — not closed; per-task turn
+  files are a six-file protocol change that wants the PC to drill it.
+- **The two `.bat` supervisors are near-verbatim copies** with a fixed 10 s
+  restart and no cap: a lane that dies at import restarts six times a minute
+  forever (alertable via `restart`, so not silent). One parameterized
+  supervisor with backoff is the fix; it is the K15's boot path, so it wants
+  an on-K15 drill, not a blind edit.
 
 ## Deliberately not in the repo
 

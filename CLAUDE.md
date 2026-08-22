@@ -17,10 +17,13 @@ principle); this file holds only the process rules an agent session needs.
   is free and renaming an event must break a test. `cglib.CapturingLog` is
   the double; don't hand-roll one.
 - **Two lanes, one direction of dependency.** The chord lane (`cglib.py`,
-  `events.py`, `couch.py`, `chord_listener.py`) is load-bearing, runs on
-  system python, and must stay stdlib-only (`events.py` documents why).
-  Voice is an overlay with its own venv and may depend on the chord lane's
-  modules, never the reverse.
+  `events.py`, `couch.py`, `chord_listener.py`, `tv.py`, `verbs.py`) is
+  load-bearing, runs on system python, and must stay stdlib-only (`events.py`
+  documents why; `hid` and `serial` are the two system-python packages it
+  may name). Voice is an overlay with its own venv and may depend on the
+  chord lane's modules, never the reverse. `tests/test_lanes.py` enforces
+  this from the AST and `tests/test_imports.py` proves every module imports
+  without reading `config.json` — run them, don't re-derive them.
 - **Telemetry never costs a session.** Anything on an emit path is fail-soft
   by construction — see `events.emit`'s positional-only signature for the
   standard this has to meet.
