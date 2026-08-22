@@ -7,7 +7,15 @@ import os, socket, subprocess, sys, time
 import cglib
 import events
 
-CFG  = cglib.load_config()
+# Read on first use by cfg(), NOT at import. Every voice module reaches this
+# file (dispatch imports couch for the ssh seam), so an import-time read made
+# config.json a precondition for importing anything: `voice_agent.py
+# --devices` on a box without one died with a raw FileNotFoundError before
+# main() could say so, library.py and grammar_gate.py hid their couch/dispatch
+# imports inside functions to dodge it, and doctor.py wrapped `from couch
+# import ssh` in a try/except whose hint was "config broken?". Tests still
+# assign couch.CFG directly and cfg() honours that.
+CFG = None
 
 PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
@@ -54,9 +62,17 @@ WATCH_FAILS    = 3     # consecutive ssh failures (raised, see ssh()) = session
 log = cglib.make_log("launch")
 
 
+def cfg():
+    """config.json, loaded once on first use (see CFG above)."""
+    global CFG
+    if CFG is None:
+        CFG = cglib.load_config()
+    return CFG
+
+
 def exlink(name, **fields):
     try:
-        ack = cglib.exlink_send(name, CFG["tvComPort"])
+        ack = cglib.exlink_send(name, cfg()["tvComPort"])
         # `ack` means the TV's serial receiver ACCEPTED THE FRAME. It is not
         # confirmation that the TV acted on it, and there is no read-back that
         # would be: Ex-Link here is send-only. A power_on can ack and leave the
@@ -69,7 +85,7 @@ def exlink(name, **fields):
 
 
 def wol():
-    mac = bytes.fromhex(CFG["gamingPcMac"].replace(":", "").replace("-", ""))
+    mac = bytes.fromhex(cfg()["gamingPcMac"].replace(":", "").replace("-", ""))
     pkt = b"\xff" * 6 + mac * 16
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -86,7 +102,7 @@ def ssh(cmd, timeout=15):
     switch the TV to a dead input, and watch() could never detect sleep (its
     fails counter only moves on exceptions). stdout-only keeps stderr noise out
     of state comparisons; Dispatch reports its own failures as FAILED:<code>."""
-    r = subprocess.run(["ssh", CFG["sshHost"], cmd],
+    r = subprocess.run(["ssh", cfg()["sshHost"], cmd],
                        capture_output=True, text=True, timeout=timeout, check=True)
     return r.stdout.strip()
 
@@ -139,7 +155,7 @@ def wait_port(timeout=PORT_WAIT_S):
     end = time.time() + timeout
     while time.time() < end:
         try:
-            with socket.create_connection((CFG["gamingPcIp"], 22), 3):
+            with socket.create_connection((cfg()["gamingPcIp"], 22), 3):
                 return True
         except OSError:
             time.sleep(1)
@@ -306,7 +322,7 @@ def start(appid=None, turn=None):
             time.sleep(1)
         if not ready: raise RuntimeError("host never reported READY")
         cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
-        exlink(CFG["tvGamingCmd"])
+        exlink(cfg()["tvGamingCmd"])
         if appid:
             # Voice "play <title>" from cold: queue the game once the session
             # is READY. Best-effort - a failed game launch never fails the
@@ -384,7 +400,7 @@ def watch(expected=None):
                 log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
-    exlink("power_off" if CFG["tvOffWhenDone"] else CFG["tvIdleCmd"])
+    exlink("power_off" if cfg()["tvOffWhenDone"] else cfg()["tvIdleCmd"])
     # Ownership-checked: a lock recycled while we stalled belongs to the
     # successor, and unlinking it would free a live session.
     if not cglib.release_lock():

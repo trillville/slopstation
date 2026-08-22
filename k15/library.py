@@ -35,6 +35,9 @@ import time
 from pathlib import Path
 
 import cglib
+import couch
+# couch.ssh is reached through the MODULE (one seam - dispatch.py says why),
+# and at the top now that importing couch no longer reads config.json.
 
 STATE = cglib.BASE / "state"
 LIBRARY = STATE / "library.json"
@@ -47,8 +50,7 @@ log = cglib.make_log("library")
 
 def fetch_installed_ssh():
     """The production path (K15): the gaming PC enumerates its own ACFs."""
-    from couch import ssh
-    return parse_games_json(ssh("games", timeout=30))
+    return parse_games_json(couch.ssh("games", timeout=30))
 
 
 def parse_games_json(text):
@@ -132,8 +134,7 @@ def fetch_collections_ssh():
     """The PC's Big Picture collections as [{name, id}] - the `collections`
     Dispatch verb reads them from the cloud-storage file. K15-only (needs the
     PC awake), same as installed."""
-    from couch import ssh
-    return parse_games_json(ssh("collections", timeout=15))
+    return parse_games_json(couch.ssh("collections", timeout=15))
 
 
 def refresh_collections():

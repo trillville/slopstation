@@ -13,6 +13,7 @@ Exit code = number of FAILs.
 import json, subprocess, sys, time
 
 import cglib
+import couch
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 _counts = {PASS: 0, WARN: 0, FAIL: 0}
@@ -136,12 +137,10 @@ def _local_rev():
         return ""
 
 
-def check_ssh():
-    try:
-        from couch import ssh
-    except Exception as e:
-        report(FAIL, "ssh", f"couch.py unimportable ({e})", "config broken? see above")
-        return
+def check_ssh(cfg):
+    if not cfg:
+        return                          # config.json unreadable: reported above
+    ssh = couch.ssh
     try:
         st = ssh("status")
         report(PASS, "ssh status", f"-> {st!r} (key, forced command, sshd, firewall all good)")
@@ -492,7 +491,7 @@ if __name__ == "__main__":
     listener_running = check_listener()
     if puck_ok and not listener_running:
         check_haptics()
-    check_ssh()
+    check_ssh(cfg)
     check_session_state()
     check_telemetry()
     check_voice(cfg)
