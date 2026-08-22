@@ -1,7 +1,8 @@
 # The entire remote attack surface: forced command for the K15's SSH key
 # (administrators_authorized_keys). Eleven verbs; everything else is DENIED.
 # Deliberately dependency-free - no dot-sourcing in the sshd context.
-# The ready path mirrors $CG.ReadyMarker in CouchGaming.common.ps1.
+# The marker paths below mirror $CG.ReadyMarker/TurnMarker/LaunchMarker/
+# NavMarker/StopMarker in CouchGaming.common.ps1 - the two lists must agree.
 #
 # Verbs: enter/exit/status (session), enterstate (whether the Enter task is
 # still running - the difference between a launch that is working and one that
@@ -34,6 +35,12 @@
 # path segment, and a slash is the one character that could leave it.
 $ready = 'C:\ProgramData\CouchGaming\ready'
 $turnFile = 'C:\ProgramData\CouchGaming\turn'
+# The payload markers for the three task-firing verbs (schtasks /Run cannot
+# pass arguments). Cleared and rewritten here, in the elevated context where
+# the delete always succeeds; the tasks re-validate what they read.
+$launchApp = 'C:\ProgramData\CouchGaming\launch-app'
+$navTarget = 'C:\ProgramData\CouchGaming\nav-target'
+$stopApp = 'C:\ProgramData\CouchGaming\stop-app'
 
 # Correlation id for one user intent, minted on the K15 and travelling with
 # the five MUTATING verbs so this machine's transcript and events join that
@@ -84,7 +91,56 @@ function Start-CgTask([string]$Name) {
   "FAILED:$code"
 }
 
-switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
+# Every Steam library root: the install dir plus libraryfolders.vdf's paths.
+# ONE copy, used by `games` and `launch` - they used to carry it twice, and the
+# case-insensitive dedupe (registry SteamPath and vdf paths differ in case)
+# had landed in one of them.
+function Get-SteamRoots([string]$SteamPath) {
+  $roots = @($SteamPath)
+  $lf = Join-Path $SteamPath 'steamapps\libraryfolders.vdf'
+  if (Test-Path $lf) {
+    foreach ($line in (Get-Content $lf)) {
+      if ($line -match '^\s*"path"\s+"(.+)"\s*$') { $roots += ($Matches[1] -replace '\\\\', '\') }
+    }
+  }
+  @($roots | ForEach-Object { $_.ToLower() } | Select-Object -Unique)
+}
+
+# One line per call, DENIED included, into the same daily jsonl
+# Write-CgEvent feeds (CouchGaming.common.ps1; the shape is mirrored here,
+# not imported - this file dot-sources nothing). A rejected or refused verb
+# used to leave no trace on this machine at all, which on the one file that
+# is the whole remote attack surface is the wrong default. The answer is
+# logged only when it is a word - `games`, `status` and `collections` answer
+# with payloads that belong in the transcript, not the audit. Fail-soft:
+# telemetry never costs a session.
+function Write-CgAudit([string]$Cmd, $Answer) {
+  try {
+    $word = if (($Answer -is [string]) -and ($Answer.Length -le 40) -and ($Answer -notmatch '[\[{]')) { $Answer } else { 'payload' }
+    $rec = [ordered]@{
+      ts      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+      level   = $(if ($word -eq 'DENIED') { 'warn' } else { 'info' })
+      env     = 'prod'
+      service = 'gamepc'
+      lane    = 'dispatch'
+      event   = 'dispatch'
+    }
+    $m = [regex]::Match("$Cmd", ' --turn (?-i:([0-9a-f]{1,8}))$')
+    if ($m.Success) { $rec.turn = $m.Groups[1].Value }
+    $rec.host = $env:COMPUTERNAME
+    $rec.cmd = "$Cmd".Substring(0, [Math]::Min(120, "$Cmd".Length))
+    $rec.answer = $word
+    $dir = Join-Path $PSScriptRoot 'logs'
+    New-Item -ItemType Directory -Force -Path $dir -ErrorAction SilentlyContinue | Out-Null
+    $file = Join-Path $dir ('pc-{0}.jsonl' -f (Get-Date -Format yyyyMMdd))
+    $line = ConvertTo-Json -InputObject $rec -Compress -Depth 3
+    [IO.File]::AppendAllText($file, $line + [Environment]::NewLine,
+                             (New-Object System.Text.UTF8Encoding($false)))
+  } catch { }
+}
+
+$cmd = $env:SSH_ORIGINAL_COMMAND
+$out = switch -Regex ($cmd) {
   '^enter( --turn ((?-i:[0-9a-f]{1,8})))?\z'
              { Set-Turn $Matches[2]
                Start-CgTask 'Enter'
@@ -122,17 +178,9 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
       if (-not $steam) { '[]'; break }
       $steam = $steam -replace '/', '\'
-      $roots = @($steam)
-      $lf = Join-Path $steam 'steamapps\libraryfolders.vdf'
-      if (Test-Path $lf) {
-        foreach ($line in (Get-Content $lf)) {
-          if ($line -match '^\s*"path"\s+"(.+)"\s*$') { $roots += ($Matches[1] -replace '\\\\', '\') }
-        }
-      }
-      # Registry SteamPath and vdf paths differ in case - dedupe roots
-      # case-insensitively, and dedupe appids as belt-and-braces.
+      # Dedupe appids as belt-and-braces (Get-SteamRoots already dedupes roots).
       $seen = @{}
-      $apps = foreach ($root in ($roots | ForEach-Object { $_.ToLower() } | Select-Object -Unique)) {
+      $apps = foreach ($root in (Get-SteamRoots $steam)) {
         foreach ($acf in (Get-ChildItem (Join-Path $root 'steamapps\appmanifest_*.acf') -ErrorAction SilentlyContinue)) {
           $t = Get-Content $acf.FullName -Raw -Encoding UTF8
           $f = @{}
@@ -155,7 +203,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       break }
   '^launch (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       $id = $Matches[1]
-      Set-Turn $Matches[3]
+      $turn = $Matches[3]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
       $run = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
       if ($run -and $run -ne 0) {
@@ -167,25 +215,23 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       # caller could otherwise make steam -applaunch pop the install dialog on
       # the TV (needs the controller - deliberately not a voice action).
       $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
-      $roots = @()
-      if ($steam) { $steam = $steam -replace '/', '\'; $roots += $steam }
-      $lf = Join-Path $steam 'steamapps\libraryfolders.vdf'
-      if (Test-Path $lf) {
-        foreach ($line in (Get-Content $lf)) {
-          if ($line -match '^\s*"path"\s+"(.+)"\s*$') { $roots += ($Matches[1] -replace '\\\\', '\') }
-        }
-      }
+      if (-not $steam) { 'NOTINSTALLED'; break }
       $installed = $false
-      foreach ($root in ($roots | Select-Object -Unique)) {
+      foreach ($root in (Get-SteamRoots ($steam -replace '/', '\'))) {
         if (Test-Path (Join-Path $root "steamapps\appmanifest_$id.acf")) { $installed = $true; break }
       }
       if (-not $installed) { 'NOTINSTALLED'; break }
+      # The turn is set only now, once every guard has passed: a refused
+      # launch used to write it first, and the NEXT task to start within
+      # 300 s (a logon's Office-Safety, say) tagged its events with a launch
+      # that never happened.
+      Set-Turn $turn
       # This context is ELEVATED (admin-key forced command), the LaunchGame
       # task is not - so the task can't delete the marker we create. Clearing
       # it here, where deletion always succeeds, keeps the protocol clean;
       # Launch-Game's own delete is best-effort.
-      Remove-Item 'C:\ProgramData\CouchGaming\launch-app' -Force -ErrorAction SilentlyContinue
-      Set-Content 'C:\ProgramData\CouchGaming\launch-app' $id
+      Remove-Item $launchApp -Force -ErrorAction SilentlyContinue
+      Set-Content $launchApp $id
       Start-CgTask 'LaunchGame'
       break }
   # nav: fire a steam:// URL into the running Big Picture session. READY-gated
@@ -194,24 +240,27 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   # unelevated, reads and maps it to a URL. Cleared here in the elevated
   # context where the delete always succeeds (the task cannot delete it).
   '^nav (downloads|library|store)( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
-      Set-Turn $Matches[3]
+      $turn = $Matches[3]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
-      Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
-      Set-Content 'C:\ProgramData\CouchGaming\nav-target' $Matches[1]
+      Set-Turn $turn                      # after the guard - see launch
+      Remove-Item $navTarget -Force -ErrorAction SilentlyContinue
+      Set-Content $navTarget $Matches[1]
       Start-CgTask 'Nav'
       break }
   '^nav (details|store) (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
-      Set-Turn $Matches[4]
+      $turn = $Matches[4]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
-      Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
-      Set-Content 'C:\ProgramData\CouchGaming\nav-target' "$($Matches[1]) $($Matches[2])"
+      Set-Turn $turn
+      Remove-Item $navTarget -Force -ErrorAction SilentlyContinue
+      Set-Content $navTarget "$($Matches[1]) $($Matches[2])"
       Start-CgTask 'Nav'
       break }
   '^nav collection ([A-Za-z0-9_.*+=-]{1,64})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
-      Set-Turn $Matches[3]
+      $turn = $Matches[3]
       if (-not (Test-Path $ready)) { 'NOTREADY'; break }
-      Remove-Item 'C:\ProgramData\CouchGaming\nav-target' -Force -ErrorAction SilentlyContinue
-      Set-Content 'C:\ProgramData\CouchGaming\nav-target' "collection $($Matches[1])"
+      Set-Turn $turn
+      Remove-Item $navTarget -Force -ErrorAction SilentlyContinue
+      Set-Content $navTarget "collection $($Matches[1])"
       Start-CgTask 'Nav'
       break }
   # stop: quit the running game. The appid is REQUIRED and re-checked against
@@ -221,12 +270,13 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   # re-focuses Big Picture after (the dead-controller lesson from Enter-TV).
   '^stop (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       $id = $Matches[1]
-      Set-Turn $Matches[3]
+      $turn = $Matches[3]
       $run = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).RunningAppID
       if (-not $run -or $run -eq 0) { 'NOTRUNNING'; break }
       if ("$run" -ne $id) { "BUSY:$run"; break }
-      Remove-Item 'C:\ProgramData\CouchGaming\stop-app' -Force -ErrorAction SilentlyContinue
-      Set-Content 'C:\ProgramData\CouchGaming\stop-app' $id
+      Set-Turn $turn                      # after the guards - see launch
+      Remove-Item $stopApp -Force -ErrorAction SilentlyContinue
+      Set-Content $stopApp $id
       Start-CgTask 'StopGame'
       break }
   # collections: library collections as [{name,id}] JSON, from the per-user
@@ -238,7 +288,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
       if (-not $steam) { '[]'; break }
       $steam = $steam -replace '/', '\'
-      $out = @()
+      $rows = @()
       $seen = @{}
       $userdata = Join-Path $steam 'userdata'
       if (Test-Path $userdata) {
@@ -257,12 +307,15 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
             $name = ($v.name -replace '[^\x20-\x7E]', '').Trim()
             if ($name -and -not $seen.ContainsKey("$($v.id)")) {
               $seen["$($v.id)"] = $true
-              $out += [pscustomobject]@{ name = $name; id = "$($v.id)" }
+              $rows += [pscustomobject]@{ name = $name; id = "$($v.id)" }
             }
           }
         }
       }
-      ConvertTo-Json -InputObject @($out) -Compress -Depth 3
+      ConvertTo-Json -InputObject @($rows) -Compress -Depth 3
       break }
-  default    { 'DENIED'; exit 1 }
+  default    { 'DENIED' }
 }
+Write-CgAudit $cmd $out
+$out
+if ($out -eq 'DENIED') { exit 1 }
