@@ -14,6 +14,7 @@ import json, subprocess, sys, time
 
 import cglib
 import couch
+import verbs
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 _counts = {PASS: 0, WARN: 0, FAIL: 0}
@@ -155,7 +156,7 @@ def check_ssh(cfg):
         ssh("bogus")
         report(WARN, "ssh dispatch", "bogus command did NOT get DENIED", "Dispatch.ps1 changed?")
     except subprocess.CalledProcessError as e:
-        if "DENIED" in (e.stdout or ""):
+        if verbs.DENIED in (e.stdout or ""):
             report(PASS, "ssh dispatch", "unknown verbs DENIED")
         else:
             report(WARN, "ssh dispatch", f"unexpected reply {e.stdout!r}", "check Dispatch.ps1")
@@ -167,7 +168,7 @@ def check_ssh(cfg):
     try:
         pcbuild = ssh("version")
     except subprocess.CalledProcessError as e:
-        if "DENIED" in (e.stdout or ""):
+        if verbs.DENIED in (e.stdout or ""):
             report(WARN, "deploy skew", "PC's Dispatch predates the version verb",
                    "run gaming-pc\\Deploy.ps1 on the PC to ship the current set")
         else:
@@ -181,7 +182,7 @@ def check_ssh(cfg):
     tok = (pcbuild.split() or [""])[0]
     dirty = tok.endswith("-dirty")
     tok = tok.removesuffix("-dirty")
-    if pcbuild == "UNKNOWN":
+    if pcbuild == verbs.UNKNOWN:
         report(WARN, "deploy skew", "PC has no build-id stamped",
                "run gaming-pc\\Deploy.ps1 - it stamps what it ships")
     elif not local:

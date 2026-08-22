@@ -20,6 +20,7 @@ import cglib
 import couch
 import events
 import library
+import verbs
 # couch.ssh / couch.ssh_intent are reached through the MODULE, never imported
 # by name: one implementation and ONE SEAM, so swapping couch.ssh intercepts
 # every verb. `from couch import ssh` would create a second binding that such
@@ -63,7 +64,7 @@ def _no_task(out):
     step someone skipped, not a fault, so say the fix out loud: the raw
     FAILED:1 this replaced taught nobody anything, and a whole couch test read
     it as "nav is broken" (2026-08-14)."""
-    return _fail(f"the {out.split(':', 1)[1]} task isn't registered on the "
+    return _fail(f"the {verbs.code_of(out)[1]} task isn't registered on the "
                  "gaming PC - it needs the one-time Register-ScheduledTask "
                  "from the setup guide")
 
@@ -150,7 +151,7 @@ class Dispatch:
         except Exception as e:
             self.log.error("end_session_failed", err=str(e), turn=turn)
             return _fail(f"couldn't reach the PC (ssh exit: {e})")
-        if out == "OK":
+        if out == verbs.OK:
             self.log("end_session_dispatched", turn=turn)
             return _ok("ending the session")
         self.log.warn("end_session_refused", answer=out, turn=turn)
@@ -184,25 +185,26 @@ class Dispatch:
             self.log.error("launch_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh launch: {e})")
         self.log("launch_dispatched", appid=appid, answer=out)
-        if out == "OK":
+        word, payload = verbs.code_of(out)
+        if out == verbs.OK:
             return _ok(f"launching {_name(appid)}")
-        if out == "ALREADY":
+        if out == verbs.ALREADY:
             return _ok(f"{_name(appid)} is already running")
-        if out.startswith("BUSY:"):
+        if word == verbs.BUSY:
             # Name the blocker: the assistant lane sees only `detail`, so a
             # bare appid leaves it saying "something else is running" with no
             # way to say WHAT to quit. The raw code stays for the log. Since
             # quit_game landed, the blocker is now quittable by voice - the
             # message offers it instead of the old "needs the controller".
-            return _busy(f"{_name(out.split(':', 1)[1])} is already running - "
+            return _busy(f"{_name(payload)} is already running - "
                          f"it has to be quit first, which I can do if you ask ({out})")
-        if out == "NOTREADY":
+        if out == verbs.NOTREADY:
             # Lock fresh but host pre-READY: a launch is in flight.
             return _busy("the session is still starting")
-        if out == "NOTINSTALLED":
+        if out == verbs.NOTINSTALLED:
             return _fail(f"{_name(appid)} is not installed - "
                          "installing it needs the controller")
-        if out.startswith("NOTASK:"):
+        if word == verbs.NOTASK:
             return _no_task(out)
         return _fail(f"the launch failed (ssh launch: {out})")
 
@@ -221,17 +223,18 @@ class Dispatch:
             self.log.error("quit_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh stop: {e})")
         self.log("quit_dispatched", appid=appid, answer=out)
-        if out == "OK":
+        word, payload = verbs.code_of(out)
+        if out == verbs.OK:
             return _ok(f"quitting {_name(appid)}")
-        if out == "NOTRUNNING":
+        if out == verbs.NOTRUNNING:
             return _ok("nothing is running to quit")
-        if out.startswith("BUSY:"):
+        if word == verbs.BUSY:
             # A different game is up: name it, don't touch it. The user asked to
             # quit one thing; quitting another is the wrong-game bug play_game's
             # BUSY exists to avoid.
-            return _busy(f"{_name(out.split(':', 1)[1])} is what's running, not "
+            return _busy(f"{_name(payload)} is what's running, not "
                          f"{_name(appid)} - nothing was quit ({out})")
-        if out.startswith("NOTASK:"):
+        if word == verbs.NOTASK:
             return _no_task(out)
         return _fail(f"the quit failed (ssh stop: {out})")
 
@@ -256,9 +259,9 @@ class Dispatch:
             self.log.error("nav_failed", kind=kind, err=str(e))
             return _fail(f"couldn't reach the PC (ssh {cmd}: {e})")
         self.log("nav_dispatched", kind=kind, arg=arg, answer=out)
-        if out == "OK":
+        if out == verbs.OK:
             return _ok(f"showing {self._nav_label(kind, arg)}")
-        if out == "NOTREADY":
+        if out == verbs.NOTREADY:
             # start_session is fire-and-forget (Popen), so "start a session
             # and open X" chains into nav while couch.py is still coming up -
             # and "start one first" told the model to start the session it
@@ -268,7 +271,7 @@ class Dispatch:
                 return _busy("the session is still starting - "
                              "try again in a moment")
             return _busy("there's no session to navigate - start one first")
-        if out.startswith("NOTASK:"):
+        if verbs.code_of(out)[0] == verbs.NOTASK:
             return _no_task(out)
         return _fail(f"the navigation failed (ssh {cmd}: {out})")
 
@@ -343,7 +346,7 @@ class Dispatch:
             if self.dry_run:
                 return self._would(f"check READY then exlink {cmd}")
             try:
-                if couch.ssh("status") == "NOTREADY":
+                if couch.ssh("status") == verbs.NOTREADY:
                     self.log("input_deferred", input=cmd, reason="not_ready")
                     return _busy("the session is still starting - the TV will "
                                  "switch over on its own when it's ready")

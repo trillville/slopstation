@@ -6,6 +6,7 @@ import os, socket, subprocess, sys, time
 
 import cglib
 import events
+import verbs
 
 # Read on first use by cfg(), NOT at import. Every voice module reaches this
 # file (dispatch imports couch for the ssh seam), so an import-time read made
@@ -142,11 +143,11 @@ def enter_running():
         ans = ssh("enterstate")
     except Exception:
         return None
-    if ans == "RUNNING":
+    if ans == verbs.RUNNING:
         return True
     # NOTASK is unreachable in practice (dispatch_enter would never have got
     # its OK) but it is still definitely-not-running, so say so.
-    if ans in ("IDLE", "NOTASK"):
+    if ans in (verbs.IDLE, verbs.NOTASK):
         return False
     return None
 
@@ -220,7 +221,7 @@ def start(appid=None, turn=None):
             for _ in range(attempts):
                 cglib.touch_lock()
                 try:
-                    if ssh_intent("enter") == "OK":
+                    if ssh_intent("enter") == verbs.OK:
                         log(event, dur_ms=ms()); return True
                 except Exception as e:
                     log.warn("enter_retry", err=str(e))
@@ -274,7 +275,7 @@ def start(appid=None, turn=None):
                 if st == turn:
                     log("host_ready", status=st, dur_ms=ms(), verified=True)
                     ready = True; break
-                if st != "NOTREADY":
+                if st != verbs.NOTREADY:
                     if events.valid_turn(st):
                         # Someone else's turn: a stale marker. Keep waiting -
                         # our Enter overwrites it, so this converges, where
@@ -301,7 +302,7 @@ def start(appid=None, turn=None):
             # of which someone spent on the couch watching a dark TV. Re-poke
             # and re-dispatch instead: the TV gets another chance to wake, and
             # Enter gets another chance to see it.
-            if (st == "NOTREADY" and time.time() >= settle_at
+            if (st == verbs.NOTREADY and time.time() >= settle_at
                     and enter_running() is False):
                 # Enter writes the marker and THEN exits, so a single
                 # (NOTREADY, task-idle) pair can be those two instants read in
@@ -352,7 +353,7 @@ def start(appid=None, turn=None):
             # 14852d looked flawless from here and was unusable on the couch.
             try:
                 answer = ssh_intent(f"launch {appid}")
-                emit = log.warn if answer == "ALREADY" else log
+                emit = log.warn if answer == verbs.ALREADY else log
                 emit("game_launch", appid=appid, result=answer)
             except Exception as e:
                 log.warn("game_launch_failed", appid=appid, err=str(e))
@@ -393,7 +394,7 @@ def watch(expected=None):
         cglib.touch_lock()
         try:
             st = ssh("status"); fails = 0
-            if st == "NOTREADY":
+            if st == verbs.NOTREADY:
                 log("session_ended", reason="host"); break
             if expected and events.valid_turn(st) and st != expected:
                 log.warn("session_ended", reason="superseded", status=st)
@@ -411,7 +412,7 @@ def watch(expected=None):
         # transient blip, its teardown restores the desk and sends the Puck
         # home; if it's truly asleep, this raises and nothing changes.
         try:
-            if ssh_intent("exit") == "OK":
+            if ssh_intent("exit") == verbs.OK:
                 log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
@@ -442,7 +443,7 @@ def reconcile():
     for _ in range(3):                  # boot-time network may need a moment
         try:
             st = ssh("status")
-            if st != "NOTREADY":
+            if st != verbs.NOTREADY:
                 log("reconcile_resumed")
                 # Adopt, don't just touch: the owner note still names the dead
                 # process, and release_lock at session end checks the pid.

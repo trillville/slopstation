@@ -101,6 +101,20 @@ def main():
     print(f"  dispatch: {len(allpats)} patterns \\z-anchored, {len(pats)} hex-bounded, "
           f"{len(HOSTILE)} hostile turns all DENIED")
 
+    # -- the ANSWER vocabulary: Dispatch's words are verbs.py's, exactly ------
+    # Every bare word the script emits ('OK', "BUSY:$run", ...), scraped the
+    # same way the patterns are, so a new answer on the PC cannot go unnamed
+    # on the K15 and a name on the K15 cannot outlive its answer.
+    import verbs
+    words = set(re.findall(r"""['"]([A-Z]{2,})(?::\$\w+)?['"]""",
+                           DISPATCH.read_text(encoding="utf-8")))
+    assert words == set(verbs.ANSWERS), \
+        f"Dispatch.ps1 vs verbs.py differ on: {sorted(words ^ set(verbs.ANSWERS))}"
+    assert verbs.code_of("BUSY:42") == ("BUSY", "42")
+    assert verbs.code_of("NOTASK:Nav") == ("NOTASK", "Nav")
+    assert verbs.code_of("OK") == ("OK", None) and verbs.code_of("") == ("", None)
+    print(f"  verbs: {len(words)} answer words, Dispatch.ps1 and verbs.py agree")
+
     # -- the wire: uncorrelated beats refused ----------------------------------
     sent = []
     real_ssh = couch.ssh
