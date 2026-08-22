@@ -77,6 +77,167 @@ def prewarm_imports_bg(provider):
     threading.Thread(target=warm, daemon=True).start()
 
 
+# --- the bench modes: separate programs that share main()'s bring-up ----------
+
+
+def bench_earcons(voice):
+    """--earcons: the whole vocabulary through the configured output device,
+    then exit (tune voice.earconGain by ear)."""
+    pa, _, output_idx = open_audio(voice)
+    log("earcon_audition", gain=earcons.GAIN)
+    for name in earcons.SPECS:
+        log("earcon_play", earcon=name)
+        play_pcm(pa, earcons.pcm(name), output_idx)
+        time.sleep(0.7)
+    return 0
+
+
+def bench_announce(voice, secrets):
+    """--announce-test: one canned bulletin through the out-of-session audio
+    path (earcon, Aura synth, chunked playback) with no job and no quota."""
+    import announce
+    ann = announce.Announcer(voice, secrets, log)
+    log("announce_test_start")
+    try:
+        done = ann.speak("Test announcement. This is how a finished "
+                         "background task will reach you.")
+    except Exception as e:
+        log.error("announce_test_failed", err=str(e))
+        return 1
+    log("announce_test_done", complete=done)
+    return 0
+
+
+def wake_trials(listener, voice, pa, output_idx):
+    """--wake-trials: log every detection with its PEAK and chime, never start
+    a session. Runs until killed."""
+    log("wake_trials_start")
+    n = 0
+    while True:
+        # peak, not score, is the number a threshold gets set from: score
+        # is wherever the ramp happened to cross and clusters just above
+        # the threshold whatever the model actually thought. Affordable
+        # here because nothing follows the detection - see _scan_peak.
+        score, peak = listener.wait_for_wake(
+            voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
+        n += 1
+        log("wake_trial", n=n, score=round(score, 2), peak=round(peak, 3))
+        play_pcm(pa, earcons.pcm("wake"), output_idx)
+        time.sleep(1.0)                     # refractory: one hit per attempt
+
+
+def false_accept_soak(listener, voice):
+    """--false-accept-soak: count spurious wakes over hours, never start a
+    session. Runs until killed."""
+    log("false_accept_soak_start")
+    t0, n = time.time(), 0
+    while True:
+        # The peak matters even more on this side: it says how far ABOVE
+        # the threshold the room can push the model, which is the margin
+        # a real wake has to beat.
+        _score, peak = listener.wait_for_wake(
+            voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
+        n += 1
+        hrs = (time.time() - t0) / 3600
+        log.warn("wake_false", n=n, hours=round(hrs, 2),
+                 peak=round(peak, 3),
+                 per_hour=round(n / max(hrs, 0.01), 1))
+        time.sleep(1.0)
+
+
+# --- the optional lanes: each decides for itself, fail-soft, and says so ------
+# Pulled out of main() so the decisions are testable (test_voice_agent drills
+# them with a CapturingLog); `log` is a parameter for exactly that reason.
+
+
+def worker_lane(voice, secrets, stt_live, brain_live, dry_run, log=log):
+    """Tier-3 worker lane, fail-soft like every other lane: a missing CLI turns
+    background tasks off with a clear message - wake, commands, and the
+    assistant are untouched either way. Returns (jobs, announcer), both None
+    while the lane is off."""
+    import announce
+    import jobs as jobs_mod
+    from workers import MODEL_KEY, WORKERS
+    wp = voice["workerProvider"]
+    adapter = (WORKERS[wp](voice[MODEL_KEY[wp]], voice["workerEffort"])
+               if wp in WORKERS else None)
+    if adapter is None:
+        log.warn("lane_disabled", what="worker", reason="unknown workerProvider",
+                 provider=wp, known=list(WORKERS))
+        return None, None
+    if not adapter.available():
+        log.warn("lane_disabled", what="worker", reason="CLI not on PATH",
+                 exe=adapter.exe)
+        return None, None
+    if not (stt_live and brain_live):
+        # The lane rides the assistant (only its background_task tool can
+        # queue work) and Deepgram (announcements + retrieval TTS) - without
+        # either it would be a store nothing fills and frames nothing speaks.
+        log.warn("lane_disabled", what="worker",
+                 reason="needs live Deepgram AND assistant keys")
+        return None, None
+    announcer = announce.Announcer(voice, secrets, log)
+    jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],
+                             on_done=announcer.submit, dry_run=dry_run)
+    announcer.jobs = jobs
+    orphans = jobs.reconcile()
+    jobs.start()
+    # Spell out what IS running, not what config asked for: an empty
+    # model means the CLI's own default.
+    log("lane_up", what="worker", provider=wp, exe=adapter.exe,
+        model=adapter.model or "(cli default)",
+        effort=adapter.effort or "(cli default)", orphans=orphans or None)
+    return jobs, announcer
+
+
+def steam_lane(cfg, secrets, log=log):
+    """Account session: install-by-voice + download status over ClientComm.
+    Self-gates on the refresh token exactly like the Steam key - no token,
+    the lane is None and install_game is never offered. Never fatal."""
+    import steam_session
+    steam = steam_session.SteamSession(secrets, log,
+                                       machine_name=cfg.get("steamMachineName"))
+    if steam.available():
+        exp = steam.token_expiry()
+        log("lane_up", what="steam_session", steamid=steam.steamid,
+            token_expires=(time.strftime("%Y-%m-%d", time.localtime(exp))
+                           if exp else None))
+        return steam
+    log("lane_disabled", what="steam_session",
+        reason="no refresh token - run steam_session.py enroll")
+    return None
+
+
+def build_ducker(cfg, voice, dry_run, log=log):
+    """Room ducking for the length of a session (TvDucker has the whole
+    story: the 08-16 blind-burst incident behind the on-gate, and the
+    08-21 eARC discovery behind keys-plus-readback - steps are SOUNDBAR
+    volume points, moved via remote-key relay and verified against the
+    TV's readback). OFF unless duckSteps is configured: this moves
+    something in the room, so it does not arrive switched on with a git
+    pull. It also needs tvIp - gate, keys and readback all live at that
+    address, and with nothing to ask it stays off rather than firing
+    blind. First use on a machine needs the one-time WS pairing:
+    `.venv\\Scripts\\python tv_remote.py pair`, accept on the TV.
+    Returns the TvDucker, or None while ducking is off."""
+    duck_steps = int(voice.get("duckSteps", 0) or 0)
+    duck_to_pct = int(voice.get("duckToPct", 0) or 0)
+    if duck_to_pct and not 0 < duck_to_pct < 100:
+        log.warn("config_suspect", setting="duckToPct", value=duck_to_pct,
+                 reason="duckToPct means duck TO that percent of the pre-duck "
+                        "level, so only 1-99 makes sense - ignoring it")
+        duck_to_pct = 0
+    tv_ip = cfg.get("tvIp")
+    if (duck_steps or duck_to_pct) and not tv_ip:
+        log.warn("config_suspect", setting="duckSteps", value=duck_steps,
+                 reason="ducking is configured but tvIp is not - it stays off "
+                        "(gate, keys and readback all need the TV's address)")
+    if (duck_steps or duck_to_pct) and tv_ip:
+        return TvDucker(duck_steps, tv_ip, log, dry_run=dry_run,
+                        to_pct=duck_to_pct or None)
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--devices", action="store_true")
@@ -118,27 +279,9 @@ def main():
     earcons.set_gain(voice.get("earconGain", 1.0))
 
     if args.earcons:
-        pa, _, output_idx = open_audio(voice)
-        log("earcon_audition", gain=earcons.GAIN)
-        for name in earcons.SPECS:
-            log("earcon_play", earcon=name)
-            play_pcm(pa, earcons.pcm(name), output_idx)
-            time.sleep(0.7)
-        return 0
-
+        return bench_earcons(voice)
     if args.announce_test:
-        import announce
-        ann = announce.Announcer(voice, secrets, log)
-        log("announce_test_start")
-        try:
-            done = ann.speak("Test announcement. This is how a finished "
-                             "background task will reach you.")
-        except Exception as e:
-            log.error("announce_test_failed", err=str(e))
-            return 1
-        log("announce_test_done", complete=done)
-        return 0
-
+        return bench_announce(voice, secrets)
     if args.text:
         from assistant_repl import repl
         return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
@@ -186,57 +329,9 @@ def main():
             effort=voice["assistantReasoningEffort"] if ap == "openai" else None,
             websearch=voice["assistantWebSearch"] or None)
 
-    # Tier-3 worker lane, fail-soft like every other lane: a missing CLI turns
-    # background tasks off with a clear message - wake, commands, and the
-    # assistant are untouched either way.
-    import announce
-    import jobs as jobs_mod
-    from workers import MODEL_KEY, WORKERS
-    jobs = announcer = None
-    wp = voice["workerProvider"]
-    adapter = (WORKERS[wp](voice[MODEL_KEY[wp]], voice["workerEffort"])
-               if wp in WORKERS else None)
-    if adapter is None:
-        log.warn("lane_disabled", what="worker", reason="unknown workerProvider",
-                 provider=wp, known=list(WORKERS))
-    elif not adapter.available():
-        log.warn("lane_disabled", what="worker", reason="CLI not on PATH",
-                 exe=adapter.exe)
-    elif not (stt_live and brain_live):
-        # The lane rides the assistant (only its background_task tool can
-        # queue work) and Deepgram (announcements + retrieval TTS) - without
-        # either it would be a store nothing fills and frames nothing speaks.
-        log.warn("lane_disabled", what="worker",
-                 reason="needs live Deepgram AND assistant keys")
-    else:
-        announcer = announce.Announcer(voice, secrets, log)
-        jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],
-                                 on_done=announcer.submit,
-                                 dry_run=args.dry_run)
-        announcer.jobs = jobs
-        orphans = jobs.reconcile()
-        jobs.start()
-        # Spell out what IS running, not what config asked for: an empty
-        # model means the CLI's own default.
-        log("lane_up", what="worker", provider=wp, exe=adapter.exe,
-            model=adapter.model or "(cli default)",
-            effort=adapter.effort or "(cli default)", orphans=orphans or None)
-
-    # Account session: install-by-voice + download status over ClientComm.
-    # Self-gates on the refresh token exactly like the Steam key - no token,
-    # the lane is None and install_game is never offered. Never fatal.
-    import steam_session
-    steam = steam_session.SteamSession(secrets, log,
-                                       machine_name=cfg.get("steamMachineName"))
-    if steam.available():
-        exp = steam.token_expiry()
-        log("lane_up", what="steam_session", steamid=steam.steamid,
-            token_expires=(time.strftime("%Y-%m-%d", time.localtime(exp))
-                           if exp else None))
-    else:
-        steam = None
-        log("lane_disabled", what="steam_session",
-            reason="no refresh token - run steam_session.py enroll")
+    jobs, announcer = worker_lane(voice, secrets, stt_live, brain_live,
+                                  args.dry_run)
+    steam = steam_lane(cfg, secrets)
 
     # Agent traces. Before the wake loop so the first session is traced like
     # every later one, and fail-soft: no keys, or a venv that predates the
@@ -266,61 +361,11 @@ def main():
         events.start_heartbeat("voice")
 
     if args.wake_trials:
-        log("wake_trials_start")
-        n = 0
-        while True:
-            # peak, not score, is the number a threshold gets set from: score
-            # is wherever the ramp happened to cross and clusters just above
-            # the threshold whatever the model actually thought. Affordable
-            # here because nothing follows the detection - see _scan_peak.
-            score, peak = listener.wait_for_wake(
-                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
-            n += 1
-            log("wake_trial", n=n, score=round(score, 2), peak=round(peak, 3))
-            play_pcm(pa, earcons.pcm("wake"), output_idx)
-            time.sleep(1.0)                     # refractory: one hit per attempt
-
+        wake_trials(listener, voice, pa, output_idx)       # never returns
     if args.false_accept_soak:
-        log("false_accept_soak_start")
-        t0, n = time.time(), 0
-        while True:
-            # The peak matters even more on this side: it says how far ABOVE
-            # the threshold the room can push the model, which is the margin
-            # a real wake has to beat.
-            _score, peak = listener.wait_for_wake(
-                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
-            n += 1
-            hrs = (time.time() - t0) / 3600
-            log.warn("wake_false", n=n, hours=round(hrs, 2),
-                     peak=round(peak, 3),
-                     per_hour=round(n / max(hrs, 0.01), 1))
-            time.sleep(1.0)
+        false_accept_soak(listener, voice)                 # never returns
 
-    # Room ducking for the length of a session (TvDucker has the whole
-    # story: the 08-16 blind-burst incident behind the on-gate, and the
-    # 08-21 eARC discovery behind keys-plus-readback - steps are SOUNDBAR
-    # volume points, moved via remote-key relay and verified against the
-    # TV's readback). OFF unless duckSteps is configured: this moves
-    # something in the room, so it does not arrive switched on with a git
-    # pull. It also needs tvIp - gate, keys and readback all live at that
-    # address, and with nothing to ask it stays off rather than firing
-    # blind. First use on a machine needs the one-time WS pairing:
-    # `.venv\Scripts\python tv_remote.py pair`, accept on the TV.
-    duck_steps = int(voice.get("duckSteps", 0) or 0)
-    duck_to_pct = int(voice.get("duckToPct", 0) or 0)
-    if duck_to_pct and not 0 < duck_to_pct < 100:
-        log.warn("config_suspect", setting="duckToPct", value=duck_to_pct,
-                 reason="duckToPct means duck TO that percent of the pre-duck "
-                        "level, so only 1-99 makes sense - ignoring it")
-        duck_to_pct = 0
-    tv_ip = cfg.get("tvIp")
-    if (duck_steps or duck_to_pct) and not tv_ip:
-        log.warn("config_suspect", setting="duckSteps", value=duck_steps,
-                 reason="ducking is configured but tvIp is not - it stays off "
-                        "(gate, keys and readback all need the TV's address)")
-    ducker = (TvDucker(duck_steps, tv_ip, log, dry_run=args.dry_run,
-                       to_pct=duck_to_pct or None)
-              if (duck_steps or duck_to_pct) and tv_ip else None)
+    ducker = build_ducker(cfg, voice, args.dry_run)
     duck_lock = threading.Lock()
 
     def duck(restore):
