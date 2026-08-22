@@ -75,8 +75,23 @@ def main():
                                   on_stop_listening=lambda: stops.append(1))
     r = simpls["stop_listening"]({})
     assert r["ok"] and stops == [1], (r, stops)
+    # now_playing answers BOTH halves: what the PC runs, and whether the rig
+    # is busy. The lock is the launch-aware half - mid-launch the PC says 0
+    # and only session_active stops that reading as "idle" (2026-08-21, turn
+    # 0b785e: the bare 0 talked the user into cancelling their own launch).
+    import os
+    import tempfile
+    import time as _time
+    cglib.LOCK = Path(tempfile.mkdtemp()) / "session.lock"
     r = impls["get_now_playing"]({})
     assert r["ok"]                                # dry-run path
+    assert r["session_active"] is False, r
+    cglib.LOCK.write_text("x")                    # a launch owns the rig
+    r = impls["get_now_playing"]({})
+    assert r["ok"] and r["session_active"] is True, r
+    old = _time.time() - cglib.LOCK_STALE_S - 60  # stale = free, same as ever
+    os.utime(cglib.LOCK, (old, old))
+    assert impls["get_now_playing"]({})["session_active"] is False
     r = impls["get_game_details"]({"appid": real_appid})
     assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
     # background_task without a JobStore (REPL, or the CLI missing): refused.

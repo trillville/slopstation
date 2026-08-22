@@ -294,12 +294,24 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
                 "goodbye - the wake word is what reopens the mic"}
 
     def get_now_playing(args):
+        # The lock is the launch-aware half of this answer. The PC truthfully
+        # reports RunningAppID 0 all through a launch (nothing is running YET),
+        # and on 2026-08-21 (turn 0b785e) that bare 0 reached the couch as
+        # "nothing is playing" seven seconds before start_session answered
+        # "already starting" off the same rig - two contradictory answers that
+        # talked the user into cancelling a launch they wanted. session_active
+        # is the SAME predicate that refusal used (cglib.session_active, the
+        # one arbiter), so the two tools can no longer disagree.
+        active = cglib.session_active()
         r = dispatch.now_playing()
         if not r.ok:
-            return {"ok": False, "error": r.detail}
+            # Mid-launch the PC can be mid-wake and unreachable. That is not
+            # "nothing playing" - the lock still answers, so carry it.
+            return {"ok": False, "error": r.detail, "session_active": active}
         appid = int(r.detail) if str(r.detail).isdigit() else 0
         return {"ok": True, "appid": appid,
-                "name": library.installed_name(appid) if appid else None}
+                "name": library.installed_name(appid) if appid else None,
+                "session_active": active}
 
     def get_game_details(args):
         appid = int(args.get("appid", 0))
@@ -471,7 +483,12 @@ TOOL_DEFS = [
      "changes and a running game is untouched. Say a short goodbye in the "
      "same turn - it is spoken first, and only then does the mic close. The "
      "wake word reopens it, so this costs the user nothing.", {}, []),
-    ("get_now_playing", "What game is currently running, if any.", {}, []),
+    ("get_now_playing", "What game is currently running, if any. "
+     "session_active is the rig's own busy state: true with appid 0 means a "
+     "session is STARTING (a launch can take a minute before anything shows "
+     "on the TV) or Big Picture is up with no game - either way the rig is "
+     "busy, so never report it as idle and never offer to start a session. "
+     "false means truly idle.", {}, []),
     ("get_game_details", "Details for one appid: tags/description/score from "
      "the catalog, plus any live facets you ask for. Request facets only when "
      "the question needs them - each is a live store call. 'price' = current "
