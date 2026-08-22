@@ -30,7 +30,8 @@ def ps_games():
 def main():
     _bootstrap.wants("steam")
     fresh_state()
-    assert library.refresh(local=True) == 0
+    assert library.refresh(local=True) == 0, \
+        "no local Steam - this test belongs to the gaming PC (run.py skips it elsewhere; --all forces it)"
     rows = library.load()["installed"]
     assert rows, "no installed games found"
     assert all({"appid", "name", "state", "size", "lastPlayed"} <= set(r) for r in rows)
