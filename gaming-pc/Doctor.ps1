@@ -70,11 +70,18 @@ if ($h -gt 0) {
 if (Test-ReadyMarker) { Report WARN 'ready marker' 'present - a session is (or looks) active' 'stale after a crash? Exit task or Office-Safety clears it' }
 else { Report PASS 'ready marker' 'absent (idle)' }
 
+# The verb markers are not a health signal on this rig: Dispatch writes them
+# from the ELEVATED forced-command context and the unelevated tasks cannot
+# delete them (Read-CgMarker logs the denial), so each survives as the last
+# dispatch of that verb until the next one overwrites it. What it says is the
+# useful datum.
 foreach ($m in 'LaunchMarker','NavMarker','StopMarker') {
     $leaf = Split-Path $CG[$m] -Leaf
     if (Test-Path $CG[$m]) {
-        Report WARN "$leaf marker" 'present - a dispatched verb never got consumed' 'safe to delete; its task may have failed - check the transcript'
-    } else { Report PASS "$leaf marker" 'absent' }
+        $val = ("$(Get-Content $CG[$m] -TotalCount 1)").Trim()
+        $age = ((Get-Date) - (Get-Item $CG[$m]).LastWriteTime).TotalHours
+        Report PASS "$leaf marker" ("last dispatch '{0}', {1:n0}h ago" -f $val, $age)
+    } else { Report PASS "$leaf marker" 'absent (never dispatched)' }
 }
 
 try {
