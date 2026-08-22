@@ -65,7 +65,7 @@ def check_provenance(reply):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--provider", choices=list(harness.assistant.BACKENDS))
+    ap.add_argument("--provider", choices=list(harness.assistant_repl.BACKENDS))
     ap.add_argument("--model")
     ap.add_argument("--trials", type=int, default=8)
     a = ap.parse_args()

@@ -7,6 +7,7 @@ import _bootstrap  # noqa: F401
 import time
 
 import assistant
+import assistant_repl
 import cglib
 import library
 import library
@@ -296,14 +297,14 @@ def main():
     # contrast is spelled out in BOTH places the model reads it.
     assert "NOT end_session" in str(assistant.TOOL_DEFS)
     assert "never end the gaming session for them" in si
-    assert set(assistant.BACKENDS) == {"anthropic", "openai"}
-    assert assistant.BACKENDS["anthropic"].key == "anthropicApiKey"
-    assert assistant.BACKENDS["openai"].key == "openaiApiKey"
+    assert set(assistant_repl.BACKENDS) == {"anthropic", "openai"}
+    assert assistant_repl.BACKENDS["anthropic"].key == "anthropicApiKey"
+    assert assistant_repl.BACKENDS["openai"].key == "openaiApiKey"
     # One map answers "which secret does this provider read" for the
     # production gates; the REPL backends carry the same value.
     assert assistant.PROVIDER_KEY == {"anthropic": "anthropicApiKey",
                                       "openai": "openaiApiKey"}
-    assert all(assistant.BACKENDS[p].key == k
+    assert all(assistant_repl.BACKENDS[p].key == k
                for p, k in assistant.PROVIDER_KEY.items())
     print(f"  tool renderers: {len(at)} anthropic + {len(ot)} openai, both cover all")
 
@@ -335,7 +336,7 @@ def main():
     # assistant content is re-sent as-is and the text accumulates - the
     # API's documented contract.
     import types
-    b = assistant.AnthropicBackend({"anthropicApiKey": "x" * 24},
+    b = assistant_repl.AnthropicBackend({"anthropicApiKey": "x" * 24},
                                    "claude-haiku-4-5", voice=voice_on)
     script = [
         types.SimpleNamespace(
@@ -398,7 +399,7 @@ def main():
     print("  ToolsSchema: native web_search rendered after the function tools")
     # OpenAIBackend must default to a REAL reasoning effort, not disable it.
     import inspect
-    eff = inspect.signature(assistant.OpenAIBackend.__init__).parameters["effort"]
+    eff = inspect.signature(assistant_repl.OpenAIBackend.__init__).parameters["effort"]
     assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"
     print("  constructions: LLMContext, Anthropic + OpenAI Responses, Aura-2 - OK")
 

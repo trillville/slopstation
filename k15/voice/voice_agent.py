@@ -140,7 +140,7 @@ def main():
         return 0
 
     if args.text:
-        from assistant import repl
+        from assistant_repl import repl
         return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
                     model=args.model, effort=args.effort)
 
