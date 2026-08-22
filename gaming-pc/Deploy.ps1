@@ -38,7 +38,9 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     $out = git -C $PSScriptRoot rev-parse --short HEAD
     if ($LASTEXITCODE -eq 0 -and $out) {
         $rev = "$out".Trim()
-        if (git -C $PSScriptRoot status --porcelain) { $rev += '-dirty' }
+        # Scoped to this folder: -dirty must mean the SHIPPED scripts do not
+        # match the rev. A scratch file elsewhere in the checkout does not.
+        if (git -C $PSScriptRoot status --porcelain .) { $rev += '-dirty' }
     }
 }
 $stamp = if ($rev) { "$rev $(Get-Date -Format yyyy-MM-dd)" }
