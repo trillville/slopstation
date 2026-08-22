@@ -5,7 +5,6 @@ regression; a new one is fine (add it here). Scans the emitters from source
     .venv\Scripts\python tests\test_event_names.py
 """
 import re
-from pathlib import Path
 
 import _bootstrap                               # noqa: F401,E402
 import _events_scan as scan

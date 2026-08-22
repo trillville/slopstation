@@ -2,7 +2,7 @@
 switch TV input -> watch loop. Invariant: nothing switches the TV to the
 gaming input before the host writes READY, so a pre-READY failure leaves the
 TV as the viewer had it."""
-import os, socket, subprocess, sys, time
+import os, socket, sys, time
 
 import cglib
 import events

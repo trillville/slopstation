@@ -8,7 +8,6 @@ serial) at top level, and nothing in k15/ imports voice/ at top level. Run:
 import ast
 import io
 import sys
-from pathlib import Path
 
 from pyflakes import api, reporter
 

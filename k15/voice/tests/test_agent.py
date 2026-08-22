@@ -5,7 +5,6 @@ jobs, steam, tracing). Named test_agent, not test_voice_agent: Start-K15.bat's
 reload and doctor find the live agent by the substring voice_agent.py. Run:
     .venv\\Scripts\\python tests\\test_agent.py
 """
-import asyncio
 import json
 import sys
 import threading

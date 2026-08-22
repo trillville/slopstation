@@ -14,9 +14,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
 import cglib                                    # noqa: E402
-import library
-import steamstore                                  # noqa: E402
-import traces                                   # noqa: E402
+import library                                  # noqa: E402
+import steamstore                               # noqa: E402
 import tracing                                  # noqa: E402  (tool spans; the
 #                                     module self-gates: REPL/bench are no-ops)
 
