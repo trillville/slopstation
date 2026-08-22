@@ -27,6 +27,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 import earcons
 import events
 import titles
+from dispatch import Result
 
 GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
 
@@ -276,7 +277,6 @@ class GrammarGate(FrameProcessor):
                 return None
             self.log.warn("title_miss", spoken=spoken, fallback="fail_earcon",
                           reason=None if self.resolve_game else "no_index")
-            from dispatch import Result
             return Result(False, "fail", f"no match for '{spoken}'")
         self.log("title_resolved", spoken=spoken, title=title, appid=appid)
         return await asyncio.to_thread(self.dispatch.play_game, appid)
@@ -293,7 +293,6 @@ class GrammarGate(FrameProcessor):
             self.log.warn("collection_miss", spoken=spoken,
                           fallback="fail_earcon",
                           reason=None if self.resolve_collection else "no_collections")
-            from dispatch import Result
             return Result(False, "fail", f"no collection matching '{spoken}'")
         self.log("collection_resolved", spoken=spoken, name=name, id=cid)
         return await asyncio.to_thread(self.dispatch.nav, "collection", cid)

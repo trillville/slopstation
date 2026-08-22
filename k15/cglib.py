@@ -328,7 +328,9 @@ class CapturingLog(_Log):
         self.echo = echo
 
     def _write(self, level, event, fields):
-        self.records.append(dict(fields, level=level, event=event))
+        rec = {("f_" + k if k in events._EMITTER_OWNED else k): v
+               for k, v in fields.items()}
+        self.records.append(dict(rec, level=level, event=event))
         if self.echo:
             print(f"[{self.lane}] " + events.human(event, level, **fields))
 

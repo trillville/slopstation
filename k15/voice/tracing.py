@@ -210,7 +210,7 @@ class _Job:
             pass
 
 
-def tool_span(kind, query, status=None):
+def tool_span(kind, query, result=None):
     """A provider-executed tool call, parented to whatever span is open (in
     the voice pipeline, Pipecat's llm span). Pipecat cannot do this itself:
     server-side tools are not in its Responses handler (see llm_audit.py)."""
@@ -223,8 +223,8 @@ def tool_span(kind, query, status=None):
             s.set_attribute("langfuse.observation.type", "tool")
             s.set_attribute("gen_ai.tool.name", str(kind))
             s.set_attribute("langfuse.observation.input", str(query)[:2000])
-            if status:
-                s.set_attribute("langfuse.observation.output", str(status))
+            if result:
+                s.set_attribute("langfuse.observation.output", str(result))
     except Exception:
         pass
 
@@ -266,8 +266,3 @@ def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
             except Exception:
                 pass
 
-
-# TODO(E5b): dual-export to Grafana Tempo. Datasource and traces:write scope
-# exist; missing is the OTLP endpoint from the stack's OpenTelemetry tile.
-# setup_tracing takes ONE exporter, so this needs the provider grabbed
-# afterwards and a second BatchSpanProcessor added.

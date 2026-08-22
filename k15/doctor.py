@@ -237,11 +237,20 @@ def _steam_mint_probe(days):
 def check_voice(cfg):
     """Voice overlay health - WARN-only, never FAIL. Filesystem and process
     checks only; doctor runs on system python, without the voice venv deps."""
-    voice_dir = cglib.BASE / "voice"
     if not (cfg and isinstance(cfg.get("voice"), dict)):
         report(WARN, "voice config", "no voice section in config.json",
                "copy the voice block from config.example.json to enable voice")
         return
+    check_voice_keys()
+    check_voice_venv(cfg)
+    check_voice_library()
+    check_voice_config(cfg)
+    check_steam_session()
+    check_workers(cfg)
+    check_voice_agent()
+
+
+def check_voice_keys():
     try:
         secrets = cglib.load_secrets()
     except Exception as e:
@@ -256,6 +265,10 @@ def check_voice(cfg):
            f"live: {', '.join(live) or 'none'}"
            + (f" | disabled: {', '.join(dead)}" if dead else ""),
            "sessions need a real deepgramApiKey in secrets.json")
+
+
+def check_voice_venv(cfg):
+    voice_dir = cglib.BASE / "voice"
     if (voice_dir / ".venv" / "deps-ok").exists():
         report(PASS, "voice venv", "bootstrapped (deps-ok sentinel present)")
         model = cfg["voice"].get("wakeModel", "")
@@ -275,6 +288,9 @@ def check_voice(cfg):
     else:
         report(WARN, "voice venv", "not bootstrapped (no .venv\\deps-ok)",
                "run voice\\Start-Voice.bat once (~2 min with network)")
+
+
+def check_voice_library():
     lib = cglib.STATE / "library.json"
     try:
         data = json.loads(lib.read_text(encoding="utf-8"))
@@ -299,6 +315,9 @@ def check_voice(cfg):
         else:
             report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
 
+
+def check_voice_config(cfg):
+    """Cross-key rules the presence check cannot catch."""
     # A spoken name in both inputs and navTargets makes "show <name>"
     # double-match SwitchInput and Nav; nothing else enforces disjointness.
     v = cfg.get("voice", {})
@@ -313,6 +332,8 @@ def check_voice(cfg):
         report(PASS, "voice web search", "on - page text reaches the "
                "tool-calling turn (set assistantWebSearch false to split them)")
 
+
+def check_steam_session():
     # Account session (install-by-voice). Speaks up only when a token is
     # present but unusable or near expiry; absent is silent. Stdlib only.
     secrets = cglib.load_secrets()
@@ -339,6 +360,9 @@ def check_voice(cfg):
             report(WARN, "steam session", f"token unreadable ({e})",
                    "re-run steam_session.py enroll")
 
+
+def check_workers(cfg):
+    voice_dir = cglib.BASE / "voice"
     # Tier-3 worker lane - stdlib checks only, WARN-only.
     import shutil
     wp = cfg["voice"].get("workerProvider", "")
@@ -386,6 +410,9 @@ def check_voice(cfg):
         except Exception as e:
             report(WARN, "worker jobs", f"jobs.json unreadable ({e})",
                    "delete state\\jobs.json; the store recreates it")
+
+
+def check_voice_agent():
     try:
         running = "voice_agent" in _python_cmdlines()
     except Exception as e:

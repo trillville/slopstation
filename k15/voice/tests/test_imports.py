@@ -20,8 +20,7 @@ VOICE = _bootstrap.VOICE
 for name in ("hid", "serial"):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-# Scripts that act at import (no main guard) are not importable by design.
-SKIP = {"calibrate"}
+SKIP = set()
 
 
 def modules():

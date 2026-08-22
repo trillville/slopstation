@@ -380,8 +380,7 @@ class WakeListener:
                             input=True, frames_per_buffer=self.CHUNK,
                             input_device_index=self.device_index)
 
-    def _listen(self, stream, threshold, on_score, ring, interrupt=None,
-                peak_hops=0):
+    def _listen(self, stream, threshold, ring, interrupt=None, peak_hops=0):
         """Blocks until the score crosses `threshold`; returns (score, peak),
         or (None, None) when `interrupt` asked to stop. peak == score unless
         peak_hops bought a real one (_scan_peak)."""
@@ -408,8 +407,6 @@ class WakeListener:
             if ring is not None:
                 ring.append(data)
             score = self.score_chunk(chunk)
-            if on_score:
-                on_score(score)
             if score >= threshold:
                 peak = self._scan_peak(stream, score, peak_hops)
                 self.model.reset()
@@ -423,13 +420,12 @@ class WakeListener:
                     shortfall=round(threshold - episode, 3))
                 episode = 0.0
 
-    def wait_for_wake(self, threshold, on_score=None, peak_hops=0):
+    def wait_for_wake(self, threshold, peak_hops=0):
         """Blocks until the wake word fires; returns (score, peak). Closes the
         stream - trials/soak only, no session follows, hence peak_hops."""
         stream = self._open_stream()
         try:
-            return self._listen(stream, threshold, on_score, None,
-                                peak_hops=peak_hops)
+            return self._listen(stream, threshold, None, peak_hops=peak_hops)
         finally:
             close_stream_quietly(stream)
 
@@ -444,7 +440,7 @@ class WakeListener:
         stream = self._open_stream()
         ring = collections.deque(maxlen=self.PREROLL_CHUNKS)
         try:
-            score, _peak = self._listen(stream, threshold, None, ring, interrupt)
+            score, _peak = self._listen(stream, threshold, ring, interrupt)
         except Exception:
             close_stream_quietly(stream)
             raise

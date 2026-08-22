@@ -15,6 +15,8 @@ Modes:
   --wake-trials         log wake detections + confidences; never start sessions
   --false-accept-soak   count spurious wakes over hours; never start sessions
   --once                exactly one session, then exit (bench)
+  --text                the assistant REPL (assistant_repl.py); --provider,
+                        --model, --effort pick the A/B side
 
 Composition root and wake loop only; audio.py owns PortAudio,
 session_runtime.py owns one session. Never load-bearing: the chord listener is
@@ -67,6 +69,106 @@ def prewarm_imports_bg(provider):
     threading.Thread(target=warm, daemon=True).start()
 
 
+def bench_mode(args, cfg, secrets):
+    """The one-shot modes that need config but no wake loop: the exit code,
+    or None to run the agent. --devices is handled before config."""
+    voice = cfg["voice"]
+    if args.earcons:
+        pa, _, output_idx = open_audio(voice)
+        log("earcon_audition", gain=earcons.GAIN)
+        for name in earcons.SPECS:
+            log("earcon_play", earcon=name)
+            play_pcm(pa, earcons.pcm(name), output_idx)
+            time.sleep(0.7)
+        return 0
+
+    if args.announce_test:
+        import announce
+        ann = announce.Announcer(voice, secrets, log)
+        log("announce_test_start")
+        try:
+            done = ann.speak("Test announcement. This is how a finished "
+                             "background task will reach you.")
+        except Exception as e:
+            log.error("announce_test_failed", err=str(e))
+            return 1
+        log("announce_test_done", complete=done)
+        return 0
+
+    if args.text:
+        from assistant_repl import repl
+        return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
+                    model=args.model, effort=args.effort)
+    return None
+
+
+def warn_config(voice):
+    """Settings that are legal but probably not what was meant. Warn, never
+    refuse: the INACTIVE provider must not block startup."""
+    # Assistant = Messages API (full ids only); worker = claude CLI (aliases
+    # fine).
+    if not voice["assistantModelAnthropic"].startswith("claude-"):
+        log.warn("config_suspect", setting="assistantModelAnthropic",
+                 value=voice["assistantModelAnthropic"],
+                 reason="not a full API model id (the assistant lane has no aliases)")
+    if (voice["assistantWebSearch"]
+            and voice["assistantProvider"] != "openai"):
+        log.warn("config_suspect", setting="assistantWebSearch",
+                 value=voice["assistantProvider"],
+                 reason="production search runs on the openai lane only")
+
+
+def make_ducker(cfg, dry_run):
+    """The session ducker as one duck(restore) call; a no-op when ducking is
+    off."""
+    voice = cfg["voice"]
+    # Session-length room ducking; details on TvDucker. Steps are SOUNDBAR
+    # volume points, moved by remote-key relay and verified against the TV's
+    # readback. Off unless duckSteps/duckToPct AND tvIp are set. First use on
+    # a machine needs `.venv\Scripts\python tv_remote.py pair`, accepted on
+    # the TV.
+    duck_steps = int(voice.get("duckSteps", 0) or 0)
+    duck_to_pct = int(voice.get("duckToPct", 0) or 0)
+    if duck_to_pct and not 0 < duck_to_pct < 100:
+        log.warn("config_suspect", setting="duckToPct", value=duck_to_pct,
+                 reason="duckToPct means duck TO that percent of the pre-duck "
+                        "level, so only 1-99 makes sense - ignoring it")
+        duck_to_pct = 0
+    tv_ip = cfg.get("tvIp")
+    if (duck_steps or duck_to_pct) and not tv_ip:
+        log.warn("config_suspect", setting="duckSteps", value=duck_steps,
+                 reason="ducking is configured but tvIp is not - it stays off "
+                        "(gate, keys and readback all need the TV's address)")
+    ducker = (TvDucker(duck_steps, tv_ip, log, dry_run=dry_run,
+                       to_pct=duck_to_pct or None)
+              if (duck_steps or duck_to_pct) and tv_ip else None)
+    duck_lock = threading.Lock()
+
+    def duck(restore):
+        """Fire duck/unduck without making the session wait for the TV.
+
+        Threaded because a burst costs real seconds (~1 s WebSocket connect,
+        ~0.15 s per key, plus readback polls). The LOCK is what makes it
+        correct: a quick session would otherwise start the unduck mid-duck and
+        the two would interleave into an arbitrary final volume. It also
+        serializes the ledger - TvDucker is only touched under this lock. A
+        failed restore stays on the ledger as debt for the next session's
+        close (tv_duck_deficit); a hard process death loses it."""
+        if ducker is None:
+            return
+
+        def run():
+            with duck_lock:
+                try:
+                    (ducker.unduck if restore else ducker.duck)()
+                except Exception as e:
+                    log.warn("tv_duck_failed", restore=restore, err=str(e))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    return duck
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--devices", action="store_true")
@@ -103,32 +205,9 @@ def main():
     secrets = cglib.load_secrets()
     earcons.set_gain(voice.get("earconGain", 1.0))
 
-    if args.earcons:
-        pa, _, output_idx = open_audio(voice)
-        log("earcon_audition", gain=earcons.GAIN)
-        for name in earcons.SPECS:
-            log("earcon_play", earcon=name)
-            play_pcm(pa, earcons.pcm(name), output_idx)
-            time.sleep(0.7)
-        return 0
-
-    if args.announce_test:
-        import announce
-        ann = announce.Announcer(voice, secrets, log)
-        log("announce_test_start")
-        try:
-            done = ann.speak("Test announcement. This is how a finished "
-                             "background task will reach you.")
-        except Exception as e:
-            log.error("announce_test_failed", err=str(e))
-            return 1
-        log("announce_test_done", complete=done)
-        return 0
-
-    if args.text:
-        from assistant_repl import repl
-        return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
-                    model=args.model, effort=args.effort)
+    rc = bench_mode(args, cfg, secrets)
+    if rc is not None:
+        return rc
 
     cglib.rotate_log()
     # Waits for a configured mic still enumerating (~15 s on a cold boot).
@@ -140,17 +219,7 @@ def main():
     from assistant import PROVIDER_KEY
     brain_key = PROVIDER_KEY.get(voice["assistantProvider"])
     brain_live = bool(brain_key and cglib.real_key(secrets.get(brain_key)))
-    # Assistant = Messages API (full ids only); worker = claude CLI (aliases
-    # fine). Warn, never refuse: the INACTIVE provider must not block startup.
-    if not voice["assistantModelAnthropic"].startswith("claude-"):
-        log.warn("config_suspect", setting="assistantModelAnthropic",
-                 value=voice["assistantModelAnthropic"],
-                 reason="not a full API model id (the assistant lane has no aliases)")
-    if (voice["assistantWebSearch"]
-            and voice["assistantProvider"] != "openai"):
-        log.warn("config_suspect", setting="assistantWebSearch",
-                 value=voice["assistantProvider"],
-                 reason="production search runs on the openai lane only")
+    warn_config(voice)
 
     # Grammar built once: a YAML typo fails here, not per-wake.
     matcher = GrammarMatcher(voice)
@@ -254,49 +323,7 @@ def main():
                      per_hour=round(n / max(hrs, 0.01), 1))
             time.sleep(1.0)
 
-    # Session-length room ducking; details on TvDucker. Steps are SOUNDBAR
-    # volume points, moved by remote-key relay and verified against the TV's
-    # readback. Off unless duckSteps/duckToPct AND tvIp are set. First use on
-    # a machine needs `.venv\Scripts\python tv_remote.py pair`, accepted on
-    # the TV.
-    duck_steps = int(voice.get("duckSteps", 0) or 0)
-    duck_to_pct = int(voice.get("duckToPct", 0) or 0)
-    if duck_to_pct and not 0 < duck_to_pct < 100:
-        log.warn("config_suspect", setting="duckToPct", value=duck_to_pct,
-                 reason="duckToPct means duck TO that percent of the pre-duck "
-                        "level, so only 1-99 makes sense - ignoring it")
-        duck_to_pct = 0
-    tv_ip = cfg.get("tvIp")
-    if (duck_steps or duck_to_pct) and not tv_ip:
-        log.warn("config_suspect", setting="duckSteps", value=duck_steps,
-                 reason="ducking is configured but tvIp is not - it stays off "
-                        "(gate, keys and readback all need the TV's address)")
-    ducker = (TvDucker(duck_steps, tv_ip, log, dry_run=args.dry_run,
-                       to_pct=duck_to_pct or None)
-              if (duck_steps or duck_to_pct) and tv_ip else None)
-    duck_lock = threading.Lock()
-
-    def duck(restore):
-        """Fire duck/unduck without making the session wait for the TV.
-
-        Threaded because a burst costs real seconds (~1 s WebSocket connect,
-        ~0.15 s per key, plus readback polls). The LOCK is what makes it
-        correct: a quick session would otherwise start the unduck mid-duck and
-        the two would interleave into an arbitrary final volume. It also
-        serializes the ledger - TvDucker is only touched under this lock. A
-        failed restore stays on the ledger as debt for the next session's
-        close (tv_duck_deficit); a hard process death loses it."""
-        if ducker is None:
-            return
-
-        def run():
-            with duck_lock:
-                try:
-                    (ducker.unduck if restore else ducker.duck)()
-                except Exception as e:
-                    log.warn("tv_duck_failed", restore=restore, err=str(e))
-
-        threading.Thread(target=run, daemon=True).start()
+    duck = make_ducker(cfg, args.dry_run)
 
     while True:
         # The chime is armed, not played: whoever first hears the user stop
