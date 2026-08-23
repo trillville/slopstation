@@ -7,6 +7,8 @@ both the log line and the only thing the assistant lane reports to the model
 
 dry_run=True logs intent instead of acting; the lock check stays live.
 """
+from __future__ import annotations
+
 import subprocess
 import sys
 import time
@@ -34,26 +36,26 @@ Result = namedtuple("Result", "ok earcon detail")
 Utterance = namedtuple("Utterance", "turn asked")
 
 
-def _ok(detail, earcon="ok"):
+def _ok(detail: str, earcon: str = "ok") -> Result:
     return Result(True, earcon, detail)
 
 
-def _busy(detail):
+def _busy(detail: str) -> Result:
     return Result(False, "busy", detail)
 
 
-def _fail(detail):
+def _fail(detail: str) -> Result:
     return Result(False, "fail", detail)
 
 
-def _no_task(out):
+def _no_task(out: str) -> Result:
     """NOTASK:<name> - a scheduled task the PC never had registered."""
     return _fail(f"the {out.split(':', 1)[1]} task isn't registered on the "
                  "gaming PC - it needs the one-time Register-ScheduledTask "
                  "from the setup guide")
 
 
-def _name(appid):
+def _name(appid: int | str) -> str:
     """appid -> installed title, falling back to the bare id. Never raises:
     the index is a cache (empty on a fresh K15, stale after an install)."""
     try:
@@ -64,7 +66,8 @@ def _name(appid):
 
 
 class Dispatch:
-    def __init__(self, cfg, log, dry_run=False, on_end_session=None):
+    def __init__(self, cfg: dict, log, dry_run: bool = False,
+                 on_end_session=None) -> None:
         self.cfg = cfg
         self.voice = cfg["voice"]
         self.log = log
@@ -76,17 +79,17 @@ class Dispatch:
         # See Utterance above; one Dispatch per session.
         self.utterance = Utterance(None, None)
 
-    def begin_utterance(self, turn, asked=None):
+    def begin_utterance(self, turn: str | None, asked: str | None = None) -> None:
         """GrammarGate's one write per final transcript."""
         self.utterance = Utterance(turn, asked)
 
     # -- internals -------------------------------------------------------------
 
-    def _would(self, what):
+    def _would(self, what: str) -> Result:
         self.log("dry_run_would", action=what)
         return _ok(f"dry-run: {what}")
 
-    def _exlink(self, what, frame_hex):
+    def _exlink(self, what: str, frame_hex: str) -> Result:
         """TV serial send; COM-port contention retry lives in tv.py."""
         if self.dry_run:
             return self._would(f"exlink {what} ({frame_hex})")
@@ -100,7 +103,7 @@ class Dispatch:
 
     # -- session ---------------------------------------------------------------
 
-    def start_session(self, appid=None):
+    def start_session(self, appid: int | str | None = None) -> Result:
         """Advisory busy check; the real arbiter is couch.py's acquire_lock."""
         age = cglib.lock_age()
         if cglib.session_active(age):
@@ -120,7 +123,7 @@ class Dispatch:
         self.log("session_dispatched", appid=appid, turn=turn)
         return _ok(f"starting a session ({what})")
 
-    def end_session(self):
+    def end_session(self) -> Result:
         """Works mid-game and mid-launch alike (teardown wins - Exit stops a
         running Enter on the host)."""
         turn = self.utterance.turn            # snapshot at operation start
@@ -163,7 +166,7 @@ class Dispatch:
         self.log.warn("end_session_refused", answer=out, turn=turn)
         return _fail(f"the PC refused the exit (ssh exit: {out})")
 
-    def now_playing(self):
+    def now_playing(self) -> Result:
         """RunningAppID via the `playing` verb. The one Result whose detail is
         data, not prose: assistant.get_now_playing parses it."""
         if self.dry_run:
@@ -174,7 +177,7 @@ class Dispatch:
             return _fail(f"couldn't reach the PC (ssh playing: {e})")
         return _ok(out if out.isdigit() else "0")
 
-    def play_game(self, appid):
+    def play_game(self, appid: int | str) -> Result:
         """Session live -> direct host launch (OK/ALREADY/BUSY/NOTREADY).
         No session -> full couch launch, game queued for after READY."""
         if not cglib.session_active():
@@ -207,7 +210,7 @@ class Dispatch:
             return _no_task(out)
         return _fail(f"the launch failed (ssh launch: {out})")
 
-    def quit_game(self, appid):
+    def quit_game(self, appid: int | str) -> Result:
         """Quit the running game. The host re-checks RunningAppID and answers
         BUSY on a mismatch, so a raced id never kills the wrong game."""
         appid = int(appid)
@@ -235,7 +238,7 @@ class Dispatch:
 
     NAV_KINDS = {"downloads", "library", "store", "details", "collection"}
 
-    def nav(self, kind, arg=None):
+    def nav(self, kind: str, arg: object = None) -> Result:
         """Fire a steam:// navigation into Big Picture via the host `nav`
         verb. Shared by the assistant tool and the grammar; host-gated on
         the session."""
@@ -265,7 +268,7 @@ class Dispatch:
             return _no_task(out)
         return _fail(f"the navigation failed (ssh {cmd}: {out})")
 
-    def _nav_label(self, kind, arg):
+    def _nav_label(self, kind: str, arg: object) -> str:
         """Spoken-friendly name for a navigation target."""
         if kind == "details" and arg:
             return _name(arg)
@@ -280,7 +283,7 @@ class Dispatch:
     # every Ex-Link volume/mute frame and then refuses it on screen ("Not
     # Available"), so these four verbs move nothing the couch can hear. The
     # write path that works is remote keys over CEC (tv_remote.py).
-    def _vol_steps(self, name):
+    def _vol_steps(self, name: str) -> Result:
         step = int(self.voice["volumeStep"])
         if self.dry_run:
             return self._would(f"{name} x{step}")
@@ -291,13 +294,13 @@ class Dispatch:
             time.sleep(0.05)
         return _ok(f"{name} x{step}")
 
-    def volume_up(self):
+    def volume_up(self) -> Result:
         return self._vol_steps("vol_up")
 
-    def volume_down(self):
+    def volume_down(self) -> Result:
         return self._vol_steps("vol_down")
 
-    def volume_set(self, level):
+    def volume_set(self, level: int) -> Result:
         """Absolute set, clamped to volumeMax so a misheard number cannot
         blast the room. Also the mute-desync resync."""
         vmax = int(self.voice["volumeMax"])
@@ -306,13 +309,13 @@ class Dispatch:
             self.log("volume_clamped", asked=int(level), set=clamped, max=vmax)
         return self._exlink(f"vol_set {clamped}", tv.vol_set_frame(clamped))
 
-    def mute_toggle(self):
+    def mute_toggle(self) -> Result:
         """Blind toggle: the S90C has no discrete mute on/off and its status
         query returns a canned echo, byte-identical across volume and mute
         states, so no state is trackable."""
         return self._exlink("mute_toggle", tv.EXLINK_FRAMES["mute_toggle"])
 
-    def switch_input(self, spoken_name):
+    def switch_input(self, spoken_name: str) -> Result:
         """Config owns the spoken-name -> input map. The GAMING input means
         "get me gaming": no session starts one, mid-launch answers "still
         starting", a READY session flips instantly. Other inputs switch

@@ -3,6 +3,8 @@ volume family) and the two pairing-free HTTP reads (power state, volume).
 Chord-safe: stdlib plus a lazy pyserial import. The venv-only write path over
 WebSocket is voice/tv_remote.py.
 """
+from __future__ import annotations
+
 import json
 import time
 
@@ -33,26 +35,26 @@ class ExlinkNak(RuntimeError):
     Callers abort fast; no blind retries."""
 
 
-def exlink_frame(c1, c2, c3, value):
+def exlink_frame(c1: int, c2: int, c3: int, value: int) -> str:
     """Build one 7-byte Ex-Link frame (hex string) with computed checksum."""
     body = bytes([0x08, 0x22, c1, c2, c3, value])
     return (body + bytes([(0x100 - sum(body)) & 0xFF])).hex()
 
 
-def vol_set_frame(level):
+def vol_set_frame(level: int) -> str:
     """Volume Direct 0-100. Clamps to the protocol range only; the
     room-protecting volumeMax clamp lives in voice dispatch."""
     return exlink_frame(0x01, 0x00, 0x00, max(0, min(100, int(level))))
 
 
-def _exlink_txn(frame_hex, port):
+def _exlink_txn(frame_hex: str, port: str) -> str:
     import serial
     with serial.Serial(port, 9600, timeout=1) as s:
         s.write(bytes.fromhex(frame_hex))
         return s.read(3).hex()
 
 
-def exlink_send_hex(frame_hex, port):
+def exlink_send_hex(frame_hex: str, port: str) -> str:
     """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK, raises
     ExlinkNak on any other answer, never retries a NAK. serial imports lazily
     so a box without pyserial can still import tv. The 1 s retry is for
@@ -69,12 +71,12 @@ def exlink_send_hex(frame_hex, port):
     return ack
 
 
-def exlink_send(name, port):
+def exlink_send(name: str, port: str) -> str:
     """Send a named frame from EXLINK_FRAMES."""
     return exlink_send_hex(EXLINK_FRAMES[name], port)
 
 
-def tv_power_state(ip, timeout=2.0, raw=False):
+def tv_power_state(ip: str, timeout: float = 2.0, raw: bool = False) -> str | None:
     """Ask the S90C whether it is on: GET /api/v2/ on port 8001 answers
     .device.PowerState = "on" | "standby". Unauthenticated, ~30 ms, answers
     from standby (2026-08-19). An accepted power_on takes ~5 s to flip the
@@ -99,7 +101,7 @@ def tv_power_state(ip, timeout=2.0, raw=False):
     return state if state in ("on", "standby") else None
 
 
-def tv_volume(ip, timeout=2.0):
+def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
     """Current volume as the TV tracks it, via pairing-free UPnP
     RenderingControl (port 9197, plain SOAP, ~3 ms). With eARC soundbar output
     this number IS the bar's level - the TV mirrors HDMI-CEC system audio

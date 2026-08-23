@@ -6,7 +6,10 @@ transcripts - hence apostrophes KEPT and numerals unified to digits, which
 is what numerals=true makes Flux emit.
 fuzzy_norm drops the rest of the punctuation and feeds rapidfuzz.
 """
+from __future__ import annotations
+
 import re
+from typing import Callable
 
 import library
 
@@ -16,7 +19,7 @@ _WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
           "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}
 
 
-def spoken_form(s):
+def spoken_form(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[™®©]", "", s)
     s = re.sub(r"[^a-z0-9' ]+", " ", s)
@@ -24,11 +27,11 @@ def spoken_form(s):
     return " ".join(tokens)
 
 
-def fuzzy_norm(s):
+def fuzzy_norm(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", spoken_form(s)).strip()
 
 
-def variants(title):
+def variants(title: str) -> list[str]:
     """Spoken-matchable forms of one raw title, most-specific first."""
     out = []
     full = spoken_form(title)
@@ -43,7 +46,7 @@ def variants(title):
     return out
 
 
-def keyterm_forms(title):
+def keyterm_forms(title: str) -> list[str]:
     """STT keyterms for one title, most-specific first.
 
     Matched against what Flux EMITS, so spoken_form, not Steam's raw string
@@ -73,7 +76,7 @@ def keyterm_forms(title):
     return out
 
 
-def variant_map(titles):
+def variant_map(titles: list[str]) -> dict[str, str]:
     """variant -> canonical title. A title's FULL spoken form always claims its
     own key (Portal must not lose 'portal' to Portal 2's number-stripped
     variant); derived variants claim only unclaimed keys, and
@@ -94,7 +97,8 @@ def variant_map(titles):
     return out
 
 
-def _resolver_from(by_name, threshold, margin=5):
+def _resolver_from(by_name: dict, threshold: float,
+                   margin: float = 5) -> Callable[[str], tuple] | None:
     """Fuzzy resolver over any {name: id} map. A near-tie between DIFFERENT
     entries resolves to nothing: token_set_ratio scores subsets at 100, so
     'warhammer' ties every 40K title."""
@@ -126,7 +130,8 @@ def _resolver_from(by_name, threshold, margin=5):
     return resolve
 
 
-def build_resolver(threshold, margin=5, rows=None):
+def build_resolver(threshold: float, margin: float = 5,
+                   rows: list | None = None) -> Callable[[str], tuple] | None:
     """spoken -> (appid, canonical title) or (None, None), over installed games
     (the index's, or `rows` - a session passes its Catalog snapshot)."""
     if rows is None:
@@ -135,7 +140,8 @@ def build_resolver(threshold, margin=5, rows=None):
                           threshold, margin)
 
 
-def build_collection_resolver(threshold, margin=5, rows=None):
+def build_collection_resolver(threshold: float, margin: float = 5,
+                              rows: list | None = None) -> Callable[[str], tuple] | None:
     """spoken -> (collection id, canonical name) or (None, None), over Big
     Picture collections. None when there are none yet."""
     if rows is None:

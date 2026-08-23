@@ -8,6 +8,8 @@ end here by pushing EndWorkerFrame downstream: an exit phrase matched here
 ends it on the spot, and stop_listening arms request_stop() so it ends once
 the goodbye has been spoken.
 """
+from __future__ import annotations
+
 import asyncio
 import time
 from pathlib import Path
@@ -42,7 +44,7 @@ _PUNCT = ",.!?"
 _WHOLE_ANCHOR = 90
 
 
-def strip_wake(text, anchor="jarvis"):
+def strip_wake(text: str, anchor: str = "jarvis") -> str:
     """Remove a leading wake phrase ("hey jarvis", "jarvis", mishears like
     "jervis") from a transcript; the pre-roll buffer includes it. Fuzzy on the
     anchor word only, >=80 (mishears like "jervis" ~83; real words like
@@ -72,7 +74,7 @@ def strip_wake(text, anchor="jarvis"):
         return text
 
 
-def stt_confidence(frame):
+def stt_confidence(frame) -> float | None:
     """Mean per-word confidence off Flux's turn payload, or None when it did
     not send words. Rounded to 2dp - a dashboard axis, not maths. Fail-soft:
     a shape change upstream costs the field, never the turn."""
@@ -85,7 +87,7 @@ def stt_confidence(frame):
         return None
 
 
-def load_intents():
+def load_intents() -> Intents:
     return Intents.from_dict(yaml.safe_load(GRAMMAR.read_text(encoding="utf-8")))
 
 
@@ -93,7 +95,7 @@ class GrammarMatcher:
     """Pure logic (no pipecat) so tests and the --text REPL reuse it.
     Runtime slot lists: inputs from config, game titles from the library."""
 
-    def __init__(self, voice_cfg):
+    def __init__(self, voice_cfg: dict) -> None:
         # {game}/{collection} are wildcards - the fuzzy resolvers own those.
         # {input} and {target} are fixed runtime lists; {target}'s VALUE is
         # the nav kind (downloads/library/store), so no second mapping.
@@ -106,7 +108,7 @@ class GrammarMatcher:
                 in voice_cfg.get("navTargets", {}).items()),
         }
 
-    def match(self, text):
+    def match(self, text: str) -> tuple | None:
         """(intent_name, slots dict) or None. Input goes through spoken_form
         so 'armored core six' meets the slot variant 'armored core 6'."""
         r = recognize(titles.spoken_form(text), self.intents,
@@ -146,7 +148,7 @@ class GrammarGate(FrameProcessor):
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
         self._stop_after_reply = False          # stop_listening tool armed one
 
-    def request_stop(self):
+    def request_stop(self) -> None:
         """stop_listening asking for the mic back. ARMS the ending; the frame
         goes out from process_frame once the goodbye has been spoken. It
         cannot end the session here: tool impls run on a worker thread
@@ -163,7 +165,7 @@ class GrammarGate(FrameProcessor):
         self._stop_after_reply = False
         await self.push_frame(EndWorkerFrame(reason=reason))
 
-    def is_busy(self):
+    def is_busy(self) -> bool:
         """True while the user is mid-turn, a dispatch is running, or an
         assistant answer is in flight (cleared when the bot starts speaking).
         Without the in-flight check a model slower than holdWindowS is killed

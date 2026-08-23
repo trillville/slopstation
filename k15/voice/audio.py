@@ -3,6 +3,8 @@ and the wake listener. Invariant: NEVER resolve a device against a PyAudio
 instance that predates a device change - PortAudio snapshots the device table
 at init.
 """
+from __future__ import annotations
+
 import collections
 import time
 import wave
@@ -25,19 +27,20 @@ class DeviceMissing(Exception):
     """A device name-fragment IS configured but nothing matches it right now.
     Distinct from "no fragment configured", which means the system default."""
 
-    def __init__(self, kind, wanted):
+    def __init__(self, kind: str, wanted: str) -> None:
         super().__init__(f"no {kind} device matching {wanted!r}")
         self.kind = kind
         self.wanted = wanted
 
 
-def wake_phrase(model_name):
+def wake_phrase(model_name: str) -> str:
     """"hey_jarvis_v0.1" -> "hey jarvis": what the pre-roll transcribes and
     strip_wake anchors on. WakeListener.key keeps the underscored stem."""
     return model_name.rsplit("_v", 1)[0].replace("_", " ")
 
 
-def resolve_device(pa, fragment, want_input, log=log, required=True):
+def resolve_device(pa, fragment: str | None, want_input: bool,
+                   log=log, required: bool = True) -> int | None:
     """Config name-fragment -> PyAudio device index; None = system default.
     Logs the bound NAME: after a rebuild the index alone says nothing about
     which physical endpoint is live. log=None resolves silently. An absent
@@ -63,7 +66,7 @@ def resolve_device(pa, fragment, want_input, log=log, required=True):
     return None
 
 
-def list_devices():
+def list_devices() -> None:
     """Raw PortAudio view for --devices: every endpoint with its channel
     counts and the two system defaults. config's inputDeviceName /
     outputDeviceName take a unique fragment of a name; empty = the default."""
@@ -98,7 +101,7 @@ def list_devices():
     pa.terminate()
 
 
-def build_audio(voice):
+def build_audio(voice: dict) -> tuple:
     """A fresh PyAudio instance plus both devices resolved by name - the only
     way to see endpoints that (re)appeared since the last one. Raises
     DeviceMissing if a configured device is not in the table, tearing the
@@ -118,7 +121,7 @@ def build_audio(voice):
         raise
 
 
-def open_audio(voice, log=log):
+def open_audio(voice: dict, log=log) -> tuple:
     """build_audio, but WAITING for a configured device that isn't there yet
     rather than settling for the Windows default - a silent fallback once cost
     5 min 10 s of deafness, the wake loop taking -9999 on the wrong endpoint
@@ -140,7 +143,7 @@ def open_audio(voice, log=log):
         waited += RETRY_S
 
 
-def rebuild_audio(old_pa, voice, listener):
+def rebuild_audio(old_pa, voice: dict, listener) -> tuple:
     """Recovery from a dead wake stream: tear the whole PortAudio instance
     down and rebuild against the current device table. Reopening on the old
     instance retries a stale index - a reconnected headset gets a NEW one the
@@ -156,7 +159,7 @@ def rebuild_audio(old_pa, voice, listener):
     return pa, input_idx, output_idx
 
 
-def play_pcm(pa, pcm, device_index=None):
+def play_pcm(pa, pcm: bytes, device_index: int | None = None) -> None:
     """Blocking playback for the earcons outside a session (wake chime before
     the pipeline is up, sleep chime after teardown). One retry after a settle:
     Bluetooth outputs renegotiate profiles around our stream churn and can
@@ -210,7 +213,7 @@ def dump_clip(ring, score, keep):
         log.warn("wake_clip_failed", err=str(e))
 
 
-def close_stream_quietly(stream):
+def close_stream_quietly(stream) -> None:
     """Best-effort close for a possibly-dead stream: after a -9999 host error
     the stream is already torn down and stop/close themselves raise 'Stream
     not open', replacing the original error."""
@@ -347,13 +350,13 @@ class WakeListener:
                                     f"openWakeWord model")
         return pretrained
 
-    def rebind(self, pa, device_index):
+    def rebind(self, pa, device_index: int | None) -> None:
         """Adopt a fresh PyAudio instance + mic index after an audio rebuild;
         the wake model and its state carry over untouched."""
         self.pa = pa
         self.device_index = device_index
 
-    def score_chunk(self, chunk_int16):
+    def score_chunk(self, chunk_int16) -> float:
         # Only one model is ever loaded. Both dicts empty = stock predict.
         scores = self.model.predict(chunk_int16, patience=self.patience,
                                     threshold=self.patience_threshold)
@@ -420,7 +423,7 @@ class WakeListener:
                     shortfall=round(threshold - episode, 3))
                 episode = 0.0
 
-    def wait_for_wake(self, threshold, peak_hops=0):
+    def wait_for_wake(self, threshold: float, peak_hops: int = 0) -> tuple:
         """Blocks until the wake word fires; returns (score, peak). Closes the
         stream - trials/soak only, no session follows, hence peak_hops."""
         stream = self._open_stream()
@@ -429,7 +432,8 @@ class WakeListener:
         finally:
             close_stream_quietly(stream)
 
-    def wait_for_wake_capture(self, threshold, on_quiet=None, interrupt=None):
+    def wait_for_wake_capture(self, threshold: float, on_quiet=None,
+                              interrupt=None) -> tuple:
         """Blocks until the wake word fires; returns (score, WakeCapture). The
         stream is handed to the capture - NOT closed - so speech right after
         the wake phrase survives the session build. The ring seeds the capture

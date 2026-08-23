@@ -4,6 +4,8 @@ Chosen by config.workerProvider (anthropic = claude CLI, openai = codex).
 
 Both CLIs read worker_home/AGENTS.md as the standing briefing; the prompt goes
 in on STDIN, which sidesteps cmd.exe quoting for npm's .cmd shims."""
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -24,7 +26,7 @@ PROMPT = (
     "...}} the contract describes.")
 
 
-def _library_context():
+def _library_context() -> str:
     """Catalog and today's Steam prices, inline in the prompt - the worker has
     no file tools (ClaudeWorker.DENY) to read them with. "" on any error."""
     try:
@@ -52,7 +54,7 @@ def _library_context():
     return "\n".join(out) + "\n"
 
 
-def _argv_for(path):
+def _argv_for(path: str) -> list[str]:
     """CreateProcess can't spawn .cmd/.bat shims directly; route those through
     cmd.exe."""
     if path.lower().endswith((".cmd", ".bat")):
@@ -60,7 +62,7 @@ def _argv_for(path):
     return [path]
 
 
-def parse_reply(text):
+def parse_reply(text: str | None) -> dict:
     """The contract JSON out of a CLI's final text; tolerant of code fences and
     prose (outermost {...} wins). If the worker ignored the contract: whole
     text as detail, first sentence as summary."""
@@ -83,20 +85,20 @@ def parse_reply(text):
 class _CliWorker:
     exe = ""                                    # shim/binary name on PATH
 
-    def __init__(self, model="", effort=""):
+    def __init__(self, model: str = "", effort: str = "") -> None:
         # Both from config, per vendor. Empty = the CLI's own default.
         self.model = model
         self.effort = effort
         self.path = shutil.which(self.exe)
 
-    def available(self):
+    def available(self) -> bool:
         return self.path is not None
 
-    def _env(self):
+    def _env(self) -> dict | None:
         """Adapters whose depth knob lives in the environment override this."""
         return None
 
-    def run(self, task, timeout):
+    def run(self, task: str, timeout: float) -> dict:
         try:
             p = subprocess.run(
                 self._argv(),
@@ -191,7 +193,7 @@ class ClaudeWorker(_CliWorker):
             "Skill,ToolSearch,Monitor,DesignSync,"               # surface expansion
             "EnterWorktree,ExitWorktree,ReportFindings")
 
-    def __init__(self, model="", effort=""):
+    def __init__(self, model: str = "", effort: str = "") -> None:
         super().__init__(model, effort)
         self.stream = True          # flipped off permanently by a usage error
 
@@ -213,7 +215,7 @@ class ClaudeWorker(_CliWorker):
             argv += ["--model", self.model]
         return argv
 
-    def run(self, task, timeout):
+    def run(self, task: str, timeout: float) -> dict:
         r = super().run(task, timeout)
         if r["ok"] or not self.stream:
             return r
@@ -228,7 +230,7 @@ class ClaudeWorker(_CliWorker):
             r.setdefault("meta", {})["stream_fallback"] = True
         return r
 
-    def _env(self):
+    def _env(self) -> dict | None:
         # Claude Code's depth knob is an env var, not a flag.
         if not self.effort:
             return None

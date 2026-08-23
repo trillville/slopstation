@@ -9,6 +9,8 @@ CLI:
     python steamstore.py <deals|search ...|reviews <appid>|news <appid>
                           |hltb <name>|trending|recent>
 """
+from __future__ import annotations
+
 import json
 import re
 import sys
@@ -31,7 +33,7 @@ TAGMAP = cglib.STATE / "store-tags.json"          # {tag_name_lower: tagid}, wee
 TAGMAP_MAX_AGE_S = 7 * 24 * 3600
 
 
-def _get(url, params=None, timeout=20):
+def _get(url: str, params: dict | None = None, timeout: float = 20):
     """One HTTP seam for layer 4 - tests swap it. JSON or None, never raises."""
     import requests
     try:
@@ -44,7 +46,7 @@ def _get(url, params=None, timeout=20):
         return None
 
 
-def _cc():
+def _cc() -> str:
     """Country code for prices, from voice.location.country (defaults US)."""
     try:
         return (cglib.config().get("voice", {})
@@ -53,7 +55,7 @@ def _cc():
         return "US"
 
 
-def store_items(appids, cc=None):
+def store_items(appids: list[int], cc: str | None = None) -> dict:
     """GetItems - batch name/price/discount, keyless. Unresolved appids are
     simply absent. No review scores: GetItems returns no review block (only an
     ESRB game_rating), so sentiment comes from fetch_reviews."""
@@ -86,7 +88,7 @@ def store_items(appids, cc=None):
     return out
 
 
-def fetch_wishlist_on_sale(steamid, cc=None):
+def fetch_wishlist_on_sale(steamid: str, cc: str | None = None) -> list[dict]:
     """Keyless GetWishlist -> GetItems -> the discounted ones, best first."""
     d = _get(f"{API}/IWishlistService/GetWishlist/v1/", {"steamid": steamid})
     items = ((d or {}).get("response", {}) or {}).get("items", []) or []
@@ -99,7 +101,7 @@ def fetch_wishlist_on_sale(steamid, cc=None):
     return on_sale
 
 
-def fetch_specials(cc=None):
+def fetch_specials(cc: str | None = None) -> list[dict]:
     """Front-page specials feed. Curated, ~a couple dozen, not exhaustive."""
     d = _get(f"{STORE}/api/featuredcategories",
              {"cc": cc or _cc(), "l": "english"})
@@ -114,7 +116,7 @@ def fetch_specials(cc=None):
     return out
 
 
-def fetch_trending(cc=None):
+def fetch_trending(cc: str | None = None) -> list[dict]:
     """GetMostPlayedGames -> names via GetItems. Keyless, by concurrents."""
     d = _get(f"{API}/ISteamChartsService/GetMostPlayedGames/v1/")
     ranks = ((d or {}).get("response", {}) or {}).get("ranks", []) or []
@@ -125,7 +127,7 @@ def fetch_trending(cc=None):
             for i, a in enumerate(appids)]
 
 
-def fetch_recently_played():
+def fetch_recently_played() -> list[dict]:
     """GetRecentlyPlayedGames. Own key only. Two weeks is all Steam offers."""
     creds = library.steam_creds()
     if not creds:
@@ -193,7 +195,7 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
     return rows[:12]
 
 
-def fetch_reviews(appid):
+def fetch_reviews(appid: int) -> dict | None:
     """/appreviews summary + recent snippets. For DLC, pass the DLC's appid."""
     d = _get(f"{STORE}/appreviews/{int(appid)}",
              {"json": 1, "language": "english", "filter": "recent",
@@ -210,7 +212,7 @@ def fetch_reviews(appid):
             "total": q.get("total_reviews"), "snippets": snippets}
 
 
-def fetch_news(appid, count=3):
+def fetch_news(appid: int, count: int = 3) -> list[dict]:
     """GetNewsForApp, patch notes preferred. Keyless, titles only."""
     d = _get(f"{API}/ISteamNews/GetNewsForApp/v2/",
              {"appid": int(appid), "count": count, "maxlength": 1,
@@ -225,7 +227,7 @@ def fetch_news(appid, count=3):
             for n in items[:count] if n.get("title")]
 
 
-def fetch_hltb(name):
+def fetch_hltb(name: str) -> dict | None:
     """Beat times via howlongtobeatpy, which chases howlongtobeat.com's
     endpoint churn. Lazy + fail-soft on BOTH import and call (the pin is
     optional, it drags in fake_useragent/bs4). Beat-times never move, so
@@ -260,11 +262,11 @@ def _save_facets(cache):
     cglib.write_json(FACET_CACHE, cache, indent=1)
 
 
-def load_deals():
+def load_deals() -> dict:
     return cglib.load_json(DEALS, {})
 
 
-def refresh_deals():
+def refresh_deals() -> int:
     """Precompute the feed answers into state/deals.json, read by list_games
     and worker_home. The wishlist half needs the key; specials is keyless."""
     s = cglib.load_secrets()
@@ -284,7 +286,7 @@ def refresh_deals():
     return 0
 
 
-def probe(args):
+def probe(args: list[str]) -> int:
     """Manual layer-4 smoke test: confirms live endpoint shapes a keyless
     checkout cannot see. Verbs as in usage()."""
     what = args[0] if args else "deals"
@@ -308,7 +310,7 @@ def probe(args):
     return 0
 
 
-def usage():
+def usage() -> int:
     print("usage: steamstore.py <deals|search ...|reviews <appid>|news <appid>"
           "|hltb <name>|trending|recent>")
     return 2

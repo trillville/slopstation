@@ -2,13 +2,15 @@
 turn tag on the mutating ones, and the answer words. Dispatch.ps1 is the
 server; voice/tests/test_turn.py holds the two in step.
 """
+from __future__ import annotations
+
 import subprocess
 
 import cglib
 import events
 
 
-def ssh(cmd, timeout=15):
+def ssh(cmd: str, timeout: float = 15) -> str:
     """Run one Dispatch verb on the host; returns its stdout.
 
     stdout only, so stderr noise stays out of state comparisons; Dispatch
@@ -21,7 +23,7 @@ def ssh(cmd, timeout=15):
     return r.stdout.strip()
 
 
-def ssh_intent(cmd, turn=None, **kw):
+def ssh_intent(cmd: str, turn: str | None = None, **kw) -> str:
     """A MUTATING verb, tagged with this launch's turn id; read-only polls use
     plain ssh(). Pass `turn` explicitly from callers whose ambient context
     predates the utterance (the voice lane's - a ContextVar cannot reach it)."""
@@ -31,7 +33,7 @@ def ssh_intent(cmd, turn=None, **kw):
     return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd, **kw)
 
 
-def enter_running():
+def enter_running() -> bool | None:
     """True/False if the gaming PC could tell us whether its Enter task is
     still running; None if it could not. The None is load-bearing: a PC
     predating `enterstate` answers DENIED and an ssh blip raises, and
@@ -52,51 +54,51 @@ def enter_running():
 # Read-only polls use ssh(); the five mutating verbs ride ssh_intent() with the
 # turn. Each returns Dispatch's answer as printed.
 
-def enter(turn=None):
+def enter(turn: str | None = None) -> str:
     return ssh_intent("enter", turn)
 
 
-def exit(turn=None):
+def exit(turn: str | None = None) -> str:
     return ssh_intent("exit", turn)
 
 
-def status():
+def status() -> str:
     return ssh("status")
 
 
-def enterstate():
+def enterstate() -> str:
     return ssh("enterstate")
 
 
-def version():
+def version() -> str:
     return ssh("version")
 
 
-def playing():
+def playing() -> str:
     return ssh("playing")
 
 
-def games():
+def games() -> str:
     return ssh("games", timeout=30)
 
 
-def collections():
+def collections() -> str:
     return ssh("collections", timeout=15)
 
 
-def launch(appid, turn=None):
+def launch(appid: int | str, turn: str | None = None) -> str:
     return ssh_intent(f"launch {int(appid)}", turn)
 
 
-def stop(appid, turn=None):
+def stop(appid: int | str, turn: str | None = None) -> str:
     return ssh_intent(f"stop {int(appid)}", turn)
 
 
-def nav(kind, arg=None, turn=None):
+def nav(kind: str, arg: object = None, turn: str | None = None) -> str:
     return ssh_intent(nav_cmd(kind, arg), turn)
 
 
-def nav_cmd(kind, arg=None):
+def nav_cmd(kind: str, arg: object = None) -> str:
     return f"nav {kind}" + (f" {arg}" if arg not in (None, "") else "")
 
 

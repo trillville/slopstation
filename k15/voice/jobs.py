@@ -7,6 +7,8 @@ vanishes.
 Read/unread is the announcement contract: a finished job stays unread until
 its summary has been HEARD (full playback, or a "what did you find"
 retrieval), so an aborted announcement is picked up at the next wake."""
+from __future__ import annotations
+
 import json
 import threading
 import time
@@ -43,7 +45,8 @@ class JobStore:
                 "Do not run couch.py, exlink.py, or any other command that "
                 "changes system state.] ")
 
-    def __init__(self, log, adapter, timeout_s, on_done=None, dry_run=False):
+    def __init__(self, log, adapter, timeout_s: float,
+                 on_done=None, dry_run: bool = False) -> None:
         self.log = log
         self.adapter = adapter
         self.timeout_s = timeout_s
@@ -54,18 +57,18 @@ class JobStore:
 
     # -- the state file (all access under the lock) ---------------------------
 
-    def _load(self):
+    def _load(self) -> list[dict]:
         try:
             return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
 
-    def _save(self, jobs):
+    def _save(self, jobs: list[dict]) -> None:
         live = [j for j in jobs if j["status"] in (QUEUED, RUNNING)]
         done = [j for j in jobs if j["status"] not in (QUEUED, RUNNING)]
         cglib.write_json(JOBS_FILE, live + done[-KEEP:], indent=1)
 
-    def _update(self, job_id, **fields):
+    def _update(self, job_id: str, **fields) -> None:
         with self._lock:
             jobs = self._load()
             for j in jobs:
@@ -75,7 +78,7 @@ class JobStore:
 
     # -- lifecycle ------------------------------------------------------------
 
-    def reconcile(self):
+    def reconcile(self) -> int:
         """RUNNING jobs from a dead process -> FAILED, announced via unread.
         Returns how many were orphaned."""
         with self._lock:
@@ -91,11 +94,11 @@ class JobStore:
             self.log.warn("job_orphaned", job=j["id"], reason="restart")
         return len(orphans)
 
-    def start(self):
+    def start(self) -> None:
         threading.Thread(target=self._run_loop, daemon=True,
                          name="job-worker").start()
 
-    def enqueue(self, task, asked=None):
+    def enqueue(self, task: str, asked: str | None = None) -> tuple[bool, str]:
         """-> (ok, spoken detail); busy beyond QUEUE_CAP. `asked` is the user's
         own words (dispatch.Utterance), None on the chord lane and the REPL."""
         with self._lock:
@@ -194,7 +197,7 @@ class JobStore:
 
     # -- the voice surface ----------------------------------------------------
 
-    def cancel_queued(self):
+    def cancel_queued(self) -> tuple[int, bool]:
         """Cancel every QUEUED job. A RUNNING subprocess is not killed; it
         finishes or times out. Returns (n_cancelled, running_now)."""
         with self._lock:
@@ -212,12 +215,12 @@ class JobStore:
             self._save(jobs)
         return cancelled, running
 
-    def unread(self):
+    def unread(self) -> list[dict]:
         with self._lock:
             return [j for j in self._load()
                     if j["status"] in (DONE, FAILED) and not j.get("read")]
 
-    def latest_result(self):
+    def latest_result(self) -> dict | None:
         """Newest finished job by COMPLETION TIME, unread first - the 'what did
         you find' answer. Not file order: _save regroups live-then-done, so a
         job that finished last can sit earlier. Does not mark read."""
@@ -229,10 +232,10 @@ class JobStore:
         unread = [j for j in done if not j.get("read")]
         return (unread or done)[-1]
 
-    def mark_read(self, job_id):
+    def mark_read(self, job_id: str) -> None:
         self._update(job_id, read=True)
 
-    def for_context(self):
+    def for_context(self) -> list[dict]:
         """Recent finished jobs, oldest first - what the assistant should know
         when you follow up on an announcement. Read jobs are included but age
         out on the shorter CONTEXT_READ_AGE_S window."""
@@ -245,7 +248,7 @@ class JobStore:
         done.sort(key=lambda j: j.get("finished", 0))
         return done[-CONTEXT_JOBS:]
 
-    def status_line(self):
+    def status_line(self) -> str | None:
         """One spoken sentence about what's in flight."""
         with self._lock:
             jobs = self._load()

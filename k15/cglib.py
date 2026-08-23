@@ -3,7 +3,10 @@
 Everything lives beside this file: config.json, secrets.json, couch.log,
 state/, and the scripts that import this.
 """
+from __future__ import annotations
+
 import json, os, pathlib, time
+from typing import Any
 
 import events
 
@@ -20,7 +23,7 @@ CANCEL = STATE / "cancel"   # one line: the cancelling turn (may be empty).
                             # voided at the next launch's start.
 
 
-def lock_age():
+def lock_age() -> float | None:
     """Seconds since the session lock was last touched, or None if no lock."""
     try:
         return time.time() - LOCK.stat().st_mtime
@@ -28,7 +31,7 @@ def lock_age():
         return None
 
 
-def session_active(age=None):
+def session_active(age: float | None = None) -> bool:
     """True while a launch or a live session owns the Puck; couch.py holds the
     lock fresh from before its first side effect through teardown. Pass `age`
     to take the decision and the log field from one stat. A STALE lock
@@ -39,7 +42,7 @@ def session_active(age=None):
     return age is not None and age < LOCK_STALE_S
 
 
-def _recycle_stale_lock(content):
+def _recycle_stale_lock(content: str) -> bool:
     """Take over a stale lock, one racer at a time; True if THIS call now owns
     it. The takeover must be ONE os.replace, never unlink-then-create: an
     empty path lets a racer's exclusive create land, and two callers win.
@@ -90,7 +93,7 @@ def _recycle_stale_lock(content):
                 pass
 
 
-def acquire_lock(content=""):
+def acquire_lock(content: str = "") -> bool:
     """Take the session lock, or answer no. True only if THIS call put the
     file there - by exclusive create, or by the atomic swap over a stale lock.
     Each is a single filesystem operation, so racing launches produce exactly
@@ -121,7 +124,7 @@ def acquire_lock(content=""):
     return False
 
 
-def touch_lock():
+def touch_lock() -> None:
     """Freshen mtime WITHOUT rewriting content: the owner note has to survive
     the session for release_lock's ownership check."""
     try:
@@ -130,7 +133,7 @@ def touch_lock():
         pass
 
 
-def adopt_lock(content):
+def adopt_lock(content: str) -> None:
     """Take over an existing lock (reconcile's resume): rewrite the owner note
     so release_lock recognizes us. Doubles as the first heartbeat."""
     try:
@@ -139,7 +142,7 @@ def adopt_lock(content):
         pass
 
 
-def release_lock():
+def release_lock() -> bool:
     """Unlink the session lock IF this process still owns it; True if it did.
 
     The owner note's pid is the check: a lock recycled out from under us is
@@ -155,7 +158,7 @@ def release_lock():
     return True
 
 
-def load_config():
+def load_config() -> dict:
     """The raw file read; config() is what runtime code calls."""
     return json.loads((BASE / "config.json").read_text(encoding="utf-8-sig"))
 
@@ -163,7 +166,7 @@ def load_config():
 _config = None
 
 
-def config():
+def config() -> dict:
     """This process's config.json, read once on first call."""
     global _config
     if _config is None:
@@ -171,7 +174,7 @@ def config():
     return _config
 
 
-def use_config(cfg):
+def use_config(cfg: dict | None) -> None:
     """Test seam: make config() answer `cfg` without touching the file."""
     global _config
     _config = cfg
@@ -192,7 +195,7 @@ REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
 
 
-def missing_config(cfg, voice=False):
+def missing_config(cfg: dict, voice: bool = False) -> list[str]:
     """Required keys absent from cfg (top level, or its voice section)."""
     if voice:
         section = cfg.get("voice") if isinstance(cfg, dict) else None
@@ -205,7 +208,7 @@ def missing_config(cfg, voice=False):
 # --- state files ----------------------------------------------------------------
 
 
-def load_json(path, default):
+def load_json(path: pathlib.Path, default: Any) -> Any:
     """A JSON state file, or `default` when absent or unparseable."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -213,7 +216,7 @@ def load_json(path, default):
         return default
 
 
-def write_json(path, obj, indent=1):
+def write_json(path: pathlib.Path, obj: Any, indent: int = 1) -> None:
     """tmp + os.replace, so a reader never sees a partial file. The replace
     retries: Windows denies a rename onto a file another process holds open
     (doctor reads jobs.json) - see _recycle_stale_lock."""
@@ -234,7 +237,7 @@ def write_json(path, obj, indent=1):
 SECRETS = BASE / "secrets.json"
 
 
-def load_secrets():
+def load_secrets() -> dict:
     """Fail-soft: missing or malformed file = no keys = lanes disabled
     downstream, never a crash. Reads SECRETS at call time (tests re-point it)."""
     try:
@@ -247,7 +250,7 @@ def load_secrets():
 real_key = events.real_key
 
 
-def rotate_log(max_bytes=5_000_000):
+def rotate_log(max_bytes: int = 5_000_000) -> None:
     """Two-generation rotation: couch.log -> couch.log.1 past the cap. Called
     at K15 boot (reconcile) and listener startup. Writers open-append-close
     per line, so a lost rename just rotates on the next call."""
@@ -267,11 +270,11 @@ class _Log:
     means the user lost something they would notice. Under the blind suite
     (env=test) the console still gets everything but couch.log does not."""
 
-    def __init__(self, lane):
+    def __init__(self, lane: str) -> None:
         self.lane = lane
         self._logf = BASE / "couch.log"
 
-    def _write(self, level, event, fields):
+    def _write(self, level: str, event: str, fields: dict) -> None:
         # The whole body is guarded, not just the I/O: every log call funnels
         # through here, so anything that raises crashes the lane.
         try:
@@ -293,23 +296,23 @@ class _Log:
         except Exception:
             pass
 
-    def __call__(self, event, /, **fields):
+    def __call__(self, event: str, /, **fields: Any) -> None:
         self._write(events.INFO, event, fields)
 
     # Three levels, not four; `info` is the spelled-out form of __call__. No
     # `debug`: `level` is a Loki LABEL alerts key on, so an unemitted level is
     # a permanently empty dashboard value.
-    def info(self, event, /, **fields):
+    def info(self, event: str, /, **fields: Any) -> None:
         self._write(events.INFO, event, fields)
 
-    def warn(self, event, /, **fields):
+    def warn(self, event: str, /, **fields: Any) -> None:
         self._write(events.WARN, event, fields)
 
-    def error(self, event, /, **fields):
+    def error(self, event: str, /, **fields: Any) -> None:
         self._write(events.ERROR, event, fields)
 
 
-def make_log(lane):
+def make_log(lane: str) -> _Log:
     """One logger per lane ('voice', 'launch', 'listener', 'library'). The lane
     is a Loki label, so the set stays small and fixed."""
     return _Log(lane)
@@ -320,20 +323,20 @@ class CapturingLog(_Log):
     recording instead of writing, so a change to the logging interface breaks
     the tests. Assert on events and fields, never prose."""
 
-    def __init__(self, lane="test", echo=False):
+    def __init__(self, lane: str = "test", echo: bool = False) -> None:
         super().__init__(lane)
         self.records = []
         self.echo = echo
 
-    def _write(self, level, event, fields):
+    def _write(self, level: str, event: str, fields: dict) -> None:
         rec = {("f_" + k if k in events._EMITTER_OWNED else k): v
                for k, v in fields.items()}
         self.records.append(dict(rec, level=level, event=event))
         if self.echo:
             print(f"[{self.lane}] " + events.human(event, level, **fields))
 
-    def events(self):
+    def events(self) -> list[str]:
         return [r["event"] for r in self.records]
 
-    def find(self, event):
+    def find(self, event: str) -> list[dict]:
         return [r for r in self.records if r["event"] == event]

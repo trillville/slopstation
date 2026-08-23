@@ -19,6 +19,8 @@ CLI:
     python library.py probe <deals|search ...|reviews <appid>|news <appid>
                              |hltb <name>|trending|recent>
 """
+from __future__ import annotations
+
 import glob
 import json
 import re
@@ -38,20 +40,20 @@ log = cglib.make_log("library")
 # --- layer 1 sources ----------------------------------------------------------
 
 
-def fetch_installed_ssh():
+def fetch_installed_ssh() -> list[dict]:
     """Production path (K15): the gaming PC enumerates its own ACFs."""
     import gamepc
     return parse_games_json(gamepc.games())
 
 
-def parse_games_json(text):
+def parse_games_json(text: str) -> list[dict]:
     rows = json.loads(text.strip().lstrip("﻿"))
     if isinstance(rows, dict):          # single-game library edge
         rows = [rows]
     return rows
 
 
-def fetch_installed_local():
+def fetch_installed_local() -> list[dict]:
     """Running ON the gaming PC: same fields as the Dispatch `games` verb."""
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
@@ -84,11 +86,11 @@ def fetch_installed_local():
 # --- index file ---------------------------------------------------------------
 
 
-def load():
+def load() -> dict:
     return cglib.load_json(LIBRARY, {})
 
 
-def installed_name(appid):
+def installed_name(appid: int) -> str | None:
     """Installed title for an appid, or None."""
     for r in load().get("installed", []):
         if r["appid"] == appid:
@@ -102,20 +104,20 @@ class Catalog:
     may be rewriting the file. Per-operation readers (dispatch, the tools)
     keep reading the file."""
 
-    def __init__(self, index):
+    def __init__(self, index: dict) -> None:
         self.installed = index.get("installed", [])
         self.collections = index.get("collections", [])
 
     @classmethod
-    def load(cls):
+    def load(cls) -> Catalog:
         return cls(load())
 
 
-def save(index):
+def save(index: dict) -> None:
     cglib.write_json(LIBRARY, index)
 
 
-def refresh(local=False):
+def refresh(local: bool = False) -> int:
     try:
         rows = fetch_installed_local() if local else fetch_installed_ssh()
     except Exception as e:
@@ -129,13 +131,13 @@ def refresh(local=False):
     return 0
 
 
-def fetch_collections_ssh():
+def fetch_collections_ssh() -> list[dict]:
     """Big Picture collections as [{name, id}]. Needs the PC awake."""
     import gamepc
     return parse_games_json(gamepc.collections())
 
 
-def refresh_collections():
+def refresh_collections() -> int:
     """Collection name->id into the index. Fail-soft when the PC is asleep."""
     try:
         rows = fetch_collections_ssh()
@@ -149,7 +151,7 @@ def refresh_collections():
     return 0
 
 
-def show():
+def show() -> int:
     index = load()
     rows = sorted(index.get("installed", []),
                   key=lambda r: r.get("lastPlayed", 0), reverse=True)
@@ -170,7 +172,7 @@ META_CACHE = STATE / "metadata-cache.json"
 _CTRL = {28: "full", 18: "partial"}          # Steam category ids
 
 
-def fetch_owned(api_key, steamid):
+def fetch_owned(api_key: str, steamid: str) -> dict:
     """Account-global playtime + recency (appmanifest LastPlayed is
     per-machine). One call, own key only."""
     import requests
@@ -190,7 +192,7 @@ def fetch_owned(api_key, steamid):
     return out
 
 
-def fetch_meta_one(appid):
+def fetch_meta_one(appid: int) -> dict:
     """appdetails (genres/controller/desc/score/year) + SteamSpy tags. Caller
     paces the requests."""
     import requests
@@ -218,15 +220,15 @@ def fetch_meta_one(appid):
     return meta
 
 
-def load_meta():
+def load_meta() -> dict:
     return cglib.load_json(META_CACHE, {})
 
 
-def _save_meta(cache):
+def _save_meta(cache: dict) -> None:
     cglib.write_json(META_CACHE, cache)
 
 
-def refresh_meta(appids, limit=200):
+def refresh_meta(appids: list[int], limit: int = 200) -> dict:
     """Top up NEW appids only, ~1 req/2 s (appdetails' unofficial ceiling).
     Saves after EACH fetch: the daemon crawl thread dies with the agent, so
     batching would re-crawl from zero every restart. Cached forever."""
@@ -243,7 +245,7 @@ def refresh_meta(appids, limit=200):
     return cache
 
 
-def refresh_owned():
+def refresh_owned() -> int:
     creds = steam_creds()
     if not creds:
         log("sync_skipped", layer="owned", reason="steamApiKey/steamId64 not set")
@@ -260,18 +262,18 @@ def refresh_owned():
 NOT_GAMES = {228980}                        # Steamworks Common Redistributables
 
 
-def ascii_only(s):
+def ascii_only(s: str | None) -> str:
     """ASCII-only: encoding-proof across every hop, (tm) glyphs are noise."""
     return re.sub(r"[^\x20-\x7E]", "", s or "").strip()
 
 
-def fuzzy_key(name):
+def fuzzy_key(name: str | None) -> str:
     """Letters and digits only: rogue-like == Roguelike, 'co op' == Co-op,
     and the facet-cache key."""
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 
-def steam_creds():
+def steam_creds() -> tuple[str, str] | None:
     """(steamApiKey, steamId64) when both are real, else None. Logs nothing:
     each caller decides whether a missing key is news."""
     s = cglib.load_secrets()
@@ -286,7 +288,7 @@ OWNED_MAX_AGE_S = 6 * 3600      # playtime/recency drift slowly; one call/6h
 _sync_lock = threading.Lock()
 
 
-def _iso_age(index, key):
+def _iso_age(index: dict, key: str) -> float | None:
     """Seconds since index[key] (iso timestamp), or None if absent/unparseable."""
     try:
         return time.time() - time.mktime(time.strptime(index[key],
@@ -295,7 +297,7 @@ def _iso_age(index, key):
         return None
 
 
-def sync(meta_limit=200):
+def sync(meta_limit: int = 200) -> None:
     """Full catalog refresh for the background thread: installed every call,
     owned when stale >6h, metadata top-up for new appids. Steam layers are
     skipped without keys. Non-reentrant, so calls can't stack meta crawls."""
@@ -328,7 +330,7 @@ def sync(meta_limit=200):
         _sync_lock.release()
 
 
-def query_terms(limit=30):
+def query_terms(limit: int = 30) -> list[str]:
     """Distinct tags/genres, frequency-ranked, fed to Flux as keyterms: titles
     alone don't teach the STT this vocabulary ("mech games" -> "met games")."""
     counts = {}
@@ -339,7 +341,7 @@ def query_terms(limit=30):
     return sorted(counts, key=lambda t: -counts[t])[:limit]
 
 
-def catalog_lines():
+def catalog_lines() -> list[str]:
     """Compact rows for the assistant's context, installed first:
     appid|name|tags|genres|hours|lastPlayed|installed|ctrl"""
     index = load()
@@ -371,7 +373,7 @@ def catalog_lines():
     return [l for _, _, l in lines]
 
 
-def catalog():
+def catalog() -> int:
     lines = catalog_lines()
     text = "\n".join(lines)
     print(text)
@@ -379,7 +381,7 @@ def catalog():
     return 0
 
 
-def usage():
+def usage() -> int:
     print("usage: library.py sync | refresh [--local-steam] [--owned] "
           "[--meta [N]] | show | catalog | probe <deals|search ...|reviews "
           "<appid>|news <appid>|hltb <name>|trending|recent>")

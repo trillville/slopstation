@@ -14,6 +14,8 @@ CLI, so the cmd.exe supervisors can emit too:
 
     python events.py emit supervisor restart code=1 what=listener
 """
+from __future__ import annotations
+
 import contextvars
 import json
 import os
@@ -26,6 +28,7 @@ import time
 import uuid
 
 from datetime import datetime, timezone
+from typing import Any
 
 BASE = pathlib.Path(__file__).resolve().parent
 LOG_DIR = BASE / "logs"
@@ -54,13 +57,13 @@ _SECRET_NAME_HINTS = ("key", "token", "secret", "password", "passwd", "pin",
 _HUMAN_MAX = 80
 
 
-def _service():
+def _service() -> str:
     """The role this box plays; a Loki label, so keep it low-cardinality.
     Overridable for the bench; the hostname is a field, not this."""
     return os.environ.get("CG_SERVICE", "k15")
 
 
-def _env():
+def _env() -> str:
     """prod unless we are demonstrably inside the blind suite. Auto-detected,
     not opt-in: a test that forgot to say so writes couch.log lines
     indistinguishable from a real outage. Keyed on argv[0], which is why the
@@ -94,29 +97,29 @@ _ctx = contextvars.ContextVar("cg_event_ctx", default={})
 TURN_RE = re.compile(r"\A[0-9a-f]{1,8}\Z")
 
 
-def new_turn():
+def new_turn() -> str:
     return uuid.uuid4().hex[:6]
 
 
-def valid_turn(value):
+def valid_turn(value: object) -> bool:
     return bool(isinstance(value, str) and TURN_RE.match(value))
 
 
-def context(**fields):
+def context(**fields: Any) -> contextvars.Token:
     """Set ambient correlation fields (turn=, session=, job=); returns the
     token for reset()."""
     merged = dict(_ctx.get(), **{k: v for k, v in fields.items() if v is not None})
     return _ctx.set(merged)
 
 
-def reset(token):
+def reset(token: contextvars.Token) -> None:
     try:
         _ctx.reset(token)
     except ValueError:
         pass                        # set in another context; nothing to undo
 
 
-def current():
+def current() -> dict:
     return dict(_ctx.get())
 
 
@@ -125,7 +128,7 @@ def current():
 _redactions = None
 
 
-def load_secrets(path):
+def load_secrets(path: str | pathlib.Path) -> dict:
     """secrets.json as a dict; {} when absent. Raises ValueError when present
     but malformed (cglib's wrapper turns that into a console note). utf-8-sig
     eats Notepad's BOM."""
@@ -135,7 +138,7 @@ def load_secrets(path):
         return {}
 
 
-def real_key(value):
+def real_key(value: object) -> bool:
     """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent. Redacting
     "..." would black out prose."""
     return (isinstance(value, str) and "..." not in value
@@ -143,7 +146,7 @@ def real_key(value):
             and len(value.strip()) >= 15)
 
 
-def _secret_values():
+def _secret_values() -> set[str]:
     """Every real secret value, loaded once, so no key can ride out in a
     field."""
     global _redactions
@@ -159,7 +162,7 @@ def _secret_values():
     return _redactions
 
 
-def scrub(key, value):
+def scrub(key: str, value: Any) -> Any:
     """Redact by field name, then by value. Returns the safe value."""
     if any(h in key.lower() for h in _SECRET_NAME_HINTS):
         return "***"
@@ -175,12 +178,12 @@ def scrub(key, value):
 _last_day = None
 
 
-def _path(day):
+def _path(day: str) -> pathlib.Path:
     stem = "test" if ENV == "test" else SERVICE
     return LOG_DIR / f"{stem}-{day}.jsonl"
 
 
-def _prune():
+def _prune() -> None:
     """Archive closed daily files out of the shipper's glob, then delete the
     expired ones. Called on the first emit of a process and at date rollover,
     never per line.
@@ -214,7 +217,7 @@ def _prune():
         pass
 
 
-def emit(lane, event, level=INFO, /, **fields):
+def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | None:
     """Append one event. Never raises, never blocks on anything but a local
     append. Returns the record (handy in tests); None if it could not be built.
 
@@ -272,7 +275,7 @@ def emit(lane, event, level=INFO, /, **fields):
 HEARTBEAT_S = 60
 
 
-def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
+def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S, **fields: Any) -> threading.Thread:
     """Emit `heartbeat` from a daemon thread for as long as this process runs.
     A dead process writes nothing, so silence and idle look identical. Writes
     JSONL ONLY, not through cglib's logger: ~1440 lines/day would swamp
@@ -301,7 +304,7 @@ def start_heartbeat(lane, interval_s=HEARTBEAT_S, **fields):
 # --- the human line -----------------------------------------------------------
 
 
-def human(event, level=INFO, /, **fields):
+def human(event: str, level: str = INFO, /, **fields: Any) -> str:
     """Render an event as couch.log reads it: the event, then fields as k=v.
     Values are elided at _HUMAN_MAX; the JSONL keeps them whole."""
     parts = [event]
@@ -325,7 +328,7 @@ def human(event, level=INFO, /, **fields):
 # --- CLI (for the cmd.exe supervisors) ----------------------------------------
 
 
-def _cli(argv):
+def _cli(argv: list[str]) -> int:
     """events.py emit <lane> <event> [--level warn] [k=v ...]
 
     So Start-Listener.bat and friends can report a crash-restart."""

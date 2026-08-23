@@ -44,7 +44,7 @@ def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
                        left_speed, left_gain, right_speed, right_gain)
 
 
-def play_pattern(dev, steps, gain=0):
+def play_pattern(dev, steps: list, gain: int = 0) -> None:
     """Play a haptic pattern; production and bench audition share this engine.
     steps = ((freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth), ...); each
     tone plays out before the next. The trailing stops are harmless if tones

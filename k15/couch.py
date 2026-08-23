@@ -2,7 +2,10 @@
 switch TV input -> watch loop. Invariant: nothing switches the TV to the
 gaming input before the host writes READY, so a pre-READY failure leaves the
 TV as the viewer had it."""
+from __future__ import annotations
+
 import os, socket, sys, time
+from typing import Callable
 
 import cglib
 import events
@@ -57,12 +60,12 @@ class Cancelled(BaseException):
     on purpose, like KeyboardInterrupt: it must ride the abort handler
     (launch_aborted, lock released, no last_error), not launch_failed."""
 
-    def __init__(self, by):
+    def __init__(self, by: str) -> None:
         self.by = by                    # the CANCELLING intent's turn, or ""
         super().__init__(by)
 
 
-def raise_if_cancelled():
+def raise_if_cancelled() -> None:
     """Consume a pending cancel (the unlink is the ack - a marker left behind
     would kill the next launch too) and stop through the abort path."""
     try:
@@ -78,7 +81,7 @@ def raise_if_cancelled():
     raise Cancelled(by)
 
 
-def exlink(name, **fields):
+def exlink(name: str, **fields) -> None:
     try:
         ack = tv.exlink_send(name, cglib.config()["tvComPort"])
         # ack = the receiver accepted the frame, not that the set acted on
@@ -89,7 +92,7 @@ def exlink(name, **fields):
         log.error("exlink_nak", cmd=name, err=str(e), **fields)
 
 
-def wol():
+def wol() -> None:
     mac = bytes.fromhex(cglib.config()["gamingPcMac"].replace(":", "").replace("-", ""))
     pkt = b"\xff" * 6 + mac * 16
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -98,7 +101,7 @@ def wol():
     log("wol_sent")
 
 
-def wait_port(timeout=PORT_WAIT_S):
+def wait_port(timeout: float = PORT_WAIT_S) -> bool:
     end = time.time() + timeout
     while time.time() < end:
         # A cold boot can spend the whole 90 s here; a cancel must not wait it out.
@@ -125,7 +128,7 @@ class TvEvidence:
     does not predict a refusal: failures at 11.8-20.0 h since the last
     session, successes at 22+ h."""
 
-    def __init__(self, ip, first, ms):
+    def __init__(self, ip: str | None, first: str | None, ms: Callable[[], int]) -> None:
         self.ip = ip
         self.confirmed = False      # the set answered "on" at least once
         self.gave_up = False        # stood down: TV_UNKNOWN_N unreadable answers
@@ -134,11 +137,11 @@ class TvEvidence:
         self._poke_at = time.time() + TV_POKE_S
         self._ms = ms               # elapsed-since-intent, for the milestones
 
-    def undecided(self):
+    def undecided(self) -> bool:
         """A tvIp rig whose set has neither answered "on" nor been given up on."""
         return bool(self.ip) and not self.confirmed and not self.gave_up
 
-    def poll(self):
+    def poll(self) -> None:
         """One evidence step, called from waits that already loop: latch
         "on", stand down on persistent silence, re-poke while not-on.
 
@@ -167,7 +170,8 @@ class TvEvidence:
             self._poke_at = time.time() + TV_POKE_S
 
 
-def wait_ready(turn, evidence, dispatch_enter, ms):
+def wait_ready(turn: str, evidence: TvEvidence,
+               dispatch_enter: Callable[..., bool], ms: Callable[[], int]) -> None:
     """Poll the host until the READY marker echoes `turn`, re-dispatching a
     DETECTED dead Enter once (ENTER_REDISPATCH); raises once the window
     closes. `dispatch_enter` is start()'s closure, so its enter_sent reaches
@@ -260,7 +264,7 @@ def wait_ready(turn, evidence, dispatch_enter, ms):
     if not ready: raise RuntimeError("host never reported READY")
 
 
-def start(appid=None, turn=None):
+def start(appid: str | None = None, turn: str | None = None) -> int:
     # One id per intent, minted upstream; a direct run mints its own.
     turn = turn if events.valid_turn(turn) else events.new_turn()
     events.context(turn=turn)
@@ -394,7 +398,7 @@ def start(appid=None, turn=None):
     return 0
 
 
-def watch(expected=None):
+def watch(expected: str | None = None) -> None:
     """Poll the session until it ends, then restore the TV and release the
     lock. `expected` is the turn the marker should keep echoing; a different
     one means a successor owns the rig, so leave the TV and lock to it. None
@@ -434,7 +438,7 @@ def watch(expected=None):
     log("session_idle")
 
 
-def reconcile():
+def reconcile() -> int:
     """Run once at K15 startup (Start-Listener.bat), before the listener.
 
     A surviving session lock means the watch loop died with us: resume
@@ -470,12 +474,12 @@ def reconcile():
     return 0
 
 
-def usage():
+def usage() -> int:
     print("usage: couch.py [start [appid] [--turn <hex>]|reconcile]")
     return 2
 
 
-def take_turn(argv):
+def take_turn(argv: list[str]) -> str | None:
     """Pull `--turn <id>` out of argv (mutating it) and return it, or None."""
     if "--turn" in argv:
         i = argv.index("--turn")

@@ -10,6 +10,8 @@ holds queued audio until its websocket handshake is confirmed.
 The transcript therefore starts with the wake phrase; grammar_gate.strip_wake
 removes it text-side.
 """
+from __future__ import annotations
+
 import threading
 import time
 
@@ -25,7 +27,7 @@ CHUNK_BYTES = CHUNK_SAMPLES * 2
 CHUNK_MS = CHUNK_SAMPLES * 1000 // SAMPLE_RATE  # 80
 
 
-def _rms(chunk):
+def _rms(chunk: bytes) -> float:
     x = np.frombuffer(chunk, np.int16).astype(np.float32)
     return float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
 
@@ -36,11 +38,11 @@ class WakeAck:
     threads, hence the lock. The timestamp lets the gate fold a success earcon
     landing on the chime into it."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._at = None
 
-    def claim(self):
+    def claim(self) -> bool:
         """True for exactly one caller - the winner plays the chime."""
         with self._lock:
             if self._at is not None:
@@ -48,7 +50,7 @@ class WakeAck:
             self._at = time.monotonic()
             return True
 
-    def age(self):
+    def age(self) -> float:
         """Seconds since the chime was claimed; inf while unclaimed."""
         with self._lock:
             return float("inf") if self._at is None else time.monotonic() - self._at
@@ -63,7 +65,7 @@ class WakeCapture:
     QUIET_RATIO = 0.18      # of the loudest speech heard since the wake word
     CHIME_BY_S = 1.5        # too noisy to tell -> chime anyway, never not at all
 
-    def __init__(self, stream, seed_chunks, on_quiet=None):
+    def __init__(self, stream, seed_chunks: list[bytes], on_quiet=None) -> None:
         self._stream = stream
         self._chunks = list(seed_chunks)
         self._pcm = None
@@ -76,7 +78,7 @@ class WakeCapture:
         self._thread = threading.Thread(target=self._pump, daemon=True)
         self._thread.start()
 
-    def _watch(self, chunk):
+    def _watch(self, chunk: bytes) -> None:
         """Fire the wake chime at end of speech, not at detection. Levels are
         relative to the wake phrase, so a loud TV doesn't read as talking;
         too loud to call chimes at CHIME_BY_S. Playback on its own thread -
@@ -91,7 +93,7 @@ class WakeCapture:
             fn, self._on_quiet = self._on_quiet, None
             threading.Thread(target=fn, daemon=True).start()
 
-    def _pump(self):
+    def _pump(self) -> None:
         limit = self.MAX_S * BYTES_PER_S // CHUNK_BYTES
         while not self._stopping.is_set() and len(self._chunks) < limit:
             try:
@@ -102,7 +104,7 @@ class WakeCapture:
             self._chunks.append(chunk)
             self._watch(chunk)
 
-    def stop(self):
+    def stop(self) -> bytes:
         if self._pcm is not None:
             return self._pcm
         self._stopping.set()
@@ -120,12 +122,12 @@ class PrerollFeeder(FrameProcessor):
     """Replays wake-capture PCM ahead of live mic audio. pcm is assigned right
     before the runner starts, so capture covers most of the session build."""
 
-    def __init__(self, log):
+    def __init__(self, log) -> None:
         super().__init__()
         self._log = log
         self.pcm = b""
 
-    def _frames(self):
+    def _frames(self) -> list:
         return [InputAudioRawFrame(audio=self.pcm[i:i + CHUNK_BYTES],
                                    sample_rate=SAMPLE_RATE, num_channels=1)
                 for i in range(0, len(self.pcm), CHUNK_BYTES)]
