@@ -5,19 +5,13 @@ bench); every tool routes through the same dispatch.py as the grammar gate.
 An appid that isn't in the index is refused at the tool boundary.
 """
 import json
-import sys
 import time
-from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
-
-import cglib                                    # noqa: E402
-import library                                  # noqa: E402
-import steamstore                               # noqa: E402
-import tracing                                  # noqa: E402  (tool spans; the
-#                                     module self-gates: REPL/bench are no-ops)
+import cglib
+import library
+import steamstore
+# tool spans; the module self-gates: REPL/bench are no-ops
+import tracing
 
 WEB_SEARCH_RULE = """\
 You can search the web for current facts the catalog can't answer (release

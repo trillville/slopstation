@@ -37,16 +37,13 @@ def check_config():
 
 
 def check_imports():
-    ok = True
     for mod in ("serial", "hid"):
         try:
             __import__(mod)
             report(PASS, f"import {mod}", "ok")
         except Exception as e:
-            ok = False
             report(FAIL, f"import {mod}", str(e),
                    "pip install pyserial hidapi (hidapi, NOT the 'hid' package)")
-    return ok
 
 
 def check_com(cfg):

@@ -280,8 +280,8 @@ class Dispatch:
     # every Ex-Link volume/mute frame and then refuses it on screen ("Not
     # Available"), so these four verbs move nothing the couch can hear. The
     # write path that works is remote keys over CEC (tv_remote.py).
-    def _vol_steps(self, name, steps=None):
-        step = int(self.voice["volumeStep"]) if steps is None else int(steps)
+    def _vol_steps(self, name):
+        step = int(self.voice["volumeStep"])
         if self.dry_run:
             return self._would(f"{name} x{step}")
         for _ in range(step):

@@ -108,8 +108,8 @@ def build_audio(voice):
     pa = pyaudio.PyAudio()
     try:
         return (pa,
-                resolve_device(pa, voice["inputDeviceName"], want_input=True),
-                resolve_device(pa, voice["outputDeviceName"], want_input=False))
+                resolve_device(pa, voice.get("inputDeviceName"), want_input=True),
+                resolve_device(pa, voice.get("outputDeviceName"), want_input=False))
     except Exception:
         try:
             pa.terminate()

@@ -4,8 +4,7 @@ Paths for k15/ and k15/voice/ on sys.path; events.LOG_DIR and cglib's state
 paths to tempdirs, so no test writes beside the real lanes whether or not it
 asks for one; a config fixture so the suite imports on a checkout with no
 config.json. fresh_state() points every state-file constant into a NEW
-tempdir; freeze_sleep() makes time.sleep a no-op; wants() skips a test the
-machine cannot run.
+tempdir; wants() skips a test the machine cannot run.
 """
 import json
 import os
@@ -80,10 +79,3 @@ def fresh_state(lock_age_s=None, lock_content="x"):
         old = time.time() - lock_age_s
         os.utime(cglib.LOCK, (old, old))
     return tmp
-
-
-def freeze_sleep():
-    """time.sleep becomes a no-op; returns the real one."""
-    real = time.sleep
-    time.sleep = lambda s: None
-    return real

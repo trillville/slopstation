@@ -4,18 +4,12 @@ tool schemas and impls as the voice pipeline (assistant.py); nothing here is
 on the wake path.
 """
 import json
-import sys
 import time
-from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
-
-import assistant                                # noqa: E402
-import cglib                                    # noqa: E402
-import llm_audit                                # noqa: E402
-import traces                                   # noqa: E402
+import assistant
+import cglib
+import llm_audit
+import traces
 
 
 # --- provider backends: one turn (with its tool loop) -> reply text -----------

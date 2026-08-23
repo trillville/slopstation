@@ -104,20 +104,15 @@ class Catalog:
 
     def __init__(self, index):
         self.installed = index.get("installed", [])
-        self.owned = index.get("owned", {})
         self.collections = index.get("collections", [])
-        self._names = {r["appid"]: r["name"] for r in self.installed if r.get("name")}
 
     @classmethod
     def load(cls):
         return cls(load())
 
-    def name(self, appid):
-        return self._names.get(appid)
-
 
 def save(index):
-    _atomic_write(LIBRARY, index)               # tmp + os.replace
+    cglib.write_json(LIBRARY, index)
 
 
 def refresh(local=False):
@@ -228,7 +223,7 @@ def load_meta():
 
 
 def _save_meta(cache):
-    _atomic_write(META_CACHE, cache)
+    cglib.write_json(META_CACHE, cache)
 
 
 def refresh_meta(appids, limit=200):
@@ -274,12 +269,6 @@ def fuzzy_key(name):
     """Letters and digits only: rogue-like == Roguelike, 'co op' == Co-op,
     and the facet-cache key."""
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
-
-
-# -- caches (every JSON write goes through _atomic_write: tmp + os.replace) ---
-
-def _atomic_write(path, obj):
-    cglib.write_json(path, obj, indent=1)
 
 
 def steam_creds():

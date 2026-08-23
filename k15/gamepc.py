@@ -106,6 +106,3 @@ VERBS = ("enter", "exit", "status", "enterstate", "version", "playing", "games",
 
 # Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE DENIED, and
 # BUSY:<appid> NOTASK:<name> FAILED:<code> with an argument after the colon.
-def split_answer(out):
-    word, _, arg = (out or "").partition(":")
-    return word, arg
