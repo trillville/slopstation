@@ -9,17 +9,17 @@ import json
 import sys
 import threading
 
-import _bootstrap                               # noqa: F401,E402
-from _bootstrap import fresh_state              # noqa: E402
+import _bootstrap  # noqa: F401
+from _bootstrap import fresh_state
 
-import announce                                 # noqa: E402
-import cglib                                    # noqa: E402
-import events                                   # noqa: E402
-import jobs as jobs_mod                         # noqa: E402
-import steam_session                            # noqa: E402
-import tracing                                  # noqa: E402
-import voice_agent as va                        # noqa: E402
-import workers                                  # noqa: E402
+import announce
+import cglib
+import events
+import jobs as jobs_mod
+import steam_session
+import tracing
+import voice_agent as va
+import workers
 
 REAL_KEY = "k" * 40
 SECRETS = {"deepgramApiKey": REAL_KEY, "anthropicApiKey": REAL_KEY}

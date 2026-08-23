@@ -29,21 +29,19 @@ import threading
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import cglib                                    # noqa: E402
-import earcons                                  # noqa: E402
-import events                                   # noqa: E402
-import library                                  # noqa: E402
-import tracing                                  # noqa: E402
-from audio import (WakeListener, list_devices, open_audio,  # noqa: E402
+import cglib
+import earcons
+import events
+import library
+import tracing
+from audio import (WakeListener, list_devices, open_audio,
                    play_pcm, rebuild_audio)
-from grammar_gate import GrammarMatcher         # noqa: E402
-from preroll import WakeAck                     # noqa: E402
-from session_runtime import run_session         # noqa: E402
-from tv_remote import TvDucker                  # noqa: E402
+from grammar_gate import GrammarMatcher
+from preroll import WakeAck
+from session_runtime import run_session
+from tv_remote import TvDucker
 
 log = cglib.make_log("voice")
 

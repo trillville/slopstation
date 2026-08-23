@@ -5,7 +5,7 @@ negatives that must fall through to the assistant lane. Run:
 import sys
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 from grammar_gate import GrammarMatcher, strip_wake
 
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",

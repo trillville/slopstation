@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 import cglib
 from audio import WakeListener, wake_phrase
 

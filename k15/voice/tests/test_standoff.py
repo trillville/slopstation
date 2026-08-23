@@ -13,8 +13,8 @@ import time
 import types
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
-from _bootstrap import fresh_state              # noqa: E402
+import _bootstrap  # noqa: F401
+from _bootstrap import fresh_state
 
 # The listener runs on SYSTEM python and `hid` is not in the voice venv, so
 # stub it: nothing here tests HID, only the decision to let go of it.

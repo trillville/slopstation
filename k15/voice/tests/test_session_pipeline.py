@@ -9,7 +9,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 import cglib
 from dispatch import Dispatch

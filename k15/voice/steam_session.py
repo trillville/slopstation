@@ -18,11 +18,9 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import cglib                                        # noqa: E402
+import cglib
 
 API = "https://api.steampowered.com"
 LOGIN = "https://login.steampowered.com"        # the transfer-login host

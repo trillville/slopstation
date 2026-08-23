@@ -24,13 +24,11 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import cglib                                    # noqa: E402
-import events                                   # noqa: E402
-import tv                                       # noqa: E402
+import cglib
+import events
+import tv
 
 KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
 

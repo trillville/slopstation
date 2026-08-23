@@ -9,7 +9,7 @@ import importlib
 import sys
 import types
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 K15 = _bootstrap.K15
 VOICE = _bootstrap.VOICE

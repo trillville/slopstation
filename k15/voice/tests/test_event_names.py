@@ -6,7 +6,7 @@ regression; a new one is fine (add it here). Scans the emitters from source
 """
 import re
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 import _events_scan as scan
 import events
 

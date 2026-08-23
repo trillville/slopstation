@@ -8,8 +8,8 @@ import tempfile
 import time
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
-from _bootstrap import fresh_state              # noqa: E402
+import _bootstrap  # noqa: F401
+from _bootstrap import fresh_state
 
 import cglib
 import tv

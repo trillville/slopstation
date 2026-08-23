@@ -5,12 +5,12 @@ Pins the list's shape; bench/probe_stt.py is the live counterpart. Run:
 import sys
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
-import library                                  # noqa: E402
-import session_runtime                          # noqa: E402
-import titles                                   # noqa: E402
-from grammar_gate import stt_confidence         # noqa: E402
+import library
+import session_runtime
+import titles
+from grammar_gate import stt_confidence
 
 VOICE = {"keytermCount": 40}
 

@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 import cglib
 from preroll import CHUNK_BYTES, CHUNK_SAMPLES, PrerollFeeder, WakeAck, WakeCapture

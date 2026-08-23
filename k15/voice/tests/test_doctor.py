@@ -7,11 +7,11 @@ import subprocess
 import sys
 import types
 
-import _bootstrap                               # noqa: F401,E402
-from _bootstrap import fresh_state              # noqa: E402
+import _bootstrap  # noqa: F401
+from _bootstrap import fresh_state
 
-import cglib                                    # noqa: E402
-import gamepc                                   # noqa: E402
+import cglib
+import gamepc
 
 # serial / hid are imported inside the checks; stub both before doctor loads.
 serial = types.ModuleType("serial")
@@ -35,7 +35,7 @@ hid.enumerate = lambda vid, pid: [{"path": b"a"}, {"path": b"b"}]
 sys.modules["serial"] = serial
 sys.modules["hid"] = hid
 
-import doctor                                   # noqa: E402
+import doctor
 
 rows = []
 

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 import cglib
 import steam_session as ss

@@ -11,7 +11,7 @@ import sys
 
 from pyflakes import api, reporter
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 K15 = _bootstrap.K15
 MODULES = sorted(K15.glob("*.py"))

@@ -11,7 +11,7 @@ import sys
 import types
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 import cglib
 import llm_audit

@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import _bootstrap                               # noqa: F401,E402
+import _bootstrap  # noqa: F401
 
 import traces
 

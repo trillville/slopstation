@@ -20,8 +20,8 @@ for p in (VOICE, K15, VOICE / "bench"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-import events                                   # noqa: E402
-import cglib                                    # noqa: E402
+import events
+import cglib
 
 events.LOG_DIR = Path(tempfile.mkdtemp(prefix="cg-test-logs-"))
 # Before any module that derives its state paths from cglib.STATE is imported.
