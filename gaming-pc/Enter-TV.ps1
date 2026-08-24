@@ -33,7 +33,7 @@ try {
     Log 'TV-GAMING profile launched'
 
     # 3a. VirtualHere client (re)connects to the K15 hub
-    if (-not (Wait-For { (Get-VhList) -match [regex]::Escape($CG.Puck) } 30 'VirtualHere sees Puck')) {
+    if (-not (Wait-For { Get-PuckAddress } 30 'VirtualHere sees Puck')) {
         throw 'VirtualHere client never re-connected to the K15 hub'
     }
 

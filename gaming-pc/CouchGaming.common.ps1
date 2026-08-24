@@ -7,7 +7,7 @@ $CG = @{
     Vh          = Join-Path $PSScriptRoot 'vhui64.exe'
     VhResult    = Join-Path $PSScriptRoot 'logs\vh-last.txt'
     VhNudge     = Join-Path $PSScriptRoot 'logs\vh-nudge.txt'
-    Puck        = 'K15.5'                  # VirtualHere address; `vhui64 -t LIST` is the source of truth
+    PuckName    = 'Steam Controller Puck'  # the hub's device NAME; addresses are resolved per use
     PuckHwId    = 'VID_28DE&PID_1304'      # Valve Steam Controller Puck
     TvEdid      = 'QCQ90S'                 # S90C's EDID name as Windows reports it
     SteamWindow = 'Steam'                  # EXACT title of the desktop library window
@@ -147,6 +147,16 @@ function Get-VhList {
     & $CG.Vh -t "LIST" -r $CG.VhResult | Out-Null
     Start-Sleep -Milliseconds 400
     (Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '
+}
+
+# A VirtualHere address is the server's kernel device number, not a physical
+# port: every unbind/rebind - which is what a claim IS - can renumber the Puck.
+# A pinned address goes stale silently (K15.5 -> K15.16 timed out Enter's claim
+# gate, 2026-08-23 turn b540b9), so resolve through the stable NAME per use.
+# '' means the hub is not listing the Puck at all.
+function Get-PuckAddress {
+    if ((Get-VhList) -match ([regex]::Escape($CG.PuckName) + '\s*\(([^)]+)\)')) { $Matches[1] }
+    else { '' }
 }
 
 # A lingering DisplayMagician instance produces the frozen profile window on
@@ -315,7 +325,7 @@ function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$Timeo
 function Request-PuckClaim {
     if (Test-PuckPresent) {
         Log 'stale Puck claim detected - releasing for a fresh instance'
-        & $CG.Vh -t "STOP USING,$($CG.Puck)" -r $CG.VhResult
+        & $CG.Vh -t "STOP USING,$(Get-PuckAddress)" -r $CG.VhResult
         if (-not (Wait-For { -not (Test-PuckPresent) } 6 'stale claim released')) {
             # Proceeding would pass the claim gate on the stale, dead instance,
             # reproducing the inputs-dead controller this recycle prevents.
@@ -324,9 +334,11 @@ function Request-PuckClaim {
     }
     $claimed = $false
     for ($i = 1; -not $claimed -and $i -le 2; $i++) {
-        & $CG.Vh -t "USE,$($CG.Puck)" -r $CG.VhResult
+        # Re-resolved per attempt: the stale release above renumbers the device.
+        $addr = Get-PuckAddress
+        & $CG.Vh -t "USE,$addr" -r $CG.VhResult
         $claimed = Wait-For { Test-PuckPresent } 8 "Puck enumerated (attempt $i)"
-        Log ("vh attempt {0}: {1}" -f $i, ((Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '))
+        Log ("vh attempt {0} ({1}): {2}" -f $i, $addr, ((Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '))
     }
     if (-not $claimed) { throw 'VirtualHere claim did not produce a device after 2 attempts' }
 }
@@ -335,9 +347,10 @@ function Request-PuckClaim {
 function Request-PuckRelease([int]$Attempts = 3) {
     $released = $false
     for ($i = 1; -not $released -and $i -le $Attempts; $i++) {
-        & $CG.Vh -t "STOP USING,$($CG.Puck)" -r $CG.VhResult
+        $addr = Get-PuckAddress
+        & $CG.Vh -t "STOP USING,$addr" -r $CG.VhResult
         Start-Sleep 1
-        Log ("vh attempt {0}: {1}" -f $i, ((Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '))
+        Log ("vh attempt {0} ({1}): {2}" -f $i, $addr, ((Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '))
         $released = -not (Test-PuckPresent)
         if (-not $released) { Start-Sleep 2 }
     }

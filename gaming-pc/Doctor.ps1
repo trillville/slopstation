@@ -52,9 +52,11 @@ if (Test-Path $ak) {
 # 4. VirtualHere
 if (Get-Process vhui64 -ErrorAction SilentlyContinue) {
     Report PASS 'virtualhere' 'client running'
-    $list = Get-VhList
-    if ($list -match [regex]::Escape($CG.Puck) -or $list -match 'K15') { Report PASS 'vh hub' 'K15 hub/Puck visible' }
-    else { Report WARN 'vh hub' "LIST: $list" 'K15 server down, or transient - rerun' }
+    # The Puck's own address, not just the hub name: a hub that answers while
+    # the Puck is missing or renumbered is exactly the failure worth catching.
+    $addr = Get-PuckAddress
+    if ($addr) { Report PASS 'vh hub' "Puck visible at $addr" }
+    else { Report WARN 'vh hub' "LIST: $(Get-VhList)" 'K15 server down, or the Puck is off the hub - rerun' }
 } else {
     Report FAIL 'virtualhere' 'client not running' 'launch vhui64.exe (Startup shortcut missing?)'
 }
