@@ -191,7 +191,7 @@ def main():
     assert couch.start() == 1
     ev = log.events()
     assert "lock_recycled" in ev and "launch_failed" in ev, ev
-    assert sent == ["power_on"], f"failure must never switch the input: {sent}"
+    assert sent == ["power_on", "power_off"], f"failure restores power, not input: {sent}"
     assert not cglib.LOCK.exists(), "failure must release the lock"
     assert "Enter" in cglib.LAST_ERROR.read_text()
     # the refusal is logged once per distinct answer, not per retry
@@ -203,9 +203,9 @@ def main():
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
     assert "launch_failed" in log.events()
-    assert sent == ["power_on"], sent
+    assert sent == ["power_on", "power_off"], sent
     assert not cglib.LOCK.exists() and "READY" in cglib.LAST_ERROR.read_text()
-    print("  no READY: timed out, lock released, input untouched")
+    print("  no READY: timed out, lock released, TV put back, input untouched")
 
     # --- the TV-asleep rescue: a second power_on, and only ever one -----------
     # Default retry threshold sits past the 0.3 s test READY wait; inside it
@@ -214,7 +214,7 @@ def main():
     couch.WAKE_RETRY_S = 0.05
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
-    assert sent == ["power_on", "power_on"], sent
+    assert sent == ["power_on", "power_on", "power_off"], sent
     assert log.find("exlink_send")[1]["again"] is True, log.records
     couch.WAKE_RETRY_S = 10                # leave no trap for the next case
     print("  wake retry: one extra power_on inside the READY wait, input alone")
@@ -260,7 +260,7 @@ def main():
     assert ev.count("enter_died") == 2, ev
     assert ev.count("enter_redispatched") == 1, ev
     assert "launch_failed" in ev
-    assert sent == ["power_on", "power_on"], f"input untouched on failure: {sent}"
+    assert sent == ["power_on", "power_on", "power_off"], f"input untouched: {sent}"
     assert not cglib.LOCK.exists() and "READY" in cglib.LAST_ERROR.read_text()
     print("  retry dies too: one rescue, then an immediate honest failure")
 
@@ -294,7 +294,7 @@ def main():
         ev = log.events()
         assert "enter_died" not in ev and "enter_redispatched" not in ev, (label, ev)
         assert "launch_failed" in ev, (label, ev)
-        assert sent == ["power_on"], (label, sent)
+        assert sent == ["power_on", "power_off"], (label, sent)
         assert not cglib.LOCK.exists(), label
     couch.ENTER_SETTLE_S = 10              # leave no trap for the next case
     couch.READY_WAIT_S = 0.3
@@ -310,8 +310,8 @@ def main():
     assert "launch_aborted" in ev and "launch_failed" not in ev, ev
     assert not cglib.LOCK.exists(), "an aborted launch still releases the lock"
     assert not cglib.LAST_ERROR.exists(), "a deliberate abort must not buzz the Puck"
-    assert sent == ["power_on"], f"an abort must never switch the input: {sent}"
-    print("  ctrl-C: launch_aborted, lock released, no fail buzz, TV alone")
+    assert sent == ["power_on", "power_off"], f"abort restores power, not input: {sent}"
+    print("  ctrl-C: launch_aborted, lock released, no fail buzz, TV put back")
 
     # --- voice cancel: end_session's marker aborts the launch ------------------
     # ssh `exit` only stops a RUNNING Enter, so it raced the redispatch rescue
@@ -341,8 +341,9 @@ def main():
     assert not cglib.LOCK.exists(), "a cancelled launch still releases the lock"
     assert not cglib.LAST_ERROR.exists(), "a cancel is deliberate - no fail buzz"
     assert not cglib.CANCEL.exists(), "consumed, or it kills the NEXT launch too"
-    assert sent == ["power_on"], f"a cancel must never switch the input: {sent}"
-    print("  cancel: marker aborts the wait, consumed, no buzz, TV alone, "
+    # The voice teardown that left the TV lit for the night (2026-08-23 b540b9).
+    assert sent == ["power_on", "power_off"], f"cancel restores power: {sent}"
+    print("  cancel: marker aborts the wait, consumed, no buzz, TV off, "
           "exit chases the sent Enter")
 
     # --- cancel beats the rescue: no redispatch over a teardown ----------------
@@ -368,7 +369,7 @@ def main():
     assert "enter_died" in ev, ev
     assert "enter_redispatched" not in ev, ev
     assert "launch_aborted" in ev and "launch_failed" not in ev, ev
-    assert sent == ["power_on"], f"no re-poke for a launch being torn down: {sent}"
+    assert sent == ["power_on", "power_off"], f"no re-poke while tearing down: {sent}"
     assert not cglib.LOCK.exists() and not cglib.CANCEL.exists()
     couch.ENTER_SETTLE_S = 10
     print("  cancel vs rescue: enter_died then cancel -> no redispatch, abort")
@@ -408,7 +409,7 @@ def main():
     assert "launch_failed" in ev and "tv_on" not in ev, ev
     assert "TV never reported on" in cglib.LAST_ERROR.read_text()
     assert log.find("launch_start")[0]["tv"] == "standby"
-    assert set(sent) == {"power_on"} and len(sent) >= 2, \
+    assert set(sent) == {"power_on", "power_off"} and sent[-1] == "power_off", \
         f"the evidence re-pokes while not-on, and never switches input: {sent}"
     assert not cglib.LOCK.exists()
     print("  tv evidence: standby set -> no redispatch into the dark, TV named")
@@ -453,6 +454,19 @@ def main():
     assert "tv_on" in ev and "enter_died" in ev and "enter_redispatched" in ev, ev
     assert log.find("host_ready")[0]["verified"] is True
     print("  tv evidence: confirmed-on set -> rescue redispatches at once")
+
+    # A set the viewer already had on is not the launch's to switch off: its
+    # power_on was a no-op there, and the restore would end someone's show.
+    fresh_state()
+    couch.ENTER_SETTLE_S = 10
+    couch.READY_WAIT_S = 0.3
+    log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
+    assert couch.start() == 1
+    assert "launch_failed" in log.events()
+    assert sent == ["power_on"], f"a set found on stays on: {sent}"
+    assert not cglib.LOCK.exists()
+    couch.READY_WAIT_S = 5                 # leave no trap for the next case
+    print("  tv evidence: a failure leaves a set the viewer already had on")
 
     # A set that cannot be READ is not a refused one: stand down to the legacy
     # blind path.

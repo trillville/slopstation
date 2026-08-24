@@ -92,6 +92,21 @@ def exlink(name: str, **fields) -> None:
         log.error("exlink_nak", cmd=name, err=str(e), **fields)
 
 
+def restore_tv() -> None:
+    """Put the TV back the way a finished session leaves it."""
+    cfg = cglib.config()
+    exlink("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
+
+
+def abort_teardown(tv_woken: bool) -> None:
+    """Release the lock and undo the TV power a failed or cancelled launch
+    spent; nothing was ever switched to the gaming input, so there is no input
+    to put back. Ownership-checked like watch()'s restore: a lock recycled
+    while we stalled belongs to a successor whose session owns the set."""
+    if cglib.release_lock() and tv_woken:
+        restore_tv()
+
+
 def wol() -> None:
     mac = bytes.fromhex(cglib.config()["gamingPcMac"].replace(":", "").replace("-", ""))
     pkt = b"\xff" * 6 + mac * 16
@@ -294,6 +309,8 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     # The Cancelled handler keys on this: a cancel consumed after our enter
     # went out may have raced the exit that wrote it.
     enter_sent = False
+    # Only a set this launch WOKE is ours to put back on the abort path.
+    tv_woken = False
     # A cancel predating this intent is void. Guarded because this runs
     # outside the try below and an unhandled OSError would die with the lock
     # held.
@@ -323,6 +340,10 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         log("launch_start", appid=appid,
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}))
         exlink("power_on")
+        # A set already on belongs to whoever was watching it - power_on was a
+        # no-op there, and powering it off on failure would end their show. No
+        # tvIp means no evidence, and the launch's own power_on is the guess.
+        tv_woken = tv0 != "on"
         wol()
         if not wait_port(): raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
@@ -375,7 +396,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             cglib.LAST_ERROR.write_text(str(e))
         except OSError:
             pass
-        cglib.release_lock(); return 1
+        abort_teardown(tv_woken); return 1
     except BaseException as e:
         # Ctrl-C is a KeyboardInterrupt, not an Exception, so the handler above
         # never sees it; without this clause the lane dies silently, holding
@@ -394,7 +415,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
                 log("exit_dispatched", reason="cancel_after_enter")
             except Exception:
                 pass
-        cglib.release_lock(); return 1
+        abort_teardown(tv_woken); return 1
     return 0
 
 
@@ -430,7 +451,7 @@ def watch(expected: str | None = None) -> None:
                 log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
-    exlink("power_off" if cglib.config()["tvOffWhenDone"] else cglib.config()["tvIdleCmd"])
+    restore_tv()
     # Ownership-checked: a lock recycled while we stalled belongs to the
     # successor, and unlinking it would free a live session.
     if not cglib.release_lock():
