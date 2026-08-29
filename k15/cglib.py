@@ -191,8 +191,7 @@ REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
                   "assistantProvider", "assistantModelAnthropic",
                   "assistantModelOpenai", "assistantReasoningEffort", "inputs",
                   "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "workerProvider", "workerModelAnthropic", "workerModelOpenai",
-                  "workerEffort", "workerTimeoutS", "followUpAfterAnnounce")
+                  "followUpAfterAnnounce")
 
 
 def missing_config(cfg: dict, voice: bool = False) -> list[str]:
@@ -219,7 +218,7 @@ def load_json(path: pathlib.Path, default: Any) -> Any:
 def write_json(path: pathlib.Path, obj: Any, indent: int = 1) -> None:
     """tmp + os.replace, so a reader never sees a partial file. The replace
     retries: Windows denies a rename onto a file another process holds open
-    (doctor reads jobs.json) - see _recycle_stale_lock."""
+    (doctor reads operations.json) - see _recycle_stale_lock."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=indent), encoding="utf-8")

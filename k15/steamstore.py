@@ -268,7 +268,7 @@ def load_deals() -> dict:
 
 def refresh_deals() -> int:
     """Precompute the feed answers into state/deals.json, read by list_games
-    and worker_home. The wishlist half needs the key; specials is keyless."""
+    and the assistant. The wishlist half needs the key; specials is keyless."""
     s = cglib.load_secrets()
     steamid = str(s.get("steamId64", ""))
     specials = fetch_specials()

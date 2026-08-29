@@ -61,11 +61,10 @@ def has(*needs):
 def fresh_state(lock_age_s=None, lock_content="x"):
     """Point every state-file constant into a new tempdir. lock_age_s seeds a
     session lock of that age (None = absent). Returns the tempdir."""
-    import jobs
     import library
+    import operations
     import steamstore
     import traces
-    import workers
     tmp = Path(tempfile.mkdtemp(prefix="cg-test-state-"))
     cglib.STATE = tmp
     cglib.LOCK = tmp / "session.lock"
@@ -77,10 +76,8 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     steamstore.DEALS = tmp / "deals.json"
     steamstore.FACET_CACHE = tmp / "facet-cache.json"
     steamstore.TAGMAP = tmp / "store-tags.json"
-    jobs.JOBS_FILE = tmp / "jobs.json"
+    operations.OPERATIONS_FILE = tmp / "operations.json"
     traces.DIR = tmp / "traces"
-    workers.WORKER_HOME = tmp / "worker_home"
-    workers.CodexWorker.LAST = workers.WORKER_HOME / ".last-message.txt"
     if lock_age_s is not None:
         cglib.LOCK.write_text(lock_content)
         old = time.time() - lock_age_s

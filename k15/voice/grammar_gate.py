@@ -21,7 +21,7 @@ from rapidfuzz import fuzz
 from pipecat.frames.frames import (BotStartedSpeakingFrame,
                                    BotStoppedSpeakingFrame, EndWorkerFrame,
                                    ErrorFrame, Frame, OutputAudioRawFrame,
-                                   TranscriptionFrame, TTSSpeakFrame,
+                                   TranscriptionFrame,
                                    UserStartedSpeakingFrame,
                                    UserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -131,8 +131,8 @@ class GrammarGate(FrameProcessor):
     ACK_COALESCE_S = 0.8
 
     def __init__(self, matcher, dispatch, log, resolve_game=None,
-                 assistant_enabled=False, wake_word=None, jobs=None,
-                 ack=None, resolve_collection=None):
+                 assistant_enabled=False, wake_word=None, ack=None,
+                 resolve_collection=None):
         super().__init__()
         self.matcher = matcher
         self.dispatch = dispatch
@@ -141,7 +141,6 @@ class GrammarGate(FrameProcessor):
         self.resolve_collection = resolve_collection  # fuzzy name -> collection id
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
-        self.jobs = jobs                        # JobStore; None = worker lane off
         self.ack = ack                          # preroll.WakeAck; None = no chime
         self._speaking = False                  # user turn open (Flux)
         self._dispatching = 0                   # blocking calls in flight
@@ -206,10 +205,6 @@ class GrammarGate(FrameProcessor):
             # teardown, so every way a session can end sounds the same.
             await self.push_frame(EndWorkerFrame(reason="exit phrase"))
             return True
-        if intent in ("TaskResult", "TaskDetail", "TaskCancel"):
-            if self.jobs is None:
-                return False        # no background lane -> the assistant
-            return await self._task_intent(intent)
         actions = {
             "StartSession": d.start_session,
             "EndSession": d.end_session,
@@ -239,33 +234,6 @@ class GrammarGate(FrameProcessor):
             self._dispatching -= 1
         self.log("dispatch", intent=intent, ok=r.ok, detail=r.detail)
         await self._result_earcon(r.earcon)
-        return True
-
-    async def _task_intent(self, intent):
-        """Background-task retrieval speaks through the session TTS (no
-        earcon), marked read only after it was spoken. All jobs calls are
-        local file reads - no thread hop."""
-        if intent == "TaskCancel":
-            n, running = self.jobs.cancel_queued()
-            self.log("task_cancel", cancelled=n, running=running)
-            if running:
-                await self.push_frame(TTSSpeakFrame(
-                    "One is already running - it will finish or time out. "
-                    + (f"Cancelled {n} queued." if n else "")))
-            else:
-                # Local file read - the ok would land inside the wake chime.
-                await self._result_earcon("ok" if n else "fail")
-            return True
-        job = self.jobs.latest_result()
-        if job is None:
-            line = self.jobs.status_line()
-            await self.push_frame(TTSSpeakFrame(
-                line or "No finished background tasks."))
-            return True
-        text = job["detail"] if intent == "TaskDetail" else job["summary"]
-        self.log("task_spoken", intent=intent, job=job["id"])
-        await self.push_frame(TTSSpeakFrame(text))
-        self.jobs.mark_read(job["id"])
         return True
 
     async def _play_game(self, spoken):

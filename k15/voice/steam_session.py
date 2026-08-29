@@ -72,8 +72,8 @@ class SteamSession:
     # -- HTTP seams (tests swap these to feed canned JSON) --------------------
 
     def _session(self):
-        import requests
         if self._sess is None:
+            import requests
             self._sess = requests.Session()
             self._sess.headers["User-Agent"] = UA
         return self._sess
@@ -214,9 +214,7 @@ class SteamSession:
         return out
 
     def _target(self, machine_name=None):
-        """Pick the client to act on: machine-name match (the call's, else
-        self.machine), falling back to the first session. None when the PC is
-        offline - callers speak that as 'the PC is asleep'."""
+        """Pick the configured client, or the first when none is configured."""
         ses = self.sessions()
         if not ses:
             return None
@@ -225,9 +223,13 @@ class SteamSession:
             for s in ses:
                 if s["machine_name"].lower() == machine_name.lower():
                     return s
+            return None
         return ses[0]
 
-    def app_list(self, changing_only=False):
+    def client_online(self, machine_name=None):
+        return self._target(machine_name) is not None
+
+    def app_list(self, changing_only=False, machine_name=None):
         """GetClientAppList for the target client, normalized to
         {appid: {name, installed, changing, paused, downloaded, total, queue}}.
         Shape, confirmed live 2026-08-14: the name field is 'app', not
@@ -236,7 +238,7 @@ class SteamSession:
         appid, bytes_required, changing, queue_position, running}, while
         filters=changing adds bytes_downloaded/bytes_to_download, installed and
         bytes_staged - so anything needing progress must pass changing_only."""
-        tgt = self._target()
+        tgt = self._target(machine_name)
         if not tgt:
             return {}
         params = {"access_token": self.access_token(), "origin": ORIGIN,
@@ -283,7 +285,8 @@ class SteamSession:
                 self.log.warn("install_failed", appid=appid, eresult=eresult)
                 return {"ok": False, "error": f"Steam refused the install (code {eresult})"}
             time.sleep(1.5)
-            app = self.app_list(changing_only=True).get(appid, {})
+            app = self.app_list(changing_only=True,
+                                machine_name=machine_name).get(appid, {})
         except Exception as e:
             self.log.error("install_error", appid=appid, err=str(e))
             return {"ok": False, "error": "couldn't reach Steam - the account "
@@ -299,7 +302,7 @@ class SteamSession:
     def download_status(self, machine_name=None):
         """Apps mid-change, most-complete first - the list_games 'downloading'
         source."""
-        apps = self.app_list(changing_only=True)
+        apps = self.app_list(changing_only=True, machine_name=machine_name)
         rows = []
         for appid, a in apps.items():
             if not a["changing"] and a["total"] <= a["downloaded"]:

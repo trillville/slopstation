@@ -66,50 +66,6 @@ def stt_keyterms(voice, wake_phrase, catalog=None):
 CARRY = {"messages": [], "t": 0.0}      # cross-session context (followupCarryS)
 
 
-def job_messages(jobs, before_t):
-    """Recent background results as prior conversation (both the ask and the
-    result). Returns (pre, post), split on whether the job finished before
-    before_t, the carry snapshot; the caller places each side around the
-    carried turns to keep clock order.
-
-    Open risk: worker text derives from untrusted web pages and is seeded as
-    role:"assistant" in a context holding quit_game, install_game and nav,
-    bounded only by those tools' checks (quit confirms first, install
-    validates ownership, nav takes validated kinds only).
-    Hardening the worker's tool surface does NOT close this - the channel is
-    its OUTPUT. The untried fix: seed results as a user-role quote attributed
-    to the worker, or mark them untrusted in the text, then measure that the
-    model treats them as data."""
-    if jobs is None:
-        return [], []
-    import jobs as jobs_mod
-    pre, post = [], []
-    for j in jobs.for_context():
-        said = j["summary"]
-        detail = j.get("detail") or ""
-        if len(detail) > jobs_mod.CONTEXT_DETAIL_CHARS:
-            # Cut on a word and mark it: a silent mid-word cut reads to the
-            # model as the whole report (2026-08-15).
-            cut = detail[:jobs_mod.CONTEXT_DETAIL_CHARS]
-            sp = cut.rfind(" ")
-            detail = (cut[:sp] if sp > 0 else cut) + " [truncated]"
-        if detail and detail != j["summary"]:
-            said += " " + detail
-        asked = (j.get("asked") or "").strip()
-        msgs = pre if j.get("finished", 0) <= before_t else post
-        if asked:
-            msgs += [{"role": "user", "content": asked},
-                     {"role": "assistant", "content": said}]
-        else:
-            # No transcript to quote (chord lane, REPL, or a job predating
-            # `asked`). System role, not an invented user turn - text in the
-            # user's mouth would read as a standing instruction.
-            msgs += [{"role": "system",
-                      "content": f"(earlier background task: {j['task']}) "
-                                 f"You reported: {said}"}]
-    return pre, post
-
-
 def _trim_carry(messages):
     """Carry only whole tool exchanges: the Anthropic API 400s on a
     tool_result without its tool_use. Drop from the front until a plain user
@@ -179,22 +135,22 @@ class Session:
     it, then save the transcript and the carry."""
 
     def __init__(self, cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                 capture=None, jobs=None, ack=None, steam=None,
+                 capture=None, operations=None, ack=None, steam=None,
                  on_end_session=None):
         self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
         self.dry_run = dry_run
         self.input_idx, self.output_idx = input_idx, output_idx
-        self.capture, self.jobs, self.ack, self.steam = capture, jobs, ack, steam
+        self.capture = capture
+        self.operations, self.ack, self.steam = operations, ack, steam
         self.on_end_session = on_end_session    # the room ducker's restore
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None                     # the LLM lane's, once built
-        self.seeded = (0, 0, 0)                 # (jobs-before, carried, jobs-after)
 
     async def run(self):
         from pipecat.frames.frames import (BotSpeakingFrame,
                                            InterimTranscriptionFrame,
-                                           TranscriptionFrame, TTSSpeakFrame,
+                                           TranscriptionFrame,
                                            UserStartedSpeakingFrame)
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -256,7 +212,6 @@ class Session:
                 rows=catalog.collections),      # None when no collections synced
             assistant_enabled=assistant_live,
             wake_word=wake_phrase.split()[-1],  # "jarvis" - the strip anchor
-            jobs=self.jobs,
             ack=self.ack,                       # wake chime, if still unplayed
         )
 
@@ -311,11 +266,6 @@ class Session:
             feeder.pcm = self.capture.stop()
         try:
             await runner.add_workers(worker)
-            if self.jobs is not None and assistant_live and self.jobs.unread():
-                # Next-wake mention for an aborted or synth-failed announcement.
-                await worker.queue_frame(TTSSpeakFrame(
-                    "By the way, a background task finished - say what did "
-                    "you find to hear it."))
             await runner.run()
         finally:
             # pipecat 1.7 never terminates the PyAudio handle it creates and
@@ -330,9 +280,7 @@ class Session:
         self._save_and_carry()
 
     def _assistant_stages(self, transport, dispatcher, gate):
-        """The LLM lane: a context seeded from the carry and recent background
-        results, the tools, the provider's LLM, TTS. The stages after the
-        gate."""
+        """The LLM lane: carried turns, tools, provider LLM, and TTS."""
         from assistant import (function_schemas, server_tools,
                                system_instruction, tool_impls)
         from pipecat.adapters.schemas.tools_schema import (AdapterType,
@@ -341,17 +289,9 @@ class Session:
         from pipecat.processors.aggregators.llm_response_universal import (
             LLMContextAggregatorPair)
 
-        voice, secrets, jobs = self.voice, self.secrets, self.jobs
+        voice, secrets = self.voice, self.secrets
         carry = (list(CARRY["messages"])
                  if time.time() - CARRY["t"] < voice["followupCarryS"] else [])
-        # Background results go in history, not the system prompt, which must
-        # stay byte-identical session to session or the prompt cache misses.
-        # Clock order matters: a job finishing after the last session goes
-        # AFTER the carried turns, or the model reads it as answered-then-
-        # asked and denies having the result (2026-08-15).
-        pre, post = job_messages(jobs, CARRY["t"])
-        self.seeded = (len(pre), len(carry), len(post))
-        carry = pre + carry + post
         # Native (provider-executed) tools ride custom_tools. Only the OpenAI
         # adapter has that passthrough in pipecat 1.7 (AdapterType has no
         # ANTHROPIC), so the knob is a no-op under the anthropic provider.
@@ -361,7 +301,7 @@ class Session:
             tools=ToolsSchema(
                 standard_tools=function_schemas(
                     # Built after the gate so its request_stop can ride here.
-                    tool_impls(dispatcher, log, jobs=jobs,
+                    tool_impls(dispatcher, log, operations=self.operations,
                                on_stop_listening=gate.request_stop,
                                voice=voice, steam=self.steam),
                     log),                   # -> one tool_call event per call
@@ -383,26 +323,20 @@ class Session:
                 asst_agg]
 
     def _save_and_carry(self):
-        """Cross-session follow-ups: dump the transcript, carry the last turns
-        minus the seeded job results - the next session re-seeds them from
-        jobs.json, so carrying them too would double the findings until they
-        aged out. They sit on both sides of the carried block; cut by the
-        counts recorded at build time."""
+        """Dump the transcript and retain the last complete turns."""
         if self.context is None:
             return
         msgs = list(self.context.messages)
         traces.save("voice", msgs,
                     {"provider": self.provider, "dry_run": self.dry_run})
-        n_pre, n_carry, n_post = self.seeded
-        kept = msgs[n_pre:n_pre + n_carry] + msgs[n_pre + n_carry + n_post:]
-        CARRY["messages"] = _trim_carry(kept[-8:])
+        CARRY["messages"] = _trim_carry(msgs[-8:])
         CARRY["t"] = time.time()
 
 
 async def run_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                      capture=None, jobs=None, ack=None, steam=None,
+                      capture=None, operations=None, ack=None, steam=None,
                       on_end_session=None):
     """voice_agent's entry: one Session, run to its end."""
     await Session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                  capture=capture, jobs=jobs, ack=ack, steam=steam,
+                  capture=capture, operations=operations, ack=ack, steam=steam,
                   on_end_session=on_end_session).run()

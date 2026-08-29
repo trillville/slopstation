@@ -248,7 +248,7 @@ def check_voice(cfg):
     check_voice_library()
     check_voice_config(cfg)
     check_steam_session()
-    check_workers(cfg)
+    check_operations()
     check_voice_agent()
 
 
@@ -363,68 +363,28 @@ def check_steam_session():
                    "re-run steam_session.py enroll")
 
 
-def _worker_exe(voice_dir, wp):
-    """The provider's CLI name, asked of workers.py in the voice venv - doctor
-    runs on system python and imports nothing from voice/. None when the venv
-    is absent or the provider is unknown."""
-    vpy = voice_dir / ".venv" / "Scripts" / "python.exe"
-    if not vpy.exists():
-        return None
-    try:
-        p = subprocess.run(
-            [str(vpy), "-c", f"import workers; print(workers.WORKERS[{wp!r}].exe)"],
-            cwd=str(voice_dir), capture_output=True, text=True, timeout=30)
-    except Exception:
-        return None
-    exe = p.stdout.strip()
-    return exe if p.returncode == 0 and exe else None
-
-
-def check_workers(cfg):
-    voice_dir = cglib.BASE / "voice"
-    # Background-task lane - WARN-only.
-    import shutil
-    wp = cfg["voice"].get("workerProvider", "")
-    if wp:
-        exe = _worker_exe(voice_dir, wp)
-        if exe is None:
-            report(WARN, "worker CLI", f"can't resolve provider '{wp}'",
-                   "workerProvider is anthropic|openai (see config.example.json); "
-                   "needs the voice venv (voice\\Start-Voice.bat once)")
-        else:
-            cli = shutil.which(exe)
-            if cli:
-                report(PASS, "worker CLI", f"{wp} -> {exe} on PATH ({cli})")
-            else:
-                report(WARN, "worker CLI", f"'{exe}' not on PATH - background "
-                       "tasks disabled (everything else runs)",
-                       f"npm i -g the {exe} CLI and log in once, "
-                       "as the autologon user")
-        if wp == "openai":
-            # Codex keeps a shell: the boundary here is AGENTS.md policy,
-            # not the harness (see workers.py).
-            report(WARN, "worker isolation",
-                   "codex keeps a shell (sandbox confines writes, not reads)",
-                   "structural research-only isolation is the anthropic lane")
-        if not (voice_dir / "worker_home" / "AGENTS.md").exists():
-            report(WARN, "worker briefing", "worker_home\\AGENTS.md missing",
-                   "git pull should restore it - workers act unbriefed without it")
-    jobs_file = cglib.STATE / "jobs.json"
-    if jobs_file.exists():
+def check_operations():
+    operations_file = cglib.STATE / "operations.json"
+    if operations_file.exists():
         try:
-            rows = json.loads(jobs_file.read_text(encoding="utf-8"))
-            running_jobs = [j for j in rows if j.get("status") == "RUNNING"]
-            unread = [j for j in rows if not j.get("read", True)]
-            note = (f"{len(rows)} recorded, {len(running_jobs)} running, "
-                    f"{len(unread)} unread")
-            if running_jobs and "voice_agent" not in _python_cmdlines():
-                report(WARN, "worker jobs", note + " - RUNNING with no agent "
-                       "(orphan)", "the agent's next start reconciles it to FAILED")
+            rows = json.loads(operations_file.read_text(encoding="utf-8"))
+            active = [o for o in rows
+                      if o.get("state") in ("QUEUED", "RUNNING", "UNKNOWN")]
+            unknown = [o for o in active if o.get("state") == "UNKNOWN"]
+            pending = [o for o in rows if o.get("announcement_pending")]
+            note = (f"{len(rows)} recorded, {len(active)} active, "
+                    f"{len(unknown)} unknown, {len(pending)} pending announcement")
+            if active and "voice_agent" not in _python_cmdlines():
+                report(WARN, "operations", note + " - monitoring is paused",
+                       "start the voice agent; active work will be re-observed")
             else:
-                report(PASS, "worker jobs", note)
+                report(PASS, "operations", note)
         except Exception as e:
-            report(WARN, "worker jobs", f"jobs.json unreadable ({e})",
-                   "delete state\\jobs.json; the store recreates it")
+            report(WARN, "operations", f"operations.json unreadable ({e})",
+                   "restore or remove the file; external work is unaffected but "
+                   "Slopstation correlation will be lost")
+    else:
+        report(PASS, "operations", "no operations recorded")
 
 
 def check_voice_agent():

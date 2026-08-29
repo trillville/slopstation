@@ -112,23 +112,28 @@ def main():
     assert impls["get_now_playing"]({})["session_active"] is False
     r = impls["get_game_details"]({"appid": real_appid})
     assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
-    # background_task without a JobStore (REPL, or the CLI missing): refused.
-    r = impls["background_task"]({"task": "find coop deals"})
-    assert not r["ok"] and "aren't available" in r["error"]
+    class FakeOperations:
+        def __init__(self):
+            self.tracked = []
+            self.acknowledged = None
 
-    class FakeJobs:
-        def enqueue(self, task, asked=None):
-            self.asked = asked
-            return True, "queued - the result will be announced"
-    fake = FakeJobs()
-    jimpls = assistant.tool_impls(d, log, jobs=fake)
-    d.begin_utterance("4c1d0e", "find me co-op deals")   # what the gate writes
-    r = jimpls["background_task"]({"task": "find coop deals"})
-    assert r["ok"] and "queued" in r["detail"]
-    # The user's words ride the utterance snapshot into the job record: the
-    # tool call runs in a task whose ambient context predates the utterance.
-    assert fake.asked == "find me co-op deals", fake.asked
-    assert not jimpls["background_task"]({"task": "  "})["ok"]
+        def track_steam_install(self, appid, title, turn=None, verified=False):
+            self.tracked.append((appid, title, turn, verified))
+            return {"id": "op-test"}
+
+        def for_assistant(self, scope, acknowledge=False):
+            self.acknowledged = acknowledge
+            return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
+
+    fake_operations = FakeOperations()
+    oimpls = assistant.tool_impls(d, log, operations=fake_operations)
+    assert "list_operations" not in impls and "list_operations" in oimpls
+    r = oimpls["list_operations"]({"scope": "active"})
+    assert r["ok"] and r["operations"][0]["state"] == "RUNNING"
+    assert fake_operations.acknowledged is False
+    assert oimpls["list_operations"]({"scope": "recent"})["ok"]
+    assert fake_operations.acknowledged is True
+    assert not oimpls["list_operations"]({"scope": "nope"})["ok"]
     # Owned-but-not-installed must still come back named.
     inst_ids = {row["appid"] for row in rows}
     owned_only = [a for a, o in library.load().get("owned", {}).items()
@@ -155,6 +160,13 @@ def main():
     with_steam = assistant.tool_impls(d, log, steam=fake_steam)
     rr = with_steam["install_game"]({"appid": 999999999})
     assert not rr["ok"] and "not in the catalog" in rr["error"], rr
+    if owned_only:
+        d.begin_utterance("4c1d0e", "install stardew valley")
+        tracked = assistant.tool_impls(d, log, steam=fake_steam,
+                                       operations=fake_operations)
+        rr = tracked["install_game"]({"appid": int(owned_only[0])})
+        assert rr["ok"] and rr["operation_id"] == "op-test", rr
+        assert fake_operations.tracked[-1][2] == "4c1d0e"
     r = impls["search_store"]({})                           # neither term nor tags
     assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
     # steamDataTools off -> the two store tools vanish from impls AND schemas,
@@ -162,10 +174,9 @@ def main():
     gated = assistant.tool_impls(d, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated   # action tools aren't gated
-    # 11 tools minus the two store ones the kill switch drops.
-    assert len(assistant.function_schemas(gated)) == 9, len(assistant.function_schemas(gated))
-    # The facts-vs-judgment split lives in the descriptions the model reads.
-    assert "not background_task" in flat(assistant.TOOL_DEFS)
+    # Ten base tools minus the two store ones the kill switch drops.
+    assert len(assistant.function_schemas(gated)) == 8, len(assistant.function_schemas(gated))
+    assert len(assistant.function_schemas(oimpls)) == 11
     print("  list_games/search_store: routed, refused cleanly, kill-switch gates")
 
     # --- fail-soft: an impl that RAISES must return an error, never propagate -
