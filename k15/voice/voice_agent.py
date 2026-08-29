@@ -10,7 +10,7 @@ Modes:
   (default)             run the agent
   --devices             list audio devices and exit
   --earcons             play the earcon vocabulary and exit (volume audition)
-  --announce-test       speak a canned job announcement and exit (audio path)
+  --announce-test       speak a canned operation announcement and exit
   --dry-run             full pipeline; side effects logged, not executed
   --wake-trials         log wake detections + confidences; never start sessions
   --false-accept-soak   count spurious wakes over hours; never start sessions
@@ -86,7 +86,7 @@ def bench_mode(args, cfg, secrets):
         log("announce_test_start")
         try:
             done = ann.speak("Test announcement. This is how a finished "
-                             "background task will reach you.")
+                             "operation will reach you.")
         except Exception as e:
             log.error("announce_test_failed", err=str(e))
             return 1
@@ -103,8 +103,7 @@ def bench_mode(args, cfg, secrets):
 def warn_config(voice):
     """Settings that are legal but probably not what was meant. Warn, never
     refuse: the INACTIVE provider must not block startup."""
-    # Assistant = Messages API (full ids only); worker = claude CLI (aliases
-    # fine).
+    # The Messages API accepts full model ids, not CLI aliases.
     if not voice["assistantModelAnthropic"].startswith("claude-"):
         log.warn("config_suspect", setting="assistantModelAnthropic",
                  value=voice["assistantModelAnthropic"],
@@ -178,9 +177,9 @@ def main():
     ap.add_argument("--false-accept-soak", action="store_true")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--announce-test", action="store_true",
-                    help="speak a canned background-task announcement and "
+                    help="speak a canned operation announcement and "
                          "exit: the out-of-session audio path (earcon, Aura "
-                         "synth, chunked playback) with no job, no quota")
+                         "synth, chunked playback) with no operation")
     ap.add_argument("--text", action="store_true",
                     help="assistant REPL: typed transcripts, no audio; "
                          "always dry-run (actions log, never execute)")
@@ -232,38 +231,20 @@ def main():
             effort=voice["assistantReasoningEffort"] if provider == "openai" else None,
             websearch=voice["assistantWebSearch"] or None)
 
-    # Background tasks, fail-soft: no CLI just turns them off.
+    # Durable external operations and their out-of-session delivery.
     import announce
-    import jobs as jobs_mod
-    from workers import WORKER_MODEL_KEY, WORKERS
-    jobs = announcer = None
-    wp = voice["workerProvider"]
-    adapter = (WORKERS[wp](voice[WORKER_MODEL_KEY[wp]], voice["workerEffort"])
-               if wp in WORKERS else None)
-    if adapter is None:
-        log.warn("lane_disabled", what="worker", reason="unknown workerProvider",
-                 provider=wp, known=list(WORKERS))
-    elif not adapter.available():
-        log.warn("lane_disabled", what="worker", reason="CLI not on PATH",
-                 exe=adapter.exe)
-    elif not (stt_live and brain_live):
-        # Only background_task queues work; announcements need Deepgram TTS.
-        log.warn("lane_disabled", what="worker",
-                 reason="needs live Deepgram AND assistant keys")
-    else:
+    import operations as operations_mod
+    operation_store = operations_mod.OperationStore(log)
+    announcer = None
+    if stt_live:
         announcer = announce.Announcer(voice, secrets, log)
-        jobs = jobs_mod.JobStore(log, adapter, voice["workerTimeoutS"],
-                                 on_done=announcer.submit,
-                                 dry_run=args.dry_run)
-        announcer.jobs = jobs
-        orphans = jobs.reconcile()
-        jobs.start()
-        log("lane_up", what="worker", provider=wp, exe=adapter.exe,
-            model=adapter.model or "(cli default)",
-            effort=adapter.effort or "(cli default)", orphans=orphans or None)
+        announcer.store = operation_store
+        operation_store.on_terminal = announcer.submit
+        for operation in operation_store.pending_announcements():
+            announcer.submit(operation)
 
-    # Install-by-voice + download status over ClientComm. No refresh token =
-    # lane None, install_game never offered. Never fatal.
+    # Remote install + download status over ClientComm. Without a refresh token,
+    # install_game keeps its controller-driven fallback. Never fatal.
     import steam_session
     steam = steam_session.SteamSession(secrets, log,
                                        machine_name=cfg.get("steamMachineName"))
@@ -276,6 +257,13 @@ def main():
         steam = None
         log("lane_disabled", what="steam_session",
             reason="no refresh token - run steam_session.py enroll")
+
+    if steam is not None:
+        monitor = operations_mod.SteamMonitor(operation_store, steam, log)
+        monitor.start()
+        log("lane_up", what="operation_monitor",
+            active=len(operation_store.active(kind="steam_install")),
+            poll_s=monitor.poll_s)
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
     tracing.setup(cfg, secrets, log)
@@ -375,7 +363,8 @@ def main():
             duck(restore=False)
             asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
                                     input_idx, output_idx, capture,
-                                    jobs=jobs, ack=ack, steam=steam,
+                                    operations=operation_store, ack=ack,
+                                    steam=steam,
                                     on_end_session=lambda: duck(restore=True)))
         except Exception as e:
             log.error("session_crashed", err=repr(e))

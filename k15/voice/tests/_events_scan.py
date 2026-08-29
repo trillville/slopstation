@@ -11,12 +11,8 @@ PC = REPO / "gaming-pc"
 NOT_EVENTS = {"event"}                       # cglib's docstring example
 
 # Names built at runtime, listed by hand. Field keys come from the call site.
-_META = {"cost_usd", "turns", "web_searches", "web_fetches", "denials", "model",
-         "stop_reason"}                      # jobs.py passes them by **splat
 DYNAMIC = {
     "enter_dispatched": {"dur_ms"}, "enter_redispatched": {"dur_ms"},
-    "job_done": _META,
-    "job_failed": {"job", "status", "dur_ms", "session", "summary", "tools"} | _META,
     "exlink_send": {"again"},                # couch.exlink(**fields) passthrough
 }
 PC_DYNAMIC = {f"{t}_start": set() for t in (

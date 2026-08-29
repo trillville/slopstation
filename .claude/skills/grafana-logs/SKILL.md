@@ -139,8 +139,7 @@ Time to READY, the number the whole system is judged on:
 - **voice, assistant lane**: `tool_call` — one per tool the assistant ran, with
   `tool`, `ok` and truncated `args`. Nothing before 2026-08-14 has it. Also
   `tool_refused` (the boundary rejecting a call, e.g. `reason=unknown_appid`),
-  `job_requested` (the background brief), `web_search` (provider-executed
-  search).
+  and `web_search` (provider-executed search).
 - **voice, couch verbs**: `nav_dispatched` `quit_dispatched` — both carry the
   host's `answer`, and `FAILED:1` on either means the PC-side scheduled task
   is not registered, not that the verb is broken. Plus `collection_resolved`
@@ -155,10 +154,11 @@ Time to READY, the number the whole system is judged on:
     arriving and the press was wrong or too short; `armed` with no partials at
     all is a claim/firmware problem, not a hold problem.
 - **supervisor**: `start` `restart` `lane_started` `lane_reloaded` `deps_installed`
-- **background jobs**: `job_queued` `job_running` `job_done` `job_failed`
-  `job_announced` `job_orphaned` — on `lane="voice"`, not a lane of their own
-  (the JobStore logs through the voice agent's logger), so select them by
-  `event`. `job_done` carries `cost_usd` / `turns` / `web_searches`.
+- **operations**: `operation_created` `operation_observed`
+  `operation_announced` `operation_cancel_refused` — durable observations of
+  externally-owned work on `lane="voice"`. `operation_observed` carries the
+  previous/current state, structured progress, and detail. `UNKNOWN` is an
+  observation gap, not a failure; terminal delivery is `operation_announced`.
 - **steam**: `enrolled` `token_mint_failed` `token_transfer_failed`
   `install_queued` `install_failed` — the account session. The lane label means
   **hand-run**, like `manual` does for `exlink.py`: the agent passes its own

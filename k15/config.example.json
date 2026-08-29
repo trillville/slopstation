@@ -52,11 +52,6 @@
     "assistantSearchMaxUses": 2,
     "steamDataTools": true,
     "location": {"city": "", "region": "", "country": "US", "timezone": ""},
-    "workerProvider": "anthropic",
-    "workerModelAnthropic": "sonnet",
-    "workerModelOpenai": "gpt-5.6-terra",
-    "workerEffort": "high",
-    "workerTimeoutS": 600,
     "langfuseHost": "https://us.cloud.langfuse.com",
     "followUpAfterAnnounce": true,
     "inputs": {

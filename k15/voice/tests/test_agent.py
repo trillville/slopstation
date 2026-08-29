@@ -1,7 +1,7 @@
 """Blind test: voice_agent.main() - lane bring-up per config shape, the bench
 modes, the wake loop's event order, dry-run plumbing, --once, a crashing
 session. Every external seam stubbed (audio, wake model, pipeline, announcer,
-jobs, steam, tracing). Named test_agent, not test_voice_agent: Start-K15.bat's
+operations, steam, tracing). Named test_agent, not test_voice_agent: Start-K15.bat's
 reload and doctor find the live agent by the substring voice_agent.py. Run:
     .venv\\Scripts\\python tests\\test_agent.py
 """
@@ -15,11 +15,10 @@ from _bootstrap import fresh_state
 import announce
 import cglib
 import events
-import jobs as jobs_mod
+import operations
 import steam_session
 import tracing
 import voice_agent as va
-import workers
 
 REAL_KEY = "k" * 40
 SECRETS = {"deepgramApiKey": REAL_KEY, "anthropicApiKey": REAL_KEY}
@@ -58,7 +57,7 @@ class FakeAnnouncer:
     made = []
 
     def __init__(self, voice, secrets, log):
-        self.jobs = None
+        self.store = None
         self.follow_up = threading.Event()
         self.session_active = threading.Event()
         self.aborted = 0
@@ -71,40 +70,44 @@ class FakeAnnouncer:
         self.aborted += 1
 
 
-class FakeJobStore:
+class FakeOperationStore:
     made = []
 
-    def __init__(self, log, adapter, timeout_s, on_done=None, dry_run=False):
-        self.on_done, self.dry_run = on_done, dry_run
-        FakeJobStore.made.append(self)
+    def __init__(self, log, on_terminal=None, path=None):
+        self.on_terminal = on_terminal
+        FakeOperationStore.made.append(self)
 
-    def reconcile(self):
-        return 0
+    def pending_announcements(self):
+        return []
 
-    def start(self):
-        pass
-
-    def unread(self):
+    def active(self, kind=None):
         return []
 
 
-class FakeAdapter:
-    available_answer = True
-    exe = "claude"
+class FakeSteamMonitor:
+    made = []
 
-    def __init__(self, model, effort):
-        self.model, self.effort = model, effort
+    def __init__(self, store, steam, log):
+        self.store, self.steam = store, steam
+        self.poll_s = 30
+        self.started = False
+        FakeSteamMonitor.made.append(self)
 
-    def available(self):
-        return self.available_answer
+    def start(self):
+        self.started = True
 
 
 class FakeSteam:
+    available_answer = False
+
     def __init__(self, secrets, log, machine_name=None):
         self.steamid = "7656"
 
     def available(self):
-        return False
+        return self.available_answer
+
+    def token_expiry(self):
+        return 2_000_000_000
 
 
 class FakeDucker:
@@ -144,15 +147,16 @@ def stub_everything():
     cglib.load_secrets = lambda: dict(SECRETS)
     tracing.setup = lambda cfg, secrets, log: False
     announce.Announcer = FakeAnnouncer
-    jobs_mod.JobStore = FakeJobStore
-    workers.WORKERS = {"anthropic": FakeAdapter}
+    operations.OperationStore = FakeOperationStore
+    operations.SteamMonitor = FakeSteamMonitor
     steam_session.SteamSession = FakeSteam
     FakeListener.wakes = []
     FakeListener.built = []
     FakeAnnouncer.made = []
-    FakeJobStore.made = []
+    FakeOperationStore.made = []
+    FakeSteamMonitor.made = []
     FakeDucker.made = []
-    FakeAdapter.available_answer = True
+    FakeSteam.available_answer = False
 
 
 def config(**top):
@@ -176,9 +180,9 @@ def run(argv, cfg, session=None, setup=None):
     calls = []
 
     async def fake_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
-                           capture=None, jobs=None, ack=None, steam=None,
+                           capture=None, operations=None, ack=None, steam=None,
                            on_end_session=None):
-        calls.append(dict(dry_run=dry_run, jobs=jobs, steam=steam,
+        calls.append(dict(dry_run=dry_run, operations=operations, steam=steam,
                           capture=capture, matcher=matcher,
                           on_end_session=on_end_session))
         if session is not None:
@@ -215,7 +219,7 @@ def main():
     assert rc == 0, rc
     ev = log.events()
     ups = {r["what"] for r in log.find("lane_up")}
-    assert {"assistant", "worker"} <= ups, ups
+    assert "assistant" in ups, ups
     assert any(r["what"] == "steam_session" for r in log.find("lane_disabled"))
     assert log.find("agent_up")[0]["dry_run"] is True
     # the loop: wake, then the session, then the sleep chime + close
@@ -225,18 +229,17 @@ def main():
     # the wake carries the session it opens (events.context is merged per wake)
     wake, opened = log.find("wake")[0], log.find("session_open")[0]
     assert wake["_session"] and wake["_session"] == opened["_session"]
-    # dry_run reaches every constructor and the session
+    # dry_run reaches the room side effects and the session
     assert calls and calls[0]["dry_run"] is True
-    assert FakeJobStore.made[0].dry_run is True
     assert FakeDucker.made and FakeDucker.made[0].dry_run is True
     # the announcer<->store wiring (two-phase attach)
-    ann, store = FakeAnnouncer.made[0], FakeJobStore.made[0]
-    assert ann.jobs is store and store.on_done == ann.submit
-    assert calls[0]["jobs"] is store and calls[0]["matcher"] == "MATCHER"
+    ann, store = FakeAnnouncer.made[0], FakeOperationStore.made[0]
+    assert ann.store is store and store.on_terminal == ann.submit
+    assert calls[0]["operations"] is store and calls[0]["matcher"] == "MATCHER"
     assert calls[0]["capture"].stopped >= 1, "capture must be stopped after the session"
     # end_session restores the room while the TV is still on (dispatch calls it)
     assert callable(calls[0]["on_end_session"])
-    print("  lanes: assistant+worker up, steam off, ducker built; one dry-run session, --once exits 0")
+    print("  lanes: assistant up, Steam off, operations+ducker built; one dry-run session")
 
     # --- no Deepgram key: no session, fail earcon, capture released ----------------
     cap = FakeCapture()
@@ -250,15 +253,15 @@ def main():
     assert "session_open" not in log.events() and cap.stopped == 1
     print("  stt off: wake plays the fail earcon, opens no session, releases the mic")
 
-    # --- worker CLI absent ----------------------------------------------------------
-    def no_cli():
-        FakeAdapter.available_answer = False
+    # --- Steam online: monitor starts and reaches the session -----------------
+    def steam_online():
+        FakeSteam.available_answer = True
         FakeListener.wakes.append((0.7, FakeCapture()))
-    rc, log, calls = run(["--once"], config(), setup=no_cli)
-    reasons = {r["what"]: r.get("reason") for r in log.find("lane_disabled")}
-    assert reasons.get("worker") == "CLI not on PATH", reasons
-    assert calls[0]["jobs"] is None
-    print("  worker: missing CLI disables the lane, session still runs")
+    rc, log, calls = run(["--once"], config(), setup=steam_online)
+    assert FakeSteamMonitor.made and FakeSteamMonitor.made[0].started
+    assert any(r["what"] == "operation_monitor" for r in log.find("lane_up"))
+    assert calls[0]["steam"] is FakeSteamMonitor.made[0].steam
+    print("  operations: enrolled Steam starts the monitor and reaches the session")
 
     # --- ducking without tvIp -----------------------------------------------------
     cfg = config()

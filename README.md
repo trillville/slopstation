@@ -92,13 +92,13 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `tv_remote.py` | TV remote keys over WebSocket (port 8002) — the only volume-write path that works on this rig — and `TvDucker`, the session-length ducking built on them. Needs a one-time pairing, see below. |
 | `assistant.py` | The catalog-in-context LLM lane: prompt, tool schemas and impls (store data, nav, quit, install), optional web search. |
 | `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
-| `workers.py` / `jobs.py` / `announce.py` | Background tasks — a research brief handed to an agent CLI that answers minutes later, out of session: the claude/codex adapters, the job store, and proactive spoken results. `worker_home/` is the worker's working directory. |
-| `steam_session.py` | Optional signed-in Steam account session: install-by-voice and download status over ClientComm. Token-gated. |
+| `operations.py` / `announce.py` | Durable correlation for externally-owned work, initially Steam installs: restart-safe observation, a diagnostic CLI, and proactive spoken completion. See `docs/operations.md`. |
+| `steam_session.py` | Optional signed-in Steam account session: install-by-voice, download status, and operation observation over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
 | `tracing.py` / `traces.py` / `llm_audit.py` | Langfuse spans, per-conversation JSON dumps under `state/traces/`, and a record of provider-executed tool calls. |
 | `requirements.txt` / `constraints.txt` | Pinned deps, plus the as-built transitive versions passed to pip as `-c`. A constraints-only change must ride a `requirements.txt` touch or the dependency gate won't fire. |
 | `models/` | Vendored wake models. `config.json`'s `wakeModel` selects one; the default is stock `hey_jarvis_v0.1`. |
-| `bench/` | Hand-run probes: room recording and slicing, STT measurement, wake-model comparison, worker tool-surface audit, verifier training. |
+| `bench/` | Hand-run probes: room recording and slicing, STT measurement, wake-model comparison, and verifier training. |
 | `tests/` | The blind suite — the tests that need neither machine nor hardware. See Tests below. |
 | `Start-Voice.bat` | Voice-lane supervisor, launched by `Start-K15.bat`: creates the venv on first run, then supervises the agent (single-instance, 10 s crash restart). The dependency gate lives inside the restart loop, so a `git pull` that changes pins installs them on the next agent launch. Args pass through — `Start-Voice.bat --dry-run` logs side effects instead of executing them. |
 
@@ -135,6 +135,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
 The box is `Restricted`, so `-ExecutionPolicy Bypass` is required — every
 scheduled task and the sshd forced command invoke PowerShell the same way. Both
 doctors are read-only and exit with their FAIL count.
+
+From `k15\voice`, inspect long-running work with
+`.venv\Scripts\python operations.py list`; `show <id>`, `reconcile`, and
+`cancel <id>` are the other diagnostic commands.
 
 **Correlate.** Every intent carries a `turn` id from the wake word or the chord
 through to the gaming PC. It appears in `k15/logs/k15-YYYYMMDD.jsonl`, in

@@ -60,7 +60,6 @@ def main():
     doctor.report = capture
     doctor.subprocess.run = fake_run
     doctor._local_rev = lambda: "abc1234"
-    doctor._worker_exe = lambda voice_dir, wp: sys.executable
     cfg = dict(_bootstrap.CONFIG)
 
     # --- config --------------------------------------------------------------
@@ -144,14 +143,19 @@ def main():
     doctor.check_voice(cfg)
     names = {n for _, n, _ in rows}
     assert {"voice keys", "voice venv", "voice library", "voice agent",
-            "worker CLI"} <= names, names
+            "operations"} <= names, names
     assert levels()["voice keys"] == "WARN" and levels()["voice agent"] == "WARN"
-    assert levels()["worker CLI"] == "PASS"
+    assert levels()["operations"] == "PASS"
+    rows.clear()
+    cglib.write_json(cglib.STATE / "operations.json", [{
+        "id": "op-test", "state": "UNKNOWN", "announcement_pending": False}])
+    doctor.check_operations()
+    assert levels()["operations"] == "WARN"
     rows.clear()
     doctor.check_voice({})
     assert levels()["voice config"] == "WARN"
     rows.clear()
-    print("  voice: keys, venv, library, worker, agent rows; no voice section warns")
+    print("  voice: keys, venv, library, operations, agent rows; no voice section warns")
 
     print("OK - doctor: config, hardware, listener, ssh contract + deploy skew, "
           "session state, telemetry, voice rows")

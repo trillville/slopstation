@@ -88,16 +88,6 @@ TABLE = [
     # Safe to widen where EndSession is not: touches nothing in the room.
     ("go away", "ExitSession", {}),
     ("leave me alone", "ExitSession", {}),
-    # Background-task surface - narrow by design.
-    ("what did you find", "TaskResult", {}),
-    ("what did you find out", "TaskResult", {}),
-    ("any updates", "TaskResult", {}),
-    ("any updates on the research", "TaskResult", {}),
-    ("task update", "TaskResult", {}),
-    ("give me the details", "TaskDetail", {}),
-    ("task details", "TaskDetail", {}),
-    ("cancel the task", "TaskCancel", {}),
-    ("cancel the job", "TaskCancel", {}),
     # --- MUST fall through (assistant lane / no action) ----------------------
     ("what mech games do i have", None, {}),
     ("suggest a shooter i haven't played in a while", None, {}),

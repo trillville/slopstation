@@ -142,7 +142,7 @@ def main():
     steamstore._save_facets({library.fuzzy_key("Hades"): {"hltb": {"main": 21}}})
     assert steamstore.fetch_hltb("hades") == {"main": 21}      # cache hit, no import
 
-    # --- refresh_deals: writes the one file the worker + list_games read -----
+    # --- refresh_deals: writes the one file list_games reads -----------------
     steamstore.log = cglib.CapturingLog("library")
     steamstore.refresh_deals()
     deals = steamstore.load_deals()

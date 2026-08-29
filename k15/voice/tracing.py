@@ -10,7 +10,6 @@ completions verbatim - events.scrub() does not apply (Pipecat builds these
 attributes) and no secret may become a span attribute.
 """
 import base64
-import contextlib
 import logging
 import os
 
@@ -140,77 +139,6 @@ def conversation_id():
     return events.current().get("session") or events.new_turn()
 
 
-# --- background jobs ----------------------------------------------------------
-#
-# A job finishes minutes after the conversation's spans close, in a worker
-# subprocess outside the pipeline Pipecat traces. W3C trace context bridges
-# it: carrier() freezes the span active when the tool fired, job_span()
-# re-parents the worker's spans onto it. So the conversation's trace latency
-# reads as wall-clock to job completion.
-
-
-def carrier():
-    """Freeze the active span context into a W3C traceparent dict, or None.
-    Stored on the job record, so a job resumed after a restart still finds its
-    parent."""
-    if not _on:
-        return None
-    try:
-        from opentelemetry.propagate import inject
-        out = {}
-        inject(out)
-        return out or None
-    except Exception:
-        return None
-
-
-class _NullJob:
-    """What every failure path yields: same shape, does nothing."""
-
-    def step(self, *a, **kw):
-        pass
-
-    def finish(self, *a, **kw):
-        pass
-
-
-class _Job:
-    def __init__(self, tracer, span):
-        self._tracer, self._span = tracer, span
-
-    def step(self, tool, arg="", result=""):
-        """One tool call the worker made. Point-in-time, in call order: the
-        CLI's stream carries no per-tool timings."""
-        try:
-            with self._tracer.start_as_current_span(f"tool: {tool}") as s:
-                s.set_attribute("langfuse.observation.type", "tool")
-                s.set_attribute("gen_ai.tool.name", str(tool))
-                if arg:
-                    s.set_attribute("langfuse.observation.input", str(arg)[:2000])
-                if result:
-                    s.set_attribute("langfuse.observation.output",
-                                    str(result)[:2000])
-        except Exception:
-            pass
-
-    def finish(self, summary="", detail="", meta=None):
-        try:
-            if summary or detail:
-                self._span.set_attribute(
-                    "langfuse.observation.output",
-                    (f"{summary}\n\n{detail}" if detail else summary)[:8000])
-            for k, v in (meta or {}).items():
-                self._span.set_attribute(f"couch.job.{k}", v)
-            # gen_ai.* too, so usage reads as usage rather than custom fields.
-            for src, dst in (("input_tokens", "gen_ai.usage.input_tokens"),
-                             ("output_tokens", "gen_ai.usage.output_tokens"),
-                             ("model", "gen_ai.request.model")):
-                if (meta or {}).get(src) is not None:
-                    self._span.set_attribute(dst, meta[src])
-        except Exception:
-            pass
-
-
 def tool_span(kind, query, result=None):
     """A provider-executed tool call, parented to whatever span is open (in
     the voice pipeline, Pipecat's llm span). Pipecat cannot do this itself:
@@ -228,42 +156,3 @@ def tool_span(kind, query, result=None):
                 s.set_attribute("langfuse.observation.output", str(result))
     except Exception:
         pass
-
-
-@contextlib.contextmanager
-def job_span(job_id, task, trace_carrier=None, session=None, provider=""):
-    """Span for one background job, re-parented onto the conversation. Never
-    raises and never suppresses: a tracing failure yields _NullJob, an
-    exception from the job body propagates untouched."""
-    cm = helper = None
-    if _on:
-        try:
-            from opentelemetry import trace as _otel
-            from opentelemetry.propagate import extract
-            tracer = _otel.get_tracer("slopstation.jobs")
-            cm = tracer.start_as_current_span(
-                "background task", context=extract(trace_carrier or {}))
-            span = cm.__enter__()
-            span.set_attribute("langfuse.observation.type", "span")
-            span.set_attribute("langfuse.observation.input", str(task)[:8000])
-            span.set_attribute("couch.job.id", str(job_id))
-            if provider:
-                span.set_attribute("couch.job.provider", str(provider))
-            sess = session or events.current().get("session")
-            if sess:
-                # Repeated on the span: Langfuse filters sessions off whatever
-                # spans carry it, and a job can outlive its conversation.
-                span.set_attribute("langfuse.session.id", sess)
-                span.set_attribute("session.id", sess)
-            helper = _Job(tracer, span)
-        except Exception:
-            cm = helper = None
-    try:
-        yield helper or _NullJob()
-    finally:
-        if cm is not None:
-            try:
-                cm.__exit__(None, None, None)
-            except Exception:
-                pass
-

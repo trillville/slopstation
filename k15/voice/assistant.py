@@ -37,13 +37,11 @@ and answer NOW, in the same breath - that is a normal answer, not a
 research project. For those look-ups you have tools: search_store to find a
 kind of game by genre and price, list_games for what's on sale or trending
 or what you've been playing, and get_game_details facets for a game's
-price, reviews, patch news, or how long it takes to beat. Those answer
-FACTS now; the background task is only for judgment across sources, not for
-something one call settles. When the question is about ONE named game's
-reviews, price, updates or length, get_game_details is the answer and web
-search is not: Steam's own review score and patch notes are better than a
-search result and arrive instantly. Search the web for what Steam does not
-carry.
+price, reviews, patch news, or how long it takes to beat. Those answer facts
+now. When the question is about ONE named game's reviews, price, updates or
+length, get_game_details is the answer and web search is not: Steam's own
+review score and patch notes are better than a search result and arrive
+instantly. Search the web for what Steam does not carry.
 
 Name titles from the catalog or from a tool result rather than from memory,
 and when the ask is for something NEW, never offer a game that is already
@@ -120,12 +118,12 @@ def known_appids():
     return ids
 
 
-def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
-               steam=None):
+def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
+               voice=None, steam=None):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL.
 
-    jobs is the background-task JobStore and on_stop_listening is
-    GrammarGate.request_stop; None for either makes that tool refuse.
+    operations is the durable external-work ledger and on_stop_listening is
+    GrammarGate.request_stop.
     voice=cfg["voice"] with steamDataTools false drops list_games/
     search_store, and function_schemas renders only what's present - so the
     kill switch removes them from what the MODEL sees, not just from what it
@@ -169,6 +167,19 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             try:
                 r = steam.install(appid)
                 if r.get("ok"):
+                    if operations is not None:
+                        owned = library.load().get("owned", {}).get(str(appid), {})
+                        title = owned.get("name") or f"app {appid}"
+                        try:
+                            operation = operations.track_steam_install(
+                                appid, title, turn=dispatch.utterance.turn,
+                                verified=bool(r.get("verified")))
+                            return {**r, "operation_id": operation["id"]}
+                        except Exception as e:
+                            # Submission already happened; tracking must not
+                            # turn a successful external action into a refusal.
+                            log.error("operation_track_failed", appid=appid,
+                                      err=str(e))
                     return r
                 log.warn("install_fallback", appid=appid, why=r.get("error"))
             except Exception as e:
@@ -365,28 +376,23 @@ def tool_impls(dispatch, log, jobs=None, on_stop_listening=None, voice=None,
             on_sale=bool(args.get("on_sale")))
         return {"ok": True, "count": len(rows), "games": rows}
 
-    def background_task(args):
-        task = str(args.get("task", "")).strip()
-        if not task:
-            return {"ok": False, "error": "background_task needs a task"}
-        if jobs is None:
-            return {"ok": False, "error": "background tasks aren't available "
-                    "right now - answer from what you know instead"}
-        # The user's words ride the gate's snapshot (see dispatch.Utterance).
-        ok, detail = jobs.enqueue(task, asked=dispatch.utterance.asked)
-        # function_schemas emits the generic tool_call; this one keeps the
-        # TASK text, which that event's args field truncates.
-        log("job_requested", ok=ok, task=task[:200])
-        return {"ok": ok, "detail" if ok else "error": detail}
+    def list_operations(args):
+        scope = args.get("scope", "active")
+        if scope not in ("active", "recent"):
+            return {"ok": False, "error": f"unknown operation scope {scope}"}
+        return {"ok": True, "scope": scope,
+                "operations": operations.for_assistant(
+                    scope, acknowledge=(scope == "recent"))}
 
     impls = {"launch_game": launch_game, "control": control,
              "stop_listening": stop_listening,
              "get_now_playing": get_now_playing,
              "get_game_details": get_game_details,
-             "background_task": background_task,
              "list_games": list_games, "search_store": search_store,
              "quit_game": quit_game, "nav": nav,
              "install_game": install_game}
+    if operations is not None:
+        impls["list_operations"] = list_operations
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
             impls.pop(gated, None)
@@ -443,9 +449,8 @@ _SEARCH_STORE = """\
 Search the Steam store with filters and get back names + prices immediately
 - this is the fast, factual path for 'find me a <kind of> game [under $N]
 [on sale]'. Pass genres/features as tags (e.g. 'Roguelike', 'Co-op'), a
-title fragment as term, a dollar cap as max_price. Use THIS, not
-background_task, when Steam's own filters can answer - only escalate to
-background_task when the user wants judgment about which is actually good."""
+title fragment as term, a dollar cap as max_price. Use this when Steam's own
+filters can answer."""
 
 _QUIT_GAME = """\
 Quit the game that is currently running. This ENDS the game and can lose
@@ -477,28 +482,11 @@ tells you which, so say what actually happened rather than assuming. Only
 for owned-but-not-installed titles (installed ones are a no-op). Confirm
 the title first if there's any doubt; downloads are large."""
 
-_BACKGROUND_TASK = """\
-Queue the background research agent ONLY when the user asks you to go away
-and report back later, or when the work truly takes many steps (compare
-reviews across sources, dig into something) - minutes, not seconds. A
-recommendation or a what's-new question is NOT this: use search_store /
-list_games / get_game_details and answer in the same breath instead. The
-split is facts vs judgment: if Steam's own filters or a review summary
-answer it, that's search_store or get_game_details, now; only 'which of
-these is actually good' or a cross-source comparison is background_task.
-When you DO escalate after a search, put the shortlist you already found
-INTO the task text so the agent deepens it rather than starting over. It is
-a full agent with web access and its own copy of the library, NOT
-restricted to the library the way you are. The result is announced aloud
-later. After queueing, tell the user you'll get back to them."""
-
-_TASK_BRIEF = """\
-A self-contained brief: what the user actually wants, plus any constraint
-THEY stated. Do not add constraints of your own, and never tell it to stay
-inside the library or list the library for it - the library is what the
-user ALREADY owns, so 'recommend games I don't own, using only my library'
-asks for an empty set. When they want something new, write 'exclude games
-already in the library' instead; the agent can read the library itself."""
+_LIST_OPERATIONS = """\
+Read Slopstation's durable operations. Use scope 'active' for current work and
+'recent' for what just finished or what an announcement referred to. These
+records come from explicit external observations; do not infer completion from
+conversation history or from an absent download."""
 
 TOOL_DEFS = [
     ("launch_game", _LAUNCH_GAME,
@@ -551,12 +539,11 @@ TOOL_DEFS = [
      ["target"]),
     ("install_game", _INSTALL_GAME,
      {"appid": {"type": "integer", "description": "appid of an owned, not-yet-"
-                "installed game"}},
+                 "installed game"}},
      ["appid"]),
-    ("background_task", _BACKGROUND_TASK,
-     {"task": {"type": "string",
-               "description": _TASK_BRIEF}},
-     ["task"]),
+    ("list_operations", _LIST_OPERATIONS,
+     {"scope": {"type": "string", "enum": ["active", "recent"]}},
+     []),
 ]
 
 

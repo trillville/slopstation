@@ -37,28 +37,10 @@ Latency on a `turn` includes **the human talking and thinking**; only the
 child spans are system time. A 25 s turn with a 3.8 s `llm` and 2.0 s `tts`
 means ~19 s of user, not a slow agent.
 
-A queued background job hangs off the same trace, under the turn that asked
-for it, even though it finishes minutes after the conversation ends:
-
-```
-conversation
-├── turn                     "research couch co-op games I don't own"
-│   └── llm                  → called background_task
-└── background task   2m14s  couch.job.cost_usd, .turns, .web_searches, .model
-    ├── tool: WebSearch      input = the query, output = what came back
-    ├── tool: WebFetch       input = the URL
-    └── …
-```
-
-So **trace latency includes the job's wall-clock** — a 90-second conversation
-that queued a 3-minute job reads as ~3 minutes. Don't report that as a slow
-conversation; the `turn` spans are the conversational latency.
-
-Tool spans are point-in-time: the CLI's stream carries no per-tool timings, so
-they show **what** the worker called and with what, not how long each took.
-`couch.job.denials` > 0 means it tried something the allowlist blocked. A job
-with `stream_fallback` in its metadata ran on an older CLI output format and
-has no tool spans at all.
+Long-running operations are executed by external authorities and are not
+attached to the conversation trace. The submitting tool call remains in its
+voice turn; later progress and completion are `operation_*` events in Grafana.
+Do not infer operation wall-clock time from Langfuse trace latency.
 
 ## Commands
 
@@ -114,11 +96,6 @@ the dispatch, the launch, the earcons, the errors.
   `k15\state\traces\<stamp>-voice.json` (`messages[].tool_calls`) is the only
   source, and the `trace_saved` log event names the exact file. That mirror
   holds the whole message history, not just the calls.
-- **Worker tool spans come from the CLI stream**, so a CLI output-format churn
-  costs the spans (`stream_fallback` in the job metadata). `couch.job.web_searches`
-  counts them from the stream too — reading the API's `server_tool_use` instead
-  reported `0` on a job with six real searches (2026-08-14).
-  `couch.job.denials` may be absent rather than zero.
 - **A trace can span several API pages.** `limit=100` is the hard maximum and
   the ROOT observation is often on a later page. `query.py` paginates on
   `meta.totalPages` and prints unreachable spans flat; a hand-rolled call gets

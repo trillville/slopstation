@@ -1,11 +1,11 @@
-"""Proactive spoken announcements OUTSIDE any session: a finished background
-job plays the announce earcon and speaks its summary. Two gates:
+"""Proactive spoken announcements OUTSIDE any session: a finished operation
+plays the announce earcon and speaks its summary. Two gates:
 session_active (the pipeline owns the speaker, so wait for session close - a
-mid-session retrieval may consume the job first) and abort (a wake word kills
-playback; the job stays unread).
+mid-session retrieval may consume the result first) and abort (a wake word kills
+playback; the operation stays pending).
 
 Playback opens its own short-lived PyAudio world, never touching the wake
-listener's. Synth failure fail-softs to earcon-only and unread."""
+listener's. Synth failure fail-softs to earcon-only and pending."""
 import json
 import queue
 import threading
@@ -33,14 +33,13 @@ def synth(text, api_key, voice_model):
 
 
 class Announcer:
-    """Thread owning the announce queue. jobs is attached after construction:
-    the store needs the announcer as its on_done hook first."""
+    """Thread owning the queue; store is attached after construction."""
 
     def __init__(self, voice_cfg, secrets, log):
         self.voice = voice_cfg
         self.secrets = secrets
         self.log = log
-        self.jobs = None                        # attached by main()
+        self.store = None                       # attached by main()
         self.session_active = threading.Event()
         self.abort = threading.Event()
         # Set after a bulletin heard in full; the wake loop takes it as "open
@@ -51,9 +50,9 @@ class Announcer:
         threading.Thread(target=self._run, daemon=True,
                          name="announcer").start()
 
-    def submit(self, job):
-        """jobs.on_done hook - called off-thread when a job finishes."""
-        self._q.put(job["id"])
+    def submit(self, operation):
+        """OperationStore terminal hook, called off-thread."""
+        self._q.put(operation["id"])
 
     def speak(self, text):
         """Earcon + one synthesized line, outside any session. True = played
@@ -71,7 +70,7 @@ class Announcer:
         """Output device index on a FRESH pa - resolving against an old
         snapshot is the deafness bug audio.py exists for. The only
         required=False caller: a missing speakerphone falls back to the
-        default rather than blocking the worker lane."""
+        default rather than blocking operation delivery."""
         return audio.resolve_device(pa, self.voice.get("outputDeviceName"),
                                     want_input=False, log=None, required=False)
 
@@ -98,32 +97,34 @@ class Announcer:
 
     def _run(self):
         while True:
-            job_id = self._q.get()
+            operation_id = self._q.get()
             self.abort.clear()
             # Session owns the speaker; a mid-session retrieval may mark the
-            # job read while we wait.
+            # operation acknowledged while we wait.
             while self.session_active.is_set():
                 time.sleep(0.5)
-            job = next((j for j in (self.jobs.unread() if self.jobs else [])
-                        if j["id"] == job_id), None)
-            if job is None:
+            operation = next((o for o in (
+                self.store.pending_announcements() if self.store else [])
+                              if o["id"] == operation_id), None)
+            if operation is None:
                 continue                        # already heard via pull
             try:
-                done = self.speak(job["summary"])
+                done = self.speak(operation["summary"])
             except Exception as e:
-                # Earcon alone still means "news"; job stays unread.
-                self.log.warn("announce_failed", job=job_id, err=str(e),
+                # Earcon alone still means "news"; operation stays pending.
+                self.log.warn("announce_failed", operation=operation_id, err=str(e),
                               fallback="earcon")
                 try:
                     self._play(earcons.pcm("announce"))
                 except OSError as e2:
-                    self.log.error("announce_earcon_failed", job=job_id, err=str(e2))
+                    self.log.error("announce_earcon_failed",
+                                   operation=operation_id, err=str(e2))
                 continue
             if done:
-                self.jobs.mark_read(job_id)
-                self.log("job_announced", job=job_id)
+                self.store.mark_delivered(operation_id)
+                self.log("operation_announced", operation=operation_id)
                 if self.follow_up_enabled:
                     # Only after a bulletin heard in FULL.
                     self.follow_up.set()
             else:
-                self.log("announce_cut_short", job=job_id)
+                self.log("announce_cut_short", operation=operation_id)

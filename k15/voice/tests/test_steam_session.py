@@ -112,6 +112,13 @@ def main():
     s_pinned._get, s_pinned._post = fake_get, fake_post
     s_pinned._access, s_pinned._access_exp = "tok", time.time() + 3600   # skip minting
     assert s_pinned._target()["instanceid"] == "111"             # self.machine wins over first
+    assert s_pinned.client_online()
+    state["sessions"] = [state["sessions"][0]]                    # only the laptop remains
+    assert s_pinned._target() is None and not s_pinned.client_online(), \
+        "a configured target must not fall through to another signed-in client"
+    state["sessions"] = [
+        {"client_instanceid": "999", "machine_name": "LAPTOP", "os_name": "Windows"},
+        {"client_instanceid": "111", "machine_name": "TILLMAN-DESKTOP", "os_name": "Windows"}]
 
     # --- 401 re-mint: a revocation 401s a not-yet-expired token and _get
     # retries once with a fresh one (driven via _session; mocks replace _get) --
