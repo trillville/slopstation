@@ -237,9 +237,22 @@ class MediaService:
             movie = dict(existing)
             movie_id = int(movie["id"])
             title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
-            if movie.get("hasFile"):
+            try:
+                current_profile_id = int(movie.get("qualityProfileId", 0))
+            except (TypeError, ValueError):
+                current_profile_id = 0
+            if movie.get("hasFile") and current_profile_id == profile_id:
                 return self._submission("movie", movie_id, title, tmdb_id,
                                         preset, profile_name, True)
+            baseline_file_id = None
+            if movie.get("hasFile"):
+                rows = self.radarr.get("moviefile", {"movieId": movie_id})
+                if not isinstance(rows, list) or not rows:
+                    raise MediaError("Radarr reports a movie file but did not return it")
+                try:
+                    baseline_file_id = int(rows[0]["id"])
+                except (KeyError, TypeError, ValueError) as e:
+                    raise MediaError("Radarr movie file has no id") from e
             movie.update(qualityProfileId=profile_id, monitored=True)
             self.radarr.put(f"movie/{movie_id}", movie)
             self.radarr.post("command", {"name": "MoviesSearch",
@@ -261,8 +274,10 @@ class MediaService:
                               "Radarr", "created movie")
             movie_id = int(movie["id"])
             title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
+            baseline_file_id = None
         return self._submission("movie", movie_id, title, tmdb_id, preset,
-                                profile_name, False)
+                                profile_name, False,
+                                baseline_file_id=baseline_file_id)
 
     @staticmethod
     def _seasons(value):
@@ -360,7 +375,7 @@ class MediaService:
 
     @staticmethod
     def _submission(kind, external_ref, title, catalog_id, preset, profile,
-                    already_available, seasons=None):
+                    already_available, seasons=None, baseline_file_id=None):
         out = {
             "ok": True,
             "kind": f"{kind}_acquisition",
@@ -374,6 +389,8 @@ class MediaService:
         }
         if kind == "series":
             out["seasons"] = seasons
+        if baseline_file_id is not None:
+            out["baseline_file_id"] = baseline_file_id
         return out
 
     @staticmethod
@@ -386,16 +403,27 @@ class MediaService:
         except ValueError:
             return None
 
-    def observe_movie(self, movie_id):
+    def observe_movie(self, movie_id, baseline_file_id=None):
         movie = self._one(self.radarr.get(f"movie/{int(movie_id)}"),
                           "Radarr", "movie")
         if movie.get("hasFile"):
-            return {"complete": True, "progress": {"percent": 100},
-                    "detail": "Radarr reports the movie imported"}
+            if baseline_file_id is None:
+                return {"complete": True, "progress": {"percent": 100},
+                        "detail": "Radarr reports the movie imported"}
+            rows = self.radarr.get("moviefile", {"movieId": int(movie_id)})
+            if not isinstance(rows, list) or not rows:
+                raise MediaError("Radarr reports a movie file but did not return it")
+            try:
+                current_file_id = int(rows[0]["id"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Radarr movie file has no id") from e
+            if current_file_id != int(baseline_file_id):
+                return {"complete": True, "progress": {"percent": 100},
+                        "detail": "Radarr imported the requested movie upgrade"}
         percent = self._queue_percent(self.radarr, "movieId", int(movie_id))
         progress = {} if percent is None else {"percent": percent}
         detail = (f"download is {percent}% complete" if percent is not None
-                  else "waiting for Radarr to import a movie file")
+                  else "waiting for Radarr to import the requested movie file")
         return {"complete": False, "progress": progress, "detail": detail}
 
     def observe_series(self, series_id, seasons=None, now=None):
@@ -448,7 +476,9 @@ class MediaService:
         kind = operation.get("kind")
         external_ref = int(operation["external_ref"])
         if kind == "movie_acquisition":
-            return self.observe_movie(external_ref)
+            metadata = operation.get("metadata") or {}
+            return self.observe_movie(external_ref,
+                                      metadata.get("baseline_file_id"))
         if kind == "series_acquisition":
             metadata = operation.get("metadata") or {}
             return self.observe_series(external_ref, metadata.get("seasons"), now)
@@ -501,7 +531,8 @@ def _track(store, submission):
     if submission["already_available"]:
         return submission
     metadata = {k: submission.get(k) for k in
-                ("catalog_id", "preset", "profile", "seasons")
+                ("catalog_id", "preset", "profile", "seasons",
+                 "baseline_file_id")
                 if k in submission}
     try:
         operation = store.track_external(

@@ -18,6 +18,7 @@ class FakeArr:
         self.lookup_by_id = None
         self.library = []
         self.episodes = []
+        self.movie_files = []
         self.queue = {"records": []}
         self.root_folders = []
         self.status_row = {"version": "1.2.3", "appName": name}
@@ -41,6 +42,8 @@ class FakeArr:
             return next(dict(row) for row in self.library if row["id"] == wanted)
         if endpoint == "episode":
             return [dict(row) for row in self.episodes]
+        if endpoint == "moviefile":
+            return [dict(row) for row in self.movie_files]
         if endpoint == "queue":
             return self.queue
         if endpoint == "system/status":
@@ -133,7 +136,21 @@ def main():
     before = len(svc.radarr.posts)
     ready = svc.request_movie(438631)
     assert ready["already_available"] and len(svc.radarr.posts) == before
-    print("  movie: default add, one-request 1080p steering, existing-file no-op")
+
+    svc = service()
+    svc.radarr.library = [{"id": 33, "tmdbId": 438631, "title": "Dune",
+                           "qualityProfileId": 11, "hasFile": True}]
+    svc.radarr.movie_files = [{"id": 71, "movieId": 33}]
+    upgrade = svc.request_movie(438631, "2160p")
+    assert not upgrade["already_available"]
+    assert upgrade["baseline_file_id"] == 71
+    assert svc.radarr.puts[0][1]["qualityProfileId"] == 10
+    operation = {"kind": "movie_acquisition", "external_ref": "33",
+                 "metadata": {"baseline_file_id": 71}}
+    assert not svc.observe(operation)["complete"]
+    svc.radarr.movie_files[0]["id"] = 72
+    assert svc.observe(operation)["complete"]
+    print("  movie: default add, steering, same-profile no-op, tracked 4K upgrade")
 
     # --- selected series seasons -------------------------------------------
     svc = service()

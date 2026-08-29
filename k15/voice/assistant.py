@@ -404,7 +404,8 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         if submission.get("already_available") or operations is None:
             return submission
         metadata = {k: submission.get(k) for k in
-                    ("catalog_id", "preset", "profile", "seasons")
+                    ("catalog_id", "preset", "profile", "seasons",
+                     "baseline_file_id")
                     if k in submission}
         try:
             operation = operations.track_external(

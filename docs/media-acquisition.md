@@ -50,10 +50,11 @@ rules. The initial movie default is `Slopstation Blu-ray HDR TrueHD`; a request
 such as “1080p is fine for this one” selects the configured `1080p` profile for
 that movie only.
 
-If a title already exists, Slopstation reuses its Radarr or Sonarr id. A file
-that is already present returns immediately without creating a completion
-announcement. An incomplete item gets the requested profile, a new search,
-and a durable operation.
+If a title already exists, Slopstation reuses its Radarr or Sonarr id. A movie
+file already assigned to the requested profile returns immediately. Selecting
+a different movie profile updates Radarr, starts an upgrade search, and keeps
+the durable operation active until Radarr replaces the prior file. An
+incomplete item gets the requested profile, a new search, and an operation.
 
 ## Operation lifecycle
 
