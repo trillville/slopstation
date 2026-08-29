@@ -20,8 +20,8 @@
     "sonarrUrl": "http://127.0.0.1:8989",
     "prowlarrUrl": "http://127.0.0.1:9696",
     "qbittorrentUrl": "http://127.0.0.1:8080",
-    "movieRoot": "/data/media/movies",
-    "seriesRoot": "/data/media/tv",
+    "movieRoot": "/data/Movies",
+    "seriesRoot": "/data/TV",
     "pollS": 30,
     "moviePresets": {
       "default": "Slopstation Blu-ray HDR TrueHD",

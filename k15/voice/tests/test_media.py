@@ -67,8 +67,8 @@ class FakeArr:
 
 def service():
     cfg = {
-        "movieRoot": "/data/media/movies",
-        "seriesRoot": "/data/media/tv",
+        "movieRoot": "/data/Movies",
+        "seriesRoot": "/data/TV",
         "moviePresets": {"default": "Movie UHD", "1080p": "Movie HD",
                          "2160p": "Movie UHD"},
         "seriesPresets": {"default": "Series HD", "1080p": "Series HD",
@@ -79,8 +79,8 @@ def service():
                        {"id": 11, "name": "Movie HD"}]
     sonarr.profiles = [{"id": 20, "name": "Series HD"},
                        {"id": 21, "name": "Series UHD"}]
-    radarr.root_folders = [{"id": 1, "path": "/data/media/movies/"}]
-    sonarr.root_folders = [{"id": 1, "path": "/data/media/tv"}]
+    radarr.root_folders = [{"id": 1, "path": "/data/Movies/"}]
+    sonarr.root_folders = [{"id": 1, "path": "/data/TV"}]
     return media.MediaService(cfg, cglib.CapturingLog("voice"), radarr, sonarr)
 
 
@@ -119,7 +119,7 @@ def main():
                           "hasFile": False}
     submitted = svc.request_movie(438631)
     endpoint, payload = svc.radarr.posts[0]
-    assert endpoint == "movie" and payload["rootFolderPath"] == "/data/media/movies"
+    assert endpoint == "movie" and payload["rootFolderPath"] == "/data/Movies"
     assert payload["qualityProfileId"] == 10
     assert payload["addOptions"] == {"searchForMovie": True, "addMethod": "manual"}
     assert submitted["external_ref"] == "31" and not submitted["already_available"]
@@ -169,7 +169,7 @@ def main():
     }
     series = svc.request_series(81189, "default", [2])
     added = svc.sonarr.posts[0][1]
-    assert added["rootFolderPath"] == "/data/media/tv"
+    assert added["rootFolderPath"] == "/data/TV"
     assert added["addOptions"]["monitor"] == "none"
     monitored = {r["seasonNumber"]: r["monitored"]
                  for r in svc.sonarr.puts[0][1]["seasons"]}
@@ -285,8 +285,8 @@ def main():
     assert compose.count("source: ${MEDIA_ROOT}") == 3
     assert "127.0.0.1:7878:7878" in compose
     assert "127.0.0.1:8989:8989" in compose
-    assert _bootstrap.CONFIG["media"]["movieRoot"] == "/data/media/movies"
-    assert _bootstrap.CONFIG["media"]["seriesRoot"] == "/data/media/tv"
+    assert _bootstrap.CONFIG["media"]["movieRoot"] == "/data/Movies"
+    assert _bootstrap.CONFIG["media"]["seriesRoot"] == "/data/TV"
     print("  deployment: four localhost sidecars share the stable /data namespace")
 
     print("OK - media: authenticated APIs, lookup/request policy, seasons, and completion")

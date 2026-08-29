@@ -89,10 +89,11 @@ Radarr and Sonarr API keys live in `secrets.json`. Existing installations stay
 disabled until `media.enabled` is set true, so a pull cannot make the voice
 agent depend on services that have not been provisioned.
 
-The Compose stack binds its web interfaces to K15 localhost. Radarr and Sonarr
-use `/data/media/movies` and `/data/media/tv`; qBittorrent uses
-`/data/torrents`. Keeping one `/data` mount gives every container identical
-paths and preserves hard-link/atomic-import behavior.
+The Compose stack binds its web interfaces to K15 localhost. Radarr uses
+`/data/Movies`, Sonarr uses `/data/TV`, and qBittorrent uses `/data/torrents`.
+These map to the existing `C:\Media\Movies` and `C:\Media\TV` host folders.
+Keeping one `/data` mount gives every container identical paths and preserves
+hard-link/atomic-import behavior.
 
 The one-time live setup that cannot be committed is:
 

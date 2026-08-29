@@ -10,8 +10,8 @@ an SSH tunnel; do not expose their management ports to the internet.
 Use these paths and service addresses during one-time setup:
 
 - qBittorrent download path: `/data/torrents`
-- Radarr root: `/data/media/movies`
-- Sonarr root: `/data/media/tv`
+- Radarr root: `/data/Movies` (`C:\Media\Movies` on the host)
+- Sonarr root: `/data/TV` (`C:\Media\TV` on the host)
 - Radarr/Sonarr qBittorrent host: `qbittorrent`, port `8080`
 - Radarr category: `radarr`
 - Sonarr category: `sonarr`

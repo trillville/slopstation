@@ -21,8 +21,8 @@ foreach ($Directory in @(
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'qbittorrent'),
     $Settings.MEDIA_ROOT,
     (Join-Path $Settings.MEDIA_ROOT 'torrents'),
-    (Join-Path $Settings.MEDIA_ROOT 'media\movies'),
-    (Join-Path $Settings.MEDIA_ROOT 'media\tv')
+    (Join-Path $Settings.MEDIA_ROOT 'Movies'),
+    (Join-Path $Settings.MEDIA_ROOT 'TV')
 )) {
     New-Item -ItemType Directory -Path $Directory -Force | Out-Null
 }
