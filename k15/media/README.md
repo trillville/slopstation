@@ -42,6 +42,25 @@ subnets. Its peer connection remains bound to the `ProtonVPN` interface with
 UPnP/NAT-PMP disabled and Proton's current forwarded port. Verify its torrent
 address is the Proton exit IP before submitting media.
 
+For unattended voice and text requests, verify this operating state once:
+
+- Docker Desktop starts at login. The four Compose services use
+  `restart: unless-stopped`, so they return automatically with Docker.
+- Native qBittorrent and Proton VPN start at login. Proton connects to a P2P
+  server before qBittorrent transfers; after a Proton reconnect, its current
+  forwarded port still matches qBittorrent's listening port.
+- In both Radarr and Sonarr, qBittorrent is enabled and its **Test** succeeds.
+  **Completed Download Handling** is enabled. Leave automatic removal off
+  until the intended seeding ratio/time policy has been configured.
+- In Prowlarr, both applications test successfully and use **Full Sync**.
+  Manage synchronized indexers in Prowlarr, not separately in Radarr or
+  Sonarr. Each indexer's RSS, Automatic Search, and Interactive Search modes
+  are enabled, and its categories include movies for Radarr or TV for Sonarr.
+- Radarr and Sonarr show no download-client, root-folder, or indexer warning
+  under **System > Status**. Their quality profiles retain upgrades, cutoffs,
+  custom-format scores, and minimum scores; Slopstation selects those profiles
+  but never repairs their policy.
+
 Create the quality profiles named in `config.json` before enabling the media
 lane. The profile owns quality and custom-format policy; Slopstation only
 selects its name. Copy the generated Radarr and Sonarr API keys into
