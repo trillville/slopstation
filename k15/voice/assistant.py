@@ -405,7 +405,7 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return submission
         metadata = {k: submission.get(k) for k in
                     ("catalog_id", "preset", "profile", "seasons",
-                     "baseline_file_id")
+                     "baseline_file_id", "baseline_episode_files")
                     if k in submission}
         try:
             operation = operations.track_external(

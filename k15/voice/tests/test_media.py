@@ -183,7 +183,33 @@ def main():
         raise AssertionError("specials accepted as a normal season")
     except media.MediaError:
         pass
-    print("  series: selected seasons monitored/searched; implicit specials excluded")
+
+    svc = service()
+    svc.sonarr.library = [{
+        "id": 42, "tvdbId": 81189, "title": "Breaking Bad",
+        "qualityProfileId": 20,
+        "seasons": [{"seasonNumber": 1, "monitored": True}],
+    }]
+    svc.sonarr.episodes = [
+        {"id": 101, "episodeFileId": 201, "seasonNumber": 1,
+         "monitored": True, "hasFile": True,
+         "airDateUtc": "2020-01-01T00:00:00Z"},
+        {"id": 102, "episodeFileId": 0, "seasonNumber": 1,
+         "monitored": True, "hasFile": False,
+         "airDateUtc": "2020-01-08T00:00:00Z"},
+    ]
+    series_upgrade = svc.request_series(81189, "2160p", [1])
+    assert series_upgrade["baseline_episode_files"] == {"101": 201}
+    upgrade_operation = {
+        "kind": "series_acquisition", "external_ref": "42",
+        "metadata": {"seasons": [1],
+                     "baseline_episode_files": {"101": 201}},
+    }
+    assert not svc.observe(upgrade_operation)["complete"]
+    svc.sonarr.episodes[0]["episodeFileId"] = 301
+    svc.sonarr.episodes[1].update(hasFile=True, episodeFileId=302)
+    assert svc.observe(upgrade_operation)["complete"]
+    print("  series: selected seasons, implicit specials excluded, upgrades tracked")
 
     # --- positive completion evidence --------------------------------------
     svc = service()

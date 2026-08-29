@@ -54,7 +54,8 @@ If a title already exists, Slopstation reuses its Radarr or Sonarr id. A movie
 file already assigned to the requested profile returns immediately. Selecting
 a different movie profile updates Radarr, starts an upgrade search, and keeps
 the durable operation active until Radarr replaces the prior file. An
-incomplete item gets the requested profile, a new search, and an operation.
+existing series profile change does the same per requested aired episode.
+An incomplete item gets the requested profile, a new search, and an operation.
 
 ## Operation lifecycle
 
