@@ -396,8 +396,13 @@ def main():
     test_wake_chime_waits_for_the_end_of_speech()
     test_wake_ack_is_claimed_exactly_once()
     test_feeder_chunking()
-    asyncio.run(test_pipeline_ordering())
-    print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")
+    # LocalAudioTransport opens PortAudio's default devices for real - the one
+    # test here that a deviceless machine (CI) cannot run.
+    if _bootstrap.has("audio"):
+        asyncio.run(test_pipeline_ordering())
+        print("OK - pre-roll: capture, chunking, and pipeline ordering all hold")
+    else:
+        print("OK - pre-roll: capture and chunking hold (ordering needs audio)")
 
 
 if __name__ == "__main__":

@@ -155,8 +155,9 @@ tests by `sys.argv[0]`, so pytest would label their events `env=prod`. From
 ```
 
 runs every file in its own process and skips what the machine lacks:
-`test_library` needs a local Steam (detected), `test_session_pipeline` real
-audio devices (`set CG_TEST_AUDIO=1`, the K15); `--all` forces both. Every test
+`test_library` needs a local Steam (detected), `test_session_pipeline` and
+test_preroll's pipeline-ordering check real audio devices
+(`set CG_TEST_AUDIO=1`, the K15); `--all` forces both. Every test
 that touches the K15 modules starts with `import _bootstrap` (paths, a temp log
 dir and state dir, a config fixture, so the suite runs on a checkout with no
 `config.json`); `test_ps_parse` is stdlib-only and does not.

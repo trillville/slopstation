@@ -51,6 +51,13 @@ def wants(*needs):
     return True
 
 
+def has(*needs):
+    """wants() without the exit, for gating one test inside a file that
+    otherwise runs blind. Same words, same CG_TEST_HAS contract."""
+    have = os.environ.get("CG_TEST_HAS")
+    return have is None or all(n in have.split(",") for n in needs)
+
+
 def fresh_state(lock_age_s=None, lock_content="x"):
     """Point every state-file constant into a new tempdir. lock_age_s seeds a
     session lock of that age (None = absent). Returns the tempdir."""
