@@ -82,6 +82,12 @@ def main():
     assert store.get(operation["id"])["state"] == operations.UNKNOWN
     assert not terminal, "absence without install proof became terminal"
 
+    steam.downloads = [{"appid": 413150, "name": "Stardew Valley",
+                        "percent": 100, "paused": False, "queue": 0}]
+    monitor.reconcile_once()
+    assert store.get(operation["id"])["state"] == operations.RUNNING
+    assert not terminal, "100% bytes without install proof became terminal"
+
     installed.add(413150)
     monitor.reconcile_once()
     finished = store.get(operation["id"])
@@ -93,7 +99,7 @@ def main():
     store.for_assistant("recent", acknowledge=True)
     heard = store.get(operation["id"])
     assert not heard["announcement_pending"] and heard["delivered"]
-    print("  monitor: progress, silent UNKNOWN, positive completion, terminal stability")
+    print("  monitor: progress, silent UNKNOWN, manifest completion, terminal stability")
 
     other = store.track_steam_install(570, "Dota 2", verified=True)
     ok, detail = store.cancel(other["id"])
