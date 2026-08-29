@@ -282,9 +282,11 @@ def main():
     compose = (root / "k15" / "media" / "compose.yaml").read_text(encoding="utf-8")
     start_media = (root / "k15" / "media" / "Start-Media.ps1").read_text(
         encoding="utf-8")
-    for sidecar in ("prowlarr:", "radarr:", "sonarr:"):
+    for sidecar in ("flaresolverr:", "prowlarr:", "radarr:", "sonarr:"):
         assert sidecar in compose
     assert "qbittorrent:" not in compose
+    assert "ghcr.io/flaresolverr/flaresolverr:latest" in compose
+    assert "8191:8191" not in compose
     assert compose.count("source: ${MEDIA_ROOT}") == 2
     assert "127.0.0.1:7878:7878" in compose
     assert "127.0.0.1:8989:8989" in compose
