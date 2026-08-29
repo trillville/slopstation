@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The blind suite, exactly as the README documents it. windows-latest is
+  # required: the tests assume Windows paths and test_ps_parse shells to the
+  # real PowerShell parser. test_library and test_session_pipeline self-skip
+  # (no Steam, no audio devices on a runner).
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            k15/voice/requirements.txt
+            k15/voice/constraints.txt
+      - run: pip install -r k15/voice/requirements.txt -c k15/voice/constraints.txt
+      - run: python tests/run.py
+        working-directory: k15/voice
+
+  types:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install mypy==2.3.1
+      - name: chord lane
+        shell: bash
+        run: mypy k15/*.py
+      # MYPYPATH resolves the voice lane's sibling imports (cglib, events,
+      # gamepc) the same way the runtime sys.path does - without it the
+      # cross-lane surface goes unchecked.
+      - name: voice
+        shell: bash
+        run: MYPYPATH=.. mypy --config-file ../../mypy.ini *.py
+        working-directory: k15/voice

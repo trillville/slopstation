@@ -1,5 +1,7 @@
 # slopstation
 
+[![ci](https://github.com/trillville/slopstation/actions/workflows/ci.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/ci.yml)
+
 One-chord couch gaming console. An RTX 4090 gaming PC feeds a Samsung S90C over
 direct HDMI; a GMKtec K15 mini PC orchestrates.
 
@@ -167,6 +169,10 @@ off the AST; `test_ps_parse` parses every `.ps1` and checks the marker paths,
 charsets and turn order agree between `Dispatch.ps1` and `common.ps1`.
 `test_turn` reads the shipping `Dispatch.ps1`, so gaming-pc regex changes are
 drilled from here.
+
+Every push runs this suite plus mypy (`mypy.ini`, lenient: it holds the
+existing annotations consistent, it does not demand new ones) on a Windows
+runner — see `.github/workflows/ci.yml`.
 
 ## Configuration
 
