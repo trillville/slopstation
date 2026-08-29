@@ -63,8 +63,9 @@ An incomplete item gets the requested profile, a new search, and an operation.
 For a newly added series with selected seasons, Sonarr may return the series
 before its episode metadata exists. The operation records that search as
 pending; the monitor submits it after Sonarr exposes every selected season,
-so the voice request does not block and, once recorded, a voice-agent restart
-cannot lose it.
+explicitly monitors the selected episode ids, and then starts the search. The
+voice request does not block and, once recorded, a voice-agent restart cannot
+lose it.
 
 ## Operation lifecycle
 

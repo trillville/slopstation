@@ -327,6 +327,30 @@ class MediaService:
                      if isinstance(row, dict)}
         return bool(available - {0}) if not wanted else wanted <= available
 
+    def _monitor_series_episodes(self, rows, seasons):
+        wanted = set(seasons or [])
+        episode_ids = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            season = int(row.get("seasonNumber", 0) or 0)
+            if season <= 0 or (wanted and season not in wanted):
+                continue
+            if row.get("monitored"):
+                continue
+            try:
+                episode_id = int(row["id"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode has no id") from e
+            if episode_id <= 0:
+                raise MediaError("Sonarr episode has no id")
+            episode_ids.append(episode_id)
+        if episode_ids:
+            self.sonarr.put("episode/monitor", {
+                "episodeIds": episode_ids,
+                "monitored": True,
+            })
+
     def dispatch_pending_series_search(self, operation):
         metadata = operation.get("metadata") or {}
         if (operation.get("kind") != "series_acquisition"
@@ -338,6 +362,7 @@ class MediaService:
         rows = self.sonarr.get("episode", {"seriesId": series_id})
         if not self._episode_metadata_ready(rows, seasons):
             return False
+        self._monitor_series_episodes(rows, seasons)
         self._search_series(series_id, seasons)
         return True
 

@@ -62,6 +62,11 @@ class FakeArr:
 
     def put(self, endpoint, payload):
         self.puts.append((endpoint, json.loads(json.dumps(payload))))
+        if endpoint == "episode/monitor":
+            episode_ids = set(payload["episodeIds"])
+            for episode in self.episodes:
+                if episode.get("id") in episode_ids:
+                    episode["monitored"] = bool(payload["monitored"])
         return dict(payload)
 
 
@@ -181,13 +186,23 @@ def main():
         "metadata": {"seasons": [2], "search_pending": True},
     }
     assert not svc.dispatch_pending_series_search(pending)
-    svc.sonarr.episodes = [{"seasonNumber": 2, "monitored": True,
-                            "hasFile": False,
-                            "airDateUtc": "2020-01-01T00:00:00Z"}]
+    svc.sonarr.episodes = [
+        {"id": 101, "seasonNumber": 0, "monitored": False,
+         "hasFile": False, "airDateUtc": "2019-01-01T00:00:00Z"},
+        {"id": 102, "seasonNumber": 2, "monitored": False,
+         "hasFile": False, "airDateUtc": "2020-01-01T00:00:00Z"},
+        {"id": 103, "seasonNumber": 2, "monitored": True,
+         "hasFile": False, "airDateUtc": "2020-01-08T00:00:00Z"},
+    ]
     assert svc.dispatch_pending_series_search(pending)
+    assert svc.sonarr.puts[-1] == (
+        "episode/monitor", {"episodeIds": [102], "monitored": True})
     assert svc.sonarr.posts[-1] == (
         "command", {"name": "SeasonSearch", "seriesId": 41,
                     "seasonNumber": 2})
+    observation = svc.observe_series(41, [2])
+    assert observation["progress"] == {
+        "episodes": 0, "total_episodes": 2, "percent": 0}
     try:
         svc.request_series(81189, seasons=[0])
         raise AssertionError("specials accepted as a normal season")
