@@ -3,6 +3,7 @@ process list, ssh, sc). Asserts the row names and the levels that matter;
 the hints are prose. Run:
     .venv\\Scripts\\python tests\\test_doctor.py
 """
+import json
 import subprocess
 import sys
 import types
@@ -143,9 +144,10 @@ def main():
     doctor.check_voice(cfg)
     names = {n for _, n, _ in rows}
     assert {"voice keys", "voice venv", "voice library", "voice agent",
-            "operations"} <= names, names
+            "operations", "media"} <= names, names
     assert levels()["voice keys"] == "WARN" and levels()["voice agent"] == "WARN"
     assert levels()["operations"] == "PASS"
+    assert levels()["media"] == "PASS"
     rows.clear()
     cglib.write_json(cglib.STATE / "operations.json", [{
         "id": "op-test", "state": "UNKNOWN", "announcement_pending": False}])
@@ -154,6 +156,17 @@ def main():
     rows.clear()
     doctor.check_voice({})
     assert levels()["voice config"] == "WARN"
+    rows.clear()
+
+    media_cfg = json.loads(json.dumps(cfg))
+    media_cfg["media"]["enabled"] = True
+    cglib.load_secrets = lambda: {"radarrApiKey": "r" * 32,
+                                  "sonarrApiKey": "s" * 32}
+    doctor._tcp_reachable = lambda url, timeout=1: True
+    doctor.check_media(media_cfg)
+    assert levels()["media config"] == "PASS"
+    assert levels()["media keys"] == "PASS"
+    assert levels()["media services"] == "PASS"
     rows.clear()
     print("  voice: keys, venv, library, operations, agent rows; no voice section warns")
 

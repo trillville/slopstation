@@ -1,0 +1,76 @@
+name: slopstation-media
+
+services:
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-America/Los_Angeles}
+    volumes:
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/prowlarr
+        target: /config
+    ports:
+      - 127.0.0.1:9696:9696
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-America/Los_Angeles}
+    volumes:
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/radarr
+        target: /config
+      - type: bind
+        source: ${MEDIA_ROOT}
+        target: /data
+    ports:
+      - 127.0.0.1:7878:7878
+    depends_on:
+      - qbittorrent
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-America/Los_Angeles}
+    volumes:
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/sonarr
+        target: /config
+      - type: bind
+        source: ${MEDIA_ROOT}
+        target: /data
+    ports:
+      - 127.0.0.1:8989:8989
+    depends_on:
+      - qbittorrent
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-America/Los_Angeles}
+      WEBUI_PORT: 8080
+      TORRENTING_PORT: 6881
+    volumes:
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/qbittorrent
+        target: /config
+      - type: bind
+        source: ${MEDIA_ROOT}
+        target: /data
+    ports:
+      - 127.0.0.1:8080:8080
+      - 6881:6881
+      - 6881:6881/udp

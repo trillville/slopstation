@@ -13,6 +13,28 @@
   "tvIdleCmd":   "hdmi1",
   "tvOffWhenDone": true,
 
+  "media": {
+    "enabled": false,
+    "_enabled": "Set true only after the sidecars, roots, quality profiles, and Radarr/Sonarr API keys are configured.",
+    "radarrUrl": "http://127.0.0.1:7878",
+    "sonarrUrl": "http://127.0.0.1:8989",
+    "prowlarrUrl": "http://127.0.0.1:9696",
+    "qbittorrentUrl": "http://127.0.0.1:8080",
+    "movieRoot": "/data/media/movies",
+    "seriesRoot": "/data/media/tv",
+    "pollS": 30,
+    "moviePresets": {
+      "default": "Slopstation Blu-ray HDR TrueHD",
+      "1080p": "Slopstation 1080p",
+      "2160p": "Slopstation Blu-ray HDR TrueHD"
+    },
+    "seriesPresets": {
+      "default": "Slopstation Series",
+      "1080p": "Slopstation Series 1080p",
+      "2160p": "Slopstation Series 2160p"
+    }
+  },
+
   "voice": {
     "inputDeviceName": "",
     "outputDeviceName": "",

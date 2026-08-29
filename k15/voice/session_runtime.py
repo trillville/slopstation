@@ -136,12 +136,13 @@ class Session:
 
     def __init__(self, cfg, secrets, matcher, dry_run, input_idx, output_idx,
                  capture=None, operations=None, ack=None, steam=None,
-                 on_end_session=None):
+                 media=None, on_end_session=None):
         self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
         self.dry_run = dry_run
         self.input_idx, self.output_idx = input_idx, output_idx
         self.capture = capture
         self.operations, self.ack, self.steam = operations, ack, steam
+        self.media = media
         self.on_end_session = on_end_session    # the room ducker's restore
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
@@ -301,9 +302,9 @@ class Session:
             tools=ToolsSchema(
                 standard_tools=function_schemas(
                     # Built after the gate so its request_stop can ride here.
-                    tool_impls(dispatcher, log, operations=self.operations,
-                               on_stop_listening=gate.request_stop,
-                               voice=voice, steam=self.steam),
+                     tool_impls(dispatcher, log, operations=self.operations,
+                                on_stop_listening=gate.request_stop,
+                                voice=voice, steam=self.steam, media=self.media),
                     log),                   # -> one tool_call event per call
                 custom_tools={AdapterType.OPENAI: native} if native else None))
         user_agg, asst_agg = LLMContextAggregatorPair(self.context)
@@ -335,8 +336,8 @@ class Session:
 
 async def run_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
                       capture=None, operations=None, ack=None, steam=None,
-                      on_end_session=None):
+                      media=None, on_end_session=None):
     """voice_agent's entry: one Session, run to its end."""
     await Session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
                   capture=capture, operations=operations, ack=ack, steam=steam,
-                  on_end_session=on_end_session).run()
+                  media=media, on_end_session=on_end_session).run()

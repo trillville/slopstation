@@ -78,7 +78,13 @@ three...'). Ask one short clarifying question only when no reading clearly
 wins. That rule resolves what to SAY; for an action, an unclear reading
 means ask, never act on the best guess. If nothing in the catalog is close,
 say the game isn't in the library - don't force a match. If something
-fails, say so plainly."""
+fails, say so plainly.
+
+Media downloads are large actions. Resolve a movie or series with find_media
+first, use only the TMDB or TVDB id it returns, and ask one short clarifying
+question when the intended result is not clear. Never guess an id or expose
+torrent release names. A quality preference applies only to that request;
+omit it to use the configured default."""
 
 
 def system_instruction(cfg):
@@ -119,7 +125,7 @@ def known_appids():
 
 
 def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
-               voice=None, steam=None):
+               voice=None, steam=None, media=None):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL.
 
     operations is the durable external-work ledger and on_stop_listening is
@@ -128,7 +134,8 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
     search_store, and function_schemas renders only what's present - so the
     kill switch removes them from what the MODEL sees, not just from what it
     can call; None (REPL/bench) keeps every tool. steam is a SteamSession,
-    used by install_game and the download-status source."""
+    used by install_game and the download-status source. media is the
+    Radarr/Sonarr request boundary; None removes every media tool."""
     def _unknown(tool, appid):
         """The refusal for an appid outside the catalog, else None."""
         if appid in known_appids():
@@ -384,6 +391,66 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
                 "operations": operations.for_assistant(
                     scope, acknowledge=(scope == "recent"))}
 
+    def find_media(args):
+        kind = str(args.get("kind", ""))
+        try:
+            candidates = media.find(kind, args.get("query", ""))
+            return {"ok": True, "kind": kind, "candidates": candidates}
+        except Exception as e:
+            log.error("tool_error", tool="find_media", err=str(e))
+            return {"ok": False, "error": str(e)}
+
+    def _track_media(submission):
+        if submission.get("already_available") or operations is None:
+            return submission
+        metadata = {k: submission.get(k) for k in
+                    ("catalog_id", "preset", "profile", "seasons")
+                    if k in submission}
+        try:
+            operation = operations.track_external(
+                submission["kind"], submission["authority"],
+                submission["external_ref"], submission["title"],
+                turn=dispatch.utterance.turn,
+                detail=f"{submission['authority'].title()} accepted the request",
+                metadata=metadata)
+            return {**submission, "operation_id": operation["id"]}
+        except Exception as e:
+            # The external mutation already succeeded; tracking cannot turn it
+            # into a refusal or cause the model to submit it twice.
+            log.error("tool_error", tool="track_media", err=str(e))
+            return {**submission, "tracking": "failed"}
+
+    def request_movie(args):
+        try:
+            tmdb_id = int(args.get("tmdb_id", 0))
+            preset = args.get("preset", "default")
+            if tmdb_id <= 0:
+                return {"ok": False, "error": "tmdb_id must be positive"}
+            if dispatch.dry_run:
+                detail = f"would request TMDB {tmdb_id} with preset {preset}"
+                log("dry_run_would", action=detail)
+                return {"ok": True, "dry_run": True, "detail": detail}
+            return _track_media(media.request_movie(tmdb_id, preset))
+        except Exception as e:
+            log.error("tool_error", tool="request_movie", err=str(e))
+            return {"ok": False, "error": str(e)}
+
+    def request_series(args):
+        try:
+            tvdb_id = int(args.get("tvdb_id", 0))
+            preset = args.get("preset", "default")
+            seasons = args.get("seasons")
+            if tvdb_id <= 0:
+                return {"ok": False, "error": "tvdb_id must be positive"}
+            if dispatch.dry_run:
+                detail = f"would request TVDB {tvdb_id} with preset {preset}"
+                log("dry_run_would", action=detail)
+                return {"ok": True, "dry_run": True, "detail": detail}
+            return _track_media(media.request_series(tvdb_id, preset, seasons))
+        except Exception as e:
+            log.error("tool_error", tool="request_series", err=str(e))
+            return {"ok": False, "error": str(e)}
+
     impls = {"launch_game": launch_game, "control": control,
              "stop_listening": stop_listening,
              "get_now_playing": get_now_playing,
@@ -393,6 +460,9 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
              "install_game": install_game}
     if operations is not None:
         impls["list_operations"] = list_operations
+    if media is not None:
+        impls.update(find_media=find_media, request_movie=request_movie,
+                     request_series=request_series)
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
             impls.pop(gated, None)
@@ -488,6 +558,24 @@ Read Slopstation's durable operations. Use scope 'active' for current work and
 records come from explicit external observations; do not infer completion from
 conversation history or from an absent download."""
 
+_FIND_MEDIA = """\
+Resolve a movie or series title before requesting it. Returns at most five
+canonical candidates with year and a TMDB movie id or TVDB series id. Use the
+returned id in a request tool only when the intended candidate is clear; ask a
+short clarifying question otherwise."""
+
+_REQUEST_MOVIE = """\
+Request one movie by a tmdb_id returned by find_media. preset is default,
+1080p, or 2160p; omit it unless the user gives a quality preference. This can
+start a large download, so call it only for an explicit request and never with
+a guessed id."""
+
+_REQUEST_SERIES = """\
+Request one series by a tvdb_id returned by find_media. Omit seasons for all
+normal seasons, or pass explicit positive season numbers. preset is default,
+1080p, or 2160p. This can start many large downloads, so call it only for an
+explicit request and never with a guessed id."""
+
 TOOL_DEFS = [
     ("launch_game", _LAUNCH_GAME,
      {"appid": {"type": "integer", "description": "appid from the catalog"}},
@@ -544,6 +632,25 @@ TOOL_DEFS = [
     ("list_operations", _LIST_OPERATIONS,
      {"scope": {"type": "string", "enum": ["active", "recent"]}},
      []),
+    ("find_media", _FIND_MEDIA,
+     {"kind": {"type": "string", "enum": ["movie", "series"]},
+      "query": {"type": "string",
+                "description": "spoken title and optional year"}},
+     ["kind", "query"]),
+    ("request_movie", _REQUEST_MOVIE,
+     {"tmdb_id": {"type": "integer",
+                  "description": "id returned by find_media"},
+      "preset": {"type": "string",
+                 "enum": ["default", "1080p", "2160p"]}},
+     ["tmdb_id"]),
+    ("request_series", _REQUEST_SERIES,
+     {"tvdb_id": {"type": "integer",
+                  "description": "id returned by find_media"},
+      "preset": {"type": "string",
+                 "enum": ["default", "1080p", "2160p"]},
+      "seasons": {"type": "array", "items": {"type": "integer"},
+                  "description": "positive season numbers; omit for all normal seasons"}},
+     ["tvdb_id"]),
 ]
 
 

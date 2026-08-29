@@ -4,7 +4,7 @@ Read-only except one haptic chirp, skipped when the chord listener is running
 (one process owns the Puck). Voice and telemetry rows are WARN-only; only the
 chord chain can FAIL. Exit code = number of FAILs.
 """
-import json, subprocess, sys, time
+import json, socket, subprocess, sys, time, urllib.parse
 
 import cglib
 import haptics
@@ -248,6 +248,7 @@ def check_voice(cfg):
     check_voice_library()
     check_voice_config(cfg)
     check_steam_session()
+    check_media(cfg)
     check_operations()
     check_voice_agent()
 
@@ -361,6 +362,46 @@ def check_steam_session():
         except Exception as e:
             report(WARN, "steam session", f"token unreadable ({e})",
                    "re-run steam_session.py enroll")
+
+
+def _tcp_reachable(url, timeout=1):
+    parsed = urllib.parse.urlsplit(str(url))
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    with socket.create_connection((parsed.hostname, port), timeout=timeout):
+        return True
+
+
+def check_media(cfg):
+    media = cfg.get("media") if isinstance(cfg, dict) else None
+    if not isinstance(media, dict) or not media.get("enabled"):
+        report(PASS, "media", "disabled")
+        return
+    required = ("radarrUrl", "sonarrUrl", "prowlarrUrl", "qbittorrentUrl",
+                "movieRoot", "seriesRoot", "moviePresets", "seriesPresets")
+    missing = [key for key in required if not media.get(key)]
+    if missing:
+        report(WARN, "media config", f"missing keys: {missing}",
+               "compare the media block with config.example.json")
+    else:
+        report(PASS, "media config", "topology, roots, and presets present")
+    secrets = cglib.load_secrets()
+    absent = [key for key in ("radarrApiKey", "sonarrApiKey")
+              if not cglib.real_key(secrets.get(key))]
+    report(WARN if absent else PASS, "media keys",
+           f"missing: {', '.join(absent)}" if absent else "Radarr and Sonarr present",
+           "copy each API key from Settings > General into secrets.json")
+    reachable, down = [], []
+    for name, key in (("Prowlarr", "prowlarrUrl"), ("Radarr", "radarrUrl"),
+                      ("Sonarr", "sonarrUrl"), ("qBittorrent", "qbittorrentUrl")):
+        try:
+            _tcp_reachable(media[key])
+            reachable.append(name)
+        except Exception:
+            down.append(name)
+    report(WARN if down else PASS, "media services",
+           f"reachable: {', '.join(reachable) or 'none'}"
+           + (f" | unreachable: {', '.join(down)}" if down else ""),
+           "start k15\\media\\Start-Media.ps1 and inspect docker compose ps")
 
 
 def check_operations():

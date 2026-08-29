@@ -6,9 +6,9 @@ media acquisition. The K15 keeps only enough state to correlate a request,
 observe its authority after a restart, answer status questions, and announce a
 terminal result.
 
-The first implementation is Steam installation. Media acquisition is the
-second implementation and may extend this contract only where the two domains
-demonstrably differ.
+Steam installation was the first implementation. Media acquisition is the
+second and extends the record only with structured request metadata. See
+`docs/media-acquisition.md` for its service and completion contracts.
 
 ## Record
 
@@ -16,14 +16,18 @@ demonstrably differ.
 
 - `id`: Slopstation identifier used by logs and the diagnostic CLI.
 - `turn`: originating voice turn when one exists.
-- `kind`: domain operation type; initially `steam_install`.
-- `authority`: system whose observation decides the state; initially `steam`.
-- `external_ref`: authority identifier; the Steam appid for an install.
+- `kind`: `steam_install`, `movie_acquisition`, or `series_acquisition`.
+- `authority`: system whose observation decides the state: Steam, Radarr, or
+  Sonarr.
+- `external_ref`: authority identifier: Steam appid, Radarr movie id, or
+  Sonarr series id.
 - `title`: user-facing label resolved from Slopstation's catalog.
 - `state`: `QUEUED`, `RUNNING`, `UNKNOWN`, `SUCCEEDED`, `FAILED`, or `CANCELED`.
 - `progress`: small structured authority-specific status, initially percent,
   paused, and queue position.
 - `detail`: the latest structured observation rendered as a short diagnostic.
+- `metadata`: optional structured request policy such as catalog id, quality
+  preset/profile, and selected seasons. Never release or indexer text.
 - `created`, `updated`, and `last_observed`: Unix timestamps.
 - `finished`: terminal-transition timestamp, otherwise null.
 - `announcement_pending`: whether the terminal result still needs to be
@@ -61,10 +65,11 @@ one Steam install.
 
 ## Monitor and announcement
 
-The voice agent owns one daemon monitor. It polls only nonterminal Steam
-operations, immediately reconciles persisted active operations after process
-startup, and sleeps between passes. Monitoring may stop while the voice agent
-is down; restart resumes observation from the file.
+The voice agent owns concrete Steam and media daemon monitors when their
+authorities are configured. Each polls only its nonterminal operation kinds,
+immediately reconciles persisted active operations after process startup, and
+sleeps between passes. Monitoring may stop while the voice agent is down;
+restart resumes observation from the file.
 
 Normal progress, `UNKNOWN`, and recovery from `UNKNOWN` are silent. A first
 terminal transition sets `announcement_pending` and queues the existing
@@ -94,8 +99,19 @@ The Steam path is deliberately concrete rather than an abstract job framework:
    reports the unsupported capability honestly.
 
 Do not introduce an adapter base class for this first implementation. When
-Radarr and Sonarr arrive, extract only the interface their real differences
-justify.
+Radarr and Sonarr arrived, the only shared surface they justified was generic
+record creation plus `MediaMonitor` consuming a structured observation. Steam
+keeps its own concrete monitor and manifest evidence.
+
+The media path is likewise concrete:
+
+1. `find_media` resolves structured TMDB/TVDB candidates through an authority.
+2. `request_movie` or `request_series` submits a resolved id and named preset.
+3. A successful submission creates or reuses its media operation.
+4. `MediaMonitor` asks the media boundary for file/episode evidence and never
+   reads release-level data.
+5. `media.py status|profiles|validate|find|request-*` provides diagnostics and
+   an explicit `--execute` mutation gate.
 
 ## Research-runner removal
 
@@ -109,18 +125,12 @@ The old research queue is removed as a feature, not migrated:
 - Remove `job_*` and task-retrieval events deliberately from the frozen event
   vocabulary; add the operation lifecycle events there.
 
-## Media decision gate
+## Media placement
 
-Before media implementation, decide where Prowlarr, Radarr, Sonarr,
-qBittorrent, downloads, and the final library live. The gaming PC sleeps by
-design, while the K15 is always available but no always-on media storage is
-described in the repository.
-
-If the bytes live only on the gaming PC, media acquisition needs a headless
-wake and keep-awake lifecycle that does not switch displays, claim the Puck, or
-start a couch session. If suitable storage is always reachable from the K15 or
-a NAS, the services can remain always on and this prerequisite disappears.
-This choice must be made before writing the media submit path.
+Prowlarr, Radarr, Sonarr, and qBittorrent live on the always-on K15. Their
+shared container path `/data` initially maps to `C:\Media`; the future NAS
+changes only that host mapping. Media acquisition therefore has no dependency
+on waking the gaming PC, display profiles, the Puck, or a couch session.
 
 ## Acceptance and deferred live validation
 
@@ -141,5 +151,5 @@ and are intentionally deferred until all repository work passes:
 4. Interrupt a completion announcement with the wake word and verify the
    result remains pending and is delivered later.
 5. Run the K15 audio-bound suite and `doctor.py` after deployment.
-6. Record the media-service and storage placement, then implement Radarr and
-   Sonarr as the second proving authority.
+6. Run the media checks in `docs/media-acquisition.md` after the sidecars,
+   indexer, profiles, and API keys are configured.
