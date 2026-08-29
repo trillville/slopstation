@@ -7,14 +7,15 @@ links, or move media files itself.
 
 ## Service boundary
 
-The always-on K15 hosts four sidecars:
+The always-on K15 hosts four services:
 
 - Prowlarr owns indexer definitions and synchronizes them into Radarr and
   Sonarr.
 - Radarr owns movie search, release selection, upgrades, import, and the final
   movie library.
 - Sonarr owns the same lifecycle for series and episodes.
-- qBittorrent owns transfer state. Radarr and Sonarr are its clients.
+- Native qBittorrent owns transfer state. It runs through Proton VPN's
+  include-only split tunnel; Radarr and Sonarr are its clients.
 
 Slopstation talks only to the Radarr and Sonarr v3 APIs during normal use. The
 K15 ledger stores their numeric movie or series id, never a release name,
@@ -22,9 +23,10 @@ tracker response, download URL, or magnet link. External strings are limited
 to structured catalog metadata returned during an explicit lookup; indexer and
 release text never enters assistant history.
 
-The repository supplies a Docker Compose deployment because all four services
-then share one stable `/data` namespace. The first host mapping is `C:\Media`;
-moving to the NAS changes `MEDIA_ROOT` in the sidecar `.env`, not Slopstation's
+The repository supplies a Docker Compose deployment for Prowlarr, Radarr, and
+Sonarr. Their stable `/data` namespace maps to `C:\Media`. Native qBittorrent
+uses `C:\Media\torrents`; Arr remote path mappings translate that to
+`/data/torrents`. Moving to the NAS changes the host paths, not Slopstation's
 API payloads or operation records.
 
 ## Request interface
@@ -90,21 +92,24 @@ disabled until `media.enabled` is set true, so a pull cannot make the voice
 agent depend on services that have not been provisioned.
 
 The Compose stack binds its web interfaces to K15 localhost. Radarr uses
-`/data/Movies`, Sonarr uses `/data/TV`, and qBittorrent uses `/data/torrents`.
-These map to the existing `C:\Media\Movies` and `C:\Media\TV` host folders.
-Keeping one `/data` mount gives every container identical paths and preserves
-hard-link/atomic-import behavior.
+`/data/Movies` and Sonarr uses `/data/TV`; these map to the existing
+`C:\Media\Movies` and `C:\Media\TV` host folders. Native qBittorrent downloads
+to `C:\Media\torrents`. Each Arr app connects to `host.docker.internal:8080`
+and maps remote `C:\Media\torrents` to local `/data/torrents`, preserving
+same-volume imports while keeping peer traffic in the Proton-bound process.
 
 The one-time live setup that cannot be committed is:
 
 1. Install Docker Desktop on the K15 and start the supplied stack.
-2. Set qBittorrent credentials, then add it as the Radarr and Sonarr download
-   client using the Compose service name `qbittorrent`.
-3. Add Radarr and Sonarr as Prowlarr applications, then configure the chosen
+2. Configure native qBittorrent's authenticated Web UI and Proton-bound peer
+   connection, then verify its torrent address is the Proton exit IP.
+3. Add qBittorrent to Radarr and Sonarr as `host.docker.internal:8080`, plus
+   the Windows-to-container remote path mapping.
+4. Add Radarr and Sonarr as Prowlarr applications, then configure the chosen
    indexers in Prowlarr.
-4. Create or import the named quality profiles and custom formats in Radarr and
+5. Create or import the named quality profiles and custom formats in Radarr and
    Sonarr.
-5. Copy the generated Radarr and Sonarr API keys into `secrets.json`, enable
+6. Copy the generated Radarr and Sonarr API keys into `secrets.json`, enable
    media in `config.json`, deploy, and run the checkout-safe and live checks.
 
 ## Acceptance

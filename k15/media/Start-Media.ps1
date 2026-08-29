@@ -18,7 +18,6 @@ foreach ($Directory in @(
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'prowlarr'),
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'radarr'),
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'sonarr'),
-    (Join-Path $Settings.MEDIA_CONFIG_ROOT 'qbittorrent'),
     $Settings.MEDIA_ROOT,
     (Join-Path $Settings.MEDIA_ROOT 'torrents'),
     (Join-Path $Settings.MEDIA_ROOT 'Movies'),
@@ -27,10 +26,9 @@ foreach ($Directory in @(
     New-Item -ItemType Directory -Path $Directory -Force | Out-Null
 }
 
-docker compose --project-directory $Here --env-file $EnvironmentFile up -d
+docker compose --project-directory $Here --env-file $EnvironmentFile up -d --remove-orphans
 docker compose --project-directory $Here --env-file $EnvironmentFile ps
 
 Write-Host ''
-Write-Host 'Local setup pages: Prowlarr http://127.0.0.1:9696, Radarr http://127.0.0.1:7878, Sonarr http://127.0.0.1:8989, qBittorrent http://127.0.0.1:8080'
-Write-Host 'For qBittorrent first-login credentials, run:'
-Write-Host "  docker compose --project-directory `"$Here`" --env-file `"$EnvironmentFile`" logs qbittorrent"
+Write-Host 'Local setup pages: Prowlarr http://127.0.0.1:9696, Radarr http://127.0.0.1:7878, Sonarr http://127.0.0.1:8989'
+Write-Host 'qBittorrent runs natively through Proton VPN; see README.md before configuring the Arr download clients.'
