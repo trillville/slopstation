@@ -57,6 +57,7 @@ def main():
     assert "CATALOG" in si and str(real_appid) in si
     # Mishear-repair: the model must know its input is STT, not typed text.
     assert "speech-to-text" in flat(si) and "mishears" in flat(si)
+    assert "find_media" in si and "Never guess an id" in si
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
@@ -121,6 +122,12 @@ def main():
             self.tracked.append((appid, title, turn, verified))
             return {"id": "op-test"}
 
+        def track_external(self, kind, authority, external_ref, title, turn=None,
+                           detail="", metadata=None):
+            self.tracked.append((kind, authority, external_ref, title, turn,
+                                 detail, metadata))
+            return {"id": "op-media"}
+
         def for_assistant(self, scope, acknowledge=False):
             self.acknowledged = acknowledge
             return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
@@ -134,6 +141,54 @@ def main():
     assert oimpls["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is True
     assert not oimpls["list_operations"]({"scope": "nope"})["ok"]
+
+    class FakeMedia:
+        def __init__(self):
+            self.requests = []
+
+        def find(self, kind, query):
+            return [{"tmdb_id": 438631, "title": "Dune", "year": 2021}]
+
+        def request_movie(self, tmdb_id, preset):
+            self.requests.append(("movie", tmdb_id, preset))
+            return {"ok": True, "kind": "movie_acquisition",
+                    "authority": "radarr", "external_ref": "31",
+                    "title": "Dune", "catalog_id": tmdb_id,
+                    "preset": preset, "profile": "Movie HD",
+                    "already_available": False}
+
+        def request_series(self, tvdb_id, preset, seasons):
+            self.requests.append(("series", tvdb_id, preset, seasons))
+            return {"ok": True, "kind": "series_acquisition",
+                    "authority": "sonarr", "external_ref": "41",
+                    "title": "Breaking Bad", "catalog_id": tvdb_id,
+                    "preset": preset, "profile": "Series HD",
+                    "seasons": seasons, "already_available": False}
+
+    fake_media = FakeMedia()
+    mimpls = assistant.tool_impls(d, log, operations=fake_operations,
+                                  media=fake_media)
+    assert {"find_media", "request_movie", "request_series"} <= set(mimpls)
+    assert mimpls["find_media"]({"kind": "movie", "query": "Dune"})[
+        "candidates"][0]["tmdb_id"] == 438631
+    preview = mimpls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
+    assert preview["dry_run"] and not fake_media.requests
+    live_dispatch = Dispatch(CFG_MIN, log, dry_run=False)
+    live_dispatch.begin_utterance("fa1100", "get dune in 1080p")
+    live_media = assistant.tool_impls(live_dispatch, log,
+                                      operations=fake_operations,
+                                      media=fake_media)
+    requested = live_media["request_movie"]({"tmdb_id": 438631,
+                                               "preset": "1080p"})
+    assert requested["operation_id"] == "op-media"
+    assert fake_media.requests[-1] == ("movie", 438631, "1080p")
+    assert fake_operations.tracked[-1][4] == "fa1100"
+    series_requested = live_media["request_series"](
+        {"tvdb_id": 81189, "seasons": [2]})
+    assert series_requested["operation_id"] == "op-media"
+    assert fake_media.requests[-1] == ("series", 81189, "default", [2])
+    assert len(assistant.function_schemas(mimpls)) == 14
+    print("  media tools: absent until configured, lookup first, dry-run safe, tracked")
     # Owned-but-not-installed must still come back named.
     inst_ids = {row["appid"] for row in rows}
     owned_only = [a for a, o in library.load().get("owned", {}).items()

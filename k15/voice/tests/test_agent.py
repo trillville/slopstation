@@ -15,6 +15,7 @@ from _bootstrap import fresh_state
 import announce
 import cglib
 import events
+import media
 import operations
 import steam_session
 import tracing
@@ -97,6 +98,20 @@ class FakeSteamMonitor:
         self.started = True
 
 
+class FakeMediaMonitor:
+    KINDS = {"movie_acquisition", "series_acquisition"}
+    made = []
+
+    def __init__(self, store, service, log, poll_s=30):
+        self.store, self.service = store, service
+        self.poll_s = poll_s
+        self.started = False
+        FakeMediaMonitor.made.append(self)
+
+    def start(self):
+        self.started = True
+
+
 class FakeSteam:
     available_answer = False
 
@@ -149,12 +164,16 @@ def stub_everything():
     announce.Announcer = FakeAnnouncer
     operations.OperationStore = FakeOperationStore
     operations.SteamMonitor = FakeSteamMonitor
+    operations.MediaMonitor = FakeMediaMonitor
+    media.from_config = lambda cfg, secrets, log: (
+        "MEDIA" if cfg.get("media", {}).get("enabled") else None)
     steam_session.SteamSession = FakeSteam
     FakeListener.wakes = []
     FakeListener.built = []
     FakeAnnouncer.made = []
     FakeOperationStore.made = []
     FakeSteamMonitor.made = []
+    FakeMediaMonitor.made = []
     FakeDucker.made = []
     FakeSteam.available_answer = False
 
@@ -181,9 +200,9 @@ def run(argv, cfg, session=None, setup=None):
 
     async def fake_session(cfg, secrets, matcher, dry_run, input_idx, output_idx,
                            capture=None, operations=None, ack=None, steam=None,
-                           on_end_session=None):
+                           media=None, on_end_session=None):
         calls.append(dict(dry_run=dry_run, operations=operations, steam=steam,
-                          capture=capture, matcher=matcher,
+                          media=media, capture=capture, matcher=matcher,
                           on_end_session=on_end_session))
         if session is not None:
             session()
@@ -262,6 +281,18 @@ def main():
     assert any(r["what"] == "operation_monitor" for r in log.find("lane_up"))
     assert calls[0]["steam"] is FakeSteamMonitor.made[0].steam
     print("  operations: enrolled Steam starts the monitor and reaches the session")
+
+    # --- media configured: independent monitor + tools reach the session -----
+    cfg = config()
+    cfg["media"]["enabled"] = True
+    cfg["media"]["pollS"] = 17
+    rc, log, calls = run(["--once"], cfg,
+                         setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())))
+    assert FakeMediaMonitor.made and FakeMediaMonitor.made[0].started
+    assert FakeMediaMonitor.made[0].poll_s == 17
+    assert calls[0]["media"] == "MEDIA"
+    assert any(r["what"] == "media_operation_monitor" for r in log.find("lane_up"))
+    print("  media: configured service starts its monitor and reaches the session")
 
     # --- ducking without tvIp -----------------------------------------------------
     cfg = config()

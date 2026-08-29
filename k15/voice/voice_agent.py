@@ -265,6 +265,18 @@ def main():
             active=len(operation_store.active(kind="steam_install")),
             poll_s=monitor.poll_s)
 
+    import media as media_mod
+    media_service = media_mod.from_config(cfg, secrets, log)
+    if media_service is not None:
+        poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
+        media_monitor = operations_mod.MediaMonitor(
+            operation_store, media_service, log, poll_s=poll_s)
+        media_monitor.start()
+        active_media = sum(len(operation_store.active(kind=kind)) for kind in
+                           media_monitor.KINDS)
+        log("lane_up", what="media_operation_monitor", active=active_media,
+            poll_s=media_monitor.poll_s)
+
     # Before the wake loop, so the first session is traced too. Fail-soft.
     tracing.setup(cfg, secrets, log)
 
@@ -364,7 +376,7 @@ def main():
             asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
                                     input_idx, output_idx, capture,
                                     operations=operation_store, ack=ack,
-                                    steam=steam,
+                                    steam=steam, media=media_service,
                                     on_end_session=lambda: duck(restore=True)))
         except Exception as e:
             log.error("session_crashed", err=repr(e))

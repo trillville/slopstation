@@ -28,10 +28,19 @@ STATES = ACTIVE | TERMINAL
 
 def _summary(operation, state):
     title = operation["title"]
+    kind = operation.get("kind")
     if state == SUCCEEDED:
+        if kind == "movie_acquisition":
+            return f"{title} is ready to watch."
+        if kind == "series_acquisition":
+            return f"The requested episodes of {title} are ready to watch."
         return f"{title} finished installing."
     if state == CANCELED:
+        if kind in ("movie_acquisition", "series_acquisition"):
+            return f"The {title} media request was canceled."
         return f"The {title} install was canceled."
+    if kind in ("movie_acquisition", "series_acquisition"):
+        return f"The {title} media request failed."
     return f"The {title} install failed."
 
 
@@ -68,9 +77,13 @@ class OperationStore:
     def get(self, operation_id):
         return next((r for r in self.all() if r.get("id") == operation_id), None)
 
-    def track_steam_install(self, appid, title, turn=None, verified=False):
-        """Create one tracker per active appid, or reuse the existing one."""
-        external_ref = str(int(appid))
+    def track_external(self, kind, authority, external_ref, title, turn=None,
+                       state=RUNNING, detail="external authority accepted the request",
+                       metadata=None, observed=True):
+        """Create one active tracker per concrete authority resource."""
+        if state not in ACTIVE:
+            raise ValueError(f"new operation state must be active, got {state}")
+        external_ref = str(external_ref)
         now = int(time.time())
         created = None
         reused = None
@@ -78,44 +91,48 @@ class OperationStore:
         with self._lock:
             rows = self._load()
             existing = next((r for r in rows
-                             if r.get("kind") == "steam_install"
+                             if r.get("kind") == kind
                              and r.get("external_ref") == external_ref
                              and r.get("state") in ACTIVE), None)
             if existing is not None:
-                if verified and existing["state"] != RUNNING:
+                updates = {}
+                if existing.get("state") != state:
                     previous = existing["state"]
-                    existing.update(state=RUNNING, updated=now,
-                                    last_observed=now,
-                                    detail="Steam verified the install queue")
+                    updates.update(state=state, detail=detail)
+                if metadata is not None and existing.get("metadata") != metadata:
+                    updates["metadata"] = metadata
+                if updates:
+                    existing.update(updates, updated=now)
+                    if observed:
+                        existing["last_observed"] = now
                     self._save(rows)
                 reused = dict(existing)
             else:
-                state = RUNNING if verified else QUEUED
                 created = {
                     "id": "op-" + uuid.uuid4().hex[:12],
                     "turn": turn,
-                    "kind": "steam_install",
-                    "authority": "steam",
+                    "kind": kind,
+                    "authority": authority,
                     "external_ref": external_ref,
                     "title": title,
                     "state": state,
                     "progress": {},
-                    "detail": ("Steam verified the install queue" if verified
-                               else "Steam accepted the install; "
-                                    "verification is pending"),
+                    "detail": detail,
                     "created": now,
                     "updated": now,
-                    "last_observed": now if verified else None,
+                    "last_observed": now if observed else None,
                     "finished": None,
                     "announcement_pending": False,
                     "delivered": None,
                 }
+                if metadata is not None:
+                    created["metadata"] = metadata
                 rows.append(created)
                 self._save(rows)
         if reused is not None:
             if previous is not None:
                 self.log("operation_observed", operation=reused["id"],
-                         previous=previous, state=RUNNING,
+                         previous=previous, state=state,
                          progress=reused.get("progress", {}),
                          detail=reused["detail"], changed=True)
             return reused
@@ -123,6 +140,15 @@ class OperationStore:
                  kind=created["kind"], authority=created["authority"],
                  external_ref=external_ref, state=created["state"])
         return dict(created)
+
+    def track_steam_install(self, appid, title, turn=None, verified=False):
+        """Create one tracker per active appid, or reuse the existing one."""
+        return self.track_external(
+            "steam_install", "steam", str(int(appid)), title, turn=turn,
+            state=RUNNING if verified else QUEUED,
+            detail=("Steam verified the install queue" if verified else
+                    "Steam accepted the install; verification is pending"),
+            observed=verified)
 
     def observe(self, operation_id, state, progress=None, detail=""):
         """Persist one authority observation and fire on the first terminal edge."""
@@ -190,8 +216,9 @@ class OperationStore:
         if operation.get("state") in TERMINAL:
             return False, f"{operation_id} is already {operation['state'].lower()}"
         self.log("operation_cancel_refused", operation=operation_id,
-                 authority=operation.get("authority"))
-        return False, ("Steam install cancellation is not supported; "
+                  authority=operation.get("authority"))
+        authority = str(operation.get("authority", "external authority")).title()
+        return False, (f"{authority} cancellation is not supported; "
                        "the operation was left unchanged")
 
     def for_assistant(self, scope="active", limit=10, acknowledge=False):
@@ -294,6 +321,48 @@ class SteamMonitor:
             self.store.observe(operation["id"], UNKNOWN, {}, detail)
 
 
+class MediaMonitor:
+    """Observe Radarr/Sonarr imports without seeing release-level data."""
+
+    KINDS = {"movie_acquisition", "series_acquisition"}
+
+    def __init__(self, store, media, log, poll_s=POLL_S):
+        self.store = store
+        self.media = media
+        self.log = log
+        self.poll_s = poll_s
+        self._wake = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True,
+                         name="media-operation-monitor").start()
+
+    def _run(self):
+        while True:
+            try:
+                self.reconcile_once()
+            except Exception as e:
+                self.log.error("operation_monitor_failed", err=str(e))
+            self._wake.wait(self.poll_s)
+            self._wake.clear()
+
+    def reconcile_once(self):
+        active = [r for r in self.store.active()
+                  if r.get("kind") in self.KINDS]
+        for operation in active:
+            try:
+                observation = self.media.observe(operation)
+                state = SUCCEEDED if observation["complete"] else RUNNING
+                self.store.observe(operation["id"], state,
+                                   observation.get("progress", {}),
+                                   observation.get("detail", ""))
+            except Exception as e:
+                authority = str(operation.get("authority", "media")).title()
+                self.store.observe(operation["id"], UNKNOWN, {},
+                                   f"{authority} observation failed: {e}")
+        return len(active)
+
+
 def _line(operation):
     progress = operation.get("progress") or {}
     pct = progress.get("percent")
@@ -335,15 +404,23 @@ def main(argv=None):
         print(detail)
         return 0 if ok else 1
 
-    import steam_session
     cfg = cglib.config()
+    secrets = cglib.load_secrets()
+    counts = []
+    import steam_session
     steam = steam_session.SteamSession(
-        cglib.load_secrets(), log, machine_name=cfg.get("steamMachineName"))
-    if not steam.available():
-        print("Steam account session is not enrolled")
+        secrets, log, machine_name=cfg.get("steamMachineName"))
+    if steam.available():
+        counts.append(("Steam", SteamMonitor(store, steam, log).reconcile_once()))
+    import media
+    service = media.from_config(cfg, secrets, log)
+    if service is not None:
+        counts.append(("media", MediaMonitor(store, service, log).reconcile_once()))
+    if not counts:
+        print("no external operation authorities are configured")
         return 1
-    count = SteamMonitor(store, steam, log).reconcile_once()
-    print(f"reconciled {count} active Steam operation(s)")
+    print("; ".join(f"reconciled {count} active {name} operation(s)"
+                    for name, count in counts))
     return 0
 
 

@@ -13,14 +13,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-PC = Path(__file__).resolve().parents[3] / "gaming-pc"
+ROOT = Path(__file__).resolve().parents[3]
+PC = ROOT / "gaming-pc"
+MEDIA_START = ROOT / "k15" / "media" / "Start-Media.ps1"
 DISPATCH = PC / "Dispatch.ps1"
 COMMON = PC / "CouchGaming.common.ps1"
 NAV = PC / "Nav-BigPicture.ps1"
 
 # Prints one 'FILE|LINE|MESSAGE' per parse error, then 'PARSED <n>'.
 PARSE_PS = r"""
-$files = Get-ChildItem '{pc}\*.ps1'
+$files = @(Get-ChildItem '{pc}\*.ps1') + @(Get-Item '{media}')
 foreach ($f in $files) {{
   $errs = $null
   [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs) | Out-Null
@@ -35,7 +37,7 @@ def read(p):
 
 
 def parse_all():
-    script = PARSE_PS.format(pc=str(PC))
+    script = PARSE_PS.format(pc=str(PC), media=str(MEDIA_START))
     enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                         "-EncodedCommand", enc],
@@ -47,7 +49,7 @@ def parse_all():
         print("  PARSE ERROR", e)
     assert parsed, f"parser run produced no summary: {r.stderr[:400]}"
     n = int(parsed[0].split()[1])
-    assert n >= 10, f"only {n} scripts parsed - path bug, not a real pass"
+    assert n >= 11, f"only {n} scripts parsed - path bug, not a real pass"
     assert not errors, f"{len(errors)} parse error(s) in gaming-pc/*.ps1"
     return n
 
@@ -93,7 +95,7 @@ def main():
 
     # 1. Every script parses.
     n = parse_all()
-    print(f"  parse: {n} gaming-pc scripts, no errors")
+    print(f"  parse: {n} gaming-pc/media scripts, no errors")
 
     # 2. Marker paths: Dispatch's literals == common.ps1's $CG values.
     dm, cm = dispatch_markers(dispatch), common_markers(common)

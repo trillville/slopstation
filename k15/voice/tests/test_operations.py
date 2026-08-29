@@ -43,6 +43,18 @@ class FakeSteam:
         return list(self.downloads)
 
 
+class FakeMedia:
+    def __init__(self):
+        self.result = {"complete": False, "progress": {"percent": 20},
+                       "detail": "1 of 5 aired episodes are ready"}
+        self.error = None
+
+    def observe(self, operation):
+        if self.error:
+            raise self.error
+        return dict(self.result)
+
+
 def main():
     fresh_state()
     log = cglib.CapturingLog("voice")
@@ -108,9 +120,49 @@ def main():
     assert store.for_assistant("active")[0]["state"] in operations.ACTIVE
     print("  capability: unsupported Steam cancellation leaves state unchanged")
 
+    # The second authority justifies generic creation, but keeps its concrete
+    # observation semantics in MediaMonitor.
+    fresh_state()
+    media_terminal = []
+    media_store = operations.OperationStore(log, on_terminal=media_terminal.append)
+    media_op = media_store.track_external(
+        "series_acquisition", "sonarr", "41", "Breaking Bad", turn="beef01",
+        detail="Sonarr accepted the request",
+        metadata={"catalog_id": 81189, "preset": "1080p",
+                  "profile": "Series HD", "seasons": [2]})
+    reused = media_store.track_external(
+        "series_acquisition", "sonarr", "41", "Breaking Bad",
+        detail="Sonarr accepted the request",
+        metadata={"catalog_id": 81189, "preset": "2160p",
+                  "profile": "Series UHD", "seasons": [2]})
+    assert reused["id"] == media_op["id"]
+    assert reused["metadata"]["preset"] == "2160p"
+    fake_media = FakeMedia()
+    media_monitor = operations.MediaMonitor(media_store, fake_media, log)
+    assert media_monitor.reconcile_once() == 1
+    assert media_store.get(media_op["id"])["progress"]["percent"] == 20
+    fake_media.error = RuntimeError("offline")
+    media_monitor.reconcile_once()
+    assert media_store.get(media_op["id"])["state"] == operations.UNKNOWN
+    assert not media_terminal
+    fake_media.error = None
+    fake_media.result = {"complete": True, "progress": {"percent": 100},
+                         "detail": "5 of 5 aired episodes are ready"}
+    media_monitor.reconcile_once()
+    media_done = media_store.get(media_op["id"])
+    assert media_done["state"] == operations.SUCCEEDED
+    assert media_done["summary"] == (
+        "The requested episodes of Breaking Bad are ready to watch.")
+    assert len(media_terminal) == 1
+    media_monitor.reconcile_once()
+    assert len(media_terminal) == 1
+    ok, detail = media_store.cancel(media_op["id"])
+    assert not ok and "already succeeded" in detail
+    print("  media: structured policy, active dedupe, UNKNOWN silence, positive completion")
+
     with contextlib.redirect_stdout(io.StringIO()) as stdout:
-        assert operations.main(["list", "--active"]) == 0
-    assert other["id"] in stdout.getvalue()
+        assert operations.main(["list"]) == 0
+    assert media_op["id"] in stdout.getvalue()
     print("  CLI: active operations render without a live Steam session")
 
     delivery_log = cglib.CapturingLog("voice")

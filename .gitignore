@@ -22,6 +22,7 @@ couch.log.*
 secrets.json
 config.json
 config.alloy
+k15/media/.env
 
 # Voice: per-machine python env and caches (listener stays on system python)
 .venv/
