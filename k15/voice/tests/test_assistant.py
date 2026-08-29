@@ -369,7 +369,7 @@ def main():
     # a local copy can pass a dict for `reasoning`, which only live inference
     # rejects.
     schemas = assistant.function_schemas(impls)
-    assert len(schemas) == 11       # the full surface; install_game is always on
+    assert len(schemas) == 10       # operations are absent without a store
     import session_runtime
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
