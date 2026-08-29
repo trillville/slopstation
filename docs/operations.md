@@ -84,8 +84,9 @@ The Steam path is deliberately concrete rather than an abstract job framework:
 
 1. `install_game` submits through `SteamSession`.
 2. A successful submission creates or reuses a `steam_install` operation.
-3. `SteamMonitor` observes Steam progress and, when the app leaves that list,
-   checks the gaming PC's manifest for the fully-installed flag.
+3. `SteamMonitor` observes Steam progress and checks the gaming PC's manifest
+   once the app leaves that list or reaches 100% downloaded. Only the
+   fully-installed manifest flag completes the operation.
 4. Voice can read structured recent or active operations through an assistant
    tool. No operation or release text is injected into conversation history.
 5. `operations.py list|show|reconcile|cancel` provides checkout-independent

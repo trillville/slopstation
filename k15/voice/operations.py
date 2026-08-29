@@ -254,11 +254,13 @@ class SteamMonitor:
             self._unknown(operations, f"Steam download status failed: {e}")
             return len(operations)
 
-        missing = [r for r in operations
-                   if int(r["external_ref"]) not in downloads]
+        needs_manifest = [
+            r for r in operations
+            if (int(r["external_ref"]) not in downloads
+                or downloads[int(r["external_ref"])].get("percent") == 100)]
         installed = set()
         probe_error = None
-        if missing:
+        if needs_manifest:
             try:
                 installed = set(self.installed_probe())
             except Exception as e:
@@ -267,17 +269,19 @@ class SteamMonitor:
         for operation in operations:
             appid = int(operation["external_ref"])
             download = downloads.get(appid)
-            if download is not None:
+            if appid in installed:
+                self.store.observe(operation["id"], SUCCEEDED, {"percent": 100},
+                                   "the gaming PC reports the app fully installed")
+            elif download is not None:
                 progress = {k: download.get(k) for k in
                             ("percent", "paused", "queue")}
                 pct = progress["percent"]
                 detail = ("download paused" if progress["paused"] else
                           f"download is {pct}% complete" if pct is not None else
                           "download is queued")
+                if pct == 100 and probe_error:
+                    detail += f"; manifest check failed: {probe_error}"
                 self.store.observe(operation["id"], RUNNING, progress, detail)
-            elif appid in installed:
-                self.store.observe(operation["id"], SUCCEEDED, {"percent": 100},
-                                   "the gaming PC reports the app fully installed")
             else:
                 detail = (f"could not verify the gaming PC manifest: {probe_error}"
                           if probe_error else
