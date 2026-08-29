@@ -127,10 +127,12 @@ The old research queue is removed as a feature, not migrated:
 
 ## Media placement
 
-Prowlarr, Radarr, Sonarr, and qBittorrent live on the always-on K15. Their
-shared container path `/data` initially maps to `C:\Media`; the future NAS
-changes only that host mapping. Media acquisition therefore has no dependency
-on waking the gaming PC, display profiles, the Puck, or a couch session.
+Prowlarr, Radarr, Sonarr, and native qBittorrent live on the always-on K15.
+The Arr containers' `/data` path and qBittorrent's Windows download path both
+refer to `C:\Media`; remote path mappings bridge their path syntax. The future
+NAS changes those host mappings without changing Slopstation operation records.
+Media acquisition therefore has no dependency on waking the gaming PC, display
+profiles, the Puck, or a couch session.
 
 ## Acceptance and deferred live validation
 

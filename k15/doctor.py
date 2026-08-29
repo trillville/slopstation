@@ -401,7 +401,7 @@ def check_media(cfg):
     report(WARN if down else PASS, "media services",
            f"reachable: {', '.join(reachable) or 'none'}"
            + (f" | unreachable: {', '.join(down)}" if down else ""),
-           "start k15\\media\\Start-Media.ps1 and inspect docker compose ps")
+           "start k15\\media\\Start-Media.ps1 and native qBittorrent")
 
 
 def check_operations():

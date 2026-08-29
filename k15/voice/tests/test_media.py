@@ -280,14 +280,19 @@ def main():
 
     root = Path(__file__).resolve().parents[3]
     compose = (root / "k15" / "media" / "compose.yaml").read_text(encoding="utf-8")
-    for sidecar in ("prowlarr:", "radarr:", "sonarr:", "qbittorrent:"):
+    start_media = (root / "k15" / "media" / "Start-Media.ps1").read_text(
+        encoding="utf-8")
+    for sidecar in ("prowlarr:", "radarr:", "sonarr:"):
         assert sidecar in compose
-    assert compose.count("source: ${MEDIA_ROOT}") == 3
+    assert "qbittorrent:" not in compose
+    assert compose.count("source: ${MEDIA_ROOT}") == 2
     assert "127.0.0.1:7878:7878" in compose
     assert "127.0.0.1:8989:8989" in compose
+    assert "--remove-orphans" in start_media
+    assert "logs qbittorrent" not in start_media
     assert _bootstrap.CONFIG["media"]["movieRoot"] == "/data/Movies"
     assert _bootstrap.CONFIG["media"]["seriesRoot"] == "/data/TV"
-    print("  deployment: four localhost sidecars share the stable /data namespace")
+    print("  deployment: Arr sidecars share /data; native qBittorrent stays VPN-bound")
 
     print("OK - media: authenticated APIs, lookup/request policy, seasons, and completion")
 
