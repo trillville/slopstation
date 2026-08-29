@@ -105,10 +105,11 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 
 ### Media sidecars (`k15/media/`)
 
-The optional always-on Prowlarr, Radarr, and Sonarr Compose stack shares one
-`/data` mount. Native qBittorrent stays behind the Proton VPN split tunnel. The
-media root maps to `C:\Media` initially and can move to a NAS without changing
-Slopstation records. Provisioning and live validation are in
+The optional always-on FlareSolverr, Prowlarr, Radarr, and Sonarr Compose stack
+shares one `/data` mount. FlareSolverr is internal-only; native qBittorrent
+stays behind the Proton VPN split tunnel. The media root maps to `C:\Media`
+initially and can move to a NAS without changing Slopstation records.
+Provisioning and live validation are in
 `docs/media-acquisition.md` and `k15/media/README.md`.
 
 ### Wake-word training (`wake-training/`)

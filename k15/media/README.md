@@ -1,10 +1,10 @@
 # K15 media sidecars
 
 `Start-Media.ps1` creates a local `.env` from the C-drive defaults and starts
-Prowlarr, Radarr, and Sonarr. Docker Desktop with Linux containers must already
-be running. qBittorrent runs as the native Windows application so Proton VPN's
-include-only split tunnel can target `qbittorrent.exe`; it must not run in this
-Compose project.
+FlareSolverr, Prowlarr, Radarr, and Sonarr. Docker Desktop with Linux containers
+must already be running. qBittorrent runs as the native Windows application so
+Proton VPN's include-only split tunnel can target `qbittorrent.exe`; it must not
+run in this Compose project.
 
 The web interfaces bind to localhost. Configure them from the K15 or through
 an SSH tunnel; do not expose their management ports to the internet.
@@ -21,6 +21,20 @@ Use these paths and service addresses during one-time setup:
   `C:\Media\torrents`, local `/data/torrents`
 - Prowlarr Radarr URL: `http://radarr:7878`
 - Prowlarr Sonarr URL: `http://sonarr:8989`
+- Prowlarr FlareSolverr URL: `http://flaresolverr:8191`
+
+FlareSolverr has no published host port. Its unauthenticated browser API is
+reachable only by services on this Compose network. To use it for a protected
+indexer:
+
+1. In Prowlarr, open **Settings > Indexers > Indexer Proxies**, add
+   **FlareSolverr**, and set its host to `http://flaresolverr:8191`.
+2. Give the proxy a tag such as `flaresolverr`, then test and save it.
+3. Add the same `flaresolverr` tag to each indexer that needs the proxy, then
+   test that indexer again. Leave unprotected indexers untagged.
+
+If the test still fails, inspect `docker compose logs flaresolverr`; it handles
+browser challenges but does not solve interactive CAPTCHAs.
 
 The native qBittorrent Web UI must listen on all addresses at port `8080`, use
 authentication, and must not bypass authentication for localhost or allowlisted

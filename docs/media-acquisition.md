@@ -7,8 +7,10 @@ links, or move media files itself.
 
 ## Service boundary
 
-The always-on K15 hosts four services:
+The always-on K15 hosts five services:
 
+- FlareSolverr handles browser challenges for explicitly tagged Prowlarr
+  indexers. Its unauthenticated API is internal to the Compose network.
 - Prowlarr owns indexer definitions and synchronizes them into Radarr and
   Sonarr.
 - Radarr owns movie search, release selection, upgrades, import, and the final
@@ -23,11 +25,11 @@ tracker response, download URL, or magnet link. External strings are limited
 to structured catalog metadata returned during an explicit lookup; indexer and
 release text never enters assistant history.
 
-The repository supplies a Docker Compose deployment for Prowlarr, Radarr, and
-Sonarr. Their stable `/data` namespace maps to `C:\Media`. Native qBittorrent
-uses `C:\Media\torrents`; Arr remote path mappings translate that to
-`/data/torrents`. Moving to the NAS changes the host paths, not Slopstation's
-API payloads or operation records.
+The repository supplies a Docker Compose deployment for FlareSolverr,
+Prowlarr, Radarr, and Sonarr. The Arr services' stable `/data` namespace maps
+to `C:\Media`. Native qBittorrent uses `C:\Media\torrents`; Arr remote path
+mappings translate that to `/data/torrents`. Moving to the NAS changes the
+host paths, not Slopstation's API payloads or operation records.
 
 ## Request interface
 
@@ -105,11 +107,13 @@ The one-time live setup that cannot be committed is:
    connection, then verify its torrent address is the Proton exit IP.
 3. Add qBittorrent to Radarr and Sonarr as `host.docker.internal:8080`, plus
    the Windows-to-container remote path mapping.
-4. Add Radarr and Sonarr as Prowlarr applications, then configure the chosen
+4. Configure Prowlarr's `http://flaresolverr:8191` proxy and tag only indexers
+   that need browser-challenge handling.
+5. Add Radarr and Sonarr as Prowlarr applications, then configure the chosen
    indexers in Prowlarr.
-5. Create or import the named quality profiles and custom formats in Radarr and
+6. Create or import the named quality profiles and custom formats in Radarr and
    Sonarr.
-6. Copy the generated Radarr and Sonarr API keys into `secrets.json`, enable
+7. Copy the generated Radarr and Sonarr API keys into `secrets.json`, enable
    media in `config.json`, deploy, and run the checkout-safe and live checks.
 
 ## Acceptance

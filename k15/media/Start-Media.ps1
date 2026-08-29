@@ -31,4 +31,5 @@ docker compose --project-directory $Here --env-file $EnvironmentFile ps
 
 Write-Host ''
 Write-Host 'Local setup pages: Prowlarr http://127.0.0.1:9696, Radarr http://127.0.0.1:7878, Sonarr http://127.0.0.1:8989'
+Write-Host 'FlareSolverr is internal-only at http://flaresolverr:8191 for Prowlarr indexer proxies.'
 Write-Host 'qBittorrent runs natively through Proton VPN; see README.md before configuring the Arr download clients.'

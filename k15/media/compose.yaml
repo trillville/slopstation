@@ -1,6 +1,15 @@
 name: slopstation-media
 
 services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ:-America/Los_Angeles}
+    expose:
+      - "8191"
+
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     restart: unless-stopped
@@ -14,6 +23,8 @@ services:
         target: /config
     ports:
       - 127.0.0.1:9696:9696
+    depends_on:
+      - flaresolverr
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
