@@ -79,7 +79,7 @@ def stt_confidence(frame) -> float | None:
     not send words. Rounded to 2dp - a dashboard axis, not maths. Fail-soft:
     a shape change upstream costs the field, never the turn."""
     try:
-        words = (frame.result or {}).get("words")
+        words = (frame.result or {}).get("words") or []
         scores = [w["confidence"] for w in words
                   if isinstance(w, dict) and w.get("confidence") is not None]
         return round(sum(scores) / len(scores), 2) if scores else None

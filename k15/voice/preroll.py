@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterable
 
 import numpy as np
 
@@ -40,7 +41,7 @@ class WakeAck:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._at = None
+        self._at: float | None = None
 
     def claim(self) -> bool:
         """True for exactly one caller - the winner plays the chime."""
@@ -65,10 +66,10 @@ class WakeCapture:
     QUIET_RATIO = 0.18      # of the loudest speech heard since the wake word
     CHIME_BY_S = 1.5        # too noisy to tell -> chime anyway, never not at all
 
-    def __init__(self, stream, seed_chunks: list[bytes], on_quiet=None) -> None:
+    def __init__(self, stream, seed_chunks: Iterable[bytes], on_quiet=None) -> None:
         self._stream = stream
         self._chunks = list(seed_chunks)
-        self._pcm = None
+        self._pcm: bytes | None = None
         self._on_quiet = on_quiet
         self._t0 = time.monotonic()
         self._quiet = 0

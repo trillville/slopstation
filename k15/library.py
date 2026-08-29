@@ -61,8 +61,8 @@ def fetch_installed_local() -> list[dict]:
     roots = {steam.lower()}
     lf = Path(steam) / "steamapps" / "libraryfolders.vdf"
     if lf.exists():
-        for m in re.finditer(r'^\s*"path"\s+"(.+)"\s*$', lf.read_text(), re.M):
-            roots.add(m.group(1).replace("\\\\", "\\").lower())
+        for pm in re.finditer(r'^\s*"path"\s+"(.+)"\s*$', lf.read_text(), re.M):
+            roots.add(pm.group(1).replace("\\\\", "\\").lower())
     rows, seen = [], set()
     for root in roots:
         for acf in glob.glob(str(Path(root) / "steamapps" / "appmanifest_*.acf")):
@@ -333,7 +333,7 @@ def sync(meta_limit: int = 200) -> None:
 def query_terms(limit: int = 30) -> list[str]:
     """Distinct tags/genres, frequency-ranked, fed to Flux as keyterms: titles
     alone don't teach the STT this vocabulary ("mech games" -> "met games")."""
-    counts = {}
+    counts: dict[str, int] = {}
     for m in load_meta().values():
         for term in (m.get("tags") or []) + (m.get("genres") or []):
             t = term.lower()

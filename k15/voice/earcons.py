@@ -47,7 +47,7 @@ SPECS = {
     "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
 
-_cache = {}
+_cache: dict = {}
 
 
 def set_gain(gain):

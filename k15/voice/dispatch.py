@@ -107,7 +107,7 @@ class Dispatch:
         """Advisory busy check; the real arbiter is couch.py's acquire_lock."""
         age = cglib.lock_age()
         if cglib.session_active(age):
-            self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))
+            self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))  # type: ignore[arg-type] # active implies aged
             return _busy("a session is already active or starting")
         what = f"couch.py start{f' {appid}' if appid else ''}"
         if self.dry_run:
@@ -238,7 +238,7 @@ class Dispatch:
 
     NAV_KINDS = {"downloads", "library", "store", "details", "collection"}
 
-    def nav(self, kind: str, arg: object = None) -> Result:
+    def nav(self, kind: str, arg: int | str | None = None) -> Result:
         """Fire a steam:// navigation into Big Picture via the host `nav`
         verb. Shared by the assistant tool and the grammar; host-gated on
         the session."""
@@ -268,7 +268,7 @@ class Dispatch:
             return _no_task(out)
         return _fail(f"the navigation failed (ssh {cmd}: {out})")
 
-    def _nav_label(self, kind: str, arg: object) -> str:
+    def _nav_label(self, kind: str, arg: int | str | None) -> str:
         """Spoken-friendly name for a navigation target."""
         if kind == "details" and arg:
             return _name(arg)

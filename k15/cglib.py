@@ -67,7 +67,7 @@ def _recycle_stale_lock(content: str) -> bool:
             return False            # a racer took it while we opened the guard
         os.write(fd, content.encode("utf-8"))
         os.close(fd)
-        fd = None                   # Windows will not rename an open file
+        fd = None                   # type: ignore[assignment] # Windows will not rename an open file
         # Windows needs the rename destination unopened, and a losing racer's
         # session_active() stat denies it - ~27% of swaps against a stat spin,
         # so retry. A denied swap changes nothing; only staleness must be
@@ -75,7 +75,7 @@ def _recycle_stale_lock(content: str) -> bool:
         for _ in range(8):
             try:
                 os.replace(guard, LOCK)
-                guard = None        # consumed by the swap; not ours to unlink
+                guard = None        # type: ignore[assignment] # consumed by the swap; not ours to unlink
                 return True
             except OSError:
                 if session_active():
@@ -325,7 +325,7 @@ class CapturingLog(_Log):
 
     def __init__(self, lane: str = "test", echo: bool = False) -> None:
         super().__init__(lane)
-        self.records = []
+        self.records: list[dict] = []
         self.echo = echo
 
     def _write(self, level: str, event: str, fields: dict) -> None:

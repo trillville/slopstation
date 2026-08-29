@@ -86,7 +86,7 @@ def variant_map(titles: list[str]) -> dict[str, str]:
         full = spoken_form(t)
         if full and full not in out:
             out[full] = t
-    derived_claims = {}
+    derived_claims: dict[str, set[str]] = {}
     for t in titles:
         for v in variants(t)[1:]:
             if v not in out:

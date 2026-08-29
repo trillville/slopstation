@@ -290,14 +290,15 @@ def probe(args: list[str]) -> int:
     """Manual layer-4 smoke test: confirms live endpoint shapes a keyless
     checkout cannot see. Verbs as in usage()."""
     what = args[0] if args else "deals"
+    out: object
     if what == "deals":
         refresh_deals(); out = load_deals()
     elif what == "search":
         out = fetch_store_search(term=" ".join(args[1:]))
     elif what == "reviews":
-        out = fetch_reviews(args[1])
+        out = fetch_reviews(int(args[1]))
     elif what == "news":
-        out = fetch_news(args[1])
+        out = fetch_news(int(args[1]))
     elif what == "hltb":
         out = fetch_hltb(" ".join(args[1:]))
     elif what == "trending":

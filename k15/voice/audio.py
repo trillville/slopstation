@@ -241,8 +241,8 @@ class WakeListener:
     vad_threshold = 0.0
     near_miss_factor = 0.0
     clips_keep = 0
-    patience = {}
-    patience_threshold = {}
+    patience: dict[str, int] = {}
+    patience_threshold: dict[str, float] = {}
 
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np
@@ -442,7 +442,7 @@ class WakeListener:
         caller must stop() the capture (idempotent) to release the mic.
         (None, None) if `interrupt` asked for a session instead."""
         stream = self._open_stream()
-        ring = collections.deque(maxlen=self.PREROLL_CHUNKS)
+        ring: collections.deque[bytes] = collections.deque(maxlen=self.PREROLL_CHUNKS)
         try:
             score, _peak = self._listen(stream, threshold, ring, interrupt)
         except Exception:

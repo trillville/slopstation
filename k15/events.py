@@ -28,7 +28,7 @@ import time
 import uuid
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeGuard
 
 BASE = pathlib.Path(__file__).resolve().parent
 LOG_DIR = BASE / "logs"
@@ -86,7 +86,7 @@ HOST = platform.node()
 # Correlation, set once per user intent and inherited downstream. A ContextVar
 # rather than a global so the voice agent's concurrent sessions cannot bleed
 # into each other; explicit kwargs win over the ambient value.
-_ctx = contextvars.ContextVar("cg_event_ctx", default={})
+_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar("cg_event_ctx", default={})
 
 
 # One intent = one id, minted at the chord or the wake word and carried across
@@ -101,7 +101,7 @@ def new_turn() -> str:
     return uuid.uuid4().hex[:6]
 
 
-def valid_turn(value: object) -> bool:
+def valid_turn(value: object) -> TypeGuard[str]:
     return bool(isinstance(value, str) and TURN_RE.match(value))
 
 
@@ -138,7 +138,7 @@ def load_secrets(path: str | pathlib.Path) -> dict:
         return {}
 
 
-def real_key(value: object) -> bool:
+def real_key(value: object) -> TypeGuard[str]:
     """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent. Redacting
     "..." would black out prose."""
     return (isinstance(value, str) and "..." not in value
@@ -335,7 +335,8 @@ def _cli(argv: list[str]) -> int:
     if not argv or argv[0] != "emit" or len(argv) < 3:
         print(__doc__.strip().splitlines()[-1].strip())
         return 2
-    lane, event, level, fields = argv[1], argv[2], INFO, {}
+    lane, event, level = argv[1], argv[2], INFO
+    fields: dict[str, int | str] = {}
     rest = argv[3:]
     while rest:
         a = rest.pop(0)

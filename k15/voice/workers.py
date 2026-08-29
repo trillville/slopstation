@@ -98,6 +98,12 @@ class _CliWorker:
         """Adapters whose depth knob lives in the environment override this."""
         return None
 
+    def _argv(self) -> list[str]:
+        raise NotImplementedError
+
+    def _extract(self, p: subprocess.CompletedProcess) -> dict:
+        raise NotImplementedError
+
     def run(self, task: str, timeout: float) -> dict:
         try:
             p = subprocess.run(

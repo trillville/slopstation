@@ -162,7 +162,7 @@ class TvEvidence:
 
         Tune TV_POKE_S / TV_WAIT_S against warm-PC launches only (ssh_up
         ~0.2 s), where dur_ms approximates frame-to-lit."""
-        if not self.undecided():
+        if self.ip is None or not self.undecided():
             return
         self.last = tv.tv_power_state(self.ip, timeout=0.5, raw=True)
         if self.last == "on":
@@ -197,7 +197,7 @@ def wait_ready(turn: str, evidence: TvEvidence,
     redispatches = ENTER_REDISPATCH
     idle_seen = 0
     settle_at = time.time() + ENTER_SETTLE_S
-    repoke_at = time.time() + WAKE_RETRY_S
+    repoke_at: float | None = time.time() + WAKE_RETRY_S
     while time.time() < end:
         cglib.touch_lock()
         raise_if_cancelled()
@@ -285,12 +285,11 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     events.context(turn=turn)
     # Before the lock: a config doctor would FAIL must not reach power_on, and
     # must not die holding the lock.
+    err: str | None = None
     try:
         missing = cglib.missing_config(cglib.config())
     except Exception as e:
         missing, err = [], str(e)
-    else:
-        err = None
     if missing or err:
         log.error("config_invalid", missing=missing or None, err=err)
         try:
@@ -301,7 +300,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     # The pre-read only shapes the log lines - acquire_lock is the arbiter.
     age = cglib.lock_age()
     if cglib.session_active(age):
-        log("launch_busy", lock_age_s=round(age)); return 1
+        log("launch_busy", lock_age_s=round(age)); return 1  # type: ignore[arg-type] # active implies aged
     if age is not None:
         log.warn("lock_recycled", lock_age_s=round(age))
     if not cglib.acquire_lock(f"{turn} {os.getpid()}"):
