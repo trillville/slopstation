@@ -17,41 +17,37 @@ flowchart LR
     user[Controller, voice, or text]
 
     subgraph k15[K15 — control plane]
-        chord[Chord lane<br/>stdlib-only]
-        voice[Voice overlay<br/>wake, STT, grammar, assistant]
-        ops[Durable operations<br/>operations.json]
-        media[Media sidecars<br/>Prowlarr, Radarr, Sonarr]
-        qbit[qBittorrent<br/>Proton-bound]
+        chord[Controller chord lane<br/>couch-session orchestration]
+        voice[Voice and text assistant<br/>intent and tools]
+        ops[Operation tracking<br/>progress and completion]
+        media[Media automation<br/>search, download, import]
+
+        voice <--> ops
+        voice --> media
+        media <--> ops
     end
 
     subgraph pc[Gaming PC — execution plane]
-        dispatch[Forced SSH command<br/>allowlisted verbs]
-        tasks[Scheduled tasks<br/>enter, exit, launch, stop]
-        steam[Steam and Big Picture]
-        display[DisplayMagician and VirtualHere]
+        automation[Allowlisted automation<br/>SSH and scheduled tasks]
+        gaming[Display, controller,<br/>Steam and Big Picture]
+
+        automation --> gaming
     end
 
-    tv[Samsung TV<br/>Ex-Link and WebSocket]
+    tv[Samsung TV<br/>power, input, volume]
 
     user --> chord
     user --> voice
-    chord --> tv
-    chord --> dispatch
-    voice --> dispatch
-    voice --> media
-    dispatch --> tasks
-    tasks --> steam
-    tasks --> display
-    voice <--> ops
-    media --> qbit
-    media <--> ops
-    tasks -. READY .-> chord
+    chord -->|TV control| tv
+    chord <-->|start, confirm, stop| automation
+    voice -->|game commands| automation
 ```
 
 The system has three operating constraints:
 
-- **Nothing switches the TV to HDMI 4 before the gaming PC writes `READY`.** A
-  failed launch leaves the viewer’s current input unchanged.
+- **Nothing switches the TV to HDMI 4 until the gaming PC confirms a successful
+  launch.** That acknowledgement is named `READY` in the protocol. A failed
+  launch leaves the viewer’s current input unchanged.
 - **The chord lane is independent of voice.** Core K15 modules use system
   Python and the standard library; the voice overlay has its own virtual
   environment and may fail without taking down controller launch.
@@ -74,7 +70,7 @@ sequenceDiagram
     P->>P: Apply TV-only profile
     P->>P: Claim controller Puck
     P->>P: Open and focus Big Picture
-    P-->>K: READY with matching turn ID
+    P-->>K: Launch confirmed (READY + matching turn ID)
     K->>T: Switch to HDMI 4
     K->>P: Watch session health
     U->>K: End session
