@@ -44,6 +44,17 @@ def _summary(operation, state):
     return f"The {title} install failed."
 
 
+def _gave_up_summary(operation, result):
+    title = operation["title"]
+    if not result.get("have"):
+        return (f"No acceptable release of {title} was found; "
+                "the request was closed.")
+    parts = ", ".join(f"season {row['season']} ({row['episodes']} episodes)"
+                      for row in result.get("missing") or [])
+    return (f"{title} is ready except {parts}; no acceptable release was "
+            "found, so those episodes were left out.")
+
+
 class OperationStore:
     """One K15-owned JSON ledger; external systems remain authoritative."""
 
@@ -166,7 +177,8 @@ class OperationStore:
                     "Steam accepted the install; verification is pending"),
             observed=verified)
 
-    def observe(self, operation_id, state, progress=None, detail=""):
+    def observe(self, operation_id, state, progress=None, detail="",
+                summary=None):
         """Persist one authority observation and fire on the first terminal edge."""
         if state not in STATES:
             raise ValueError(f"unknown operation state {state}")
@@ -192,7 +204,7 @@ class OperationStore:
                            updated=now)
             if state in TERMINAL and previous != state:
                 row.update(finished=now, announcement_pending=True,
-                           summary=_summary(row, state))
+                           summary=summary or _summary(row, state))
                 terminal = dict(row)
             self._save(rows)
             out = dict(row)
@@ -413,6 +425,7 @@ class MediaMonitor:
 
     KINDS = {"movie_acquisition", "series_acquisition"}
     SEARCH_RETRY_DELAYS_S = (5 * 60, 30 * 60, 2 * 60 * 60)
+    WAITING_GIVE_UP_S = 24 * 60 * 60
 
     def __init__(self, store, media, log, poll_s=POLL_S):
         self.store = store
@@ -431,6 +444,31 @@ class MediaMonitor:
             except Exception as e:
                 self.log.error("operation_monitor_failed", err=str(e))
             time.sleep(self.poll_s)
+
+    def _maybe_give_up(self, operation, progress, now):
+        metadata = operation.get("metadata") or {}
+        # Indexer trouble is the retry ladder's problem, not evidence that no
+        # release exists - never close the request over it.
+        if (metadata.get("search_retry_pending")
+                or metadata.get("search_retry_exhausted")):
+            return
+        # total_episodes == 0 means nothing requested has aired: waiting is
+        # the correct state, indefinitely.
+        if (operation.get("kind") == "series_acquisition"
+                and not int(progress.get("total_episodes", 0) or 0)):
+            return
+        since = int(metadata.get("waiting_since", 0) or 0)
+        if not since:
+            self.store.update_metadata(operation["id"], {"waiting_since": now})
+            return
+        if now - since < self.WAITING_GIVE_UP_S:
+            return
+        result = self.media.abandon_missing(operation)
+        self.store.observe(
+            operation["id"],
+            SUCCEEDED if result.get("have") else FAILED, progress,
+            "no acceptable release appeared; unmonitored the missing scope",
+            summary=_gave_up_summary(operation, result))
 
     def _schedule_search_retry(self, operation, now):
         metadata = operation.get("metadata") or {}
@@ -523,6 +561,12 @@ class MediaMonitor:
                             operation["id"], "waiting_for_match",
                             f"{authority} did not find an acceptable match for "
                             f"{operation['title']} yet. It will keep watching.")
+                if state == RUNNING and phase == "waiting_for_match":
+                    self._maybe_give_up(operation, progress, now)
+                elif ((operation.get("metadata") or {}).get("waiting_since")
+                      and state == RUNNING):
+                    self.store.update_metadata(operation["id"],
+                                               remove=("waiting_since",))
             except Exception as e:
                 authority = str(operation.get("authority", "media")).title()
                 previous_phase = (operation.get("progress") or {}).get("phase")

@@ -679,6 +679,45 @@ class MediaService:
             for row in health)
         return enabled and not blocked
 
+    def abandon_missing(self, operation):
+        """Unmonitor the still-missing scope so the authority stops watching."""
+        kind = operation.get("kind")
+        if kind == "movie_acquisition":
+            movie_id = int(operation["external_ref"])
+            movie = self._one(self.radarr.get(f"movie/{movie_id}"),
+                              "Radarr", "movie")
+            if movie.get("hasFile"):
+                return {"have": 1, "missing": []}
+            unmonitored = dict(movie)
+            unmonitored["monitored"] = False
+            self.radarr.put(f"movie/{movie_id}", unmonitored)
+            return {"have": 0, "missing": []}
+        if kind != "series_acquisition":
+            raise MediaError(f"unsupported media operation kind {kind}")
+        metadata = operation.get("metadata") or {}
+        seasons = self._seasons(metadata.get("seasons")) \
+            if metadata.get("seasons") is not None else None
+        series_id = int(operation["external_ref"])
+        rows = self.sonarr.get("episode", {"seriesId": series_id})
+        targets = self._target_episodes(rows, seasons)
+        missing = [row for row in targets if not row.get("hasFile")]
+        episode_ids = []
+        for row in missing:
+            try:
+                episode_ids.append(int(row["id"]))
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode has no id") from e
+        if episode_ids:
+            self.sonarr.put("episode/monitor", {
+                "episodeIds": sorted(episode_ids), "monitored": False})
+        by_season = {}
+        for row in missing:
+            number = int(row.get("seasonNumber", 0) or 0)
+            by_season[number] = by_season.get(number, 0) + 1
+        return {"have": len(targets) - len(missing),
+                "missing": [{"season": number, "episodes": by_season[number]}
+                            for number in sorted(by_season)]}
+
     def retry_search(self, operation):
         kind = operation.get("kind")
         external_ref = int(operation["external_ref"])

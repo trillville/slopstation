@@ -316,6 +316,32 @@ def main():
     print("  library: per-season aired counts regardless of monitoring; "
           "specials and unaired excluded")
 
+    # --- abandon ------------------------------------------------------------
+    aband = service()
+    aband.sonarr.library = [{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}]
+    aband.sonarr.episodes = [
+        {"id": 1, "seasonNumber": 1, "hasFile": False, "monitored": True,
+         "airDateUtc": "2008-01-20T00:00:00Z"},
+        {"id": 2, "seasonNumber": 1, "hasFile": False, "monitored": True,
+         "airDateUtc": "2008-01-27T00:00:00Z"},
+        {"id": 3, "seasonNumber": 2, "hasFile": True, "monitored": True,
+         "airDateUtc": "2009-03-08T00:00:00Z"},
+    ]
+    result = aband.abandon_missing({
+        "kind": "series_acquisition", "external_ref": "41",
+        "metadata": {"seasons": None}})
+    assert result == {"have": 1, "missing": [{"season": 1, "episodes": 2}]}
+    assert aband.sonarr.puts[-1] == ("episode/monitor",
+                                     {"episodeIds": [1, 2],
+                                      "monitored": False})
+    aband.radarr.library = [{"id": 32, "tmdbId": 438631, "title": "Dune",
+                             "hasFile": False, "monitored": True}]
+    result = aband.abandon_missing({"kind": "movie_acquisition",
+                                    "external_ref": "32"})
+    assert result == {"have": 0, "missing": []}
+    assert aband.radarr.puts[-1][1]["monitored"] is False
+    print("  abandon: missing scope unmonitored; obtained count survives")
+
     # --- movies --------------------------------------------------------------
     svc.radarr.lookup_by_id = {"tmdbId": 438631, "title": "Dune", "year": 2021}
     svc.radarr.created = {"id": 31, "tmdbId": 438631, "title": "Dune",

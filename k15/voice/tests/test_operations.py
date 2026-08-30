@@ -61,6 +61,9 @@ class FakeMedia:
         self.retry_command_ids = [88]
         self.retry_error = None
         self.retries = []
+        self.abandoned = []
+        self.abandon_result = {"have": 80,
+                               "missing": [{"season": 1, "episodes": 11}]}
 
     def dispatch_pending_series_search(self, operation):
         if self.search_ready and bool(
@@ -81,6 +84,10 @@ class FakeMedia:
         if self.retry_error:
             raise self.retry_error
         return list(self.retry_command_ids)
+
+    def abandon_missing(self, operation):
+        self.abandoned.append(operation["id"])
+        return dict(self.abandon_result)
 
 
 def main():
@@ -304,6 +311,78 @@ def main():
         assert operations.main(["list"]) == 0
     assert retry_op["id"] in stdout.getvalue()
     print("  CLI: active operations render without a live Steam session")
+
+    fresh_state()
+    give_store = operations.OperationStore(log)
+    give_media = FakeMedia()
+    waiting = {"complete": False,
+               "progress": {"phase": "waiting_for_match", "episodes": 80,
+                            "total_episodes": 91, "percent": 88},
+               "detail": "no acceptable episode release is available yet"}
+    give_media.result = dict(waiting)
+    give_op = give_store.track_external(
+        "series_acquisition", "sonarr", "71", "Rick and Morty",
+        metadata={"catalog_id": 275274, "seasons": None})
+    give_monitor = operations.MediaMonitor(give_store, give_media, log)
+    give_monitor.reconcile_once(now=5000)
+    assert give_store.get(give_op["id"])["metadata"]["waiting_since"] == 5000
+    assert not give_media.abandoned
+    give_media.result = {"complete": False,
+                         "progress": {"phase": "downloading",
+                                      "total_episodes": 91},
+                         "detail": "download is active"}
+    give_monitor.reconcile_once(now=6000)   # a grab resets the clock
+    assert "waiting_since" not in give_store.get(give_op["id"])["metadata"]
+    give_media.result = dict(waiting)
+    give_monitor.reconcile_once(now=7000)
+    give_monitor.reconcile_once(now=7000 + 24 * 3600 - 1)
+    assert not give_media.abandoned
+    assert give_store.get(give_op["id"])["state"] == operations.RUNNING
+    give_monitor.reconcile_once(now=7000 + 24 * 3600)
+    closed = give_store.get(give_op["id"])
+    assert give_media.abandoned == [give_op["id"]]
+    assert closed["state"] == operations.SUCCEEDED
+    assert closed["announcement_pending"]
+    assert "season 1" in closed["summary"]
+
+    unaired = give_store.track_external(
+        "series_acquisition", "sonarr", "72", "Andor",
+        metadata={"catalog_id": 393189, "seasons": [2]})
+    give_media.result = {"complete": False,
+                         "progress": {"phase": "waiting_for_match",
+                                      "episodes": 0, "total_episodes": 0,
+                                      "percent": 0},
+                         "detail": "no requested monitored episodes have aired yet"}
+    give_monitor.reconcile_once(now=8000)
+    give_monitor.reconcile_once(now=8000 + 48 * 3600)
+    fresh = give_store.get(unaired["id"])
+    assert fresh["state"] == operations.RUNNING
+    assert "waiting_since" not in fresh["metadata"]
+    assert give_media.abandoned == [give_op["id"]]
+
+    empty = give_store.track_external(
+        "movie_acquisition", "radarr", "73", "Obscure Film",
+        metadata={"catalog_id": 999})
+    give_media.result = {"complete": False,
+                         "progress": {"phase": "waiting_for_match",
+                                      "percent": 0},
+                         "detail": "no acceptable movie release is available yet"}
+    give_media.abandon_result = {"have": 0, "missing": []}
+    give_monitor.reconcile_once(now=9000)
+    give_store.update_metadata(empty["id"], {
+        "search_retry_pending": True,
+        "search_retry_after": 9000 + 200 * 3600})
+    give_monitor.reconcile_once(now=9000 + 48 * 3600)  # retry gate holds
+    assert give_store.get(empty["id"])["state"] == operations.RUNNING
+    give_store.update_metadata(empty["id"],
+                               remove=("search_retry_pending",
+                                       "search_retry_after"))
+    give_monitor.reconcile_once(now=9000 + 96 * 3600)
+    failed_empty = give_store.get(empty["id"])
+    assert failed_empty["state"] == operations.FAILED
+    assert failed_empty["announcement_pending"]
+    print("  give up: waiting window closes partial scope, spares unaired "
+          "and retry-pending")
 
     fresh_state()
     canceled_store = operations.OperationStore(log)
