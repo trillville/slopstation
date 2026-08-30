@@ -28,6 +28,7 @@ ROOT = cglib.BASE.parent
 
 # Command-line needle -> lane name. The same needles Start-K15.bat kills on.
 AGENTS = {"chord_listener.py": "listener", "voice_agent.py": "voice"}
+LISTENER = "chord_listener.py"
 
 IDLE_POLL_S = 15
 RELAUNCH_S = 90         # supervisor backoff is 10 s; this is that with room
@@ -128,11 +129,17 @@ def main(argv: list[str]) -> int:
         was = running_agents()
         for needle in sorted(was):
             log("deploy_reloaded", what=AGENTS[needle], killed=kill(needle))
-        missing = wait_relaunch(was)
+        # The chord lane is required back whether or not it was up to begin
+        # with: a deploy that leaves it dead has landed code that nothing is
+        # running, and doctor.py only WARNs about that, so this is the only
+        # thing standing between a dead chord lane and a green CD run. Voice is
+        # an overlay and may stay off.
+        missing = wait_relaunch(was | {LISTENER})
         if missing:
             lanes = ", ".join(sorted(AGENTS[m] for m in missing))
-            raise RuntimeError(f"{lanes} did not come back in {RELAUNCH_S}s - "
-                               "supervisor window gone? run Start-K15.bat there")
+            raise RuntimeError(f"{lanes} not running {RELAUNCH_S}s after the "
+                               "reload - no supervisor to relaunch it? run "
+                               "Start-K15.bat there")
 
         fails = subprocess.run([sys.executable, "doctor.py"],
                                cwd=str(cglib.BASE), timeout=900).returncode

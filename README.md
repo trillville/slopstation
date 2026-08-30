@@ -222,10 +222,14 @@ Media acquisition is optional and has a separate ordered bootstrap in
 
 ## Continuous deployment
 
-A green `ci` run on `main` triggers `cd`, which deploys the gaming PC, then the
-K15, and runs each machine's doctor. Neither machine accepts inbound
-connections, so each runs a self-hosted GitHub Actions runner that polls
-outbound.
+A green `ci` run on `main` triggers `cd`, which deploys each machine and runs
+its doctor. Neither machine accepts inbound connections, so each runs a
+self-hosted GitHub Actions runner that polls outbound.
+
+The two legs are independent. The gaming PC sleeps, so its runner is offline
+most of the time and its job waits in the queue - GitHub cancels one nothing
+claims within about a day - while the K15 deploys immediately. Until the PC
+catches up on its own next wake, `doctor.py` reports the skew as a WARN.
 
 Both legs park rather than interrupt a session. The PC waits while its READY
 marker exists or an Enter/Exit task is running; the K15 waits while the session
@@ -241,7 +245,9 @@ keep a stranger's commit off the gaming PC.
 Runner setup, once per machine:
 
 1. Add a repository runner (Settings, Actions, Runners) labelled `gamepc` on
-   `TILLMAN-DESKTOP` and `k15` on the K15.
+   `TILLMAN-DESKTOP` and `k15` on the K15. The PC also needs `git` on `PATH`:
+   without it the checkout arrives as a plain tarball and `Deploy.ps1` stamps
+   `nogit` instead of a rev, which is the one thing the skew check reads.
 2. Run it interactively - `run.cmd` with a shortcut in `shell:startup` - not as
    a service. The K15's lanes must relaunch inside the logged-in session or
    they reach neither the Puck nor the audio devices, and the PC's doctor reads
@@ -253,7 +259,10 @@ Runner setup, once per machine:
 
 `deploy.py` fast-forwards the checkout, kills each running agent so its
 supervisor relaunches it on the new code, then runs `doctor.py`. It never
-starts a lane: an agent that does not come back is reported, not restarted.
+starts a lane: an agent that does not come back is reported, not restarted. The
+chord lane must be running when it finishes - `doctor.py` only WARNs about a
+dead one, so without that check a deploy onto a K15 with no supervisors would
+report success.
 
 ## Operate and diagnose
 

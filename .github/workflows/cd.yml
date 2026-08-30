@@ -25,13 +25,6 @@ defaults:
   run:
     shell: powershell
 
-# One deploy at a time, never cancelled mid-copy. A run parked in its session
-# gate holds the group; GitHub keeps only the newest run queued behind it,
-# which is the one worth landing.
-concurrency:
-  group: cd
-  cancel-in-progress: false
-
 env:
   SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
   # The couch gate's budget. Both legs park rather than end a live session, so
@@ -39,12 +32,18 @@ env:
   WAIT_MINUTES: "120"
 
 jobs:
+  # Per machine, not per workflow: a shared group would let the sleeping PC's
+  # queued job hold the K15's deploys behind it for the whole 24 h a job can
+  # sit unclaimed. Never cancelled mid-copy.
   gaming-pc:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
           (github.event.workflow_run.conclusion == 'success' &&
            github.event.workflow_run.event == 'push') }}
     runs-on: [self-hosted, gamepc]
+    concurrency:
+      group: cd-gamepc
+      cancel-in-progress: false
     timeout-minutes: 150
     steps:
       # Deploy.ps1 ships from a checkout and stamps that checkout's rev, so the
@@ -58,11 +57,20 @@ jobs:
       - name: doctor
         run: powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
 
-  # Second, so the deploy-skew row doctor.py prints compares two machines that
-  # have both landed this commit.
+  # Independent of the PC leg, deliberately. The PC sleeps, so its runner is
+  # offline most of the time; chaining these would mean the K15 - which is
+  # always on - deployed nothing until someone next played a game. The cost is
+  # that doctor.py's deploy-skew row reads as a mismatch until the PC catches
+  # up on its own next wake, and that row is a WARN, not a FAIL.
   k15:
-    needs: gaming-pc
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.event == 'push') }}
     runs-on: [self-hosted, k15]
+    concurrency:
+      group: cd-k15
+      cancel-in-progress: false
     timeout-minutes: 150
     steps:
       # No actions/checkout: deploy.py runs from the LIVE checkout, which is
