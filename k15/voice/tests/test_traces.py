@@ -4,7 +4,6 @@ objects (model_dump), prune expired files on save, and fail soft. Run:
 """
 import json
 import os
-import sys
 import tempfile
 import time
 from pathlib import Path

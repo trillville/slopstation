@@ -10,7 +10,6 @@ import base64
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -107,7 +106,7 @@ def main():
     for var, key in (("ready", "ready"), ("turnFile", "turn")):
         lit = re.search(r"^\$" + var + r"\s*=\s*'([^']+)'", dispatch, re.M).group(1)
         assert lit == cm[key], f"{key} marker drift: Dispatch {lit!r} vs common {cm[key]!r}"
-    print(f"  markers: launch/nav/stop/ready/turn paths equal across the two files")
+    print("  markers: launch/nav/stop/ready/turn paths equal across the two files")
 
     # 3. Nav-collection charset: the verb pattern and the task's re-validation.
     d = re.search(r"\^nav collection \((\[[^\]]+\]\{\d+,\d+\})\)", dispatch)

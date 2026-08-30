@@ -3,8 +3,6 @@ burst count however the tones are retuned, fades kill clicks, amplitudes and
 level order hold, and the gain knob scales without wrapping int16. Run:
     .venv\\Scripts\\python tests\\test_earcons.py
 """
-import sys
-from pathlib import Path
 
 import numpy as np
 

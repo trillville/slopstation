@@ -2,9 +2,7 @@
 takeover, and the debt that self-heals a failed restore. Run:
     .venv\\Scripts\\python tests\\test_ducking.py
 """
-import sys
 import time
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 

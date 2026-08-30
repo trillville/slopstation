@@ -70,7 +70,6 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     cglib.LOCK = tmp / "session.lock"
     cglib.LAST_ERROR = tmp / "last_error"
     cglib.CANCEL = tmp / "cancel"
-    library.STATE = tmp
     library.LIBRARY = tmp / "library.json"
     library.META_CACHE = tmp / "metadata-cache.json"
     steamstore.DEALS = tmp / "deals.json"

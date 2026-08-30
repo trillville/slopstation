@@ -6,8 +6,6 @@ Brief tones will be audible. Run:
     .venv\\Scripts\\python tests\\test_session_pipeline.py
 """
 import asyncio
-import sys
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 

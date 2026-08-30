@@ -3,18 +3,14 @@ stubbed at its seam (ssh, exlink, wol, wait_port). Run:
     .venv\\Scripts\\python tests\\test_couch.py
 """
 import os
-import sys
-import tempfile
 import threading
 import time
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 from _bootstrap import fresh_state
 
 import cglib
 import tv
-import events
 
 import couch
 import gamepc
