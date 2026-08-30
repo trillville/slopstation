@@ -52,7 +52,6 @@ class OperationStore:
         self.on_terminal = on_terminal
         self.on_notification = on_notification
         self.path = path or OPERATIONS_FILE
-        self._lock = threading.Lock()
 
     def _load(self):
         rows = cglib.load_json(self.path, [])
@@ -62,7 +61,7 @@ class OperationStore:
         cglib.write_json(self.path, rows)
 
     def all(self):
-        with self._lock:
+        with cglib.guard(self.path):
             return [dict(r) for r in self._load()]
 
     def recent(self, limit=10):
@@ -80,7 +79,7 @@ class OperationStore:
 
     def update_metadata(self, operation_id, updates=None, remove=()):
         now = int(time.time())
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -105,7 +104,7 @@ class OperationStore:
         created = None
         reused = None
         previous = None
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             existing = next((r for r in rows
                              if r.get("kind") == kind
@@ -176,7 +175,7 @@ class OperationStore:
         changed = False
         previous = None
         out = None
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -217,7 +216,7 @@ class OperationStore:
     def notify(self, operation_id, key, summary):
         now = int(time.time())
         notification = None
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -247,7 +246,7 @@ class OperationStore:
 
     def mark_notification_delivered(self, operation_id, key):
         now = int(time.time())
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -264,7 +263,7 @@ class OperationStore:
 
     def mark_delivered(self, operation_id):
         now = int(time.time())
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             for row in rows:
                 if row.get("id") == operation_id:
