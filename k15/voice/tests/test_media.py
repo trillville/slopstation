@@ -466,8 +466,10 @@ def main():
         if "/api/v1/indexer" in path:
             return [{
                 "name": name, "enable": True,
-                "fields": [{"name": "seedRatio", "value": 0.25},
-                           {"name": "seedTime", "value": 60}],
+                "fields": [{"name": "torrentBaseSettings.seedRatio",
+                            "value": 0.25},
+                           {"name": "torrentBaseSettings.seedTime",
+                            "value": 60}],
             } for name in ("1337x", "EZTV")]
         if path.endswith("/api/v1/applications"):
             return [{"name": name, "implementation": name,
@@ -486,9 +488,10 @@ def main():
             return {"enableCompletedDownloadHandling": True}
         if path.endswith("/downloadclient"):
             category = "radarr" if split.port == 7878 else "sonarr"
+            category_field = "movieCategory" if split.port == 7878 else "tvCategory"
             return [{"implementation": "QBittorrent", "enable": True,
                      "removeCompletedDownloads": True,
-                     "fields": [{"name": "category", "value": category}]}]
+                     "fields": [{"name": category_field, "value": category}]}]
         raise AssertionError((method, url))
 
     doctor_qbit_preferences = {
