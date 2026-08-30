@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 try:                                 # Windows-only; the append lock needs it
     import msvcrt
 except ImportError:                  # pragma: no cover - no such rig today
-    msvcrt = None
+    msvcrt = None                    # type: ignore[assignment] # _append falls back to a bare append
 from typing import Any, TypeGuard
 
 BASE = pathlib.Path(__file__).resolve().parent
