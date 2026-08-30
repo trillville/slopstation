@@ -8,13 +8,13 @@ and Slopstation observes progress without owning the download process.
 
 ```mermaid
 flowchart LR
-    request[Voice, text,<br/>or media.py] --> slop[Slopstation<br/>resolve title, scope, preset]
+    request[Voice, text,<br/>or command line] --> slop[Slopstation<br/>resolve title, scope, preset]
     slop --> managers[Radarr · movies<br/>Sonarr · series]
     managers -->|dispatch| qbit[qBittorrent<br/>transfer and seed]
     qbit --> torrents[C:\Media\torrents]
     torrents -->|import| libraries[C:\Media\Movies<br/>C:\Media\TV]
 
-    ops[(operations.json<br/>durable observation)] <--> slop
+    ops[Operation tracking<br/>progress and completion] <--> slop
     indexers[Configured indexers] <--> prowlarr[Prowlarr<br/>indexer management]
     flaresolverr[FlareSolverr<br/>challenge proxy] -. browser challenge .-> prowlarr
     prowlarr --> managers
