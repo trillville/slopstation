@@ -21,6 +21,7 @@ class FakeArr:
         self.episodes = []
         self.movie_files = []
         self.queue = {"records": []}
+        self.history = {"records": []}
         self.root_folders = []
         self.health = []
         self.indexers = [{"id": 1, "enable": True,
@@ -52,6 +53,8 @@ class FakeArr:
             return [dict(row) for row in self.movie_files]
         if endpoint == "queue":
             return self.queue
+        if endpoint == "history":
+            return self.history
         if endpoint.startswith("command/"):
             command_id = int(endpoint.split("/")[1])
             return dict(self.commands.get(command_id, {
@@ -269,6 +272,74 @@ def main():
             2026, 8, 30, 4, 12, 4, tzinfo=datetime.timezone.utc))
     assert rotated["state"] == "active" and rotated["port"] == 40123
     print("  Proton: reconnect mapping, no-op repeat, teardown, stale and unknown states")
+
+    # --- media health watch ---------------------------------------------------
+    watch_radarr, watch_sonarr = FakeArr("Radarr"), FakeArr("Sonarr")
+    watch_radarr.health = [{"source": "IndexerStatusCheck", "type": "warning",
+                            "message": "Indexers unavailable due to failures"}]
+    watch_radarr.history = {"records": [
+        {"id": 4, "eventType": "grabbed", "sourceTitle": "Dune.2021"},
+        {"id": 5, "eventType": "downloadFailed", "sourceTitle": "Dune.2021",
+         "data": {"message": "Torrent removed by qBittorrent"}}]}
+    watch_sonarr.queue = {"records": [
+        {"id": 1, "downloadId": "ABC", "title": "Show.S01",
+         "trackedDownloadStatus": "warning",
+         "statusMessages": [{"messages": ["Not a preferred word upgrade"]}]},
+        {"id": 2, "downloadId": "ABC", "title": "Show.S01",
+         "trackedDownloadStatus": "warning",
+         "statusMessages": [{"messages": ["Not a preferred word upgrade"]}]}]}
+    watch_log = cglib.CapturingLog("voice")
+    watch = media.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
+
+    watch.reconcile_once()
+    issue = watch_log.find("media_health_issue")
+    assert len(issue) == 1 and issue[0]["source"] == "IndexerStatusCheck"
+    assert issue[0]["level"] == "warn" and issue[0]["app"] == "Radarr"
+    # History already on disk at startup is backlog, not news.
+    assert not watch_log.find("media_import_failed")
+    # A season pack is one queue row per episode and one thing to act on.
+    stalled = watch_log.find("media_queue_stalled")
+    assert len(stalled) == 1 and stalled[0]["download"] == "ABC"
+
+    watch_log.records.clear()
+    watch.reconcile_once()
+    assert watch_log.events() == []
+
+    watch_log.records.clear()
+    watch_radarr.health = []
+    watch_radarr.history["records"].extend([
+        {"id": 6, "eventType": "importFailed", "sourceTitle": "Heat.1995",
+         "downloadId": "PACK", "episodeId": 1,
+         "data": {"message": "No files found are eligible for import"}},
+        {"id": 7, "eventType": "importFailed", "sourceTitle": "Heat.1995",
+         "downloadId": "PACK", "episodeId": 2,
+         "data": {"message": "No files found are eligible for import"}}])
+    watch_sonarr.queue["records"][0]["trackedDownloadStatus"] = "error"
+    watch.reconcile_once()
+    failed = watch_log.find("media_import_failed")
+    # One bad grab is one line even though it failed once per episode.
+    assert [r["title"] for r in failed] == ["Heat.1995"]
+    assert failed[0]["records"] == 2
+    assert failed[0]["level"] == "error" and failed[0]["kind"] == "importFailed"
+    assert watch_log.find("media_health_cleared")[0]["source"] == "IndexerStatusCheck"
+    assert watch_log.find("media_queue_stalled")[0]["status"] == "error"
+
+    class DeadArr:
+        name = "Sonarr"
+
+        def get(self, endpoint, params=None):
+            raise media.MediaError("connection refused")
+
+    watch_log.records.clear()
+    dead = media.MediaHealthMonitor((DeadArr(),), watch_log)
+    dead.reconcile_once()
+    dead.reconcile_once()
+    # An app that stays down is one line, not one line per poll.
+    assert len(watch_log.find("media_watch_failed")) == 1
+
+    assert media.media_health_monitor_from_config(
+        {"media": {"enabled": True, "healthSync": False}}, {}, watch_log) is None
+    print("  watch: health state, failure watermark, season-pack stalls collapse")
 
     svc = service()
     svc.radarr.lookup = [
