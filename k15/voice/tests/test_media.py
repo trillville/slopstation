@@ -501,7 +501,6 @@ def main():
         "upnp": False,
         "listen_port": 33125,
         "max_ratio_act": 0,
-        "share_limits_mode": "MatchAny",
         "bypass_local_auth": False,
         "bypass_auth_subnet_whitelist_enabled": False,
     }
@@ -530,7 +529,8 @@ def main():
     assert any(row["name"] == "qBittorrent share-limit action"
                and row["level"] == "PASS" for row in doctor["checks"])
     broken_preferences = dict(doctor_qbit_preferences,
-                              current_network_interface="Ethernet", upnp=True)
+                              current_network_interface="Ethernet", upnp=True,
+                              share_limits_mode="MatchAll")
     doctor_qbit_preferences.clear()
     doctor_qbit_preferences.update(broken_preferences)
     broken = media.media_doctor(
@@ -540,6 +540,8 @@ def main():
         compose_runner=lambda media_dir: compose_rows)
     assert not broken["ok"]
     assert any(row["name"] == "qBittorrent UPnP/NAT-PMP"
+               and row["level"] == "FAIL" for row in broken["checks"])
+    assert any(row["name"] == "qBittorrent share-limit mode"
                and row["level"] == "FAIL" for row in broken["checks"])
     print("  doctor: live boundaries, policy checks, and proof-limit warnings")
 
