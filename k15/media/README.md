@@ -86,10 +86,12 @@ removal after import and seeding.
    **EZTV**. Keep both application connections on **Full Sync** so these values
    reach Radarr and Sonarr.
 2. In native qBittorrent, open **Tools > Options > BitTorrent > Seeding
-   Limits**. Set the limit-combination mode to the first/either limit
-   (`MatchAny`) and the action to **Stop torrent**. Do not select a remove or
-   delete action. The indexer-specific limits take precedence, so global
-   ratio/time defaults do not need to be enabled.
+   Limits**. Check ratio `0.25` and total seeding time `60 min`; leave inactive
+   seeding time unchecked. Set the action to **Stop torrent**. qBittorrent
+   evaluates the enabled limits independently (the API calls this `MatchAny`),
+   but the Windows UI has no separate mode selector. Do not select a remove or
+   delete action. The indexer-specific limits take precedence, so these global
+   values are a matching fallback.
 3. Keep the `radarr` and `sonarr` categories configured in their download
    clients. Do not use a post-import category change; Arr needs to continue
    recognizing its torrent while it seeds.

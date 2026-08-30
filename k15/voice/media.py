@@ -1004,10 +1004,11 @@ def _compose_services(media_dir):
     return rows
 
 
-def _row_field(row, name):
+def _row_field(row, *names):
+    wanted = {name.casefold() for name in names}
     for field in row.get("fields") or []:
         if (isinstance(field, dict)
-                and str(field.get("name", "")).casefold() == name.casefold()):
+                and str(field.get("name", "")).casefold() in wanted):
             return field.get("value")
     return None
 
@@ -1121,7 +1122,9 @@ def _check_arr(report, kind, client, media_cfg):
             report.add("FAIL", f"{label} qBittorrent client",
                        "no enabled qBittorrent download client")
         else:
-            categories = {_clean_text(_row_field(row, "category"), 80).casefold()
+            category_field = "movieCategory" if kind == "movie" else "tvCategory"
+            categories = {_clean_text(
+                _row_field(row, category_field, "category"), 80).casefold()
                           for row in qbittorrent}
             if expected_category in categories:
                 report.add("PASS", f"{label} qBittorrent client",
@@ -1181,8 +1184,10 @@ def _check_prowlarr(report, client, media_cfg):
             if row is None or row not in _enabled_rows([row]):
                 report.add("FAIL", f"Prowlarr indexer {name}", "missing or disabled")
                 continue
-            actual_ratio = _row_field(row, "seedRatio")
-            actual_time = _row_field(row, "seedTime")
+            actual_ratio = _row_field(
+                row, "torrentBaseSettings.seedRatio", "seedRatio")
+            actual_time = _row_field(
+                row, "torrentBaseSettings.seedTime", "seedTime")
             if (_number_matches(actual_ratio, ratio)
                     and _number_matches(actual_time, minutes)):
                 report.add("PASS", f"Prowlarr indexer {name}",
