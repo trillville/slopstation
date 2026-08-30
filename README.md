@@ -1,6 +1,7 @@
 # slopstation
 
 [![ci](https://github.com/trillville/slopstation/actions/workflows/ci.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/ci.yml)
+[![cd](https://github.com/trillville/slopstation/actions/workflows/cd.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/cd.yml)
 
 Slopstation turns a Windows gaming PC, a Samsung S90C, and a Steam Controller
 into a couch console. A GMKtec K15 mini PC owns orchestration: it can start a
@@ -113,8 +114,8 @@ See [the media runbook](k15/media/README.md) for the Radarr/Sonarr pipeline.
 
 | Area | Host | Runtime | Update path |
 |---|---|---|---|
-| `k15/` | `K15` | Repository clone on the Desktop | `git pull`, then `Start-K15.bat` |
-| `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | Run `gaming-pc\Deploy.ps1` from a PC checkout |
+| `k15/` | `K15` | Repository clone on the Desktop | The `cd` workflow, or `git pull` then `Start-K15.bat` |
+| `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | The `cd` workflow, or `gaming-pc\Deploy.ps1` from a PC checkout |
 | `wake-training/` | Gaming PC | Checkout plus external training data | Run in place; GPU required |
 
 The gaming PC is deployed by copy because its runtime also contains
@@ -218,6 +219,50 @@ make each request self-contained.
 
 Media acquisition is optional and has a separate ordered bootstrap in
 [`k15/media/README.md`](k15/media/README.md).
+
+## Continuous deployment
+
+A green `ci` run on `main` triggers `cd`, which deploys each machine and runs
+its doctor. Neither machine accepts inbound connections, so each runs a
+self-hosted GitHub Actions runner that polls outbound.
+
+The two legs are independent. The gaming PC sleeps, so its runner is offline
+most of the time and its job waits in the queue - GitHub cancels one nothing
+claims within about a day - while the K15 deploys immediately. Until the PC
+catches up on its own next wake, `doctor.py` reports the skew as a WARN.
+
+Both legs park rather than interrupt a session. The PC waits while its READY
+marker exists or an Enter/Exit task is running; the K15 waits while the session
+lock is fresh. The budget is `WAIT_MINUTES` in `.github/workflows/cd.yml`; past
+it the run fails and the next green commit retries. A failing doctor fails the
+run and changes nothing else - there is no automatic rollback.
+
+This repository is public and the runners are self-hosted, so `cd` runs only
+for a `push` that reached `main`. A fork's pull request runs `ci` here too, and
+its head branch can be called anything, so the branch filter alone would not
+keep a stranger's commit off the gaming PC.
+
+Runner setup, once per machine:
+
+1. Add a repository runner (Settings, Actions, Runners) labelled `gamepc` on
+   `TILLMAN-DESKTOP` and `k15` on the K15. The PC also needs `git` on `PATH`:
+   without it the checkout arrives as a plain tarball and `Deploy.ps1` stamps
+   `nogit` instead of a rev, which is the one thing the skew check reads.
+2. Run it interactively - `run.cmd` with a shortcut in `shell:startup` - not as
+   a service. The K15's lanes must relaunch inside the logged-in session or
+   they reach neither the Puck nor the audio devices, and the PC's doctor reads
+   display state that session 0 does not have.
+3. On the K15 the runner never checks the repository out: it runs
+   `k15\deploy.py` from the live checkout, which must already be on `main`,
+   clean, and current. Set the repository variable `K15_CHECKOUT` if that
+   checkout is not at `C:\Users\minipc\Desktop\slopstation`.
+
+`deploy.py` fast-forwards the checkout, kills each running agent so its
+supervisor relaunches it on the new code, then runs `doctor.py`. It never
+starts a lane: an agent that does not come back is reported, not restarted. The
+chord lane must be running when it finishes - `doctor.py` only WARNs about a
+dead one, so without that check a deploy onto a K15 with no supervisors would
+report success.
 
 ## Operate and diagnose
 

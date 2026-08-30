@@ -77,4 +77,8 @@ needs audio devices (the K15).
   hand-copy; it ships the set atomically and stamps `build-id`, which
   `doctor.py` compares (`ssh gamepc version`) to catch skew.
 - After either: `python doctor.py` on the K15 should end `0 fail`.
+- CD (`.github/workflows/cd.yml`) does both of the above and both
+  doctors on self-hosted runners after a green `ci` on `main`. It parks
+  while a session is live and never rolls back. Hand-deploying stays
+  valid - it is the same two scripts.
 
