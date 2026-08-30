@@ -44,6 +44,22 @@ def _summary(operation, state):
     return f"The {title} install failed."
 
 
+def _waiting_summary(operation, progress):
+    """Spoken heads-up when waiting begins; None when waiting is pre-air."""
+    authority = str(operation.get("authority", "media")).title()
+    title = operation["title"]
+    if operation.get("kind") == "series_acquisition":
+        total = int(progress.get("total_episodes", 0) or 0)
+        if not total:
+            return None
+        missing = total - int(progress.get("episodes", 0) or 0)
+        return (f"{authority} could not find {missing} of the {total} "
+                f"requested episodes of {title}. It will keep watching for "
+                "a day, then leave the missing episodes out.")
+    return (f"{authority} could not find an acceptable release of {title}. "
+            "It will keep watching for a day, then close the request.")
+
+
 def _gave_up_summary(operation, result):
     title = operation["title"]
     if not result.get("have"):
@@ -178,7 +194,7 @@ class OperationStore:
             observed=verified)
 
     def observe(self, operation_id, state, progress=None, detail="",
-                summary=None):
+                summary=None, announce=True):
         """Persist one authority observation and fire on the first terminal edge."""
         if state not in STATES:
             raise ValueError(f"unknown operation state {state}")
@@ -203,9 +219,10 @@ class OperationStore:
                 row.update(state=state, progress=progress, detail=detail,
                            updated=now)
             if state in TERMINAL and previous != state:
-                row.update(finished=now, announcement_pending=True,
+                row.update(finished=now, announcement_pending=announce,
                            summary=summary or _summary(row, state))
-                terminal = dict(row)
+                if announce:
+                    terminal = dict(row)
             self._save(rows)
             out = dict(row)
         if changed:
@@ -464,11 +481,14 @@ class MediaMonitor:
         if now - since < self.WAITING_GIVE_UP_S:
             return
         result = self.media.abandon_missing(operation)
+        # The waiting_for_match notification already said this would happen
+        # and when; a spoken announcement a day later would land with no
+        # context, so the close is silent.
         self.store.observe(
             operation["id"],
             SUCCEEDED if result.get("have") else FAILED, progress,
             "no acceptable release appeared; unmonitored the missing scope",
-            summary=_gave_up_summary(operation, result))
+            summary=_gave_up_summary(operation, result), announce=False)
 
     def _schedule_search_retry(self, operation, now):
         metadata = operation.get("metadata") or {}
@@ -555,12 +575,11 @@ class MediaMonitor:
                         self.store.notify(
                             operation["id"], "download_started",
                             f"{operation['title']} has started downloading.")
-                    elif phase == "waiting_for_match" and previous_phase == "searching":
-                        authority = str(operation.get("authority", "media")).title()
-                        self.store.notify(
-                            operation["id"], "waiting_for_match",
-                            f"{authority} did not find an acceptable match for "
-                            f"{operation['title']} yet. It will keep watching.")
+                    elif phase == "waiting_for_match":
+                        summary = _waiting_summary(operation, progress)
+                        if summary:
+                            self.store.notify(operation["id"],
+                                              "waiting_for_match", summary)
                 if state == RUNNING and phase == "waiting_for_match":
                     self._maybe_give_up(operation, progress, now)
                 elif ((operation.get("metadata") or {}).get("waiting_since")

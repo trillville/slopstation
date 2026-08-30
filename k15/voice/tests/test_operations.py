@@ -327,6 +327,12 @@ def main():
     give_monitor.reconcile_once(now=5000)
     assert give_store.get(give_op["id"])["metadata"]["waiting_since"] == 5000
     assert not give_media.abandoned
+    # The heads-up speaks while the user still has context: what is missing
+    # and that the close is coming.
+    heads_up = [item for item in give_store.pending_notifications()
+                if item["operation_id"] == give_op["id"]]
+    assert len(heads_up) == 1 and heads_up[0]["key"] == "waiting_for_match"
+    assert "11" in heads_up[0]["summary"]
     give_media.result = {"complete": False,
                          "progress": {"phase": "downloading",
                                       "total_episodes": 91},
@@ -342,7 +348,8 @@ def main():
     closed = give_store.get(give_op["id"])
     assert give_media.abandoned == [give_op["id"]]
     assert closed["state"] == operations.SUCCEEDED
-    assert closed["announcement_pending"]
+    # The close is silent - the heads-up already said it was coming.
+    assert not closed["announcement_pending"]
     assert "season 1" in closed["summary"]
 
     unaired = give_store.track_external(
@@ -359,6 +366,9 @@ def main():
     assert fresh["state"] == operations.RUNNING
     assert "waiting_since" not in fresh["metadata"]
     assert give_media.abandoned == [give_op["id"]]
+    # Pre-air waiting is not "couldn't find": no heads-up either.
+    assert not [item for item in give_store.pending_notifications()
+                if item["operation_id"] == unaired["id"]]
 
     empty = give_store.track_external(
         "movie_acquisition", "radarr", "73", "Obscure Film",
@@ -380,9 +390,10 @@ def main():
     give_monitor.reconcile_once(now=9000 + 96 * 3600)
     failed_empty = give_store.get(empty["id"])
     assert failed_empty["state"] == operations.FAILED
-    assert failed_empty["announcement_pending"]
-    print("  give up: waiting window closes partial scope, spares unaired "
-          "and retry-pending")
+    assert not failed_empty["announcement_pending"]
+    assert failed_empty["summary"].startswith("No acceptable release")
+    print("  give up: heads-up speaks early with the deadline; the close "
+          "itself is silent; unaired and retry-pending are spared")
 
     fresh_state()
     canceled_store = operations.OperationStore(log)
