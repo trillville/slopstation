@@ -19,15 +19,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# One deploy at a time, never cancelled mid-copy. A run parked in its session
-# gate holds the group; GitHub keeps only the newest run queued behind it,
-# which is the one worth landing.
 # Windows PowerShell 5.1, explicitly: the runner default is pwsh, which is not
 # installed on either machine.
 defaults:
   run:
     shell: powershell
 
+# One deploy at a time, never cancelled mid-copy. A run parked in its session
+# gate holds the group; GitHub keeps only the newest run queued behind it,
+# which is the one worth landing.
 concurrency:
   group: cd
   cancel-in-progress: false
