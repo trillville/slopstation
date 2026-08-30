@@ -149,15 +149,24 @@ correlation suffix; every other command returns `DENIED`.
    `k15\secrets.template.json` to `k15\secrets.json`. Set device names,
    addresses, API keys, and local tokens; both destination files are ignored by
    Git. `tvIp` enables TV-state evidence and is required for volume ducking.
-3. Install the VirtualHere server and connect the TV’s Ex-Link adapter. The
-   configured COM port must identify the Ex-Link device.
-4. Run `k15\Start-K15.bat`. The first voice start creates its virtual
+3. Install the VirtualHere server and give the K15 a DHCP reservation. Allow
+   its USB hub from the private LAN:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName 'VirtualHere USB hub (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 7575 -Profile Private -RemoteAddress LocalSubnet
+   ```
+
+   `doctor.py` verifies the service, listener, and firewall rule. Zero connected
+   clients is normal while the gaming PC sleeps.
+4. Connect the TV’s Ex-Link adapter. The configured COM port must identify the
+   Ex-Link device.
+5. Run `k15\Start-K15.bat`. The first voice start creates its virtual
    environment and installs the pinned dependencies.
-5. Put a shortcut to `Start-K15.bat` in `shell:startup`.
-6. If TV volume ducking is enabled, run
+6. Put a shortcut to `Start-K15.bat` in `shell:startup`.
+7. If TV volume ducking is enabled, run
    `.venv\Scripts\python tv_remote.py pair` from `k15\voice` and accept the TV
    prompt.
-7. Run `python doctor.py` from `k15` until no checks fail.
+8. Run `python doctor.py` from `k15` until no checks fail.
 
 #### Optional MCP access
 
@@ -290,8 +299,7 @@ Revisit the display probe before adding another 2160-pixel-high desk display.
 The TV acknowledges unsupported Ex-Link volume commands but does not apply
 them; `tv_remote.py` is the working volume path.
 
-Runtime-only state is intentionally absent from Git: real config, secrets, and
-the media `.env`,
-VirtualHere binaries and PINs, DisplayMagician shortcuts, scheduled-task
-registrations, SSH/firewall state, logs, operation state, voice virtual
-environment, and wake-training data.
+Runtime-only state is intentionally absent from Git: real config, secrets, the
+media `.env`, VirtualHere binaries and PINs, DisplayMagician shortcuts,
+scheduled-task registrations, SSH/firewall state, logs, operation state, voice
+virtual environment, and wake-training data.
