@@ -38,8 +38,6 @@ class FakeArr:
         if endpoint == "qualityprofile":
             return list(self.profiles)
         if endpoint in ("movie/lookup", "series/lookup"):
-            if params and str(params.get("term", "")).startswith("tvdb:"):
-                return list(self.lookup)
             return list(self.lookup)
         if endpoint == "movie/lookup/tmdb":
             return dict(self.lookup_by_id)
@@ -95,8 +93,8 @@ class FakeArr:
                     self.library[index] = json.loads(json.dumps(payload))
         return dict(payload)
 
-    def delete(self, endpoint, params=None, payload=None):
-        self.deletes.append((endpoint, params, payload))
+    def delete(self, endpoint, params=None):
+        self.deletes.append((endpoint, params))
         if endpoint.startswith("command/"):
             self.commands.pop(int(endpoint.split("/")[1]), None)
         elif endpoint.startswith("queue/"):
@@ -108,10 +106,7 @@ class FakeArr:
                 row for row in self.queue["records"]
                 if (row.get("downloadId") != download_id if download_id
                     else int(row.get("id", 0)) != queue_id)]
-        elif endpoint.startswith("movie/"):
-            wanted = int(endpoint.split("/")[1])
-            self.library = [row for row in self.library if row["id"] != wanted]
-        elif endpoint.startswith("series/"):
+        elif endpoint.startswith(("movie/", "series/")):
             wanted = int(endpoint.split("/")[1])
             self.library = [row for row in self.library if row["id"] != wanted]
         elif endpoint.startswith("episodefile/"):
@@ -619,10 +614,10 @@ def main():
     assert removed_movie["downloads_canceled"] == 1
     assert removed_movie["files_deleted"] == 1
     assert not svc.radarr.library
-    assert ("command/8", None, None) in svc.radarr.deletes
+    assert ("command/8", None) in svc.radarr.deletes
     assert any(endpoint == "queue/700" and params["removeFromClient"]
                and params["skipRedownload"] and not params["blocklist"]
-               for endpoint, params, _ in svc.radarr.deletes)
+               for endpoint, params in svc.radarr.deletes)
 
     svc = service()
     svc.sonarr.library = [{

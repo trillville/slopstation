@@ -3,8 +3,6 @@ at a plain user turn - a tool_result without its tool_use is a 400 from
 Anthropic. Run:
     .venv\\Scripts\\python tests\\test_carry.py
 """
-import sys
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 

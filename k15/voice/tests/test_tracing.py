@@ -4,8 +4,6 @@ tracing must never cost a voice session. Run:
     .venv\\Scripts\\python tests\\test_tracing.py
 """
 import base64
-import sys
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 

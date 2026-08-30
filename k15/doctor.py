@@ -83,31 +83,43 @@ def _python_cmdlines():
     return r.stdout or ""
 
 
-def check_listener():
+def _process_row(name, needle, up, down, down_hint, undetected_hint=""):
+    """One 'is this lane's python running' row. A probe that itself fails is
+    reported as that, and reads as not running."""
     try:
-        running = "chord_listener" in _python_cmdlines()
+        running = needle in _python_cmdlines()
     except Exception as e:
-        report(WARN, "listener", f"could not detect ({e})", "assuming not running")
+        report(WARN, name, f"could not detect ({e})", undetected_hint)
         return False
     if running:
-        report(PASS, "listener", "running (owns the Puck - haptic check skipped)")
+        report(PASS, name, up)
     else:
-        report(WARN, "listener", "NOT running - the chord is deaf",
-               "run Start-Listener.bat (or it's mid-restart; re-check in 10s)")
+        report(WARN, name, down, down_hint)
     return running
+
+
+def check_listener():
+    return _process_row(
+        "listener", "chord_listener",
+        "running (owns the Puck - haptic check skipped)",
+        "NOT running - the chord is deaf",
+        "run Start-Listener.bat (or it's mid-restart; re-check in 10s)",
+        "assuming not running")
 
 
 def check_haptics():
     """Only called when the listener is stopped. Needs the controller awake."""
     try:
-        from haptic_test import open_input_interface, chirp
-        dev = open_input_interface()
+        dev, _ = haptics.open_streaming_interface(haptics.streams_input_reports)
+        why = "no live 0x42 interface"
     except Exception as e:
-        report(WARN, "haptics", str(e),
+        dev, why = None, str(e)
+    if not dev:
+        report(WARN, "haptics", why,
                "controller asleep? tap a button and rerun; or a session is active")
         return
     try:
-        chirp(dev, 0)
+        haptics.chirp(dev, 0)
         report(PASS, "haptics", "chirp sent - you should have felt it (if not: rerun after firmware calibrate)")
     except Exception as e:
         report(FAIL, "haptics", f"write failed ({e})",
@@ -129,14 +141,13 @@ def _local_rev():
 
 def check_ssh():
     import gamepc
-    ssh = gamepc.ssh
     try:
         cglib.config()["sshHost"]
     except Exception as e:
         report(FAIL, "ssh", f"config.json has no usable sshHost ({e})", "config broken? see above")
         return
     try:
-        st = ssh("status")
+        st = gamepc.status()
         report(PASS, "ssh status", f"-> {st!r} (key, forced command, sshd, firewall all good)")
     except subprocess.TimeoutExpired:
         report(WARN, "ssh status", "timed out", "PC asleep? that's normal from idle; wake it to fully test")
@@ -145,7 +156,7 @@ def check_ssh():
                "PC awake? then check sshd service / firewall rule / administrators_authorized_keys")
         return
     try:
-        ssh("bogus")
+        gamepc.ssh("bogus")     # no wrapper: not a verb, that is the point
         report(WARN, "ssh dispatch", "bogus command did NOT get DENIED", "Dispatch.ps1 changed?")
     except subprocess.CalledProcessError as e:
         if "DENIED" in (e.stdout or ""):
@@ -157,7 +168,7 @@ def check_ssh():
 
     # Deploy skew: Deploy.ps1 updates the PC, git pull updates here.
     try:
-        pcbuild = ssh("version")
+        pcbuild = gamepc.version()
     except subprocess.CalledProcessError as e:
         if "DENIED" in (e.stdout or ""):
             report(WARN, "deploy skew", "PC's Dispatch predates the version verb",
@@ -411,39 +422,42 @@ def check_media(cfg):
 
 def check_operations():
     operations_file = cglib.STATE / "operations.json"
-    if operations_file.exists():
-        try:
-            rows = json.loads(operations_file.read_text(encoding="utf-8"))
-            active = [o for o in rows
-                      if o.get("state") in ("QUEUED", "RUNNING", "UNKNOWN")]
-            unknown = [o for o in active if o.get("state") == "UNKNOWN"]
-            pending = [o for o in rows if o.get("announcement_pending")]
-            note = (f"{len(rows)} recorded, {len(active)} active, "
-                    f"{len(unknown)} unknown, {len(pending)} pending announcement")
-            if active and "voice_agent" not in _python_cmdlines():
-                report(WARN, "operations", note + " - monitoring is paused",
-                       "start the voice agent; active work will be re-observed")
-            else:
-                report(PASS, "operations", note)
-        except Exception as e:
-            report(WARN, "operations", f"operations.json unreadable ({e})",
-                   "restore or remove the file; external work is unaffected but "
-                   "Slopstation correlation will be lost")
-    else:
+    if not operations_file.exists():
         report(PASS, "operations", "no operations recorded")
+        return
+    try:
+        rows = json.loads(operations_file.read_text(encoding="utf-8"))
+        active = [o for o in rows
+                  if o.get("state") in ("QUEUED", "RUNNING", "UNKNOWN")]
+        unknown = [o for o in active if o.get("state") == "UNKNOWN"]
+        pending = [o for o in rows if o.get("announcement_pending")]
+        note = (f"{len(rows)} recorded, {len(active)} active, "
+                f"{len(unknown)} unknown, {len(pending)} pending announcement")
+    except Exception as e:
+        report(WARN, "operations", f"operations.json unreadable ({e})",
+               "restore or remove the file; external work is unaffected but "
+               "Slopstation correlation will be lost")
+        return
+    # The agent probe is outside the parse: its failure is not a bad ledger.
+    try:
+        paused = active and "voice_agent" not in _python_cmdlines()
+    except Exception as e:
+        report(WARN, "operations", note + f" - agent probe failed ({e})",
+               "the ledger is intact; whether monitoring runs is unknown")
+        return
+    if paused:
+        report(WARN, "operations", note + " - monitoring is paused",
+               "start the voice agent; active work will be re-observed")
+    else:
+        report(PASS, "operations", note)
 
 
 def check_voice_agent():
-    try:
-        running = "voice_agent" in _python_cmdlines()
-    except Exception as e:
-        report(WARN, "voice agent", f"could not detect ({e})", "")
-        return
-    if running:
-        report(PASS, "voice agent", "running (wake word armed)")
-    else:
-        report(WARN, "voice agent", "not running - wake word deaf (chord unaffected)",
-               "run voice\\Start-Voice.bat or the startup shortcut")
+    _process_row(
+        "voice agent", "voice_agent",
+        "running (wake word armed)",
+        "not running - wake word deaf (chord unaffected)",
+        "run voice\\Start-Voice.bat or the startup shortcut")
 
 
 def check_telemetry():

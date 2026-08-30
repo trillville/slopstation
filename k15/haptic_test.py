@@ -27,7 +27,7 @@ import sys, time
 import hid
 
 import haptics
-from haptics import RID_INPUT as STATE_REPORT, VID, PID   # 0x42, ID_TRITON_CONTROLLER_STATE
+from haptics import VID, PID
 
 SUSTAIN_MS = 0x18FF            # bridge's PlayHapticTone duration (~6.4 s)
 
@@ -49,40 +49,19 @@ def w(dev, data, label):
 
 
 def open_input_interface(timeout_s=2.0):
-    """The interface emitting 0x42 state reports is also the haptic write
-    target. The Puck exposes ~13 interfaces; some error on read - skip those."""
-    for info in hid.enumerate(VID, PID):
-        d = hid.device()
-        try:
-            d.open_path(info["path"])
-            d.set_nonblocking(True)
-            t0 = time.time()
-            while time.time() - t0 < timeout_s:
-                r = d.read(64)
-                if r and r[0] == STATE_REPORT:
-                    log(f"latched 0x42 interface: {info['path']}")
-                    return d
-                time.sleep(0.002)
-        except (OSError, ValueError):
-            pass                       # unreadable interface - skip it
-        try:
-            d.close()
-        except Exception:
-            pass
-    raise RuntimeError("no live 0x42 interface - controller awake? listener stopped?")
+    dev, path = haptics.open_streaming_interface(haptics.streams_input_reports,
+                                                 timeout_s)
+    if not dev:
+        raise RuntimeError("no live 0x42 interface - controller awake? listener stopped?")
+    log(f"latched 0x42 interface: {path}")
+    return dev
 
 
 def chirp(dev, gain):
-    for freq, dur in ((440, 60), (660, 90)):
-        for side in (0, 1):
-            w(dev, haptics.tone_report(side, freq, dur, gain), f"tone {freq}Hz/{dur}ms side{side}")
-        time.sleep(0.07)
-    for side in (0, 1):
-        w(dev, haptics.stop_report(side), f"stop side{side}")
+    haptics.chirp(dev, gain, write=w)
 
 
-# Production vocabulary, from haptics.py, played by the listener's engine.
-# Count is the message: 1 launch, 2 busy, 3 fail.
+# Production vocabulary, from haptics.py.
 PATTERNS = {
     "launch": haptics.PATTERN_LAUNCH,
     "busy":   haptics.PATTERN_BUSY,
@@ -120,7 +99,9 @@ def rumble(dev, _gain):
     w(dev, haptics.rumble_report(700, 130, 60, 270, 60), "rumble one-shot")
 
 
-def probe(_dev=None, _gain=None):
+def probe():
+    # Not in CMDS: main opens the device before dispatching one, and probe
+    # enumerates for itself.
     for info in hid.enumerate(VID, PID):
         log(f"path={info['path']} usage_page={info.get('usage_page', 0):#06x} "
             f"usage={info.get('usage', 0):#04x}")

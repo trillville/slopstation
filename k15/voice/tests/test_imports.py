@@ -19,13 +19,8 @@ VOICE = _bootstrap.VOICE
 for name in ("hid", "serial"):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-SKIP = set()
-
-
 def modules():
-    for p in sorted(K15.glob("*.py")) + sorted(VOICE.glob("*.py")):
-        if p.stem not in SKIP:
-            yield p
+    yield from sorted(K15.glob("*.py")) + sorted(VOICE.glob("*.py"))
 
 
 def walked():

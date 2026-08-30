@@ -70,7 +70,6 @@ def fake_get(url, params=None, timeout=20):
 
 def main():
     tmp = Path(tempfile.mkdtemp())
-    library.STATE = tmp
     steamstore.DEALS = tmp / "deals.json"
     steamstore.FACET_CACHE = tmp / "facet-cache.json"
     steamstore.TAGMAP = tmp / "store-tags.json"

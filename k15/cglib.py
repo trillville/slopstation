@@ -335,8 +335,8 @@ class _Log:
 
 
 def make_log(lane: str) -> _Log:
-    """One logger per lane ('voice', 'launch', 'listener', 'library'). The lane
-    is a Loki label, so the set stays small and fixed."""
+    """One logger per lane. The lane is a Loki label, so the set stays small and
+    fixed: tests/test_event_names.py LANES is the enforced list."""
     return _Log(lane)
 
 

@@ -4,10 +4,8 @@ only, and the non-reentrant guard against stacked crawls. All layer fns are
 mocked; no network. Run:
     .venv\\Scripts\\python tests\\test_sync.py
 """
-import sys
 import threading
 import time
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 import cglib

@@ -101,8 +101,8 @@ def restore_tv() -> None:
 def abort_teardown(tv_woken: bool) -> None:
     """Release the lock and undo the TV power a failed or cancelled launch
     spent; nothing was ever switched to the gaming input, so there is no input
-    to put back. Ownership-checked like watch()'s restore: a lock recycled
-    while we stalled belongs to a successor whose session owns the set."""
+    to put back. The restore is gated on release_lock(): a lock recycled while
+    we stalled belongs to a successor whose live session owns the set."""
     if cglib.release_lock() and tv_woken:
         restore_tv()
 

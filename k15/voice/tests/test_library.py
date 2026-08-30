@@ -4,7 +4,6 @@ install on this machine, cross-validated row-for-row against Dispatch.ps1's
     .venv\\Scripts\\python tests\\test_library.py
 """
 import subprocess
-import sys
 from pathlib import Path
 
 import _bootstrap  # noqa: F401

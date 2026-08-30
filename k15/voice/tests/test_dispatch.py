@@ -3,10 +3,7 @@ dry-run, volume stepping + clamp, mute, input map + the READY-gate on the
 gaming input, serial retry, ssh outcomes. Run:
     .venv\\Scripts\\python tests\\test_dispatch.py
 """
-import sys
-import tempfile
 import time
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 from _bootstrap import fresh_state
@@ -229,8 +226,8 @@ def main():
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy", r
     assert "start one first" in r.detail, r
-    # Mid-start (fresh lock) the busy names the situation: "start one first"
-    # told the model to start the session it had just started (2026-08-15).
+    # Mid-start (fresh lock) is a distinct busy from no-session: the reply must
+    # not tell the model to start what is already starting (2026-08-15).
     fresh_state(10)
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
@@ -244,8 +241,8 @@ def main():
     assert Harness().d.nav("downloads").earcon == "fail"
 
     # --- an UNREGISTERED task says so, on every verb that fires one ----------
-    # The old FAILED:1 read as "nav is broken" when the fix was one
-    # Register-ScheduledTask (2026-08-14); the reply names the task and the fix.
+    # The reply must name the task and the Register-ScheduledTask fix, not read
+    # as a broken verb (2026-08-14).
     h = Harness()
     dp.library.installed_name = lambda a: None
     fresh_state(5)          # a live session, so play_game takes the ssh path

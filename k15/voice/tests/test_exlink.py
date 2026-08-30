@@ -5,10 +5,8 @@ vol_set clamping must agree - every table entry is rebuilt from its
 """
 import sys
 import time
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
-import cglib
 import tv
 
 # name -> (c1, c2, c3, value), straight from the official worksheet rows.

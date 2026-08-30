@@ -31,7 +31,7 @@
     "seedTimeMinutes": 60,
     "pollS": 30,
     "healthSync": true,
-    "_healthSync": "OPTIONAL: when true (the default), the voice supervisor polls Radarr and Sonarr for health issues, failed imports, and stalled queue items, and emits them on the media lane. Set false to silence the watch.",
+    "_healthSync": "OPTIONAL: when true (the default), the voice supervisor polls Radarr and Sonarr for health issues, failed imports, and stalled queue items, and emits them on the voice lane. Set false to silence the watch.",
     "healthPollS": 300,
     "moviePresets": {
       "default": "Slopstation Blu-ray HDR TrueHD",
@@ -57,7 +57,7 @@
     "outputDeviceName": "",
     "wakeModel": "hey_jarvis_v0.1",
     "wakeThreshold": 0.5,
-    "_wakeTuning": "All five OPTIONAL (audio.py/voice_agent.py read them with defaults) and deliberately not in REQUIRED_VOICE - config.json is gitignored, so a key mandatory in code is an agent that will not start after a git pull. wakeNearMissFactor (fraction of wakeThreshold): emit wake_near_miss for a run of scores that got this close and never crossed - the only trace recall leaves. Raise toward 1.0 if a loud room makes it chatty. wakeClipsKeep: fired pre-rolls kept under logs/wake as wavs, the corpus a custom verifier trains negatives on; 0 disables, 200 is ~13 MB.",
+    "_wakeTuning": "All OPTIONAL (audio.py reads them with defaults) and deliberately not in REQUIRED_VOICE - config.json is gitignored, so a key mandatory in code is an agent that will not start after a git pull. wakeNearMissFactor (fraction of wakeThreshold): emit wake_near_miss for a run of scores that got this close and never crossed - the only trace recall leaves. Raise toward 1.0 if a loud room makes it chatty. wakeClipsKeep: fired pre-rolls kept under logs/wake as wavs, the corpus a custom verifier trains negatives on; 0 disables, 200 is ~13 MB.",
     "_wakeGates": "wakeVadThreshold (0-1, Silero speech gate) and wakePatience (N consecutive frames above threshold, costing (N-1)*80ms, capped at 30 by openWakeWord's prediction buffer) are RECOMMENDED AT 0: both suppress detections, and the 2026-08-15 failure was already too FEW. Turn them on when wake_near_miss shows real margin - VAD first (0.3-0.5), which kills effects and music but not TV dialogue, which is speech and passes cleanly.",
     "wakeNearMissFactor": 0.5,
     "wakeClipsKeep": 200,

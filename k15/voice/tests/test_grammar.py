@@ -2,8 +2,6 @@
 negatives that must fall through to the assistant lane. Run:
     .venv\\Scripts\\python tests\\test_grammar.py
 """
-import sys
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 from grammar_gate import GrammarMatcher, strip_wake
@@ -69,8 +67,7 @@ TABLE = [
     ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),
     ("start elden ring", "PlayGame", {"game": "elden ring"}),
     ("play some music", "PlayGame", {"game": "some music"}),
-    # Conversational lead-ins: the commonest launch phrasings in the logs, and
-    # they used to fall through to the LLM with an empty slot.
+    # Conversational lead-ins: the commonest launch phrasings in the logs.
     ("i want to play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("i wanna play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("i would like to play elden ring", "PlayGame", {"game": "elden ring"}),

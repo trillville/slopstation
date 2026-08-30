@@ -32,8 +32,7 @@ QUERY_TERM_SLOTS = 30
 # Ordinary English, in spoken_form. Flux gets these right unprompted, so a slot
 # spent here is a slot not spent on a coined word it does get wrong. Steam's
 # tag head is almost nothing else: 21 of the top 30 for a 40-game library
-# (2026-08-29), which is how "mechs" - the mishear query_terms was written for
-# - sat at rank 45 and never reached Flux at all.
+# (2026-08-29).
 GENERIC_TERMS = frozenset({
     "2d", "3d", "action", "adventure", "anime", "arcade", "atmospheric",
     "base building", "beautiful", "building", "casual",
@@ -69,11 +68,9 @@ def _dedupe(terms):
 
 
 def query_keyterms(limit=QUERY_TERM_SLOTS):
-    """The words used to ask ABOUT games, in the form Flux emits them.
-
-    query_terms was the one keyterm source that skipped spoken_form, so Flux
-    was taught SteamSpy's punctuation - 'rogue-like', 'souls-like', 'co-op' -
-    and never the unhyphenated words the couch actually says."""
+    """The words used to ask ABOUT games, in the form Flux emits them: every
+    term goes through spoken_form, never SteamSpy's punctuation ('rogue-like',
+    'souls-like', 'co-op')."""
     return [t for t in _dedupe(titles.spoken_form(x)
                                for x in library.query_terms(None))
             if t not in GENERIC_TERMS][:limit]

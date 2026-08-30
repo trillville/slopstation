@@ -46,7 +46,7 @@ Do not infer operation wall-clock time from Langfuse trace latency.
 
 | | |
 |---|---|
-| `conversations --since 24h` | one row per voice session: time, trace id, session, latency, cost |
+| `conversations --since 24h` | one row per voice session: time, trace id, session, env, latency, name. No cost — a root observation's cost fields are null; use `trace <id>` |
 | `trace <traceId>` | the full tree with per-span timing, tokens and cost |
 | `trace <traceId> --io` | the same, plus prompts and completions |
 | `errors --since 24h` | observations Langfuse marked ERROR |
@@ -57,8 +57,11 @@ Do not infer operation wall-clock time from Langfuse trace latency.
 The trace's **session id is the same `session` field** in the Loki JSONL:
 
 ```bash
-python .claude/skills/grafana-logs/query.py '{service="k15"} | json | session="c32ec7"' --since 24h
+python .claude/skills/grafana-logs/query.py --session c32ec7 --since 24h
 ```
+
+`--session` widens to both machines on its own; quoting a raw LogQL selector
+here is the PowerShell footgun that skill warns about.
 
 Langfuse says what the model did; Loki says what the system did around it —
 the dispatch, the launch, the earcons, the errors.

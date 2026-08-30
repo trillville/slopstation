@@ -6,7 +6,6 @@ the token without logging it. No network. Run:
 """
 import base64
 import json
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -103,7 +102,6 @@ def main():
         {"client_instanceid": "999", "machine_name": "LAPTOP", "os_name": "Windows"},
         {"client_instanceid": "111", "machine_name": "TILLMAN-DESKTOP", "os_name": "Windows"}]
     assert [x["instanceid"] for x in s.sessions()] == ["999", "111"]
-    assert s._target("TILLMAN-DESKTOP")["instanceid"] == "111"   # matched, not first
     assert s._target()["instanceid"] == "999"                    # no name -> first
     # A configured machine name pins the target, so install/status can't land
     # on another signed-in box Steam happens to list first.
@@ -145,7 +143,7 @@ def main():
     # --- install: verified via GetClientAppList, right instanceid on the wire -
     state["apps"] = [{"appid": 570, "app": "Dota", "changing": True,
                       "bytes_to_download": "100", "bytes_downloaded": "10"}]
-    r = s.install(570, machine_name="TILLMAN-DESKTOP")
+    r = s_pinned.install(570)
     assert r["ok"] and r["verified"] is True, r
     inst = [d for m, d in posts if "InstallClientApp" in m][-1]
     assert inst["appid"] == 570 and inst["client_instanceid"] == "111", inst

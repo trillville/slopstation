@@ -8,7 +8,6 @@ score here alongside good live trials is the test's limit, not the model's.
 """
 import json
 import subprocess
-import sys
 import tempfile
 import wave
 from pathlib import Path
