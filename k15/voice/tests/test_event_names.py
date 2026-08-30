@@ -139,7 +139,7 @@ PYTHON = {
     "token_transfer_failed": {"err", "url"},
     "tool_call": {"args", "ok", "tool"},
     "tool_error": {"err", "tool"},
-    "tool_refused": {"appid", "reason", "tool"},
+    "tool_refused": {"appid", "catalog_id", "reason", "tool"},
     "trace_save_failed": {"err"},
     "trace_saved": {"file", "messages", "pruned"},
     "tracing_setup_failed": {"err"},

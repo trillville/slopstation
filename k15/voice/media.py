@@ -429,6 +429,7 @@ class MediaService:
                     "in_library": True,
                     "title": _clean_text(movie.get("title"))
                     or f"TMDB {catalog_id}",
+                    "year": movie.get("year"),
                     "available": bool(movie.get("hasFile"))}
         if kind != "series":
             raise MediaError(f"unknown media kind {kind}")
@@ -450,6 +451,7 @@ class MediaService:
         return {"kind": kind, "catalog_id": catalog_id, "in_library": True,
                 "title": _clean_text(series.get("title"))
                 or f"TVDB {catalog_id}",
+                "year": series.get("year"),
                 "seasons": [seasons[number] for number in sorted(seasons)]}
 
     def profiles(self):

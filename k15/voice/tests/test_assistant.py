@@ -192,6 +192,8 @@ def main():
         def library(self, kind, catalog_id):
             self.requests.append(("library", kind, catalog_id))
             return {"kind": kind, "catalog_id": catalog_id, "in_library": True,
+                    "title": "Breaking Bad" if kind == "series" else "Dune",
+                    "year": 2008 if kind == "series" else 2021,
                     "seasons": [{"season": 2, "have": 13, "aired": 13}]}
 
         def request_movie(self, tmdb_id, preset):
@@ -275,11 +277,28 @@ def main():
         "progress": {"phase": "downloading"},
         "metadata": {"catalog_id": 81189, "seasons": [2],
                      "command_ids": [77]}}]
-    deleted = live_media["delete_media"]({
-        "kind": "series", "catalog_id": 81189, "seasons": [2]})
+    for bad in ([], [0], [-1], [True], "2", 2, [2, "3"], (2,)):
+        assert "positive integers" in live_media["delete_media"](
+            {"kind": "series", "catalog_id": 81189, "seasons": bad})["error"], bad
+    assert "integer" in live_media["delete_media"](
+        {"kind": "movie", "catalog_id": "dune"})["error"]
+    ask = {"kind": "series", "catalog_id": 81189, "seasons": [2]}
+    asked = live_media["delete_media"](dict(ask))
+    assert not asked["ok"] and "Breaking Bad 2008, season 2" in asked["acknowledgment"]
+    # a repeat inside the same turn is refused, so the model cannot self-confirm
+    assert not live_media["delete_media"](dict(ask))["ok"]
+    assert not fake_media.requests[-1][0].startswith("delete")
+    assert log.find("tool_refused")[-1]["reason"] == "unconfirmed"
+    live_dispatch.begin_utterance("fa1101", "yes")
+    deleted = live_media["delete_media"](dict(ask))
     assert deleted["ok"]
-    assert fake_media.requests[-1] == (
-        "delete_series", 81189, [2], False, [77])
+    # a question the user declined must not stay armed
+    assistant.ASK_TTL_S, ttl = -1, assistant.ASK_TTL_S
+    live_media["delete_media"](dict(ask))
+    live_dispatch.begin_utterance("fa1102", "later")
+    assert not live_media["delete_media"](dict(ask))["ok"]
+    assistant.ASK_TTL_S = ttl
+    assert ("delete_series", 81189, [2], False, [77]) in fake_media.requests
     assert deleted["operations_canceled"] == ["op-andor"]
     assert fake_operations.observed[-1][1] == "CANCELED"
     assert fake_operations.delivered == ["op-andor"]
