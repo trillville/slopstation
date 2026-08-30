@@ -95,7 +95,15 @@ torrent release names. A quality preference applies only to that request;
 omit it to use the configured default. Deleting media is destructive but an
 explicit request such as 'delete Andor season one' is authorization. Preserve
 other TV seasons: pass the named positive seasons, and set all_seasons only
-when the user explicitly asks to delete the whole series or every season."""
+when the user explicitly asks to delete the whole series or every season.
+
+Current operation state never comes from the catalog or conversation memory.
+For questions about what is downloading, installing, searching, waiting,
+importing, active, or recently finished, always call list_operations. Report
+each operation's actual phase: only phase=downloading is downloading. Use
+list_games source=downloading only when the user explicitly asks for Steam's
+raw client activity, and describe phase=finalizing as finalizing, never as a
+download."""
 
 
 def system_instruction(cfg, interface="voice"):
@@ -400,6 +408,17 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         scope = args.get("scope", "active")
         if scope not in ("active", "recent"):
             return {"ok": False, "error": f"unknown operation scope {scope}"}
+        if scope == "active":
+            import operations as operations_mod
+            try:
+                if steam is not None:
+                    operations_mod.SteamMonitor(
+                        operations, steam, log).reconcile_once()
+                if media is not None:
+                    operations_mod.MediaMonitor(
+                        operations, media, log).reconcile_once()
+            except Exception as e:
+                log.error("operation_monitor_failed", err=str(e))
         return {"ok": True, "scope": scope,
                 "operations": operations.for_assistant(
                     scope, acknowledge=(scope == "recent"))}
@@ -579,10 +598,11 @@ _LIST_GAMES = """\
 Read a ready-made list of games. source: 'wishlist_on_sale' (the user's
 wishlist items currently discounted), 'specials' (today's featured store
 sales), 'trending' (most-played right now), 'recently_played' (what the
-user played in the last two weeks), 'downloading' (what's installing on the
-PC and how far along). Use this for 'anything on sale', 'what's on my
-wishlist', 'what's popular', 'what have I been playing', 'how far along is
-the download'. Leads with names and prices - not a research task."""
+user played in the last two weeks), 'downloading' (Steam's raw client
+activity, including a finalizing phase). Use this for 'anything on sale',
+'what's on my wishlist', 'what's popular', 'what have I been playing', 'how
+far along is the Steam download'. General Slopstation operation status belongs
+to list_operations. Leads with names and prices - not a research task."""
 
 _SEARCH_STORE = """\
 Search the Steam store with filters and get back names + prices immediately
@@ -624,8 +644,12 @@ the title first if there's any doubt; downloads are large."""
 _LIST_OPERATIONS = """\
 Read Slopstation's durable operations. Use scope 'active' for current work and
 'recent' for what just finished or what an announcement referred to. These
-records come from explicit external observations; do not infer completion from
-conversation history or from an absent download."""
+records are refreshed from their configured authorities before active results
+are returned. Use this for every general question about current downloads,
+installs, searches, waiting work, imports, or recent completion. Only call an
+operation downloading when progress.phase is downloading; name every other
+phase accurately. Never infer current state from conversation history, the
+catalog, or an absent download."""
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five

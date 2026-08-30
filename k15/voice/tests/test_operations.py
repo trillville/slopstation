@@ -204,6 +204,21 @@ def main():
     assert media_op["id"] in stdout.getvalue()
     print("  CLI: active operations render without a live Steam session")
 
+    fresh_state()
+    canceled_store = operations.OperationStore(log)
+    canceled_op = canceled_store.track_external(
+        "series_acquisition", "sonarr", "71", "Andor",
+        metadata={"catalog_id": 393189, "seasons": [1]})
+    canceled_media = FakeMedia()
+    canceled_media.result = {
+        "complete": False, "canceled": True,
+        "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
+        "detail": "requested episodes are unmonitored"}
+    operations.MediaMonitor(canceled_store, canceled_media, log).reconcile_once()
+    assert canceled_store.get(canceled_op["id"])["state"] == operations.CANCELED
+    print("  media: externally unmonitored scope reconciles to cancellation")
+
+    fresh_state()
     delivery_log = cglib.CapturingLog("voice")
     delivery_store = operations.OperationStore(delivery_log)
     voice = dict(_bootstrap.CONFIG["voice"])

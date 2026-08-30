@@ -18,7 +18,16 @@ class FakeBackend:
     def turn(self, system_text, user_text, impls):
         assert "general text assistant" in system_text
         self.turns += 1
+        if "running" in user_text:
+            result = impls["list_operations"]({"scope": "active"})
+            assert result["operations"][0]["title"] == "Andor"
         return f"reply {self.turns}: {user_text}"
+
+
+class FakeOperations:
+    def for_assistant(self, scope, acknowledge=False):
+        return [{"id": "op-andor", "title": "Andor", "state": "RUNNING",
+                 "progress": {"phase": "waiting_for_match"}}]
 
 
 def request(url, token=None, payload=None):
@@ -45,7 +54,8 @@ def main():
     log = cglib.CapturingLog("voice")
     original = assistant_repl.BACKENDS["anthropic"]
     assistant_repl.BACKENDS["anthropic"] = FakeBackend
-    server = text_interface.start(cfg, secrets, log)
+    server = text_interface.start(
+        cfg, secrets, log, operations=FakeOperations())
     try:
         host, port = server.server_address
         base = f"http://{host}:{port}"
@@ -64,6 +74,9 @@ def main():
         assert second["reply"] == "reply 2: and recently?"
         assert first["turn"] != second["turn"]
         assert len(log.find("text_request")) == 2
+        calls = log.find("tool_call")
+        assert len(calls) == 1
+        assert calls[0]["tool"] == "list_operations" and calls[0]["ok"]
     finally:
         server.shutdown()
         server.server_close()

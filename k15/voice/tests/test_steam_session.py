@@ -179,12 +179,20 @@ def main():
          "bytes_to_download": "100", "bytes_downloaded": "50", "download_paused": False},
         {"appid": 20, "app": "Nearly", "changing": True,
          "bytes_to_download": "100", "bytes_downloaded": "90", "download_paused": False},
+        {"appid": 30, "app": "Finalizing", "changing": True,
+         "bytes_to_download": "100", "bytes_downloaded": "100",
+         "download_paused": False, "installed": False},
+        {"appid": 40, "app": "Installed", "changing": True,
+         "bytes_to_download": "100", "bytes_downloaded": "100",
+         "download_paused": False, "installed": True},
         {"appid": 730, "app": "Idle", "changing": False,
          "bytes_to_download": "0", "bytes_downloaded": "0"}]
     ds = s.download_status()
-    assert [d["appid"] for d in ds] == [20, 570], ds        # 90% before 50%; idle dropped
-    assert ds[0] == {"appid": 20, "name": "Nearly", "percent": 90,
-                     "paused": False, "queue": None}, ds[0]
+    assert [d["appid"] for d in ds] == [30, 20, 570], ds
+    assert ds[0]["phase"] == "finalizing"
+    assert ds[1] == {"appid": 20, "name": "Nearly", "percent": 90,
+                     "paused": False, "queue": None,
+                     "phase": "downloading"}, ds[1]
 
     # --- enroll: persists the refresh token, and NEVER logs it ---------------
     tmp = Path(tempfile.mkdtemp()) / "secrets.json"

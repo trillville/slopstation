@@ -61,6 +61,9 @@ database until concurrent writers or real query requirements appear.
   stops monitoring, cancels an active search, removes its download and partial
   data, and deletes imported files in the requested scope before recording
   `CANCELED`.
+- If every episode in a requested Sonarr scope becomes unmonitored outside
+  Slopstation, reconciliation records that operation as `CANCELED` instead of
+  leaving a zero-target request active forever.
 - Repeating the same observation or polling a terminal record produces no
   duplicate announcement.
 
@@ -100,7 +103,9 @@ The Steam path is deliberately concrete rather than an abstract job framework:
    once the app leaves that list or reaches 100% downloaded. Only the
    fully-installed manifest flag completes the operation.
 4. Voice can read structured recent or active operations through an assistant
-   tool. No operation or release text is injected into conversation history.
+   tool. Active reads first reconcile configured authorities; current-state
+   questions never use catalog or conversation memory. No operation or release
+   text is injected into conversation history.
 5. `operations.py list|show|reconcile|cancel|abandon` provides diagnostics.
    `reconcile` uses live authority observations; `cancel` reports unsupported
    Steam cancellation honestly. `abandon <media-operation> --execute` performs

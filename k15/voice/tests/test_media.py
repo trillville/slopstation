@@ -316,6 +316,11 @@ def main():
                                     "phase": "waiting_for_match"}
     svc.sonarr.episodes[2]["hasFile"] = True
     assert svc.observe_series(60, None, now)["complete"]
+    for episode in svc.sonarr.episodes:
+        if episode["seasonNumber"] == 1:
+            episode["monitored"] = False
+    canceled = svc.observe_series(60, [1], now)
+    assert canceled["canceled"] and not canceled["complete"]
     print("  observe: queue bytes ignored except percent; only aired monitored files complete")
 
     # --- authoritative abandonment ----------------------------------------
