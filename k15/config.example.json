@@ -22,6 +22,8 @@
     "qbittorrentUrl": "http://127.0.0.1:8080",
     "qbittorrentUsername": "admin",
     "qbittorrentNetworkInterface": "ProtonVPN",
+    "protonPortSync": false,
+    "_protonPortSync": "OPTIONAL: when true, the voice supervisor reads the official Proton Windows client log and keeps qBittorrent's listening port equal to a fresh Active port. Validate proton-port and sync-proton-port first; a future Proton log-format change fails closed.",
     "movieRoot": "/data/Movies",
     "seriesRoot": "/data/TV",
     "managedIndexers": ["1337x", "EZTV"],

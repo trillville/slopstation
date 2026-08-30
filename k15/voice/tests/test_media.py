@@ -1,6 +1,7 @@
 """Blind test: Radarr/Sonarr API boundary, policy, and completion evidence."""
 import datetime
 import json
+import tempfile
 import urllib.parse
 from pathlib import Path
 
@@ -155,6 +156,8 @@ def main():
         path = urllib.parse.urlsplit(url).path
         if path.endswith("/auth/login"):
             return {"Set-Cookie": "QBT_SID_8080=session-1; HttpOnly; path=/"}, b""
+        if headers.get("Cookie") == "QBT_SID_8080=expired":
+            raise media.QbittorrentAuthError("expired session")
         assert headers["Cookie"] == "QBT_SID_8080=session-1"
         if path.endswith("/app/preferences"):
             return {}, json.dumps(qbit_preferences).encode()
@@ -184,7 +187,81 @@ def main():
         raise AssertionError("invalid qBittorrent port accepted")
     except media.MediaError:
         pass
+    qbit.sid = "expired"
+    assert qbit.preferences()["listen_port"] == 33125
+    assert len([row for row in qbit_calls
+                if row[1].endswith("/auth/login")]) == 2
     print("  qBittorrent: cookie auth, explicit port mutation, read-back verification")
+
+    proton_dir = Path(tempfile.mkdtemp(prefix="cg-proton-log-"))
+    proton_log = proton_dir / "client-logs.txt"
+
+    def proton_event(timestamp, status, port=None):
+        pair = "" if port is None else f", Port pair {port}->{port}, expiring in 00:01:00"
+        return (f"{timestamp} | INFO  | PROCESS.COMM | Received PortForwarding "
+                f"Status '{status}' triggered at 'fixture'{pair} |\n"
+                "{\"Caller\":\"ClientControllerListener\"}\n")
+
+    proton_log.write_text(
+        proton_event("2026-08-27T18:13:17.939Z", "Stopped")
+        + proton_event("2026-08-30T04:10:26.030Z", "Starting")
+        + proton_event("2026-08-30T04:10:26.031Z", "HelloCommunication")
+        + proton_event("2026-08-30T04:10:26.047Z", "PortMappingCommunication")
+        + proton_event("2026-08-30T04:10:36.034Z", "SleepingUntilRefresh", 39733),
+        encoding="utf-8")
+    proton_now = datetime.datetime(2026, 8, 30, 4, 10, 40,
+                                   tzinfo=datetime.timezone.utc)
+    source = media.read_proton_port_state(proton_log, now=proton_now)
+    assert source["state"] == "active" and source["port"] == 39733
+    qbit_preferences["listen_port"] = 33125
+    proton_monitor = media.ProtonPortMonitor(
+        qbit, cglib.CapturingLog("voice"), path=proton_log, now=proton_now)
+    synced = proton_monitor.reconcile_once()
+    assert synced["changed"] and synced["previous_port"] == 33125
+    assert synced["listen_port"] == 39733
+    mutations = len([row for row in qbit_calls
+                     if row[1].endswith("/app/setPreferences")])
+    assert not proton_monitor.reconcile_once()["changed"]
+    assert len([row for row in qbit_calls
+                if row[1].endswith("/app/setPreferences")]) == mutations
+
+    proton_log.write_text(
+        proton_log.read_text(encoding="utf-8")
+        + proton_event("2026-08-30T04:10:41.000Z",
+                       "DestroyPortMappingCommunication", 39733)
+        + proton_event("2026-08-30T04:10:41.100Z", "Stopped"),
+        encoding="utf-8")
+    proton_monitor.now = datetime.datetime(
+        2026, 8, 30, 4, 10, 42, tzinfo=datetime.timezone.utc)
+    assert proton_monitor.reconcile_once()["state"] == "inactive"
+    proton_monitor.now = datetime.datetime(
+        2026, 8, 30, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    assert proton_monitor.inspect()["state"] == "stale"
+    try:
+        proton_monitor.reconcile_once()
+        raise AssertionError("stale Proton state was accepted")
+    except media.MediaError:
+        pass
+    proton_log.write_text(
+        proton_event("2026-08-30T04:12:01.000Z", "Starting"),
+        encoding="utf-8")
+    proton_monitor.now = datetime.datetime(
+        2026, 8, 30, 4, 12, 2, tzinfo=datetime.timezone.utc)
+    assert proton_monitor.reconcile_once()["state"] == "transitional"
+    assert media.read_proton_port_state(
+        proton_dir / "missing.txt", now=proton_now)["state"] == "missing"
+    proton_log.write_text("not a Proton status line", encoding="utf-8")
+    assert media.read_proton_port_state(
+        proton_log, now=proton_now)["state"] == "unknown"
+    proton_backup = proton_dir / "client-logs.1.txt"
+    proton_backup.write_text(
+        proton_event("2026-08-30T04:12:03.000Z",
+                     "SleepingUntilRefresh", 40123), encoding="utf-8")
+    rotated = media.read_proton_port_state(
+        proton_log, now=datetime.datetime(
+            2026, 8, 30, 4, 12, 4, tzinfo=datetime.timezone.utc))
+    assert rotated["state"] == "active" and rotated["port"] == 40123
+    print("  Proton: reconnect mapping, no-op repeat, teardown, stale and unknown states")
 
     svc = service()
     svc.radarr.lookup = [
@@ -449,6 +526,7 @@ def main():
 
     doctor_cfg = json.loads(json.dumps(_bootstrap.CONFIG))
     doctor_cfg["media"]["enabled"] = True
+    doctor_cfg["media"]["protonPortSync"] = True
     doctor_secrets = {
         "radarrApiKey": "radarr-key-long-enough",
         "sonarrApiKey": "sonarr-key-long-enough",
@@ -519,29 +597,41 @@ def main():
 
     compose_rows = [{"Service": name, "State": "running", "Health": ""}
                     for name in ("flaresolverr", "prowlarr", "radarr", "sonarr")]
+    doctor_proton_log = proton_dir / "doctor-client-logs.txt"
+    doctor_proton_log.write_text(
+        proton_event("2026-08-30T05:00:00.000Z",
+                     "SleepingUntilRefresh", 33125), encoding="utf-8")
+    doctor_now = datetime.datetime(
+        2026, 8, 30, 5, 0, 5, tzinfo=datetime.timezone.utc)
     doctor = media.media_doctor(
         doctor_cfg, doctor_secrets, cglib.CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,
-        compose_runner=lambda media_dir: compose_rows)
+        compose_runner=lambda media_dir: compose_rows,
+        proton_log_path=doctor_proton_log, now=doctor_now)
     assert doctor["ok"]
     assert [row["level"] for row in doctor["checks"]].count("WARN") == 0
     assert any(row["name"] == "qBittorrent share-limit action"
                and row["level"] == "PASS" for row in doctor["checks"])
+    assert any(row["name"] == "Proton port synchronization"
+               and row["level"] == "PASS" for row in doctor["checks"])
     broken_preferences = dict(doctor_qbit_preferences,
                               current_network_interface="Ethernet", upnp=True,
-                              share_limits_mode="MatchAll")
+                              share_limits_mode="MatchAll", listen_port=1234)
     doctor_qbit_preferences.clear()
     doctor_qbit_preferences.update(broken_preferences)
     broken = media.media_doctor(
         doctor_cfg, doctor_secrets, cglib.CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,
-        compose_runner=lambda media_dir: compose_rows)
+        compose_runner=lambda media_dir: compose_rows,
+        proton_log_path=doctor_proton_log, now=doctor_now)
     assert not broken["ok"]
     assert any(row["name"] == "qBittorrent UPnP/NAT-PMP"
                and row["level"] == "FAIL" for row in broken["checks"])
     assert any(row["name"] == "qBittorrent share-limit mode"
+               and row["level"] == "FAIL" for row in broken["checks"])
+    assert any(row["name"] == "Proton port synchronization"
                and row["level"] == "FAIL" for row in broken["checks"])
     print("  doctor: live boundaries and policy checks")
 

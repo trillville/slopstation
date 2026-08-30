@@ -7,8 +7,11 @@ import argparse
 import datetime
 import http.cookies
 import json
+import os
+import re
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,6 +22,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import cglib
 
 PRESETS = ("default", "1080p", "2160p")
+PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
+PROTON_INACTIVE_STATUSES = {"DestroyPortMappingCommunication", "Stopped", "Error"}
+PROTON_LOG_MAX_AGE_S = 45
+PROTON_STATUS_RE = re.compile(
+    r"(?ms)^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)"
+    r"[^\r\n]*Received PortForwarding Status '(?P<status>[^']+)'"
+    r"(?P<detail>.*?)(?=^\d{4}-\d{2}-\d{2}T|\Z)")
+PROTON_PORT_RE = re.compile(r"Port pair\s+\d+->(?P<port>\d+)")
 
 
 class MediaError(RuntimeError):
@@ -26,6 +37,10 @@ class MediaError(RuntimeError):
 
 
 class MediaConfigurationError(MediaError):
+    pass
+
+
+class QbittorrentAuthError(MediaError):
     pass
 
 
@@ -100,8 +115,8 @@ def _qbit_http_transport(method, url, headers, body, timeout):
             return dict(response.headers.items()), response.read()
     except urllib.error.HTTPError as e:
         path = urllib.parse.urlsplit(url).path
-        raise MediaError(
-            f"qBittorrent returned HTTP {e.code} for {path}") from e
+        error_type = QbittorrentAuthError if e.code in (401, 403) else MediaError
+        raise error_type(f"qBittorrent returned HTTP {e.code} for {path}") from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise MediaError("qBittorrent is unreachable") from e
 
@@ -129,20 +144,32 @@ class QbittorrentClient:
     def _call(self, method, endpoint, payload=None, authenticate=True):
         if authenticate and self.sid is None:
             self.login()
-        body = None
-        headers = {
-            "Accept": "application/json",
-            "Origin": self.origin,
-            "Referer": self.base_url + "/",
-        }
-        if payload is not None:
-            body = urllib.parse.urlencode(payload).encode("utf-8")
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
-        if self.sid is not None and self.sid_cookie is not None:
-            headers["Cookie"] = f"{self.sid_cookie}={self.sid}"
-        return self.transport(
-            method, f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
-            headers, body, self.timeout)
+
+        def send():
+            body = None
+            headers = {
+                "Accept": "application/json",
+                "Origin": self.origin,
+                "Referer": self.base_url + "/",
+            }
+            if payload is not None:
+                body = urllib.parse.urlencode(payload).encode("utf-8")
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+            if self.sid is not None and self.sid_cookie is not None:
+                headers["Cookie"] = f"{self.sid_cookie}={self.sid}"
+            return self.transport(
+                method, f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
+                headers, body, self.timeout)
+
+        try:
+            return send()
+        except QbittorrentAuthError:
+            if not authenticate:
+                raise
+            self.sid = None
+            self.sid_cookie = None
+            self.login()
+            return send()
 
     def login(self):
         headers, raw = self._call("POST", "auth/login", {
@@ -213,6 +240,130 @@ class QbittorrentClient:
                 f"qBittorrent did not retain listening port {port}")
         return {"ok": True, "previous_port": previous,
                 "listen_port": confirmed, "changed": previous != confirmed}
+
+
+def default_proton_log_path():
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        raise MediaConfigurationError("LOCALAPPDATA is unavailable")
+    return Path(local_app_data) / "Proton" / "Proton VPN" / "Logs" / "client-logs.txt"
+
+
+def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
+    """Read the latest state periodically emitted by Proton's Windows client."""
+    source = Path(path) if path is not None else default_proton_log_path()
+    backup = source.with_name(f"{source.stem}.1{source.suffix}")
+    sources = [candidate for candidate in (backup, source) if candidate.is_file()]
+    if not sources:
+        return {"state": "missing", "status": None, "port": None,
+                "observed_at": None, "age_s": None, "path": str(source)}
+
+    latest = None
+    for candidate in sources:
+        try:
+            text = candidate.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError as e:
+            raise MediaError("Proton client log is unreadable") from e
+        for match in PROTON_STATUS_RE.finditer(text):
+            try:
+                observed = datetime.datetime.fromisoformat(
+                    match.group("timestamp").replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if latest is not None and observed < latest["observed"]:
+                continue
+            port_match = PROTON_PORT_RE.search(match.group("detail"))
+            latest = {
+                "status": match.group("status"),
+                "port": int(port_match.group("port")) if port_match else None,
+                "observed": observed,
+                "path": candidate,
+            }
+    if latest is None:
+        return {"state": "unknown", "status": None, "port": None,
+                "observed_at": None, "age_s": None, "path": str(source)}
+
+    current = now or datetime.datetime.now(datetime.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=datetime.timezone.utc)
+    age_s = (current - latest["observed"]).total_seconds()
+    status = latest["status"]
+    port = latest["port"]
+    if age_s < -5 or age_s > max_age_s:
+        state = "stale"
+    elif status in PROTON_ACTIVE_STATUSES and port is not None:
+        state = "active"
+    elif status in PROTON_INACTIVE_STATUSES:
+        state = "inactive"
+    else:
+        state = "transitional"
+    return {
+        "state": state,
+        "status": status,
+        "port": port,
+        "observed_at": latest["observed"].isoformat().replace("+00:00", "Z"),
+        "age_s": round(age_s, 3),
+        "path": str(latest["path"]),
+    }
+
+
+class ProtonPortMonitor:
+    """Synchronize a fresh Proton Windows mapping into qBittorrent."""
+
+    def __init__(self, client, log, path=None, poll_s=30,
+                 max_age_s=PROTON_LOG_MAX_AGE_S, now=None):
+        self.client = client
+        self.log = log
+        self.path = Path(path) if path is not None else default_proton_log_path()
+        self.poll_s = poll_s
+        self.max_age_s = max_age_s
+        self.now = now
+        self._stop = threading.Event()
+        self._last_failure = None
+
+    def inspect(self):
+        return read_proton_port_state(
+            self.path, now=self.now, max_age_s=self.max_age_s)
+
+    def reconcile_once(self):
+        source = self.inspect()
+        result = {**source, "changed": False}
+        if source["state"] == "missing":
+            raise MediaError("Proton client log is missing")
+        if source["state"] == "unknown":
+            raise MediaError("Proton client log format is unrecognized")
+        if source["state"] == "stale":
+            raise MediaError("Proton port-forwarding state is stale")
+        if source["state"] != "active":
+            self._last_failure = None
+            return result
+        updated = self.client.set_listen_port(source["port"])
+        result.update(updated)
+        self._last_failure = None
+        if updated["changed"]:
+            self.log.info(
+                "proton_port_synced", port=updated["listen_port"],
+                previous_port=updated["previous_port"],
+                source_age_s=source["age_s"])
+        return result
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True,
+                         name="proton-port-monitor").start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.reconcile_once()
+            except Exception as e:
+                detail = _clean_text(e)
+                if detail != self._last_failure:
+                    self.log.error("proton_port_sync_failed", err=detail)
+                    self._last_failure = detail
+            self._stop.wait(self.poll_s)
 
 
 class MediaService:
@@ -1046,6 +1197,24 @@ def _qbit_from_config(media_cfg, secrets, transport=None):
         transport=transport)
 
 
+def proton_port_monitor_from_config(cfg, secrets, log, transport=None,
+                                    path=None, now=None):
+    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+    if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
+            or not media_cfg.get("protonPortSync")):
+        return None
+    try:
+        poll_s = media_cfg.get("pollS", 30)
+        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
+            raise MediaConfigurationError("media.pollS must be positive")
+        return ProtonPortMonitor(
+            _qbit_from_config(media_cfg, secrets, transport), log,
+            path=path, poll_s=poll_s, now=now)
+    except MediaConfigurationError as e:
+        log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
+        return None
+
+
 def _check_arr(report, kind, client, media_cfg):
     label = client.name
     try:
@@ -1232,7 +1401,7 @@ def _check_qbittorrent(report, client, media_cfg):
         categories = client.categories()
     except MediaError as e:
         report.add("FAIL", "qBittorrent API", str(e))
-        return
+        return None
     report.add("PASS", "qBittorrent API", f"reachable, version {version}")
     expected_interface = str(media_cfg.get(
         "qbittorrentNetworkInterface", "ProtonVPN"))
@@ -1279,10 +1448,46 @@ def _check_qbittorrent(report, client, media_cfg):
     report.add("FAIL" if missing else "PASS", "qBittorrent categories",
                "missing: " + ", ".join(missing) if missing
                else "radarr and sonarr are present")
+    return preferences
+
+
+def _check_proton_port_sync(report, preferences, path=None, now=None):
+    try:
+        source = read_proton_port_state(path=path, now=now)
+    except MediaError as e:
+        report.add("FAIL", "Proton port synchronization", str(e))
+        return
+    state = source["state"]
+    if state == "active":
+        try:
+            current = int(preferences.get("listen_port", 0) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        expected = source["port"]
+        report.add("PASS" if current == expected else "FAIL",
+                   "Proton port synchronization",
+                   (f"active port {expected} matches qBittorrent"
+                    if current == expected else
+                    f"Proton active port {expected}; qBittorrent uses {current or 'invalid'}"))
+    elif state == "inactive":
+        report.add("PASS", "Proton port synchronization",
+                   f"idle; Proton status is {source['status']}")
+    elif state == "transitional":
+        report.add("WARN", "Proton port synchronization",
+                   f"Proton status is {source['status']}; retry after connection settles")
+    elif state == "stale":
+        report.add("FAIL", "Proton port synchronization",
+                   f"latest Proton state is {source['age_s']:.0f} seconds old")
+    elif state == "missing":
+        report.add("FAIL", "Proton port synchronization",
+                   f"client log is missing: {source['path']}")
+    else:
+        report.add("FAIL", "Proton port synchronization",
+                   "client log contains no recognized port-forwarding state")
 
 
 def media_doctor(cfg, secrets, log, arr_transport=None, qbit_transport=None,
-                 compose_runner=None):
+                 compose_runner=None, proton_log_path=None, now=None):
     """Read live configuration without changing any service."""
     report = DoctorReport()
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
@@ -1341,9 +1546,12 @@ def media_doctor(cfg, secrets, log, arr_transport=None, qbit_transport=None,
         report.add("FAIL", "Prowlarr API", "prowlarrApiKey is missing")
 
     try:
-        _check_qbittorrent(
+        qbit_preferences = _check_qbittorrent(
             report, _qbit_from_config(media_cfg, secrets, qbit_transport),
             media_cfg)
+        if media_cfg.get("protonPortSync") and qbit_preferences is not None:
+            _check_proton_port_sync(
+                report, qbit_preferences, path=proton_log_path, now=now)
     except MediaConfigurationError as e:
         report.add("FAIL", "qBittorrent API", str(e))
     return report.result()
@@ -1415,6 +1623,9 @@ def main(argv=None):
     sub.add_parser("profiles")
     sub.add_parser("validate")
     sub.add_parser("doctor")
+    sub.add_parser("proton-port")
+    proton_sync = sub.add_parser("sync-proton-port")
+    proton_sync.add_argument("--execute", action="store_true")
     qbit_port = sub.add_parser("set-qbit-port")
     qbit_port.add_argument("port", type=int)
     qbit_port.add_argument("--execute", action="store_true")
@@ -1450,6 +1661,21 @@ def main(argv=None):
             for check in result["checks"]:
                 print(f"{check['level']:<5} {check['name']} - {check['detail']}")
             return 0 if result["ok"] else 1
+        if args.command == "proton-port":
+            result = read_proton_port_state()
+            print(json.dumps(result, indent=2))
+            return 0 if result["state"] in ("active", "inactive", "transitional") else 1
+        if args.command == "sync-proton-port":
+            if not args.execute:
+                print("change not submitted; repeat with --execute")
+                return 2
+            media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+            if not isinstance(media_cfg, dict):
+                raise MediaConfigurationError("media configuration is missing")
+            result = ProtonPortMonitor(
+                _qbit_from_config(media_cfg, secrets), log).reconcile_once()
+            print(json.dumps(result, indent=2))
+            return 0 if result["state"] in ("active", "inactive") else 1
         if args.command == "set-qbit-port":
             if not args.execute:
                 print("change not submitted; repeat with --execute")

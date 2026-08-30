@@ -118,6 +118,18 @@ class FakeMediaMonitor:
         self.started = True
 
 
+class FakeProtonPortMonitor:
+    made = []
+
+    def __init__(self, poll_s=30):
+        self.poll_s = poll_s
+        self.started = False
+        FakeProtonPortMonitor.made.append(self)
+
+    def start(self):
+        self.started = True
+
+
 class FakeSteam:
     available_answer = False
 
@@ -173,6 +185,10 @@ def stub_everything():
     operations.MediaMonitor = FakeMediaMonitor
     media.from_config = lambda cfg, secrets, log: (
         "MEDIA" if cfg.get("media", {}).get("enabled") else None)
+    media.proton_port_monitor_from_config = lambda cfg, secrets, log: (
+        FakeProtonPortMonitor(cfg["media"].get("pollS", 30))
+        if cfg.get("media", {}).get("enabled")
+        and cfg.get("media", {}).get("protonPortSync") else None)
     steam_session.SteamSession = FakeSteam
     FakeListener.wakes = []
     FakeListener.built = []
@@ -180,6 +196,7 @@ def stub_everything():
     FakeOperationStore.made = []
     FakeSteamMonitor.made = []
     FakeMediaMonitor.made = []
+    FakeProtonPortMonitor.made = []
     FakeDucker.made = []
     FakeSteam.available_answer = False
 
@@ -293,13 +310,17 @@ def main():
     cfg = config()
     cfg["media"]["enabled"] = True
     cfg["media"]["pollS"] = 17
+    cfg["media"]["protonPortSync"] = True
     rc, log, calls = run(["--once"], cfg,
                          setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())))
     assert FakeMediaMonitor.made and FakeMediaMonitor.made[0].started
     assert FakeMediaMonitor.made[0].poll_s == 17
     assert calls[0]["media"] == "MEDIA"
     assert any(r["what"] == "media_operation_monitor" for r in log.find("lane_up"))
-    print("  media: configured service starts its monitor and reaches the session")
+    assert FakeProtonPortMonitor.made and FakeProtonPortMonitor.made[0].started
+    assert FakeProtonPortMonitor.made[0].poll_s == 17
+    assert any(r["what"] == "proton_port_sync" for r in log.find("lane_up"))
+    print("  media: operation and Proton port monitors start and reach the session")
 
     # --- ducking without tvIp -----------------------------------------------------
     cfg = config()
