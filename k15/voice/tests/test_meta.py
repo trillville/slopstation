@@ -2,7 +2,6 @@
 thread dies on Ctrl+C) keeps progress instead of re-crawling from zero. Run:
     .venv\\Scripts\\python tests\\test_meta.py
 """
-import sys
 import time
 
 import _bootstrap  # noqa: F401

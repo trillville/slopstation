@@ -6,12 +6,9 @@ chord lane goes deaf until someone deletes a file.
 
 Run:  python tests\\test_standoff.py     (system python - no venv needed)
 """
-import os
 import sys
-import tempfile
 import time
 import types
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 from _bootstrap import fresh_state

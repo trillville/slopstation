@@ -352,24 +352,56 @@ def track(store, submission, turn=None):
         return {**submission, "tracking": "failed"}
 
 
+def covered_by_delete(store, kind, catalog_id, seasons=None, all_seasons=False):
+    """The active acquisitions a delete of this scope would cover, with the
+    search commands to cancel alongside them. `kind` is "movie" or "series".
+    A movie is covered outright; a series only when the delete's scope holds
+    every season its request asked for, so a partial delete leaves the
+    request tracking the seasons it still owns."""
+    rows, command_ids = [], []
+    for operation in (store.active(kind=f"{kind}_acquisition")
+                      if store is not None else []):
+        metadata = operation.get("metadata") or {}
+        if int(metadata.get("catalog_id", 0) or 0) != int(catalog_id):
+            continue
+        requested = metadata.get("seasons")
+        if not (kind == "movie" or all_seasons
+                or (requested is not None
+                    and set(requested) <= set(seasons or []))):
+            continue
+        rows.append(operation)
+        command_ids.extend(metadata.get("command_ids") or [])
+    return rows, command_ids
+
+
+def record_deleted(store, rows, result=None):
+    """Close the operations a completed delete covered, so the ledger stops
+    announcing work whose files are gone. Called after the delete returns:
+    the mutation already happened, and these rows describe it."""
+    for operation in rows:
+        store.observe(operation["id"], CANCELED, operation.get("progress", {}),
+                      "the media request was deleted cleanly")
+        store.mark_delivered(operation["id"])
+    if rows and result is not None:
+        result["operations_canceled"] = [row["id"] for row in rows]
+    return result
+
+
 def _fully_installed_appids():
     return {int(r["appid"]) for r in library.fetch_installed_ssh()
             if int(r.get("state", 0)) & 4}
 
 
-class SteamMonitor:
-    """Observe active Steam installs without owning their execution."""
+class _Monitor:
+    """The observation loop both monitors run: daemon so it never holds a
+    shutdown, and an authority's failure logs rather than ending the thread.
+    Subclasses set THREAD_NAME and supply reconcile_once, log and poll_s."""
 
-    def __init__(self, store, steam, log, installed_probe=None, poll_s=POLL_S):
-        self.store = store
-        self.steam = steam
-        self.log = log
-        self.installed_probe = installed_probe or _fully_installed_appids
-        self.poll_s = poll_s
+    THREAD_NAME = "operation-monitor"
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
-                         name="steam-operation-monitor").start()
+                         name=self.THREAD_NAME).start()
 
     def _run(self):
         while True:
@@ -378,6 +410,19 @@ class SteamMonitor:
             except Exception as e:
                 self.log.error("operation_monitor_failed", err=str(e))
             time.sleep(self.poll_s)
+
+
+class SteamMonitor(_Monitor):
+    """Observe active Steam installs without owning their execution."""
+
+    THREAD_NAME = "steam-operation-monitor"
+
+    def __init__(self, store, steam, log, installed_probe=None, poll_s=POLL_S):
+        self.store = store
+        self.steam = steam
+        self.log = log
+        self.installed_probe = installed_probe or _fully_installed_appids
+        self.poll_s = poll_s
 
     def reconcile_once(self):
         operations = self.store.active(kind="steam_install")
@@ -437,9 +482,10 @@ class SteamMonitor:
             self.store.observe(operation["id"], UNKNOWN, {}, detail)
 
 
-class MediaMonitor:
+class MediaMonitor(_Monitor):
     """Observe Radarr/Sonarr imports without seeing release-level data."""
 
+    THREAD_NAME = "media-operation-monitor"
     KINDS = {"movie_acquisition", "series_acquisition"}
     SEARCH_RETRY_DELAYS_S = (5 * 60, 30 * 60, 2 * 60 * 60)
     WAITING_GIVE_UP_S = 24 * 60 * 60
@@ -449,18 +495,6 @@ class MediaMonitor:
         self.media = media
         self.log = log
         self.poll_s = poll_s
-
-    def start(self):
-        threading.Thread(target=self._run, daemon=True,
-                         name="media-operation-monitor").start()
-
-    def _run(self):
-        while True:
-            try:
-                self.reconcile_once()
-            except Exception as e:
-                self.log.error("operation_monitor_failed", err=str(e))
-            time.sleep(self.poll_s)
 
     def _maybe_give_up(self, operation, progress, now):
         metadata = operation.get("metadata") or {}
@@ -640,9 +674,11 @@ def main(argv=None):
         print(json.dumps(operation, indent=2))
         return 0
     if args.command == "cancel":
-        ok, detail = store.cancel(args.operation)
+        # No authority here supports cancellation, so cancel() always refuses
+        # and this exit is unconditional. The tuple stays for one that might.
+        _, detail = store.cancel(args.operation)
         print(detail)
-        return 0 if ok else 1
+        return 1
     if args.command == "abandon":
         operation = store.get(args.operation)
         if operation is None:
@@ -674,10 +710,7 @@ def main(argv=None):
                 result = service.delete_series(
                     metadata["catalog_id"], seasons=seasons,
                     all_seasons=seasons is None, command_ids=command_ids)
-            store.observe(operation["id"], CANCELED,
-                          operation.get("progress", {}),
-                          "the media request was deleted cleanly")
-            store.mark_delivered(operation["id"])
+            record_deleted(store, [operation])
         except Exception as e:
             print(f"abandon failed; operation left active: {e}")
             return 1

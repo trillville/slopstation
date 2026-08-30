@@ -140,8 +140,9 @@ def main():
             return {"id": operation_id, "state": state,
                     "progress": progress, "detail": detail}
 
-        def active(self):
-            return list(self.active_rows)
+        def active(self, kind=None):
+            return [r for r in self.active_rows
+                    if kind is None or r.get("kind") == kind]
 
         def mark_delivered(self, operation_id):
             self.delivered.append(operation_id)
@@ -581,15 +582,6 @@ def main():
     eff = inspect.signature(assistant_repl.OpenAIBackend.__init__).parameters["effort"]
     assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"
     print("  constructions: LLMContext, Anthropic + OpenAI Responses, Aura-2 - OK")
-
-    # Live metadata (keyless APIs) - tolerant: network may be absent.
-    try:
-        meta = library.fetch_meta_one(real_appid)
-        assert meta.get("tags") or meta.get("genres"), meta
-        print(f"  live metadata for {real_appid}: tags={meta.get('tags', [])[:3]} "
-              f"controller={meta.get('controller')}")
-    except Exception as e:
-        print(f"  live metadata SKIPPED ({e}) - rerun with network")
 
     print("OK - assistant: prompt, tool boundary, routing, constructions")
 

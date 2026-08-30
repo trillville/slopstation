@@ -127,12 +127,12 @@ def main():
 
     # -- heartbeat: the signal absence is measured against ---------------------
     events._last_day = None
-    events.start_heartbeat("listener", interval_s=0.05, source="unit")
+    events.start_heartbeat("listener", interval_s=0.05)
     time.sleep(0.3)
     beats = [r for r in read(sorted(tmp.glob("test-*.jsonl"))[-1])
              if r["event"] == "heartbeat"]
     assert len(beats) >= 3, f"only {len(beats)} beats in 0.3s at 50ms"
-    assert beats[0]["lane"] == "listener" and beats[0]["source"] == "unit"
+    assert beats[0]["lane"] == "listener"
     # Daemon, or a dead agent hangs on exit instead of dying cleanly.
     assert all(t.daemon for t in __import__("threading").enumerate()
                if t.name.startswith("heartbeat-"))

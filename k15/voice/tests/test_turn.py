@@ -5,14 +5,13 @@ they are read out of the shipping script rather than copied. Run:
     .venv\\Scripts\\python tests\\test_turn.py
 """
 import re
-import sys
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
 import couch
-import gamepc
 import events
+import gamepc
 
 DISPATCH = Path(__file__).resolve().parents[3] / "gaming-pc" / "Dispatch.ps1"
 
@@ -67,7 +66,6 @@ def main():
     # gamepc.py mirrors the switch: one function per verb, the same set. And
     # the answer words couch/dispatch compare against must all be spelled in
     # the shipping script.
-    import gamepc
     verbs = {re.match(r"\^(\w+)", p).group(1) for p in allpats}
     assert verbs == set(gamepc.VERBS), f"verbs: Dispatch {sorted(verbs)} vs gamepc {sorted(gamepc.VERBS)}"
     assert all(callable(getattr(gamepc, v)) for v in gamepc.VERBS)

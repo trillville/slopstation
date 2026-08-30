@@ -39,7 +39,7 @@ def enter_running() -> bool | None:
     predating `enterstate` answers DENIED and an ssh blip raises, and
     re-dispatching on either would fight a healthy Enter."""
     try:
-        ans = ssh("enterstate")
+        ans = enterstate()
     except Exception:
         return None
     if ans == "RUNNING":

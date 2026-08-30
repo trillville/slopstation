@@ -573,35 +573,16 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
                 return {"ok": False, "acknowledgment":
                         f"Delete {named}? That erases the files."}
             pending_delete.pop(scope, None)
-            active = []
-            command_ids = []
-            for operation in operations.active() if operations is not None else []:
-                metadata = operation.get("metadata") or {}
-                if operation.get("kind") != f"{kind}_acquisition":
-                    continue
-                if int(metadata.get("catalog_id", 0) or 0) != catalog_id:
-                    continue
-                operation_seasons = metadata.get("seasons")
-                fully_covered = (kind == "movie" or all_seasons
-                                 or (operation_seasons is not None
-                                     and set(operation_seasons) <= set(seasons or [])))
-                if fully_covered:
-                    active.append(operation)
-                    command_ids.extend(metadata.get("command_ids") or [])
+            import operations as operations_mod
+            covered, command_ids = operations_mod.covered_by_delete(
+                operations, kind, catalog_id, seasons, all_seasons)
             if kind == "movie":
                 result = media.delete_movie(catalog_id, command_ids)
             else:
                 result = media.delete_series(
                     catalog_id, seasons=seasons, all_seasons=all_seasons,
                     command_ids=command_ids)
-            for operation in active:
-                operations.observe(operation["id"], "CANCELED",
-                                   operation.get("progress", {}),
-                                   "the media request was deleted cleanly")
-                operations.mark_delivered(operation["id"])
-            if active:
-                result["operations_canceled"] = [row["id"] for row in active]
-            return result
+            return operations_mod.record_deleted(operations, covered, result)
         except Exception as e:
             log.error("tool_error", tool="delete_media", err=str(e))
             return {"ok": False, "error": str(e)}
@@ -849,29 +830,32 @@ TOOL_DEFS = [
 ]
 
 
+def record_tool_call(name, args, out, log=None):
+    """Emit one tool call to both telemetry sinks. Pipecat's llm span carries
+    the completion TEXT only, so a tool-calling turn traces as output:null;
+    the event is greppable, joins on turn, and outlives Langfuse's 30-day
+    retention. Fail-soft on both, and log=None keeps the Loki half quiet.
+
+    Both lanes record through here - the voice pipeline below and the text
+    interface - so the event shape has one home."""
+    try:
+        tracing.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
+    except Exception:
+        pass
+    if log:
+        ok = out.get("ok") if isinstance(out, dict) else None
+        log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
+
+
 def function_schemas(impls, log=None):
     """Pipecat FunctionSchema list with auto-registering async handlers. Tool
     impls call blocking dispatch (ssh/serial) - run them off the event loop so
-    audio and the Flux socket keep flowing. Also the one place every tool call
-    is recorded (_record); log=None keeps the Loki half quiet."""
+    audio and the Flux socket keep flowing."""
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.frames.frames import (FunctionCallResultProperties,
                                        TTSSpeakFrame)
-
-    def _record(name, args, out, log=log):
-        """Emit the tool call to both telemetry sinks. Pipecat's llm span
-        carries the completion TEXT only, so a tool-calling turn traces as
-        output:null; the event is greppable, joins on turn, and outlives
-        Langfuse's 30-day retention. Fail-soft on both."""
-        try:
-            tracing.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
-        except Exception:
-            pass
-        if log:
-            ok = out.get("ok") if isinstance(out, dict) else None
-            log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
 
     def wrap(name, fn):
         async def handler(params):
@@ -890,7 +874,7 @@ def function_schemas(impls, log=None):
             # After the call, so the span carries the RESULT. The await above
             # does not lose the OTel context (contextvars are per-task), so
             # this still parents onto Pipecat's llm span.
-            _record(name, args, out)
+            record_tool_call(name, args, out, log)
             acknowledgment = (out.get("acknowledgment")
                               if isinstance(out, dict) else None)
             if acknowledgment:

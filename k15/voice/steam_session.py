@@ -213,23 +213,22 @@ class SteamSession:
                             "os_name": s.get("os_name", "")})
         return out
 
-    def _target(self, machine_name=None):
+    def _target(self):
         """Pick the configured client, or the first when none is configured."""
         ses = self.sessions()
         if not ses:
             return None
-        machine_name = machine_name or self.machine
-        if machine_name:
+        if self.machine:
             for s in ses:
-                if s["machine_name"].lower() == machine_name.lower():
+                if s["machine_name"].lower() == self.machine.lower():
                     return s
             return None
         return ses[0]
 
-    def client_online(self, machine_name=None):
-        return self._target(machine_name) is not None
+    def client_online(self):
+        return self._target() is not None
 
-    def app_list(self, changing_only=False, machine_name=None):
+    def app_list(self, changing_only=False):
         """GetClientAppList for the target client, normalized to
         {appid: {name, installed, changing, paused, downloaded, total, queue}}.
         Shape, confirmed live 2026-08-14: the name field is 'app', not
@@ -238,7 +237,7 @@ class SteamSession:
         appid, bytes_required, changing, queue_position, running}, while
         filters=changing adds bytes_downloaded/bytes_to_download, installed and
         bytes_staged - so anything needing progress must pass changing_only."""
-        tgt = self._target(machine_name)
+        tgt = self._target()
         if not tgt:
             return {}
         params = {"access_token": self.access_token(), "origin": ORIGIN,
@@ -265,7 +264,7 @@ class SteamSession:
                 "queue": None if queue in (None, -1) else queue}
         return out
 
-    def install(self, appid, machine_name=None):
+    def install(self, appid):
         """Queue an install on the PC's client -> a small dict the tool speaks.
         InstallClientApp answers an empty 200 even when nothing queued (stale
         instanceid, client just went offline), so this re-reads
@@ -273,7 +272,7 @@ class SteamSession:
         appid = int(appid)
         # One try around the whole flow so no hop can raise out of the middle.
         try:
-            tgt = self._target(machine_name)
+            tgt = self._target()
             if not tgt:
                 return {"ok": False, "error": "the gaming PC isn't online in Steam "
                         "right now, so there's nothing to install to"}
@@ -285,8 +284,7 @@ class SteamSession:
                 self.log.warn("install_failed", appid=appid, eresult=eresult)
                 return {"ok": False, "error": f"Steam refused the install (code {eresult})"}
             time.sleep(1.5)
-            app = self.app_list(changing_only=True,
-                                machine_name=machine_name).get(appid, {})
+            app = self.app_list(changing_only=True).get(appid, {})
         except Exception as e:
             self.log.error("install_error", appid=appid, err=str(e))
             return {"ok": False, "error": "couldn't reach Steam - the account "
@@ -299,10 +297,10 @@ class SteamSession:
         return {"ok": True, "detail": "queued the install on the gaming PC",
                 "verified": bool(queued)}
 
-    def download_status(self, machine_name=None):
+    def download_status(self):
         """Apps mid-change, most-complete first - the list_games 'downloading'
         source."""
-        apps = self.app_list(changing_only=True, machine_name=machine_name)
+        apps = self.app_list(changing_only=True)
         rows = []
         for appid, a in apps.items():
             if not a["changing"] and a["total"] <= a["downloaded"]:

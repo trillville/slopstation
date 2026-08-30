@@ -2,8 +2,6 @@
 Pins the list's shape; bench/probe_stt.py is the live counterpart. Run:
     .venv\\Scripts\\python tests\\test_keyterms.py
 """
-import sys
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
@@ -65,8 +63,7 @@ def test_vocabulary_covers_all_three_sources_and_drops_non_games():
 
 
 def test_query_words_are_spoken_forms_not_steamspy_strings():
-    """SteamSpy writes 'Rogue-like'; the couch says 'rogue like'. Tags were the
-    one source that skipped spoken_form."""
+    """SteamSpy writes 'Rogue-like'; the couch says 'rogue like'."""
     terms = session_runtime.query_keyterms()
     assert "rogue like" in terms, terms
     assert not any("-" in t or t != t.lower() for t in terms), terms

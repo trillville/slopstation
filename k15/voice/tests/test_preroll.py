@@ -5,7 +5,6 @@ the ENTIRE pre-roll, only then live mic audio. Run:
     .venv\\Scripts\\python tests\\test_preroll.py
 """
 import asyncio
-import sys
 import threading
 import time
 from pathlib import Path

@@ -69,15 +69,16 @@ class TextApplication:
             acknowledgments = []
             for name, fn in session["impls"].items():
                 def audited(args, _name=name, _fn=fn):
+                    # The raise is load-bearing here: the LAN client learns a
+                    # tool failed as a 500. The voice lane fail-softs instead,
+                    # because an uncalled result_callback breaks the turn.
                     try:
                         out = _fn(args)
                     except Exception:
-                        self.log("tool_call", tool=_name, ok=False,
-                                 args=json.dumps(args)[:300])
+                        assistant.record_tool_call(
+                            _name, args, {"ok": False}, self.log)
                         raise
-                    ok = out.get("ok") if isinstance(out, dict) else None
-                    self.log("tool_call", tool=_name, ok=ok,
-                             args=json.dumps(args)[:300])
+                    assistant.record_tool_call(_name, args, out, self.log)
                     if isinstance(out, dict) and out.get("acknowledgment"):
                         acknowledgments.append(str(out["acknowledgment"]))
                     return out

@@ -39,7 +39,7 @@ and warns on drift.
 
 | File | Role |
 |---|---|
-| `CouchGaming.common.ps1` | Shared library, dot-sourced by every other script: `$CG` constants (the `2160` TV sentinel, Puck address/HW ID, paths), display probe, Puck claim/release, profile apply-verify, task guards, ready-marker ops, Steam library/install-dir/process resolvers. |
+| `CouchGaming.common.ps1` | Shared library, dot-sourced by every other script: `$CG` constants (the `2160` TV sentinel, Puck device name/HW ID, paths), display probe, Puck claim/release, profile apply-verify, task guards, ready-marker ops, Steam library/install-dir/process resolvers. |
 | `Enter-TV.ps1` | Session setup: TV-GAMING profile, Puck claim, Big Picture, `READY` marker. Task `\CouchGaming\Enter`. |
 | `Exit-TV.ps1` | Teardown: close Big Picture, restore OFFICE, release Puck. Task `\CouchGaming\Exit`. Stops a mid-flight Enter first. |
 | `Office-Safety.ps1` | Unconditional OFFICE restore at every logon. Task `\CouchGaming\ForceOfficeAtLogon`. Stands down while Enter/Exit run. |
@@ -92,17 +92,17 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `dispatch.py` | Every voice side effect — session, TV, launch, quit, Big Picture nav — plus the per-utterance snapshot. Shared by both lanes. |
 | `tv_remote.py` | TV remote keys over WebSocket (port 8002) — the only volume-write path that works on this rig — and `TvDucker`, the session-length ducking built on them. Needs a one-time pairing, see below. |
 | `assistant.py` | The catalog-in-context LLM lane: prompt, tool schemas and impls (store data, nav, quit, install), optional web search. |
-| `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
+| `assistant_repl.py` | The provider SDK backends — `BACKENDS`, which `text_interface.py` drives for every LAN chat turn — plus the `--text` REPL, which runs the same prompt over the base tool set only (no operations ledger, media or Steam session). |
 | `operations.py` / `announce.py` | Durable correlation for Steam installs and media acquisition: restart-safe observation, a diagnostic CLI, and proactive spoken completion. |
 | `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation (with bounded retries once an indexer outage clears), stack diagnostics, and optional Proton-to-qBittorrent port synchronization. Prowlarr/qBittorrent stay outside normal acquisition. |
 | `text_interface.py` | Authenticated LAN chat endpoint over the same assistant tools and durable operations as voice. |
 | `remote_interface.py` | The phone lane: a hand-rolled MCP server a Claude custom connector calls, forwarding one conversational tool to `text_interface.py`. Stdlib-only, holds no assistant state; a Cloudflare tunnel publishes it. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice, download status, and operation observation over ClientComm. Token-gated. |
-| `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
+| `earcons.py` | Earcon synthesis from specs, lazily on first request and cached after (`set_gain` clears the cache) — no binary audio assets in the repo. |
 | `tracing.py` / `traces.py` / `llm_audit.py` | Langfuse spans, per-conversation JSON dumps under `state/traces/`, and a record of provider-executed tool calls. |
 | `requirements.txt` / `constraints.txt` | Pinned deps, plus the as-built transitive versions passed to pip as `-c`. A constraints-only change must ride a `requirements.txt` touch or the dependency gate won't fire. |
 | `models/` | Vendored wake models. `config.json`'s `wakeModel` selects one; the default is stock `hey_jarvis_v0.1`. |
-| `bench/` | Hand-run probes: room recording and slicing, STT measurement, wake-model comparison, and verifier training. |
+| `bench/` | Hand-run probes: room recording and slicing, STT measurement, wake-model comparison, verifier training, and a PortAudio host-API soak that asks whether the wake stream's deaths follow MME or the machine. |
 | `tests/` | The blind suite — the tests that need neither machine nor hardware. See Tests below. |
 | `Start-Voice.bat` | Voice-lane supervisor, launched by `Start-K15.bat`: creates the venv on first run, then supervises the agent (single-instance, 10 s crash restart). The dependency gate lives inside the restart loop, so a `git pull` that changes pins installs them on the next agent launch. Args pass through — `Start-Voice.bat --dry-run` logs side effects instead of executing them. |
 
@@ -218,9 +218,9 @@ charsets and turn order agree between `Dispatch.ps1` and `common.ps1`.
 `test_turn` reads the shipping `Dispatch.ps1`, so gaming-pc regex changes are
 drilled from here.
 
-Every push runs this suite plus mypy (`mypy.ini`, lenient: it holds the
-existing annotations consistent, it does not demand new ones) on a Windows
-runner — see `.github/workflows/ci.yml`.
+Every pull request, and every push to `main`, runs this suite plus mypy
+(`mypy.ini`, lenient: it holds the existing annotations consistent, it does not
+demand new ones) on a Windows runner — see `.github/workflows/ci.yml`.
 
 ## Configuration
 
@@ -231,6 +231,8 @@ checkout runs without local config fighting `git pull`:
 - `k15/secrets.json` ← `k15/secrets.template.json`
 - `k15/alloy/config.alloy` and `gaming-pc/alloy/config.alloy` ← the `.example`
   beside each
+- `k15/media/.env` ← `k15/media/.env.example` — `Start-Media.ps1` copies it for
+  you on first run
 
 `config.example.json` documents every key inline. Two worth knowing about:
 
@@ -267,7 +269,7 @@ stdlib-only query script.
 |---|---|
 | Gaming PC | `TILLMAN-DESKTOP` · `192.168.68.67` · MAC `74-56-3C-45-92-DD` · user `tillm` |
 | K15 | `K15` · `192.168.68.75` · user `minipc` |
-| Puck | The controller's wireless receiver, shared over VirtualHere as `K15.5` — VID `28DE`, PID `1304` |
+| Puck | The controller's wireless receiver, shared over VirtualHere under the device name `Steam Controller Puck` — a claim can renumber its address, so the address is resolved by name per use, never pinned. VID `28DE`, PID `1304` |
 | Ex-Link serial | `COM3` on the K15 · 9600 8N1 |
 | TV | Samsung S90C · EDID name `QCQ90S` · `192.168.68.51` |
 | TV inputs | HDMI1 Apple TV · HDMI2 PS5 · HDMI3 eARC · HDMI4 PC |
@@ -293,8 +295,8 @@ ssh gamepc enter | exit | status | enterstate | version
 - **VirtualHere `config.ini`** — contains the EasyFind ID and PIN. Never commit.
 - **`OFFICE.lnk` / `TV-GAMING.lnk`** — machine-generated DisplayMagician profile
   shortcuts.
-- **`config.json`, `secrets.json`, `config.alloy`** — per-machine, created from
-  the committed templates.
+- **`config.json`, `secrets.json`, `config.alloy`, `k15/media/.env`** —
+  per-machine, created from the committed templates.
 - **Scheduled task registrations, sshd setup, firewall rules** — one-time
   commands run on the machines themselves.
 - **Logs and runtime state** — `logs/`, `state/session.lock`, `couch.log`, and

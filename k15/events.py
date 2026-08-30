@@ -319,7 +319,7 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
 HEARTBEAT_S = 60
 
 
-def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S, **fields: Any) -> threading.Thread:
+def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> threading.Thread:
     """Emit `heartbeat` from a daemon thread for as long as this process runs.
     A dead process writes nothing, so silence and idle look identical. Writes
     JSONL ONLY, not through cglib's logger: ~1440 lines/day would swamp
@@ -335,7 +335,7 @@ def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S, **fields: Any) -
     def tick():
         while True:
             try:
-                emit(lane, "heartbeat", INFO, interval_s=interval_s, **fields)
+                emit(lane, "heartbeat", INFO, interval_s=interval_s)
             except Exception:
                 pass
             time.sleep(interval_s)

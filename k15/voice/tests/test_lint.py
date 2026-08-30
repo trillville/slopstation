@@ -1,6 +1,8 @@
 """Guard: pyflakes over every module, failing on UNDEFINED NAMES - the crash
 class py_compile misses; run_session and the --text repl open audio/network,
-so no unit test exercises them. Plus the lane rule, read off the AST: the
+so no unit test exercises them. In tests/ it also fails on unused imports,
+which are harmless per file but regrew into a copy-pasted preamble across the
+whole suite. Plus the lane rule, read off the AST: the
 modules that run on system python import only stdlib + each other (+ hid and
 serial) at top level, and nothing in k15/ imports voice/ - not even lazily. Run:
     .venv\\Scripts\\python tests\\test_lint.py
@@ -23,6 +25,19 @@ MODULES += sorted((K15 / "voice" / "bench").glob("*.py"))
 # an undefined name would break. Their livekit-wakeword import is absent from
 # this venv - harmless, pyflakes parses rather than imports.
 MODULES += sorted((K15.parent / "wake-training").glob("*.py"))
+# The agent skills were in no sweep at all, and nothing imports them either, so
+# a name error there surfaces only when someone is already debugging.
+MODULES += sorted((K15.parent / ".claude" / "skills").rglob("*.py"))
+# tests/ last, and tracked separately: this suite is the only place where the
+# unused half of pyflakes is also enforced (see UNUSED_EXEMPT).
+TESTS = sorted(_bootstrap.TESTS.glob("*.py"))
+MODULES += TESTS
+
+# An unused import is noise anywhere, but in tests/ it was a copy-pasted
+# sys/Path preamble that regrew on every new file until it reached 41 lines, so
+# here it fails. _bootstrap is imported for its side effects alone - paths, a
+# temp log and state dir, a config fixture - and is never referenced.
+UNUSED_EXEMPT = {"_bootstrap"}
 
 # Runs on system python (no venv): the chord lane plus the K15 tools.
 # Third-party allowed: hid, serial.
@@ -74,15 +89,19 @@ def main():
         for line in out.getvalue().splitlines():
             if "undefined name" in line or "may be undefined" in line:
                 problems.append(line)
+            elif f in TESTS and "imported but unused" in line:
+                if line.split("'")[1].split(".")[-1] not in UNUSED_EXEMPT:
+                    problems.append(line)
     for p in problems:
         print("FAIL", p)
     assert checked >= 10, f"only {checked} modules checked - path bug, not a real pass"
-    assert not problems, f"{len(problems)} undefined-name issue(s)"
+    assert not problems, f"{len(problems)} pyflakes issue(s)"
     lanes = check_lanes()
     for b in lanes:
         print("FAIL", b)
     assert not lanes, f"{len(lanes)} lane-rule violation(s)"
-    print(f"OK - pyflakes: no undefined names across {checked} modules; "
+    print(f"OK - pyflakes: no undefined names across {checked} modules, "
+          f"no unused imports across {len(TESTS)} tests; "
           f"lane rule holds for {len(SYSTEM_PYTHON)} system-python modules")
 
 

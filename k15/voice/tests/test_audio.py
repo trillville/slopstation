@@ -3,7 +3,6 @@ configured device that is merely absent. Fake device table, no PortAudio. Run:
     .venv\\Scripts\\python tests\\test_audio.py
 """
 import sys
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 

@@ -7,9 +7,7 @@ must pass events through unchanged and in order, and never raise into the
 pipeline. Fakes only - no network, no keys.
 """
 import asyncio
-import sys
 import types
-from pathlib import Path
 
 import _bootstrap  # noqa: F401
 

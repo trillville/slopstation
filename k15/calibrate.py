@@ -11,25 +11,15 @@ time. Not while chord_listener.py is running - one process owns the Puck.
 import time
 from collections import Counter
 
-import hid
-
-from haptics import VID, PID
+import haptics
 
 def pick_interface():
-    for d in hid.enumerate(VID, PID):
-        try:
-            h = hid.device(); h.open_path(d["path"]); h.set_nonblocking(True)
-            t0 = time.time(); got = 0
-            while time.time() - t0 < 2.0:
-                if h.read(64): got += 1
-                time.sleep(0.005)
-            if got > 10:
-                print(f"using interface: {d['path']}")
-                return h
-            h.close()
-        except (OSError, ValueError):
-            pass
-    return None
+    # Report type unknown here - that is what this tool measures - so accept on
+    # volume of traffic, not on the report id.
+    dev, path = haptics.open_streaming_interface(lambda reads: len(reads) > 10)
+    if dev:
+        print(f"using interface: {path}")
+    return dev
 
 def main():
     dev = pick_interface()
