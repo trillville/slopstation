@@ -18,9 +18,10 @@ flowchart LR
     microphone[Microphone]
     command[Command line]
 
-    chord[K15 controller lane<br/>couch-session orchestration]
-    assistant[K15 voice and text assistant<br/>intent and tools]
-    operations[K15 operation tracking<br/>progress and completion]
+    chord[K15 controller chord<br/>start-session gesture]
+    assistant[K15 voice and text assistant<br/>grammar, intent, tools]
+    control[K15 room and session control]
+    operations[K15 operation tracking<br/>Steam and media progress]
 
     tv[Samsung TV<br/>power, input, volume]
     pc[Gaming PC execution<br/>allowlisted automation · display<br/>controller · Steam and Big Picture]
@@ -30,13 +31,14 @@ flowchart LR
     microphone --> assistant
     command --> assistant
 
-    chord -->|power, input, volume| tv
-    chord -->|start and stop| pc
-    pc -. launch confirmed and status .-> chord
-    assistant -->|game commands| pc
+    chord -->|start session| control
+    assistant -->|TV, game, and session actions| control
+    control --> tv
+    control -->|commands| pc
+    pc -. launch confirmed and status .-> control
     assistant -->|media requests| media
-    assistant ---|reads and writes| operations
-    media -. progress and completion .-> operations
+    assistant ---|tracks long-running work| operations
+    media -. observed state .-> operations
 ```
 
 The system has three operating constraints:
