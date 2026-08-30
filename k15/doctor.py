@@ -393,6 +393,8 @@ def check_media(cfg):
     reachable, down = [], []
     for name, key in (("Prowlarr", "prowlarrUrl"), ("Radarr", "radarrUrl"),
                       ("Sonarr", "sonarrUrl"), ("qBittorrent", "qbittorrentUrl")):
+        if not media.get(key):
+            continue
         try:
             _tcp_reachable(media[key])
             reachable.append(name)

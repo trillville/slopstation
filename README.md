@@ -66,7 +66,7 @@ and warns on drift.
 | `library.py` | Game catalog: installed games (over ssh), owned games + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json` and auto-synced by the voice agent; `Catalog` is one read of it for a voice session. |
 | `steamstore.py` | Live Steam store data: search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat, and the `state/deals.json` precompute. `python steamstore.py <probe>` smokes an endpoint. |
 | `doctor.py` | Read-only chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (skipped while the listener owns the Puck), ssh contract + deploy skew, session state, telemetry (event retention + the Alloy service), voice overlay (WARN-only, one `check_*` per row group). |
-| `slop.py` | Authenticated general text client for the K15 assistant; interactive or one-shot from either machine. See `docs/text-interface.md`. |
+| `slop.py` | Authenticated general text client for the K15 assistant; interactive or one-shot from either machine. |
 | `exlink.py` | Manual Ex-Link TV control from the command line (frames from `tv.py`). Power and inputs work; the volume/mute subcommands are acked and refused on this rig (see Conventions). |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after a firmware change. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports. Run only with the listener stopped. |
@@ -93,8 +93,8 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `tv_remote.py` | TV remote keys over WebSocket (port 8002) — the only volume-write path that works on this rig — and `TvDucker`, the session-length ducking built on them. Needs a one-time pairing, see below. |
 | `assistant.py` | The catalog-in-context LLM lane: prompt, tool schemas and impls (store data, nav, quit, install), optional web search. |
 | `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
-| `operations.py` / `announce.py` | Durable correlation for Steam installs and media acquisition: restart-safe observation, a diagnostic CLI, and proactive spoken completion. See `docs/operations.md`. |
-| `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation, stack diagnostics, and optional Proton-to-qBittorrent port synchronization. Prowlarr/qBittorrent stay outside normal acquisition. See `docs/media-acquisition.md`. |
+| `operations.py` / `announce.py` | Durable correlation for Steam installs and media acquisition: restart-safe observation, a diagnostic CLI, and proactive spoken completion. |
+| `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation (with bounded retries once an indexer outage clears), stack diagnostics, and optional Proton-to-qBittorrent port synchronization. Prowlarr/qBittorrent stay outside normal acquisition. |
 | `text_interface.py` | Authenticated LAN chat endpoint over the same assistant tools and durable operations as voice. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice, download status, and operation observation over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
@@ -111,8 +111,7 @@ The optional always-on FlareSolverr, Prowlarr, Radarr, and Sonarr Compose stack
 shares one `/data` mount. FlareSolverr is internal-only; native qBittorrent
 stays behind the Proton VPN split tunnel. The media root maps to `C:\Media`
 initially and can move to a NAS without changing Slopstation records.
-Provisioning and live validation are in
-`docs/media-acquisition.md` and `k15/media/README.md`.
+Provisioning and live validation are in `k15/media/README.md`.
 
 ### Wake-word training (`wake-training/`)
 
@@ -154,9 +153,13 @@ From `k15\voice`, inspect long-running work with
 `abandon <id> --execute`, which cleans up in Radarr or Sonarr before recording
 the cancellation.
 
-**Text.** After the authenticated endpoint is enabled, run `python k15\slop.py`
-from either checkout for a general chat using the same tools as voice. See
-`docs/text-interface.md` for the token and private-LAN firewall setup.
+**Text.** Put 32 random bytes in `secrets.json` as `textInterfaceToken` and add the
+`textInterface` block from `config.example.json` to `config.json`. `python
+k15\slop.py` then opens a general chat over the same tools as voice; on the K15 it
+reads the local config and token. To reach it from the gaming PC, set that block's
+`host` to `0.0.0.0`, allow its port inbound on the Private profile only
+(`New-NetFirewallRule -Profile Private -RemoteAddress LocalSubnet`), and set
+`SLOPSTATION_URL` and `SLOPSTATION_TOKEN` in that shell.
 
 **Correlate.** Every intent carries a `turn` id from the wake word or the chord
 through to the gaming PC. It appears in `k15/logs/k15-YYYYMMDD.jsonl`, in

@@ -46,6 +46,7 @@ PYTHON = {
     "earcon_play": {"earcon"},
     "end_session_dispatched": {"turn", "via"},
     "end_session_failed": {"err", "turn"},
+    "end_session_hook_failed": {"err"},
     "end_session_refused": {"answer", "turn"},
     "enrolled": {"steamid"},
     "enter_died": {"dur_ms"},

@@ -635,8 +635,7 @@ class MediaService:
             if number > 0 and (selected is None or number in selected):
                 row["monitored"] = True
             seasons.append(row)
-        out.update(qualityProfileId=out["qualityProfileId"], monitored=True,
-                   seasons=seasons)
+        out.update(monitored=True, seasons=seasons)
         return out
 
     def _search_series(self, series_id, seasons):
