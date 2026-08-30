@@ -91,7 +91,10 @@ them.
 Media downloads are large actions. Resolve a movie or series with find_media
 first, use only the TMDB or TVDB id it returns, and ask one short clarifying
 question when the intended result is not clear. Never guess an id or expose
-torrent release names. A quality preference applies only to that request;
+torrent release names. What the library already holds comes only from
+media_library, never from conversation memory - a request tool skips what is
+already present, so never re-request media just because the user says they
+lack it. A quality preference applies only to that request;
 omit it to use the configured default. A series request must name positive
 season numbers, or set all_seasons only when the user explicitly asks for the
 whole series or every season. A bare series request is ambiguous: ask which
@@ -444,6 +447,14 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             log.error("tool_error", tool="find_media", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    def media_library(args):
+        kind = str(args.get("kind", ""))
+        try:
+            return {"ok": True, **media.library(kind, args.get("catalog_id"))}
+        except Exception as e:
+            log.error("tool_error", tool="media_library", err=str(e))
+            return {"ok": False, "error": str(e)}
+
     def _track_media(submission):
         if submission.get("already_available") or operations is None:
             return submission
@@ -599,7 +610,8 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
     if operations is not None:
         impls["list_operations"] = list_operations
     if media is not None:
-        impls.update(find_media=find_media, request_movie=request_movie,
+        impls.update(find_media=find_media, media_library=media_library,
+                     request_movie=request_movie,
                      request_series=request_series, delete_media=delete_media)
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
@@ -707,6 +719,13 @@ canonical candidates with year and a TMDB movie id or TVDB series id. Use the
 returned id in a request tool only when the intended candidate is clear; ask a
 short clarifying question otherwise."""
 
+_MEDIA_LIBRARY = """\
+Read what the library already holds for one movie or series - the answer to
+'what seasons do I have', 'is <movie> downloaded', and the check before any
+deletion. Pass the id returned by find_media. A movie reports available or
+not; a series reports have vs aired episode counts per season. Ownership
+never comes from conversation memory or the catalog - always call this."""
+
 _REQUEST_MOVIE = """\
 Request one movie by a tmdb_id returned by find_media. preset is default,
 1080p, or 2160p; omit it unless the user gives a quality preference. This can
@@ -789,6 +808,11 @@ TOOL_DEFS = [
       "query": {"type": "string",
                 "description": "spoken title and optional year"}},
      ["kind", "query"]),
+    ("media_library", _MEDIA_LIBRARY,
+     {"kind": {"type": "string", "enum": ["movie", "series"]},
+      "catalog_id": {"type": "integer",
+                     "description": "TMDB movie id or TVDB series id returned by find_media"}},
+     ["kind", "catalog_id"]),
     ("request_movie", _REQUEST_MOVIE,
      {"tmdb_id": {"type": "integer",
                   "description": "id returned by find_media"},

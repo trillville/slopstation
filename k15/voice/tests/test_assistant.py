@@ -189,6 +189,11 @@ def main():
         def find(self, kind, query):
             return [{"tmdb_id": 438631, "title": "Dune", "year": 2021}]
 
+        def library(self, kind, catalog_id):
+            self.requests.append(("library", kind, catalog_id))
+            return {"kind": kind, "catalog_id": catalog_id, "in_library": True,
+                    "seasons": [{"season": 2, "have": 13, "aired": 13}]}
+
         def request_movie(self, tmdb_id, preset):
             self.requests.append(("movie", tmdb_id, preset))
             return {"ok": True, "kind": "movie_acquisition",
@@ -217,9 +222,14 @@ def main():
     fake_media = FakeMedia()
     mimpls = assistant.tool_impls(d, log, operations=fake_operations,
                                   media=fake_media)
-    assert {"find_media", "request_movie", "request_series", "delete_media"} <= set(mimpls)
+    assert {"find_media", "media_library", "request_movie", "request_series",
+            "delete_media"} <= set(mimpls)
     assert mimpls["find_media"]({"kind": "movie", "query": "Dune"})[
         "candidates"][0]["tmdb_id"] == 438631
+    held = mimpls["media_library"]({"kind": "series", "catalog_id": 81189})
+    assert held["ok"] and held["seasons"][0]["have"] == 13
+    assert fake_media.requests[-1] == ("library", "series", 81189)
+    fake_media.requests.clear()
     preview = mimpls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
     assert preview["dry_run"] and not fake_media.requests
     live_dispatch = Dispatch(CFG_MIN, log, dry_run=False)
@@ -273,7 +283,7 @@ def main():
     assert deleted["operations_canceled"] == ["op-andor"]
     assert fake_operations.observed[-1][1] == "CANCELED"
     assert fake_operations.delivered == ["op-andor"]
-    assert len(assistant.function_schemas(mimpls)) == 15
+    assert len(assistant.function_schemas(mimpls)) == 16
     print("  media tools: absent until configured, lookup first, dry-run safe, tracked")
     # Owned-but-not-installed must still come back named.
     inst_ids = {row["appid"] for row in rows}
