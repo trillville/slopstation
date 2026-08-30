@@ -525,7 +525,7 @@ def main():
         qbit_transport=doctor_qbit_transport,
         compose_runner=lambda media_dir: compose_rows)
     assert doctor["ok"]
-    assert [row["level"] for row in doctor["checks"]].count("WARN") == 2
+    assert [row["level"] for row in doctor["checks"]].count("WARN") == 0
     assert any(row["name"] == "qBittorrent share-limit action"
                and row["level"] == "PASS" for row in doctor["checks"])
     broken_preferences = dict(doctor_qbit_preferences,
@@ -543,7 +543,7 @@ def main():
                and row["level"] == "FAIL" for row in broken["checks"])
     assert any(row["name"] == "qBittorrent share-limit mode"
                and row["level"] == "FAIL" for row in broken["checks"])
-    print("  doctor: live boundaries, policy checks, and proof-limit warnings")
+    print("  doctor: live boundaries and policy checks")
 
     root = Path(__file__).resolve().parents[3]
     compose = (root / "k15" / "media" / "compose.yaml").read_text(encoding="utf-8")

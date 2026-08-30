@@ -1346,10 +1346,6 @@ def media_doctor(cfg, secrets, log, arr_transport=None, qbit_transport=None,
             media_cfg)
     except MediaConfigurationError as e:
         report.add("FAIL", "qBittorrent API", str(e))
-    report.add("WARN", "Proton assigned port",
-               "Windows Proton VPN does not expose it through a supported API; compare Active port manually")
-    report.add("WARN", "Torrent-visible VPN address",
-               "not tested; run an explicit torrent address test after VPN changes")
     return report.result()
 
 

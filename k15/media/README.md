@@ -158,10 +158,10 @@ seed values, qBittorrent categories, interface binding, UPnP/NAT-PMP, share
 limit behavior, Web UI authentication, and the listening port. Any `FAIL`
 makes the command exit nonzero; `WARN` does not.
 
-The ordinary command always warns that Proton's current Windows Active port
-cannot be read through a supported API and that the torrent-visible address
-has not been probed. Those are limits of the evidence, not failures. The
-doctor never adds a torrent or mutates a service.
+The doctor never adds a torrent or mutates a service. It cannot read Proton's
+current Windows Active port or prove the torrent-visible address. After a
+Proton reconnect, compare its Active port with the reported qBittorrent port;
+repeat the torrent-address test after VPN or network changes.
 
 Changing to the NAS later requires stopping the stack and native qBittorrent,
 copying `MEDIA_ROOT`, editing `.env`, changing qBittorrent's download path and
