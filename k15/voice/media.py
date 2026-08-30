@@ -1673,32 +1673,6 @@ def from_config(cfg, secrets, log, transport=None):
     return MediaService(media_cfg, log, radarr, sonarr)
 
 
-def _track(store, submission):
-    if submission["already_available"]:
-        return submission
-    metadata = {k: submission.get(k) for k in
-                ("catalog_id", "preset", "profile", "seasons",
-                 "baseline_file_id", "baseline_episode_files",
-                 "search_pending", "command_ids")
-                if k in submission}
-    try:
-        operation = store.track_external(
-            submission["kind"], submission["authority"],
-            submission["external_ref"], submission["title"],
-            detail=f"{submission['authority'].title()} accepted the request",
-            metadata=metadata)
-        operation = store.observe(
-            operation["id"], "RUNNING", {"phase": "searching"},
-            f"{submission['authority'].title()} accepted the request and is searching")
-        return {**submission, "operation_id": operation["id"],
-                "phase": "searching"}
-    except Exception as e:
-        # Submission already happened; a failed local write must not invite a
-        # second external request from the diagnostic CLI.
-        store.log.error("tool_error", tool="track_media_cli", err=str(e))
-        return {**submission, "tracking": "failed"}
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Inspect and request media")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1794,10 +1768,10 @@ def main(argv=None):
             import operations
             store = operations.OperationStore(log)
             if args.command == "request-movie":
-                result = _track(store, service.request_movie(
+                result = operations.track(store, service.request_movie(
                     args.tmdb_id, args.preset))
             elif args.command == "request-series":
-                result = _track(store, service.request_series(
+                result = operations.track(store, service.request_series(
                     args.tvdb_id, args.preset, args.seasons))
             elif args.command == "delete-movie":
                 active = [row for row in store.active(kind="movie_acquisition")

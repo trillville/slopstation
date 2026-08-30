@@ -298,6 +298,31 @@ class OperationStore:
                 for r in rows[:limit]]
 
 
+def track(store, submission, turn=None):
+    """Record one accepted external submission. The mutation already happened,
+    so a failed local write reports itself and never invites a second one."""
+    if store is None or submission.get("already_available"):
+        return submission
+    metadata = {k: submission[k] for k in
+                ("catalog_id", "preset", "profile", "seasons", "all_seasons",
+                 "baseline_file_id", "baseline_episode_files",
+                 "search_pending", "command_ids") if k in submission}
+    authority = str(submission["authority"]).title()
+    try:
+        operation = store.track_external(
+            submission["kind"], submission["authority"],
+            submission["external_ref"], submission["title"], turn=turn,
+            detail=f"{authority} accepted the request", metadata=metadata)
+        operation = store.observe(
+            operation["id"], RUNNING, {"phase": "searching"},
+            f"{authority} accepted the request and is searching")
+        return {**submission, "operation_id": operation["id"],
+                "phase": "searching"}
+    except Exception as e:
+        store.log.error("tool_error", tool="track_media", err=str(e))
+        return {**submission, "tracking": "failed"}
+
+
 def _fully_installed_appids():
     return {int(r["appid"]) for r in library.fetch_installed_ssh()
             if int(r.get("state", 0)) & 4}

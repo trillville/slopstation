@@ -453,31 +453,9 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return {"ok": False, "error": str(e)}
 
     def _track_media(submission):
-        if submission.get("already_available") or operations is None:
-            return submission
-        metadata = {k: submission.get(k) for k in
-                    ("catalog_id", "preset", "profile", "seasons",
-                     "all_seasons",
-                     "baseline_file_id", "baseline_episode_files",
-                     "search_pending", "command_ids")
-                    if k in submission}
-        try:
-            operation = operations.track_external(
-                submission["kind"], submission["authority"],
-                submission["external_ref"], submission["title"],
-                turn=dispatch.utterance.turn,
-                detail=f"{submission['authority'].title()} accepted the request",
-                metadata=metadata)
-            operation = operations.observe(
-                operation["id"], "RUNNING", {"phase": "searching"},
-                f"{submission['authority'].title()} accepted the request and is searching")
-            return {**submission, "operation_id": operation["id"],
-                    "phase": "searching"}
-        except Exception as e:
-            # The external mutation already succeeded; tracking cannot turn it
-            # into a refusal or cause the model to submit it twice.
-            log.error("tool_error", tool="track_media", err=str(e))
-            return {**submission, "tracking": "failed"}
+        import operations as operations_mod
+        return operations_mod.track(operations, submission,
+                                    dispatch.utterance.turn)
 
     def request_movie(args):
         try:

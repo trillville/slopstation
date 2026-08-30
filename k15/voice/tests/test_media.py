@@ -9,6 +9,7 @@ import _bootstrap  # noqa: F401
 
 import cglib
 import media
+import operations
 
 
 class FakeArr:
@@ -591,7 +592,7 @@ def main():
         def track_external(self, *args, **kwargs):
             raise OSError("disk unavailable")
 
-    assert media._track(FailingStore(), failed_submission)["tracking"] == "failed"
+    assert operations.track(FailingStore(), failed_submission)["tracking"] == "failed"
     print("  factory: disabled is inert; preflight checks roots and named profiles")
 
     doctor_cfg = json.loads(json.dumps(_bootstrap.CONFIG))
