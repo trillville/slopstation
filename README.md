@@ -8,8 +8,6 @@ into a couch console. A GMKtec K15 mini PC owns orchestration: it can start a
 session from a controller chord, accept voice, text, and MCP requests, and
 track long-running Steam and media work across restarts.
 
-Hold **Steam + right trigger** for two seconds, or say **“hey jarvis, play
-Armored Core Six.”**
 
 ## Architecture
 
