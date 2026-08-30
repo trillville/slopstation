@@ -63,8 +63,22 @@ class TextApplication:
         turn = uuid.uuid4().hex[:6]
         with session["lock"]:
             session["dispatch"].begin_utterance(turn, message)
+            impls = {}
+            for name, fn in session["impls"].items():
+                def audited(args, _name=name, _fn=fn):
+                    try:
+                        out = _fn(args)
+                    except Exception:
+                        self.log("tool_call", tool=_name, ok=False,
+                                 args=json.dumps(args)[:300])
+                        raise
+                    ok = out.get("ok") if isinstance(out, dict) else None
+                    self.log("tool_call", tool=_name, ok=ok,
+                             args=json.dumps(args)[:300])
+                    return out
+                impls[name] = audited
             reply = session["backend"].turn(
-                self.system_text, message, session["impls"])
+                self.system_text, message, impls)
         self.log("text_request", turn=turn, session=session_id)
         return {"ok": True, "session": session_id, "turn": turn,
                 "reply": reply}

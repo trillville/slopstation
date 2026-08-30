@@ -628,6 +628,19 @@ class MediaService:
                        previous_phase=None):
         rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
         metadata_ready = self._episode_metadata_ready(rows, seasons)
+        scope = [row for row in rows if isinstance(row, dict)
+                 and int(row.get("seasonNumber", 0) or 0) > 0
+                 and (seasons is None
+                      or int(row.get("seasonNumber", 0) or 0) in seasons)]
+        if metadata_ready and scope and not any(
+                row.get("monitored") for row in scope):
+            return {
+                "complete": False,
+                "canceled": True,
+                "progress": {"episodes": 0, "total_episodes": 0,
+                             "percent": 0},
+                "detail": "Sonarr reports the requested episodes are unmonitored",
+                "metadata_ready": True}
         targets = self._target_episodes(rows, seasons, now)
         baseline = baseline_episode_files or {}
         total = len(targets)

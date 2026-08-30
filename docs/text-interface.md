@@ -75,6 +75,12 @@ Voice and text accept the same action language. Examples:
 - `Delete Andor season 1.`
 - `Delete every season of Andor.`
 
+Questions about current downloads, searches, imports, and installs refresh the
+durable operation ledger before answering. Only an operation whose structured
+phase is `downloading` is described as downloading; searching, waiting for a
+match, importing, and finalizing retain their distinct names. Steam's broader
+raw client activity remains available only when explicitly requested.
+
 Series deletion without a named season or explicit whole-series wording is
 refused. Selected-season deletion preserves the Sonarr series and every other
 season. Movie and whole-series deletion remove their authority record and

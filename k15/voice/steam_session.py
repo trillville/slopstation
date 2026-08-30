@@ -308,8 +308,15 @@ class SteamSession:
             if not a["changing"] and a["total"] <= a["downloaded"]:
                 continue
             pct = (round(100 * a["downloaded"] / a["total"]) if a["total"] else None)
+            if pct == 100 and a["installed"]:
+                continue
+            phase = ("finalizing" if pct == 100 else
+                     "paused" if a["paused"] else
+                     "queued" if a["queue"] is not None and not a["downloaded"] else
+                     "downloading")
             rows.append({"appid": appid, "name": a["name"], "percent": pct,
-                         "paused": a["paused"], "queue": a["queue"]})
+                         "paused": a["paused"], "queue": a["queue"],
+                         "phase": phase})
         rows.sort(key=lambda r: -(r["percent"] or 0))
         return rows
 

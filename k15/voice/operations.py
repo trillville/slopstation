@@ -422,7 +422,8 @@ class MediaMonitor:
                         operation["id"], {"command_ids": command_ids},
                         remove=("search_pending",)) or operation
                 observation = self.media.observe(operation)
-                state = SUCCEEDED if observation["complete"] else RUNNING
+                state = (CANCELED if observation.get("canceled") else
+                         SUCCEEDED if observation["complete"] else RUNNING)
                 previous_phase = (operation.get("progress") or {}).get("phase")
                 progress = observation.get("progress", {})
                 self.store.observe(operation["id"], state, progress,
