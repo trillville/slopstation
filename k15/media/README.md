@@ -7,55 +7,22 @@ and Slopstation observes progress without owning the download process.
 ## Architecture
 
 ```mermaid
-flowchart TB
-    request[Voice, text, or media.py]
+flowchart LR
+    request[Voice, text,<br/>or media.py] --> slop[Slopstation<br/>resolve title, scope, preset]
+    slop --> managers[Radarr · movies<br/>Sonarr · series]
+    managers -->|dispatch| qbit[qBittorrent<br/>transfer and seed]
+    qbit --> torrents[C:\Media\torrents]
+    torrents -->|import| libraries[C:\Media\Movies<br/>C:\Media\TV]
 
-    subgraph control[Slopstation control plane]
-        direction LR
-        slop[Resolve title<br/>scope and preset]
-        ops[operations.json<br/>durable observation]
-        slop <--> ops
-    end
-
-    subgraph docker[Docker Compose]
-        direction TB
-
-        subgraph discovery[Release discovery]
-            direction LR
-            indexers[Configured indexers] <--> prowlarr[Prowlarr<br/>indexer management]
-            prowlarr -. browser challenge .-> flaresolverr[FlareSolverr<br/>challenge proxy]
-        end
-
-        subgraph managers[Desired state and import]
-            direction LR
-            radarr[Radarr<br/>movies]
-            sonarr[Sonarr<br/>series]
-        end
-
-        prowlarr --> radarr
-        prowlarr --> sonarr
-    end
-
-    subgraph windows[Native Windows on the K15]
-        direction LR
-        proton[Proton VPN<br/>peer traffic] --- qbit[qBittorrent<br/>transfer and seed]
-        qbit --> torrents[C:\Media\torrents]
-    end
-
-    subgraph libraries[Managed libraries]
-        direction LR
-        movies[C:\Media\Movies]
-        tv[C:\Media\TV]
-    end
-
-    request --> slop
-    slop -->|create and reconcile| radarr
-    slop -->|create and reconcile| sonarr
-    radarr -->|dispatch| qbit
-    sonarr -->|dispatch| qbit
-    torrents -->|Radarr imports| movies
-    torrents -->|Sonarr imports| tv
+    ops[(operations.json<br/>durable observation)] <--> slop
+    indexers[Configured indexers] <--> prowlarr[Prowlarr<br/>indexer management]
+    flaresolverr[FlareSolverr<br/>challenge proxy] -. browser challenge .-> prowlarr
+    prowlarr --> managers
+    proton[Proton VPN<br/>peer traffic] --- qbit
 ```
+
+Prowlarr, FlareSolverr, Radarr, and Sonarr run in Docker Compose. qBittorrent
+and Proton VPN run natively on Windows.
 
 | Component | Owns |
 |---|---|
