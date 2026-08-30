@@ -47,9 +47,10 @@ def _summary(operation, state):
 class OperationStore:
     """One K15-owned JSON ledger; external systems remain authoritative."""
 
-    def __init__(self, log, on_terminal=None, path=None):
+    def __init__(self, log, on_terminal=None, on_notification=None, path=None):
         self.log = log
         self.on_terminal = on_terminal
+        self.on_notification = on_notification
         self.path = path or OPERATIONS_FILE
         self._lock = threading.Lock()
 
@@ -213,6 +214,54 @@ class OperationStore:
                 if r.get("state") in TERMINAL
                 and r.get("announcement_pending")]
 
+    def notify(self, operation_id, key, summary):
+        now = int(time.time())
+        notification = None
+        with self._lock:
+            rows = self._load()
+            row = next((r for r in rows if r.get("id") == operation_id), None)
+            if row is None:
+                return None
+            notifications = list(row.get("notifications") or [])
+            if any(item.get("key") == key for item in notifications):
+                return None
+            notification = {"operation_id": operation_id, "key": key,
+                            "summary": summary, "pending": True,
+                            "created": now, "delivered": None}
+            notifications.append(notification)
+            row.update(notifications=notifications, updated=now)
+            self._save(rows)
+        self.log("operation_notification", operation=operation_id, key=key)
+        if self.on_notification is not None:
+            try:
+                self.on_notification(dict(notification))
+            except Exception as e:
+                self.log.error("operation_announce_hook_failed",
+                               operation=operation_id, err=str(e))
+        return dict(notification)
+
+    def pending_notifications(self):
+        return [dict(item) for row in self.all()
+                for item in row.get("notifications") or []
+                if item.get("pending")]
+
+    def mark_notification_delivered(self, operation_id, key):
+        now = int(time.time())
+        with self._lock:
+            rows = self._load()
+            row = next((r for r in rows if r.get("id") == operation_id), None)
+            if row is None:
+                return False
+            changed = False
+            for item in row.get("notifications") or []:
+                if item.get("key") == key and item.get("pending"):
+                    item.update(pending=False, delivered=now)
+                    changed = True
+            if changed:
+                row["updated"] = now
+                self._save(rows)
+            return changed
+
     def mark_delivered(self, operation_id):
         now = int(time.time())
         with self._lock:
@@ -367,14 +416,29 @@ class MediaMonitor:
                   if r.get("kind") in self.KINDS]
         for operation in active:
             try:
-                if self.media.dispatch_pending_series_search(operation):
+                command_ids = self.media.dispatch_pending_series_search(operation)
+                if command_ids:
                     operation = self.store.update_metadata(
-                        operation["id"], remove=("search_pending",)) or operation
+                        operation["id"], {"command_ids": command_ids},
+                        remove=("search_pending",)) or operation
                 observation = self.media.observe(operation)
                 state = SUCCEEDED if observation["complete"] else RUNNING
-                self.store.observe(operation["id"], state,
-                                   observation.get("progress", {}),
+                previous_phase = (operation.get("progress") or {}).get("phase")
+                progress = observation.get("progress", {})
+                self.store.observe(operation["id"], state, progress,
                                    observation.get("detail", ""))
+                phase = progress.get("phase")
+                if state == RUNNING and phase != previous_phase:
+                    if phase == "downloading":
+                        self.store.notify(
+                            operation["id"], "download_started",
+                            f"{operation['title']} has started downloading.")
+                    elif phase == "waiting_for_match" and previous_phase == "searching":
+                        authority = str(operation.get("authority", "media")).title()
+                        self.store.notify(
+                            operation["id"], "waiting_for_match",
+                            f"{authority} did not find an acceptable match for "
+                            f"{operation['title']} yet. It will keep watching.")
             except Exception as e:
                 authority = str(operation.get("authority", "media")).title()
                 self.store.observe(operation["id"], UNKNOWN, {},
@@ -384,8 +448,12 @@ class MediaMonitor:
 
 def _line(operation):
     progress = operation.get("progress") or {}
-    pct = progress.get("percent")
+    phase = progress.get("phase")
+    pct = (progress.get("download_percent")
+           if phase == "downloading" else progress.get("percent"))
     suffix = f" ({pct}%)" if pct is not None else ""
+    if phase:
+        suffix = f" [{phase}]" + suffix
     return (f"{operation['id']} {operation['state']} {operation['kind']} "
             f"{operation['title']}{suffix}")
 
@@ -400,6 +468,9 @@ def main(argv=None):
     sub.add_parser("reconcile")
     cancel = sub.add_parser("cancel")
     cancel.add_argument("operation")
+    abandon = sub.add_parser("abandon")
+    abandon.add_argument("operation")
+    abandon.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
 
     log = cglib.make_log("voice")
@@ -422,6 +493,46 @@ def main(argv=None):
         ok, detail = store.cancel(args.operation)
         print(detail)
         return 0 if ok else 1
+    if args.command == "abandon":
+        operation = store.get(args.operation)
+        if operation is None:
+            print(f"no operation named {args.operation}")
+            return 1
+        if operation.get("state") in TERMINAL:
+            print(f"{args.operation} is already {operation['state'].lower()}")
+            return 1
+        if operation.get("kind") not in MediaMonitor.KINDS:
+            print("only Radarr and Sonarr operations support clean abandonment")
+            return 1
+        if not args.execute:
+            print("nothing deleted; repeat with --execute")
+            return 2
+        cfg = cglib.config()
+        secrets = cglib.load_secrets()
+        import media
+        service = media.from_config(cfg, secrets, log)
+        if service is None:
+            print("media is disabled or its configuration/API keys are incomplete")
+            return 1
+        metadata = operation.get("metadata") or {}
+        command_ids = metadata.get("command_ids") or []
+        try:
+            if operation["kind"] == "movie_acquisition":
+                result = service.delete_movie(metadata["catalog_id"], command_ids)
+            else:
+                seasons = metadata.get("seasons")
+                result = service.delete_series(
+                    metadata["catalog_id"], seasons=seasons,
+                    all_seasons=seasons is None, command_ids=command_ids)
+            store.observe(operation["id"], CANCELED,
+                          operation.get("progress", {}),
+                          "the media request was deleted cleanly")
+            store.mark_delivered(operation["id"])
+        except Exception as e:
+            print(f"abandon failed; operation left active: {e}")
+            return 1
+        print(result["detail"])
+        return 0
 
     cfg = cglib.config()
     secrets = cglib.load_secrets()

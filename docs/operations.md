@@ -23,8 +23,9 @@ second and extends the record only with structured request metadata. See
   Sonarr series id.
 - `title`: user-facing label resolved from Slopstation's catalog.
 - `state`: `QUEUED`, `RUNNING`, `UNKNOWN`, `SUCCEEDED`, `FAILED`, or `CANCELED`.
-- `progress`: small structured authority-specific status, initially percent,
-  paused, and queue position.
+- `progress`: small structured authority-specific status. Media uses the
+  phases `searching`, `waiting_for_match`, `downloading`, `importing`, and
+  `ready`, plus safe aggregate percent or episode counts.
 - `detail`: the latest structured observation rendered as a short diagnostic.
 - `metadata`: optional structured request policy such as catalog id, quality
   preset/profile, and selected seasons. Never release or indexer text.
@@ -34,6 +35,8 @@ second and extends the record only with structured request metadata. See
   spoken.
 - `delivered`: successful full-playback or explicit voice-retrieval timestamp,
   otherwise null.
+- `notifications`: durable, one-time lifecycle receipts such as
+  `download_started`; each has its own pending and delivered fields.
 
 There is one K15 writer. Atomic JSON replacement is sufficient while that
 remains true; the external authority is still the source of truth. Do not add a
@@ -53,9 +56,11 @@ database until concurrent writers or real query requirements appear.
 - `UNKNOWN` can return to `RUNNING` or advance to a terminal state. It is
   visible in status output but never announced.
 - Terminal records never regress after a restart or a later observation.
-- Cancellation changes state only after the authority confirms it. Steam
-  installation cancellation is unsupported in the first slice and must be
-  refused without changing the record.
+- Cancellation changes state only after the authority cleanup succeeds. Steam
+  installation cancellation remains unsupported. Radarr/Sonarr abandonment
+  stops monitoring, cancels an active search, removes its download and partial
+  data, and deletes imported files in the requested scope before recording
+  `CANCELED`.
 - Repeating the same observation or polling a terminal record produces no
   duplicate announcement.
 
@@ -71,8 +76,10 @@ immediately reconciles persisted active operations after process startup, and
 sleeps between passes. Monitoring may stop while the voice agent is down;
 restart resumes observation from the file.
 
-Normal progress, `UNKNOWN`, and recovery from `UNKNOWN` are silent. A first
-terminal transition sets `announcement_pending` and queues the existing
+Most progress, `UNKNOWN`, and recovery from `UNKNOWN` are silent. Media emits
+one durable spoken receipt when an acceptable download starts, and one when an
+initial search finishes without a match. A first terminal transition sets
+`announcement_pending` and queues the existing
 out-of-session announcer. The announcer retains its independent audio device,
 session gate, wake-word abort, and follow-up window. Full playback clears the
 pending flag; interrupted or failed playback leaves it set for a later retry.
@@ -94,9 +101,10 @@ The Steam path is deliberately concrete rather than an abstract job framework:
    fully-installed manifest flag completes the operation.
 4. Voice can read structured recent or active operations through an assistant
    tool. No operation or release text is injected into conversation history.
-5. `operations.py list|show|reconcile|cancel` provides checkout-independent
-   diagnostics. `reconcile` uses live Steam and PC observations; `cancel`
-   reports the unsupported capability honestly.
+5. `operations.py list|show|reconcile|cancel|abandon` provides diagnostics.
+   `reconcile` uses live authority observations; `cancel` reports unsupported
+   Steam cancellation honestly. `abandon <media-operation> --execute` performs
+   authoritative media cleanup before changing the ledger.
 
 Do not introduce an adapter base class for this first implementation. When
 Radarr and Sonarr arrived, the only shared surface they justified was generic
@@ -110,8 +118,8 @@ The media path is likewise concrete:
 3. A successful submission creates or reuses its media operation.
 4. `MediaMonitor` asks the media boundary for file/episode evidence and never
    reads release-level data.
-5. `media.py status|profiles|validate|find|request-*` provides diagnostics and
-   an explicit `--execute` mutation gate.
+5. `media.py status|profiles|validate|find|request-*|delete-*` provides
+   diagnostics and an explicit `--execute` mutation gate.
 
 ## Research-runner removal
 

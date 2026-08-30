@@ -51,8 +51,10 @@ class FakeMedia:
         self.search_ready = False
 
     def dispatch_pending_series_search(self, operation):
-        return self.search_ready and bool(
-            (operation.get("metadata") or {}).get("search_pending"))
+        if self.search_ready and bool(
+                (operation.get("metadata") or {}).get("search_pending")):
+            return [77]
+        return []
 
     def observe(self, operation):
         if self.error:
@@ -151,6 +153,7 @@ def main():
     fake_media.search_ready = True
     media_monitor.reconcile_once()
     assert "search_pending" not in media_store.get(media_op["id"])["metadata"]
+    assert media_store.get(media_op["id"])["metadata"]["command_ids"] == [77]
     fake_media.error = RuntimeError("offline")
     media_monitor.reconcile_once()
     assert media_store.get(media_op["id"])["state"] == operations.UNKNOWN
@@ -169,6 +172,32 @@ def main():
     ok, detail = media_store.cancel(media_op["id"])
     assert not ok and "already succeeded" in detail
     print("  media: structured policy, active dedupe, UNKNOWN silence, positive completion")
+
+    phase_op = media_store.track_external(
+        "movie_acquisition", "radarr", "51", "Arrival",
+        metadata={"catalog_id": 329865, "command_ids": [9]})
+    fake_media.result = {
+        "complete": False,
+        "progress": {"phase": "searching"},
+        "detail": "Radarr is searching"}
+    media_monitor.reconcile_once()
+    fake_media.result = {
+        "complete": False,
+        "progress": {"phase": "waiting_for_match"},
+        "detail": "no acceptable release yet"}
+    media_monitor.reconcile_once()
+    assert len(media_store.pending_notifications()) == 1
+    assert media_store.pending_notifications()[0]["key"] == "waiting_for_match"
+    fake_media.result = {
+        "complete": False,
+        "progress": {"phase": "downloading", "percent": 2},
+        "detail": "download is 2% complete"}
+    media_monitor.reconcile_once()
+    assert {row["key"] for row in media_store.pending_notifications()} == {
+        "waiting_for_match", "download_started"}
+    media_monitor.reconcile_once()
+    assert len(media_store.pending_notifications()) == 2
+    print("  phases: waiting and download receipts are durable and edge-triggered")
 
     with contextlib.redirect_stdout(io.StringIO()) as stdout:
         assert operations.main(["list"]) == 0
@@ -197,6 +226,13 @@ def main():
         "announcement_pending"])
     assert ann.follow_up.is_set()
     assert len(delivery_log.find("operation_announced")) == 1
+    delivery_store.on_notification = ann.submit_notification
+    delivery_store.notify(
+        pending["id"], "download_started",
+        "Team Fortress Classic has started downloading.")
+    assert wait_for(lambda: not any(
+        row["operation_id"] == pending["id"]
+        for row in delivery_store.pending_notifications()))
     print("  announcer: interrupted delivery stays pending; full retry acknowledges once")
 
     print("OK - operations: persistence, reconciliation, CLI, and announcement semantics")

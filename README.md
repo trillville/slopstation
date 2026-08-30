@@ -66,6 +66,7 @@ and warns on drift.
 | `library.py` | Game catalog: installed games (over ssh), owned games + metadata (Steam Web API, key-gated), collections (over ssh), merged into `state/library.json` and auto-synced by the voice agent; `Catalog` is one read of it for a voice session. |
 | `steamstore.py` | Live Steam store data: search, wishlist-on-sale, specials, trending, reviews, news, how-long-to-beat, and the `state/deals.json` precompute. `python steamstore.py <probe>` smokes an endpoint. |
 | `doctor.py` | Read-only chain diagnosis: config, deps, Ex-Link port, Puck, listener, haptics (skipped while the listener owns the Puck), ssh contract + deploy skew, session state, telemetry (event retention + the Alloy service), voice overlay (WARN-only, one `check_*` per row group). |
+| `slop.py` | Authenticated general text client for the K15 assistant; interactive or one-shot from either machine. See `docs/text-interface.md`. |
 | `exlink.py` | Manual Ex-Link TV control from the command line (frames from `tv.py`). Power and inputs work; the volume/mute subcommands are acked and refused on this rig (see Conventions). |
 | `calibrate.py` | Rediscovers the controller's HID button bytes after a firmware change. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports. Run only with the listener stopped. |
@@ -94,6 +95,7 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
 | `operations.py` / `announce.py` | Durable correlation for Steam installs and media acquisition: restart-safe observation, a diagnostic CLI, and proactive spoken completion. See `docs/operations.md`. |
 | `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation, and diagnostic CLI. Prowlarr/qBittorrent stay behind the service boundary. See `docs/media-acquisition.md`. |
+| `text_interface.py` | Authenticated LAN chat endpoint over the same assistant tools and durable operations as voice. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice, download status, and operation observation over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
 | `tracing.py` / `traces.py` / `llm_audit.py` | Langfuse spans, per-conversation JSON dumps under `state/traces/`, and a record of provider-executed tool calls. |
@@ -148,7 +150,13 @@ doctors are read-only and exit with their FAIL count.
 
 From `k15\voice`, inspect long-running work with
 `.venv\Scripts\python operations.py list`; `show <id>`, `reconcile`, and
-`cancel <id>` are the other diagnostic commands.
+`cancel <id>` are the other diagnostic commands. Media operations also support
+`abandon <id> --execute`, which cleans up in Radarr or Sonarr before recording
+the cancellation.
+
+**Text.** After the authenticated endpoint is enabled, run `python k15\slop.py`
+from either checkout for a general chat using the same tools as voice. See
+`docs/text-interface.md` for the token and private-LAN firewall setup.
 
 **Correlate.** Every intent carries a `turn` id from the wake word or the chord
 through to the gaming PC. It appears in `k15/logs/k15-YYYYMMDD.jsonl`, in

@@ -23,12 +23,31 @@ citations, links, URLs, source names, or parenthetical references of any
 kind - a bracketed source would be spoken letter by letter."""
 
 
-RULES = """\
+VOICE_STYLE = """\
 You are the voice assistant for a couch gaming setup (Steam on a TV).
 Answers are SPOKEN aloud: plain text only, no markdown, no emoji, at most
 two short sentences unless asked for detail. For list questions lead with
 the count, name at most three (installed first, then most played), and
-offer the rest.
+offer the rest."""
+
+TEXT_STYLE = """\
+You are Slopstation's general text assistant for the K15 and gaming PC.
+Answer naturally and concisely; Markdown is allowed. You have the same safe
+action tools as voice, but the text interface is not limited to media tasks."""
+
+VOICE_INPUT_RULE = """\
+You hear the user through speech-to-text, so expect mishears: 'met games'
+is probably 'mech games', 'bolder's gate' is Baldur's Gate, 'dead lock' is
+Deadlock. When a request reads odd, find the near-sounding reading that
+best fits the catalog and the conversation and answer THAT, opening with
+your reading so a wrong guess is self-correcting ('Mech games? You have
+three...'). Ask one short clarifying question only when no reading clearly
+wins. That rule resolves what to SAY; for an action, an unclear reading
+means ask, never act on the best guess. If nothing in the catalog is close,
+say the game isn't in the library - don't force a match. If something
+fails, say so plainly."""
+
+RULES = """\
 
 The catalog below is the user's own library - what they ALREADY own.
 Questions about games they do not own (what to buy, what's new, what's like
@@ -69,25 +88,17 @@ alone' are the opposite ask and cost nothing: call stop_listening, which
 closes the mic and touches nothing else - never end the gaming session for
 them.
 
-You hear the user through speech-to-text, so expect mishears: 'met games'
-is probably 'mech games', 'bolder's gate' is Baldur's Gate, 'dead lock' is
-Deadlock. When a request reads odd, find the near-sounding reading that
-best fits the catalog and the conversation and answer THAT, opening with
-your reading so a wrong guess is self-correcting ('Mech games? You have
-three...'). Ask one short clarifying question only when no reading clearly
-wins. That rule resolves what to SAY; for an action, an unclear reading
-means ask, never act on the best guess. If nothing in the catalog is close,
-say the game isn't in the library - don't force a match. If something
-fails, say so plainly.
-
 Media downloads are large actions. Resolve a movie or series with find_media
 first, use only the TMDB or TVDB id it returns, and ask one short clarifying
 question when the intended result is not clear. Never guess an id or expose
 torrent release names. A quality preference applies only to that request;
-omit it to use the configured default."""
+omit it to use the configured default. Deleting media is destructive but an
+explicit request such as 'delete Andor season one' is authorization. Preserve
+other TV seasons: pass the named positive seasons, and set all_seasons only
+when the user explicitly asks to delete the whole series or every season."""
 
 
-def system_instruction(cfg):
+def system_instruction(cfg, interface="voice"):
     """RULES + a config-derived tail (date, spoken input names, volume
     ceiling, mute semantics) + the catalog. Built once per session, so none
     of it moves under the prompt cache."""
@@ -111,7 +122,9 @@ def system_instruction(cfg):
     if voice["assistantWebSearch"]:
         tail.append(
 WEB_SEARCH_RULE)
-    return (RULES + " " + " ".join(tail) + "\n\n"
+    style = TEXT_STYLE if interface == "text" else VOICE_STYLE
+    input_rule = "" if interface == "text" else "\n\n" + VOICE_INPUT_RULE
+    return (style + input_rule + "\n\n" + RULES + " " + " ".join(tail) + "\n\n"
             "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
             "never|inst/notinst|controller full/partial/none/?):\n"
             + "\n".join(library.catalog_lines()))
@@ -406,7 +419,7 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         metadata = {k: submission.get(k) for k in
                     ("catalog_id", "preset", "profile", "seasons",
                      "baseline_file_id", "baseline_episode_files",
-                     "search_pending")
+                     "search_pending", "command_ids")
                     if k in submission}
         try:
             operation = operations.track_external(
@@ -415,7 +428,11 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
                 turn=dispatch.utterance.turn,
                 detail=f"{submission['authority'].title()} accepted the request",
                 metadata=metadata)
-            return {**submission, "operation_id": operation["id"]}
+            operation = operations.observe(
+                operation["id"], "RUNNING", {"phase": "searching"},
+                f"{submission['authority'].title()} accepted the request and is searching")
+            return {**submission, "operation_id": operation["id"],
+                    "phase": "searching"}
         except Exception as e:
             # The external mutation already succeeded; tracking cannot turn it
             # into a refusal or cause the model to submit it twice.
@@ -453,6 +470,56 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             log.error("tool_error", tool="request_series", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    def delete_media(args):
+        kind = str(args.get("kind", ""))
+        catalog_id = int(args.get("catalog_id", 0) or 0)
+        seasons = args.get("seasons")
+        all_seasons = bool(args.get("all_seasons", False))
+        if catalog_id <= 0:
+            return {"ok": False, "error": "catalog_id must be positive"}
+        if kind == "series" and seasons is None and not all_seasons:
+            return {"ok": False, "error": "name seasons or explicitly request all seasons"}
+        if dispatch.dry_run:
+            scope = "all seasons" if all_seasons else seasons
+            detail = f"would delete {kind} {catalog_id} scope {scope}"
+            log("dry_run_would", action=detail)
+            return {"ok": True, "dry_run": True, "detail": detail}
+        active = []
+        command_ids = []
+        for operation in operations.active() if operations is not None else []:
+            metadata = operation.get("metadata") or {}
+            if operation.get("kind") != f"{kind}_acquisition":
+                continue
+            if int(metadata.get("catalog_id", 0) or 0) != catalog_id:
+                continue
+            operation_seasons = metadata.get("seasons")
+            fully_covered = (kind == "movie" or all_seasons
+                             or (operation_seasons is not None
+                                 and set(operation_seasons) <= set(seasons or [])))
+            if fully_covered:
+                active.append(operation)
+                command_ids.extend(metadata.get("command_ids") or [])
+        try:
+            if kind == "movie":
+                result = media.delete_movie(catalog_id, command_ids)
+            elif kind == "series":
+                result = media.delete_series(
+                    catalog_id, seasons=seasons, all_seasons=all_seasons,
+                    command_ids=command_ids)
+            else:
+                return {"ok": False, "error": f"unknown media kind {kind}"}
+            for operation in active:
+                operations.observe(operation["id"], "CANCELED",
+                                   operation.get("progress", {}),
+                                   "the media request was deleted cleanly")
+                operations.mark_delivered(operation["id"])
+            if active:
+                result["operations_canceled"] = [row["id"] for row in active]
+            return result
+        except Exception as e:
+            log.error("tool_error", tool="delete_media", err=str(e))
+            return {"ok": False, "error": str(e)}
+
     impls = {"launch_game": launch_game, "control": control,
              "stop_listening": stop_listening,
              "get_now_playing": get_now_playing,
@@ -464,7 +531,7 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         impls["list_operations"] = list_operations
     if media is not None:
         impls.update(find_media=find_media, request_movie=request_movie,
-                     request_series=request_series)
+                     request_series=request_series, delete_media=delete_media)
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
             impls.pop(gated, None)
@@ -578,6 +645,13 @@ normal seasons, or pass explicit positive season numbers. preset is default,
 1080p, or 2160p. This can start many large downloads, so call it only for an
 explicit request and never with a guessed id."""
 
+_DELETE_MEDIA = """\
+Cleanly cancel or delete media through Radarr or Sonarr. Resolve the title with
+find_media first and pass its catalog id. For a series, pass explicit positive
+season numbers, or set all_seasons=true only when the user explicitly asks to
+delete the entire series. This removes active downloads and partial data; it
+also deletes imported files in the requested scope."""
+
 TOOL_DEFS = [
     ("launch_game", _LAUNCH_GAME,
      {"appid": {"type": "integer", "description": "appid from the catalog"}},
@@ -653,6 +727,15 @@ TOOL_DEFS = [
       "seasons": {"type": "array", "items": {"type": "integer"},
                   "description": "positive season numbers; omit for all normal seasons"}},
      ["tvdb_id"]),
+    ("delete_media", _DELETE_MEDIA,
+     {"kind": {"type": "string", "enum": ["movie", "series"]},
+      "catalog_id": {"type": "integer",
+                     "description": "TMDB movie id or TVDB series id returned by find_media"},
+      "seasons": {"type": "array", "items": {"type": "integer"},
+                  "description": "series seasons to delete; preserve every other season"},
+      "all_seasons": {"type": "boolean",
+                      "description": "true only for an explicit whole-series deletion"}},
+     ["kind", "catalog_id"]),
 ]
 
 

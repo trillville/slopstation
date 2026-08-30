@@ -240,8 +240,11 @@ def main():
         announcer = announce.Announcer(voice, secrets, log)
         announcer.store = operation_store
         operation_store.on_terminal = announcer.submit
+        operation_store.on_notification = announcer.submit_notification
         for operation in operation_store.pending_announcements():
             announcer.submit(operation)
+        for notification in operation_store.pending_notifications():
+            announcer.submit_notification(notification)
 
     # Remote install + download status over ClientComm. Without a refresh token,
     # install_game keeps its controller-driven fallback. Never fatal.
@@ -276,6 +279,10 @@ def main():
                            media_monitor.KINDS)
         log("lane_up", what="media_operation_monitor", active=active_media,
             poll_s=media_monitor.poll_s)
+
+    import text_interface
+    text_interface.start(cfg, secrets, log, operations=operation_store,
+                         steam=steam, media=media_service)
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
     tracing.setup(cfg, secrets, log)

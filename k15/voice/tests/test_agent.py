@@ -67,6 +67,9 @@ class FakeAnnouncer:
     def submit(self, job):
         pass
 
+    def submit_notification(self, notification):
+        pass
+
     def abort_current(self):
         self.aborted += 1
 
@@ -79,6 +82,9 @@ class FakeOperationStore:
         FakeOperationStore.made.append(self)
 
     def pending_announcements(self):
+        return []
+
+    def pending_notifications(self):
         return []
 
     def active(self, kind=None):
@@ -254,6 +260,7 @@ def main():
     # the announcer<->store wiring (two-phase attach)
     ann, store = FakeAnnouncer.made[0], FakeOperationStore.made[0]
     assert ann.store is store and store.on_terminal == ann.submit
+    assert store.on_notification == ann.submit_notification
     assert calls[0]["operations"] is store and calls[0]["matcher"] == "MATCHER"
     assert calls[0]["capture"].stopped >= 1, "capture must be stopped after the session"
     # end_session restores the room while the TV is still on (dispatch calls it)
