@@ -5,7 +5,9 @@ indexer result crosses this module's public interface.
 """
 import argparse
 import datetime
+import http.cookies
 import json
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -88,6 +90,124 @@ class ArrClient:
 
     def delete(self, endpoint, params=None, payload=None):
         return self.request("DELETE", endpoint, params=params, payload=payload)
+
+
+def _qbit_http_transport(method, url, headers, body, timeout):
+    request = urllib.request.Request(url, data=body, headers=headers,
+                                     method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return dict(response.headers.items()), response.read()
+    except urllib.error.HTTPError as e:
+        path = urllib.parse.urlsplit(url).path
+        raise MediaError(
+            f"qBittorrent returned HTTP {e.code} for {path}") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise MediaError("qBittorrent is unreachable") from e
+
+
+class QbittorrentClient:
+    """Authenticated boundary for diagnostics and explicit maintenance."""
+
+    def __init__(self, base_url, username, password, transport=None, timeout=10):
+        parsed = urllib.parse.urlsplit(str(base_url).rstrip("/"))
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise MediaConfigurationError("qBittorrent URL is invalid")
+        if not isinstance(username, str) or not username:
+            raise MediaConfigurationError("media.qbittorrentUsername is missing")
+        if not isinstance(password, str) or not password:
+            raise MediaConfigurationError("qbittorrentPassword is missing")
+        self.base_url = str(base_url).rstrip("/")
+        self.origin = f"{parsed.scheme}://{parsed.netloc}"
+        self.username = username
+        self.password = password
+        self.transport = transport or _qbit_http_transport
+        self.timeout = timeout
+        self.sid = None
+
+    def _call(self, method, endpoint, payload=None, authenticate=True):
+        if authenticate and self.sid is None:
+            self.login()
+        body = None
+        headers = {
+            "Accept": "application/json",
+            "Origin": self.origin,
+            "Referer": self.base_url + "/",
+        }
+        if payload is not None:
+            body = urllib.parse.urlencode(payload).encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if self.sid is not None:
+            headers["Cookie"] = f"SID={self.sid}"
+        return self.transport(
+            method, f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
+            headers, body, self.timeout)
+
+    def login(self):
+        headers, raw = self._call("POST", "auth/login", {
+            "username": self.username,
+            "password": self.password,
+        }, authenticate=False)
+        if raw.decode("utf-8", "replace").strip() != "Ok.":
+            raise MediaError("qBittorrent rejected the configured credentials")
+        cookie = http.cookies.SimpleCookie()
+        for key, value in headers.items():
+            if str(key).casefold() == "set-cookie":
+                cookie.load(value)
+        if "SID" not in cookie:
+            raise MediaError("qBittorrent login returned no session cookie")
+        self.sid = cookie["SID"].value
+
+    def _text(self, endpoint):
+        _, raw = self._call("GET", endpoint)
+        return raw.decode("utf-8", "replace").strip()
+
+    def _json(self, endpoint):
+        _, raw = self._call("GET", endpoint)
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            raise MediaError("qBittorrent returned malformed JSON") from e
+        return value
+
+    def version(self):
+        return self._text("app/version")
+
+    def preferences(self):
+        value = self._json("app/preferences")
+        if not isinstance(value, dict):
+            raise MediaError("qBittorrent returned invalid preferences")
+        return value
+
+    def categories(self):
+        value = self._json("torrents/categories")
+        if not isinstance(value, dict):
+            raise MediaError("qBittorrent returned invalid categories")
+        return value
+
+    def set_preferences(self, changes):
+        self._call("POST", "app/setPreferences", {
+            "json": json.dumps(changes, separators=(",", ":")),
+        })
+
+    def set_listen_port(self, port):
+        try:
+            port = int(port)
+        except (TypeError, ValueError) as e:
+            raise MediaError("listening port must be an integer") from e
+        if not 1 <= port <= 65535:
+            raise MediaError("listening port must be between 1 and 65535")
+        before = self.preferences()
+        previous = int(before.get("listen_port", 0) or 0)
+        if previous != port:
+            self.set_preferences({"listen_port": port})
+        after = self.preferences()
+        confirmed = int(after.get("listen_port", 0) or 0)
+        if confirmed != port:
+            raise MediaError(
+                f"qBittorrent did not retain listening port {port}")
+        return {"ok": True, "previous_port": previous,
+                "listen_port": confirmed, "changed": previous != confirmed}
 
 
 class MediaService:
@@ -836,6 +956,388 @@ class MediaService:
         return out
 
 
+class DoctorReport:
+    def __init__(self):
+        self.checks = []
+
+    def add(self, level, name, detail):
+        self.checks.append({"level": level, "name": name,
+                            "detail": _clean_text(detail, 240)})
+
+    def result(self):
+        return {"ok": not any(row["level"] == "FAIL" for row in self.checks),
+                "checks": list(self.checks)}
+
+
+def _compose_services(media_dir):
+    env_file = media_dir / ".env"
+    if not env_file.is_file():
+        raise MediaError(f"Compose environment file is missing: {env_file}")
+    command = [
+        "docker", "compose", "--project-directory", str(media_dir),
+        "--env-file", str(env_file), "ps", "--format", "json",
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True,
+                                   timeout=20, check=False)
+    except (FileNotFoundError, OSError) as e:
+        raise MediaError("Docker CLI is unavailable") from e
+    except subprocess.TimeoutExpired as e:
+        raise MediaError("Docker Compose status timed out") from e
+    if completed.returncode:
+        detail = _clean_text(completed.stderr) or "Docker Compose status failed"
+        raise MediaError(detail)
+    text = completed.stdout.strip()
+    if not text:
+        return []
+    try:
+        rows = json.loads(text)
+        if isinstance(rows, dict):
+            rows = [rows]
+    except ValueError:
+        try:
+            rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except ValueError as e:
+            raise MediaError("Docker Compose returned malformed status") from e
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise MediaError("Docker Compose returned invalid status")
+    return rows
+
+
+def _row_field(row, name):
+    for field in row.get("fields") or []:
+        if (isinstance(field, dict)
+                and str(field.get("name", "")).casefold() == name.casefold()):
+            return field.get("value")
+    return None
+
+
+def _number_matches(value, expected):
+    try:
+        return float(value) == float(expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def _enabled_rows(rows):
+    return [row for row in rows if isinstance(row, dict)
+            and row.get("enable", row.get("enabled", True))]
+
+
+def _configured_password(value):
+    return (isinstance(value, str) and "..." not in value
+            and not value.upper().startswith("PLACEHOLDER")
+            and len(value.strip()) >= 6)
+
+
+def _qbit_from_config(media_cfg, secrets, transport=None):
+    password = secrets.get("qbittorrentPassword")
+    if not _configured_password(password):
+        raise MediaConfigurationError("qbittorrentPassword is missing")
+    return QbittorrentClient(
+        media_cfg.get("qbittorrentUrl", ""),
+        media_cfg.get("qbittorrentUsername", ""), password,
+        transport=transport)
+
+
+def _check_arr(report, kind, client, media_cfg):
+    label = client.name
+    try:
+        status = client.get("system/status")
+        if not isinstance(status, dict):
+            raise MediaError(f"{label} returned invalid status")
+        report.add("PASS", f"{label} API",
+                   f"reachable, version {_clean_text(status.get('version'), 40)}")
+    except MediaError as e:
+        report.add("FAIL", f"{label} API", str(e))
+        return
+
+    try:
+        health = client.get("health")
+        if not isinstance(health, list):
+            raise MediaError(f"{label} returned invalid health status")
+        if health:
+            sources = sorted({_clean_text(row.get("source"), 40) for row in health
+                              if isinstance(row, dict) and row.get("source")})
+            detail = f"{len(health)} warning(s)"
+            if sources:
+                detail += ": " + ", ".join(sources[:5])
+            report.add("WARN", f"{label} health", detail)
+        else:
+            report.add("PASS", f"{label} health", "no health warnings")
+    except MediaError as e:
+        report.add("FAIL", f"{label} health", str(e))
+
+    root_key = "movieRoot" if kind == "movie" else "seriesRoot"
+    presets_key = "moviePresets" if kind == "movie" else "seriesPresets"
+    try:
+        roots = client.get("rootfolder")
+        profiles = client.get("qualityprofile")
+        if not isinstance(roots, list) or not isinstance(profiles, list):
+            raise MediaError(f"{label} returned invalid roots or profiles")
+        wanted_root = str(media_cfg.get(root_key, ""))
+        root_names = {str(row.get("path", "")).rstrip("/\\").casefold()
+                      for row in roots if isinstance(row, dict)}
+        if wanted_root and wanted_root.rstrip("/\\").casefold() in root_names:
+            report.add("PASS", f"{label} root", wanted_root)
+        else:
+            report.add("FAIL", f"{label} root",
+                       f"configured root {wanted_root or '(missing)'} does not exist")
+        available = {str(row.get("name", "")).casefold() for row in profiles
+                     if isinstance(row, dict)}
+        wanted = sorted(set((media_cfg.get(presets_key) or {}).values()))
+        missing = [name for name in wanted if str(name).casefold() not in available]
+        if missing:
+            report.add("FAIL", f"{label} quality profiles",
+                       "missing: " + ", ".join(missing))
+        else:
+            report.add("PASS", f"{label} quality profiles",
+                       f"all {len(wanted)} configured profile(s) exist")
+    except MediaError as e:
+        report.add("FAIL", f"{label} library policy", str(e))
+
+    try:
+        indexers = client.get("indexer")
+        if not isinstance(indexers, list):
+            raise MediaError(f"{label} returned invalid indexers")
+        enabled = _enabled_rows(indexers)
+        if enabled:
+            report.add("PASS", f"{label} indexers",
+                       f"{len(enabled)} enabled indexer(s)")
+        else:
+            report.add("FAIL", f"{label} indexers", "no enabled indexers")
+    except MediaError as e:
+        report.add("FAIL", f"{label} indexers", str(e))
+
+    try:
+        clients = client.get("downloadclient")
+        if not isinstance(clients, list):
+            raise MediaError(f"{label} returned invalid download clients")
+        qbittorrent = [row for row in _enabled_rows(clients)
+                       if str(row.get("implementation", "")).casefold()
+                       == "qbittorrent"]
+        expected_category = "radarr" if kind == "movie" else "sonarr"
+        if not qbittorrent:
+            report.add("FAIL", f"{label} qBittorrent client",
+                       "no enabled qBittorrent download client")
+        else:
+            categories = {_clean_text(_row_field(row, "category"), 80).casefold()
+                          for row in qbittorrent}
+            if expected_category in categories:
+                report.add("PASS", f"{label} qBittorrent client",
+                           f"enabled with {expected_category} category")
+            else:
+                report.add("FAIL", f"{label} qBittorrent client",
+                           f"expected category {expected_category}")
+        completed = client.get("config/downloadclient")
+        if not isinstance(completed, dict):
+            raise MediaError(f"{label} returned invalid download handling")
+        handling = bool(completed.get("enableCompletedDownloadHandling"))
+        removal = bool(qbittorrent) and all(
+            row.get("removeCompletedDownloads") for row in qbittorrent)
+        if not handling:
+            report.add("FAIL", f"{label} completed-download handling",
+                       "completed-download handling is disabled")
+        elif handling and removal:
+            report.add("PASS", f"{label} completed-download removal",
+                       "enabled after import and seed-goal completion")
+        elif handling and qbittorrent:
+            report.add("WARN", f"{label} completed-download removal",
+                       "handling is enabled, but Remove Completed Downloads is disabled on qBittorrent")
+    except MediaError as e:
+        report.add("FAIL", f"{label} download client", str(e))
+
+
+def _check_prowlarr(report, client, media_cfg):
+    try:
+        status = client.get("system/status")
+        if not isinstance(status, dict):
+            raise MediaError("Prowlarr returned invalid status")
+        report.add("PASS", "Prowlarr API",
+                   f"reachable, version {_clean_text(status.get('version'), 40)}")
+    except MediaError as e:
+        report.add("FAIL", "Prowlarr API", str(e))
+        return
+    try:
+        health = client.get("health")
+        if not isinstance(health, list):
+            raise MediaError("Prowlarr returned invalid health status")
+        report.add("WARN" if health else "PASS", "Prowlarr health",
+                   f"{len(health)} warning(s)" if health else "no health warnings")
+    except MediaError as e:
+        report.add("FAIL", "Prowlarr health", str(e))
+
+    try:
+        rows = client.get("indexer")
+        if not isinstance(rows, list):
+            raise MediaError("Prowlarr returned invalid indexers")
+        expected_names = media_cfg.get("managedIndexers") or []
+        ratio = media_cfg.get("seedRatio")
+        minutes = media_cfg.get("seedTimeMinutes")
+        by_name = {str(row.get("name", "")).casefold(): row
+                   for row in rows if isinstance(row, dict)}
+        for name in expected_names:
+            row = by_name.get(str(name).casefold())
+            if row is None or row not in _enabled_rows([row]):
+                report.add("FAIL", f"Prowlarr indexer {name}", "missing or disabled")
+                continue
+            actual_ratio = _row_field(row, "seedRatio")
+            actual_time = _row_field(row, "seedTime")
+            if (_number_matches(actual_ratio, ratio)
+                    and _number_matches(actual_time, minutes)):
+                report.add("PASS", f"Prowlarr indexer {name}",
+                           f"ratio {ratio}, seed time {minutes} minutes")
+            else:
+                report.add("FAIL", f"Prowlarr indexer {name}",
+                           f"expected ratio {ratio} and seed time {minutes} minutes")
+        if not expected_names:
+            report.add("WARN", "Prowlarr managed indexers",
+                       "media.managedIndexers is empty")
+    except MediaError as e:
+        report.add("FAIL", "Prowlarr indexers", str(e))
+
+    try:
+        rows = client.get("applications")
+        if not isinstance(rows, list):
+            raise MediaError("Prowlarr returned invalid applications")
+        for wanted in ("radarr", "sonarr"):
+            matches = [row for row in rows if isinstance(row, dict)
+                       and wanted in (str(row.get("implementation", "")) + " "
+                                      + str(row.get("name", ""))).casefold()]
+            if not matches:
+                report.add("FAIL", f"Prowlarr {wanted} sync", "application is missing")
+            elif any("full" in str(row.get("syncLevel", "")).casefold()
+                     for row in matches):
+                report.add("PASS", f"Prowlarr {wanted} sync", "Full Sync")
+            else:
+                report.add("FAIL", f"Prowlarr {wanted} sync", "Full Sync is not enabled")
+    except MediaError as e:
+        report.add("FAIL", "Prowlarr applications", str(e))
+
+
+def _check_qbittorrent(report, client, media_cfg):
+    try:
+        version = client.version()
+        preferences = client.preferences()
+        categories = client.categories()
+    except MediaError as e:
+        report.add("FAIL", "qBittorrent API", str(e))
+        return
+    report.add("PASS", "qBittorrent API", f"reachable, version {version}")
+    expected_interface = str(media_cfg.get(
+        "qbittorrentNetworkInterface", "ProtonVPN"))
+    interfaces = [str(preferences.get(key, "")) for key in
+                  ("current_network_interface", "current_interface_name")]
+    if any(value.casefold() == expected_interface.casefold() for value in interfaces):
+        report.add("PASS", "qBittorrent interface", expected_interface)
+    else:
+        actual = next((value for value in interfaces if value), "All interfaces")
+        report.add("FAIL", "qBittorrent interface",
+                   f"expected {expected_interface}; found {actual}")
+    address = str(preferences.get("current_interface_address", ""))
+    report.add("PASS" if not address else "WARN", "qBittorrent optional IP",
+               "All addresses" if not address else f"restricted to {address}")
+    report.add("FAIL" if preferences.get("upnp") else "PASS",
+               "qBittorrent UPnP/NAT-PMP",
+               "enabled" if preferences.get("upnp") else "disabled")
+    try:
+        port = int(preferences.get("listen_port", 0) or 0)
+    except (TypeError, ValueError):
+        port = 0
+    report.add("PASS" if 1 <= port <= 65535 else "FAIL",
+               "qBittorrent listening port", str(port or "invalid"))
+    action = preferences.get("max_ratio_act")
+    report.add("PASS" if action == 0 else "FAIL", "qBittorrent share-limit action",
+               "Stop" if action == 0 else "must be Stop, never Remove")
+    mode = str(preferences.get("share_limits_mode", ""))
+    report.add("PASS" if mode.casefold() == "matchany" else "FAIL",
+               "qBittorrent share-limit mode",
+               mode or "must be MatchAny (either limit)")
+    auth_bypass = (preferences.get("bypass_local_auth")
+                   or preferences.get("bypass_auth_subnet_whitelist_enabled"))
+    report.add("FAIL" if auth_bypass else "PASS", "qBittorrent Web UI auth",
+               "authentication bypass is enabled" if auth_bypass
+               else "no localhost or subnet bypass")
+    category_names = {str(name).casefold() for name in categories}
+    missing = [name for name in ("radarr", "sonarr")
+               if name not in category_names]
+    report.add("FAIL" if missing else "PASS", "qBittorrent categories",
+               "missing: " + ", ".join(missing) if missing
+               else "radarr and sonarr are present")
+
+
+def media_doctor(cfg, secrets, log, arr_transport=None, qbit_transport=None,
+                 compose_runner=None):
+    """Read live configuration without changing any service."""
+    report = DoctorReport()
+    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+    if not isinstance(media_cfg, dict):
+        report.add("FAIL", "Slopstation media config", "media section is missing")
+        return report.result()
+    report.add("PASS" if media_cfg.get("enabled") else "FAIL",
+               "Slopstation media config",
+               "enabled" if media_cfg.get("enabled") else "media.enabled is false")
+
+    media_dir = Path(__file__).resolve().parent.parent / "media"
+    try:
+        rows = (compose_runner or _compose_services)(media_dir)
+        states = {str(row.get("Service", row.get("service", ""))).casefold(): row
+                  for row in rows}
+        bad = []
+        for name in ("flaresolverr", "prowlarr", "radarr", "sonarr"):
+            row = states.get(name)
+            state = str((row or {}).get("State", (row or {}).get("state", "")))
+            health = str((row or {}).get("Health", (row or {}).get("health", "")))
+            if (row is None or state.casefold() != "running"
+                    or health.casefold() not in ("", "healthy")):
+                bad.append(name)
+        report.add("FAIL" if bad else "PASS", "Docker media containers",
+                   "not ready: " + ", ".join(bad) if bad
+                   else "FlareSolverr, Prowlarr, Radarr, and Sonarr are running")
+    except MediaError as e:
+        report.add("FAIL", "Docker media containers", str(e))
+
+    clients = {}
+    for name, key, url_key in (("Radarr", "radarrApiKey", "radarrUrl"),
+                               ("Sonarr", "sonarrApiKey", "sonarrUrl")):
+        if not cglib.real_key(secrets.get(key)):
+            report.add("FAIL", f"{name} API", f"{key} is missing")
+            continue
+        try:
+            clients[name] = ArrClient(name, media_cfg.get(url_key, ""),
+                                      secrets[key], transport=arr_transport)
+        except MediaConfigurationError as e:
+            report.add("FAIL", f"{name} API", str(e))
+    if "Radarr" in clients:
+        _check_arr(report, "movie", clients["Radarr"], media_cfg)
+    if "Sonarr" in clients:
+        _check_arr(report, "series", clients["Sonarr"], media_cfg)
+
+    if cglib.real_key(secrets.get("prowlarrApiKey")):
+        try:
+            prowlarr = ArrClient(
+                "Prowlarr", media_cfg.get("prowlarrUrl", ""),
+                secrets["prowlarrApiKey"], api_version="v1",
+                transport=arr_transport)
+            _check_prowlarr(report, prowlarr, media_cfg)
+        except MediaConfigurationError as e:
+            report.add("FAIL", "Prowlarr API", str(e))
+    else:
+        report.add("FAIL", "Prowlarr API", "prowlarrApiKey is missing")
+
+    try:
+        _check_qbittorrent(
+            report, _qbit_from_config(media_cfg, secrets, qbit_transport),
+            media_cfg)
+    except MediaConfigurationError as e:
+        report.add("FAIL", "qBittorrent API", str(e))
+    report.add("WARN", "Proton assigned port",
+               "Windows Proton VPN does not expose it through a supported API; compare Active port manually")
+    report.add("WARN", "Torrent-visible VPN address",
+               "not tested; run an explicit torrent address test after VPN changes")
+    return report.result()
+
+
 def from_config(cfg, secrets, log, transport=None):
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
     if not isinstance(media_cfg, dict) or not media_cfg.get("enabled"):
@@ -901,6 +1403,10 @@ def main(argv=None):
     sub.add_parser("status")
     sub.add_parser("profiles")
     sub.add_parser("validate")
+    sub.add_parser("doctor")
+    qbit_port = sub.add_parser("set-qbit-port")
+    qbit_port.add_argument("port", type=int)
+    qbit_port.add_argument("--execute", action="store_true")
     find = sub.add_parser("find")
     find.add_argument("kind", choices=("movie", "series"))
     find.add_argument("query")
@@ -925,11 +1431,29 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     log = cglib.make_log("voice")
-    service = from_config(cglib.config(), cglib.load_secrets(), log)
-    if service is None:
-        print("media is disabled or its configuration/API keys are incomplete")
-        return 1
+    cfg = cglib.config()
+    secrets = cglib.load_secrets()
     try:
+        if args.command == "doctor":
+            result = media_doctor(cfg, secrets, log)
+            for check in result["checks"]:
+                print(f"{check['level']:<5} {check['name']} - {check['detail']}")
+            return 0 if result["ok"] else 1
+        if args.command == "set-qbit-port":
+            if not args.execute:
+                print("change not submitted; repeat with --execute")
+                return 2
+            media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+            if not isinstance(media_cfg, dict):
+                raise MediaConfigurationError("media configuration is missing")
+            result = _qbit_from_config(media_cfg, secrets).set_listen_port(args.port)
+            print(json.dumps(result, indent=2))
+            return 0
+
+        service = from_config(cfg, secrets, log)
+        if service is None:
+            print("media is disabled or its configuration/API keys are incomplete")
+            return 1
         if args.command == "status":
             result = service.status()
         elif args.command == "profiles":

@@ -19,7 +19,9 @@ The always-on K15 hosts five services:
 - Native qBittorrent owns transfer state. It runs through Proton VPN's
   include-only split tunnel; Radarr and Sonarr are its clients.
 
-Slopstation talks only to the Radarr and Sonarr v3 APIs during normal use. The
+Slopstation talks only to the Radarr and Sonarr v3 APIs during normal use. A
+separate operator-only diagnostic path reads Prowlarr and qBittorrent, and an
+explicit maintenance command can update qBittorrent's listening port. The
 K15 ledger stores their numeric movie or series id, never a release name,
 tracker response, download URL, or magnet link. External strings are limited
 to structured catalog metadata returned during an explicit lookup; indexer and
@@ -135,6 +137,14 @@ The one-time live setup that cannot be committed is:
    Sonarr.
 7. Copy the generated Radarr and Sonarr API keys into `secrets.json`, enable
    media in `config.json`, deploy, and run the checkout-safe and live checks.
+8. Configure the same Prowlarr seed ratio/time for the initial public
+   indexers, make qBittorrent stop at the first limit, and validate movie and
+   series cleanup separately before enabling Arr's automatic removal.
+
+`python media.py doctor` provides the read-only live check. Prowlarr and
+qBittorrent credentials are required only for that command and the explicit
+`set-qbit-port` helper; they do not widen the normal assistant acquisition
+boundary.
 
 ## Acceptance
 
