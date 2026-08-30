@@ -64,6 +64,7 @@ class TextApplication:
         with session["lock"]:
             session["dispatch"].begin_utterance(turn, message)
             impls = {}
+            acknowledgments = []
             for name, fn in session["impls"].items():
                 def audited(args, _name=name, _fn=fn):
                     try:
@@ -75,10 +76,14 @@ class TextApplication:
                     ok = out.get("ok") if isinstance(out, dict) else None
                     self.log("tool_call", tool=_name, ok=ok,
                              args=json.dumps(args)[:300])
+                    if isinstance(out, dict) and out.get("acknowledgment"):
+                        acknowledgments.append(str(out["acknowledgment"]))
                     return out
                 impls[name] = audited
             reply = session["backend"].turn(
                 self.system_text, message, impls)
+            if acknowledgments:
+                reply = acknowledgments[-1]
         self.log("text_request", turn=turn, session=session_id)
         return {"ok": True, "session": session_id, "turn": turn,
                 "reply": reply}

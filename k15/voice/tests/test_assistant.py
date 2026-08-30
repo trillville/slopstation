@@ -235,7 +235,31 @@ def main():
     series_requested = live_media["request_series"](
         {"tvdb_id": 81189, "seasons": [2]})
     assert series_requested["operation_id"] == "op-media"
+    assert series_requested["all_seasons"] is False
     assert fake_media.requests[-1] == ("series", 81189, "default", [2])
+    assert series_requested["acknowledgment"] == (
+        "Requested Breaking Bad, season 2, using the default quality profile. "
+        "Sonarr is searching in the background.")
+    before = list(fake_media.requests)
+    unscoped = live_media["request_series"]({"tvdb_id": 81189})
+    assert not unscoped["ok"]
+    assert unscoped["clarification"] == (
+        "Which season would you like, or should I download all seasons?")
+    assert fake_media.requests == before
+    mixed = live_media["request_series"]({
+        "tvdb_id": 81189, "seasons": [1], "all_seasons": True})
+    assert not mixed["ok"] and fake_media.requests == before
+    all_requested = live_media["request_series"]({
+        "tvdb_id": 81189, "preset": "2160p", "all_seasons": True})
+    assert all_requested["acknowledgment"] == (
+        "Requested Breaking Bad, all normal seasons, in 2160p. "
+        "Sonarr is searching in the background.")
+    assert all_requested["all_seasons"] is True
+    assert fake_media.requests[-1] == ("series", 81189, "2160p", None)
+    assert fake_operations.tracked[-1][6]["all_seasons"] is True
+    series_schema = next(tool for tool in assistant.anthropic_tools()
+                         if tool["name"] == "request_series")
+    assert "all_seasons" in series_schema["input_schema"]["properties"]
     fake_operations.active_rows = [{
         "id": "op-andor", "kind": "series_acquisition",
         "progress": {"phase": "downloading"},
@@ -328,6 +352,28 @@ def main():
         async def result_callback(self, out): got.append(out)
     _a.run(sch.handler(P()))
     assert got and got[0]["ok"] is False, got
+
+    spoken = []
+    receipt_result = []
+    receipt_schema = assistant.function_schemas({
+        "request_series": lambda _: {
+            "ok": True, "acknowledgment": "Requested Andor, season 1, in 2160p."
+        }})[0]
+    class ReceiptWorker:
+        async def queue_frame(self, frame):
+            spoken.append(frame)
+    class ReceiptParams:
+        arguments = {"tvdb_id": 393189, "seasons": [1]}
+        pipeline_worker = ReceiptWorker()
+        async def result_callback(self, out, *, properties=None):
+            receipt_result.append((out, properties))
+    async def exercise_receipt():
+        await receipt_schema.handler(ReceiptParams())
+        await receipt_result[0][1].on_context_updated()
+    _a.run(exercise_receipt())
+    assert receipt_result[0][1].run_llm is False
+    assert spoken[0].text == "Requested Andor, season 1, in 2160p."
+    assert spoken[0].append_to_context is True
 
     # --- every tool call is RECORDED, including the ones that raise ----------
     # A tool-calling llm span traces as output:null, so function_schemas is the
