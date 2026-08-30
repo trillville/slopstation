@@ -117,6 +117,9 @@ def main():
         def __init__(self):
             self.tracked = []
             self.acknowledged = None
+            self.active_rows = []
+            self.observed = []
+            self.delivered = []
 
         def track_steam_install(self, appid, title, turn=None, verified=False):
             self.tracked.append((appid, title, turn, verified))
@@ -131,6 +134,17 @@ def main():
         def for_assistant(self, scope, acknowledge=False):
             self.acknowledged = acknowledge
             return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
+
+        def observe(self, operation_id, state, progress, detail):
+            self.observed.append((operation_id, state, progress, detail))
+            return {"id": operation_id, "state": state,
+                    "progress": progress, "detail": detail}
+
+        def active(self):
+            return list(self.active_rows)
+
+        def mark_delivered(self, operation_id):
+            self.delivered.append(operation_id)
 
     fake_operations = FakeOperations()
     oimpls = assistant.tool_impls(d, log, operations=fake_operations)
@@ -165,10 +179,19 @@ def main():
                     "preset": preset, "profile": "Series HD",
                     "seasons": seasons, "already_available": False}
 
+        def delete_movie(self, tmdb_id, command_ids):
+            self.requests.append(("delete_movie", tmdb_id, command_ids))
+            return {"ok": True, "title": "Dune", "removed": True}
+
+        def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
+            self.requests.append(("delete_series", tvdb_id, seasons,
+                                  all_seasons, command_ids))
+            return {"ok": True, "title": "Breaking Bad", "removed": True}
+
     fake_media = FakeMedia()
     mimpls = assistant.tool_impls(d, log, operations=fake_operations,
                                   media=fake_media)
-    assert {"find_media", "request_movie", "request_series"} <= set(mimpls)
+    assert {"find_media", "request_movie", "request_series", "delete_media"} <= set(mimpls)
     assert mimpls["find_media"]({"kind": "movie", "query": "Dune"})[
         "candidates"][0]["tmdb_id"] == 438631
     preview = mimpls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
@@ -187,7 +210,20 @@ def main():
         {"tvdb_id": 81189, "seasons": [2]})
     assert series_requested["operation_id"] == "op-media"
     assert fake_media.requests[-1] == ("series", 81189, "default", [2])
-    assert len(assistant.function_schemas(mimpls)) == 14
+    fake_operations.active_rows = [{
+        "id": "op-andor", "kind": "series_acquisition",
+        "progress": {"phase": "downloading"},
+        "metadata": {"catalog_id": 81189, "seasons": [2],
+                     "command_ids": [77]}}]
+    deleted = live_media["delete_media"]({
+        "kind": "series", "catalog_id": 81189, "seasons": [2]})
+    assert deleted["ok"]
+    assert fake_media.requests[-1] == (
+        "delete_series", 81189, [2], False, [77])
+    assert deleted["operations_canceled"] == ["op-andor"]
+    assert fake_operations.observed[-1][1] == "CANCELED"
+    assert fake_operations.delivered == ["op-andor"]
+    assert len(assistant.function_schemas(mimpls)) == 15
     print("  media tools: absent until configured, lookup first, dry-run safe, tracked")
     # Owned-but-not-installed must still come back named.
     inst_ids = {row["appid"] for row in rows}

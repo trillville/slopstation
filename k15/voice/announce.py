@@ -52,7 +52,12 @@ class Announcer:
 
     def submit(self, operation):
         """OperationStore terminal hook, called off-thread."""
-        self._q.put(operation["id"])
+        self._q.put(("terminal", operation["id"], None))
+
+    def submit_notification(self, notification):
+        """OperationStore lifecycle hook, called off-thread."""
+        self._q.put(("notification", notification["operation_id"],
+                     notification["key"]))
 
     def speak(self, text):
         """Earcon + one synthesized line, outside any session. True = played
@@ -97,19 +102,25 @@ class Announcer:
 
     def _run(self):
         while True:
-            operation_id = self._q.get()
+            kind, operation_id, key = self._q.get()
             self.abort.clear()
             # Session owns the speaker; a mid-session retrieval may mark the
             # operation acknowledged while we wait.
             while self.session_active.is_set():
                 time.sleep(0.5)
-            operation = next((o for o in (
-                self.store.pending_announcements() if self.store else [])
-                              if o["id"] == operation_id), None)
-            if operation is None:
+            if kind == "terminal":
+                item = next((o for o in (
+                    self.store.pending_announcements() if self.store else [])
+                             if o["id"] == operation_id), None)
+            else:
+                item = next((o for o in (
+                    self.store.pending_notifications() if self.store else [])
+                             if o["operation_id"] == operation_id
+                             and o["key"] == key), None)
+            if item is None:
                 continue                        # already heard via pull
             try:
-                done = self.speak(operation["summary"])
+                done = self.speak(item["summary"])
             except Exception as e:
                 # Earcon alone still means "news"; operation stays pending.
                 self.log.warn("announce_failed", operation=operation_id, err=str(e),
@@ -121,7 +132,10 @@ class Announcer:
                                    operation=operation_id, err=str(e2))
                 continue
             if done:
-                self.store.mark_delivered(operation_id)
+                if kind == "terminal":
+                    self.store.mark_delivered(operation_id)
+                else:
+                    self.store.mark_notification_delivered(operation_id, key)
                 self.log("operation_announced", operation=operation_id)
                 if self.follow_up_enabled:
                     # Only after a bulletin heard in FULL.

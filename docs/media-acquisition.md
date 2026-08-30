@@ -39,6 +39,8 @@ Title resolution and mutation are separate tools:
    with canonical title, year, and TMDB or TVDB id.
 2. `request_movie(tmdb_id, preset)` submits one resolved movie.
 3. `request_series(tvdb_id, preset, seasons)` submits one resolved series.
+4. `delete_media` removes a resolved movie, selected series seasons, or an
+   explicitly requested whole series through its authority.
 
 The assistant must ask a short clarifying question when the lookup does not
 produce one unambiguous candidate. A title string alone never crosses the
@@ -77,7 +79,7 @@ Media adds two concrete operation kinds to the existing ledger:
 The external reference is the Radarr movie id or Sonarr series id. Structured
 metadata records the requested preset, profile name, source catalog id, and
 explicit season list when present. A selected-season request can also carry a
-temporary pending-search marker, removed after the monitor submits the search.
+temporary pending-search marker and the resulting command ids.
 An active operation with the same kind and external reference is reused.
 
 Radarr positively completes a movie operation only when `hasFile` is true.
@@ -90,10 +92,19 @@ An empty Sonarr episode response remains running as metadata population, not
 as evidence that the requested episodes have not aired.
 
 Missing services, HTTP errors, deleted authority records, and malformed
-responses produce `UNKNOWN`, never `FAILED`. `UNKNOWN`, normal progress, and
-recovery are silent. Only the first positive terminal edge queues the existing
-announcement path. Radarr and Sonarr have no safe “undo this request”
-equivalent, so cancellation remains explicitly unsupported.
+responses produce `UNKNOWN`, never `FAILED`. `UNKNOWN` and recovery are
+silent. The visible media phases are `searching`, `waiting_for_match`,
+`downloading`, `importing`, and `ready`. The first transition into downloading
+and the first no-match result each create a durable spoken receipt. Only the
+first positive terminal edge queues the completion announcement.
+
+Deletion stays inside the authority boundary. A movie delete disables
+monitoring, cancels its active search and queue payload, then asks Radarr to
+delete the record and files. A selected-season delete leaves the Sonarr series
+and every other season intact, unmonitors the selected episodes, removes their
+active payload, and deletes only their imported episode files. Whole-series
+deletion requires explicit all-season scope. Slopstation records `CANCELED`
+only after this cleanup succeeds.
 
 ## Configuration and deployment
 
@@ -139,7 +150,6 @@ import, repeat by voice with a `1080p` override, request a short or selected
 series season, restart the voice agent during transfer, and confirm exactly one
 completion announcement for each request.
 
-The media CLI is a provisioning and diagnostic surface, not the general chat
-client. A production text interface for the K15 and gaming PC should be a
-separate slice that reuses the same assistant tools and operation ledger for
-all Slopstation capabilities; it should not be coupled to media acquisition.
+The media CLI remains a provisioning and diagnostic surface. The general text
+client is `python k15/slop.py`; it talks to the authenticated K15 interface and
+reuses the same assistant tools and operation ledger as voice.

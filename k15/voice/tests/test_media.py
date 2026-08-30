@@ -24,6 +24,8 @@ class FakeArr:
         self.status_row = {"version": "1.2.3", "appName": name}
         self.posts = []
         self.puts = []
+        self.deletes = []
+        self.commands = {}
         self.created = None
 
     def get(self, endpoint, params=None):
@@ -46,6 +48,10 @@ class FakeArr:
             return [dict(row) for row in self.movie_files]
         if endpoint == "queue":
             return self.queue
+        if endpoint.startswith("command/"):
+            command_id = int(endpoint.split("/")[1])
+            return dict(self.commands.get(command_id, {
+                "id": command_id, "status": "completed", "result": "successful"}))
         if endpoint == "system/status":
             return dict(self.status_row)
         if endpoint == "rootfolder":
@@ -57,7 +63,10 @@ class FakeArr:
         if endpoint in ("movie", "series"):
             return dict(self.created)
         if endpoint == "command":
-            return {"id": 1}
+            command_id = len(self.commands) + 1
+            self.commands[command_id] = {
+                "id": command_id, "status": "started", "result": "unknown"}
+            return dict(self.commands[command_id])
         raise AssertionError((self.name, "POST", endpoint, payload))
 
     def put(self, endpoint, payload):
@@ -67,7 +76,38 @@ class FakeArr:
             for episode in self.episodes:
                 if episode.get("id") in episode_ids:
                     episode["monitored"] = bool(payload["monitored"])
+        elif endpoint.startswith(("movie/", "series/")):
+            wanted = int(endpoint.split("/")[1])
+            for index, row in enumerate(self.library):
+                if int(row["id"]) == wanted:
+                    self.library[index] = json.loads(json.dumps(payload))
         return dict(payload)
+
+    def delete(self, endpoint, params=None, payload=None):
+        self.deletes.append((endpoint, params, payload))
+        if endpoint.startswith("command/"):
+            self.commands.pop(int(endpoint.split("/")[1]), None)
+        elif endpoint.startswith("queue/"):
+            queue_id = int(endpoint.split("/")[1])
+            selected = next(row for row in self.queue["records"]
+                            if int(row["id"]) == queue_id)
+            download_id = selected.get("downloadId")
+            self.queue["records"] = [
+                row for row in self.queue["records"]
+                if (row.get("downloadId") != download_id if download_id
+                    else int(row.get("id", 0)) != queue_id)]
+        elif endpoint.startswith("movie/"):
+            wanted = int(endpoint.split("/")[1])
+            self.library = [row for row in self.library if row["id"] != wanted]
+        elif endpoint.startswith("series/"):
+            wanted = int(endpoint.split("/")[1])
+            self.library = [row for row in self.library if row["id"] != wanted]
+        elif endpoint.startswith("episodefile/"):
+            wanted = int(endpoint.split("/")[1])
+            for episode in self.episodes:
+                if int(episode.get("episodeFileId", 0) or 0) == wanted:
+                    episode.update(hasFile=False, episodeFileId=0)
+        return None
 
 
 def service():
@@ -126,8 +166,9 @@ def main():
     endpoint, payload = svc.radarr.posts[0]
     assert endpoint == "movie" and payload["rootFolderPath"] == "/data/Movies"
     assert payload["qualityProfileId"] == 10
-    assert payload["addOptions"] == {"searchForMovie": True, "addMethod": "manual"}
+    assert payload["addOptions"] == {"searchForMovie": False, "addMethod": "manual"}
     assert submitted["external_ref"] == "31" and not submitted["already_available"]
+    assert submitted["command_ids"] == [1]
 
     svc = service()
     svc.radarr.library = [{"id": 32, "tmdbId": 438631, "title": "Dune",
@@ -139,7 +180,7 @@ def main():
         "command", {"name": "MoviesSearch", "movieIds": [32]})
     svc.radarr.library[0]["hasFile"] = True
     before = len(svc.radarr.posts)
-    ready = svc.request_movie(438631)
+    ready = svc.request_movie(438631, "1080p")
     assert ready["already_available"] and len(svc.radarr.posts) == before
 
     svc = service()
@@ -202,7 +243,8 @@ def main():
                     "seasonNumber": 2})
     observation = svc.observe_series(41, [2])
     assert observation["progress"] == {
-        "episodes": 0, "total_episodes": 2, "percent": 0}
+        "episodes": 0, "total_episodes": 2, "percent": 0,
+        "phase": "waiting_for_match"}
     try:
         svc.request_series(81189, seasons=[0])
         raise AssertionError("specials accepted as a normal season")
@@ -245,7 +287,7 @@ def main():
          "title": "UNTRUSTED RELEASE TEXT"}]}
     movie_progress = svc.observe_movie(50)
     assert not movie_progress["complete"]
-    assert movie_progress["progress"] == {"percent": 75}
+    assert movie_progress["progress"] == {"phase": "downloading", "percent": 75}
     assert "UNTRUSTED" not in movie_progress["detail"]
     svc.radarr.library[0]["hasFile"] = True
     assert svc.observe_movie(50)["complete"]
@@ -270,10 +312,64 @@ def main():
     assert progress["metadata_ready"]
     assert not progress["complete"]
     assert progress["progress"] == {"episodes": 1, "total_episodes": 2,
-                                    "percent": 50}
+                                    "percent": 50,
+                                    "phase": "waiting_for_match"}
     svc.sonarr.episodes[2]["hasFile"] = True
     assert svc.observe_series(60, None, now)["complete"]
     print("  observe: queue bytes ignored except percent; only aired monitored files complete")
+
+    # --- authoritative abandonment ----------------------------------------
+    svc = service()
+    svc.radarr.library = [{"id": 70, "tmdbId": 438631, "title": "Dune",
+                           "monitored": True, "hasFile": True}]
+    svc.radarr.commands[8] = {"id": 8, "status": "started"}
+    svc.radarr.queue = {"records": [
+        {"id": 700, "movieId": 70, "downloadId": "same", "size": 100},
+        {"id": 701, "movieId": 70, "downloadId": "same", "size": 100}]}
+    removed_movie = svc.delete_movie(438631, [8])
+    assert removed_movie["downloads_canceled"] == 1
+    assert removed_movie["files_deleted"] == 1
+    assert not svc.radarr.library
+    assert ("command/8", None, None) in svc.radarr.deletes
+    assert any(endpoint == "queue/700" and params["removeFromClient"]
+               and params["skipRedownload"] and not params["blocklist"]
+               for endpoint, params, _ in svc.radarr.deletes)
+
+    svc = service()
+    svc.sonarr.library = [{
+        "id": 71, "tvdbId": 393189, "title": "Andor", "monitored": True,
+        "seasons": [{"seasonNumber": 1, "monitored": True},
+                    {"seasonNumber": 2, "monitored": True}]}]
+    svc.sonarr.episodes = [
+        {"id": 710, "seriesId": 71, "seasonNumber": 1, "monitored": True,
+         "hasFile": True, "episodeFileId": 810},
+        {"id": 711, "seriesId": 71, "seasonNumber": 1, "monitored": True,
+         "hasFile": False, "episodeFileId": 0},
+        {"id": 712, "seriesId": 71, "seasonNumber": 2, "monitored": True,
+         "hasFile": True, "episodeFileId": 812}]
+    svc.sonarr.queue = {"records": [
+        {"id": 720, "seriesId": 71, "episodeId": 710,
+         "downloadId": "season-one"},
+        {"id": 721, "seriesId": 71, "episodeId": 711,
+         "downloadId": "season-one"},
+        {"id": 722, "seriesId": 71, "episodeId": 712,
+         "downloadId": "season-two"}]}
+    removed_season = svc.delete_series(393189, seasons=[1])
+    assert removed_season["downloads_canceled"] == 1
+    assert removed_season["files_deleted"] == 1
+    assert svc.sonarr.library[0]["seasons"][0]["monitored"] is False
+    assert svc.sonarr.library[0]["seasons"][1]["monitored"] is True
+    assert svc.sonarr.episodes[0]["hasFile"] is False
+    assert svc.sonarr.episodes[2]["hasFile"] is True
+    assert len(svc.sonarr.queue["records"]) == 1
+    try:
+        svc.delete_series(393189)
+        raise AssertionError("unscoped series deletion was accepted")
+    except media.MediaError:
+        pass
+    removed_all = svc.delete_series(393189, all_seasons=True)
+    assert removed_all["all_seasons"] and not svc.sonarr.library
+    print("  delete: authority commands, queue payloads, and scoped imported files")
 
     # --- factory gating and status ------------------------------------------
     cfg = json.loads(json.dumps(_bootstrap.CONFIG))
