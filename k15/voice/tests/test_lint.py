@@ -42,7 +42,8 @@ UNUSED_EXEMPT = {"_bootstrap"}
 # Runs on system python (no venv): the chord lane plus the K15 tools.
 # Third-party allowed: hid, serial.
 SYSTEM_PYTHON = {"cglib", "events", "couch", "chord_listener", "exlink", "tv",
-                 "haptics", "gamepc", "doctor", "calibrate", "haptic_test"}
+                 "haptics", "gamepc", "doctor", "deploy", "calibrate",
+                 "haptic_test"}
 THIRD_PARTY_OK = {"hid", "serial"}
 STDLIB = set(sys.stdlib_module_names)
 

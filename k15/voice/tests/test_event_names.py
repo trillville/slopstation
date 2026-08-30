@@ -37,6 +37,11 @@ PYTHON = {
     "config_invalid": {"err", "missing"},
     "config_suspect": {"reason", "setting", "value"},
     "deals_synced": {"specials", "wishlist"},
+    "deploy_deferred": {"budget_s", "reason", "waited_s"},
+    "deploy_done": {"dur_ms", "fails", "sha", "was"},
+    "deploy_failed": {"err", "sha"},
+    "deploy_reloaded": {"killed", "what"},
+    "deploy_start": {"at", "sha"},
     "dispatch": {"detail", "intent", "ok"},
     "download_status_error": {"err"},
     "dry_run_would": {"action"},
@@ -186,6 +191,9 @@ PYTHON = {
 }
 
 POWERSHELL = {
+    "deploy_deferred": {"budget_s", "reason"},
+    "deploy_done": {"build_id", "scripts"},
+    "deploy_start": {"dest"},
     "enter_failed": {"err", "primary_height", "reason"},
     "enter_start": set(),
     "exit_done": {"office_ok", "puck_ok"},
@@ -220,7 +228,8 @@ BAT = {
     "start": set(),
 }
 
-LANES = {'manual', 'launch', 'library', 'steam', 'traces', 'listener', 'voice'}
+LANES = {'manual', 'launch', 'library', 'steam', 'traces', 'listener', 'voice',
+         'deploy'}
 
 
 def check(kind, frozen, now):

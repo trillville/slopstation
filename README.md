@@ -113,8 +113,8 @@ See [the media runbook](k15/media/README.md) for the Radarr/Sonarr pipeline.
 
 | Area | Host | Runtime | Update path |
 |---|---|---|---|
-| `k15/` | `K15` | Repository clone on the Desktop | `git pull`, then `Start-K15.bat` |
-| `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | Run `gaming-pc\Deploy.ps1` from a PC checkout |
+| `k15/` | `K15` | Repository clone on the Desktop | The `cd` workflow, or `git pull` then `Start-K15.bat` |
+| `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | The `cd` workflow, or `gaming-pc\Deploy.ps1` from a PC checkout |
 | `wake-training/` | Gaming PC | Checkout plus external training data | Run in place; GPU required |
 
 The gaming PC is deployed by copy because its runtime also contains
@@ -218,6 +218,36 @@ make each request self-contained.
 
 Media acquisition is optional and has a separate ordered bootstrap in
 [`k15/media/README.md`](k15/media/README.md).
+
+## Continuous deployment
+
+A green `ci` run on `main` triggers `cd`, which deploys the gaming PC, then the
+K15, and runs each machine's doctor. Neither machine accepts inbound
+connections, so each runs a self-hosted GitHub Actions runner that polls
+outbound.
+
+Both legs park rather than interrupt a session. The PC waits while its READY
+marker exists or an Enter/Exit task is running; the K15 waits while the session
+lock is fresh. The budget is `WAIT_MINUTES` in `.github/workflows/cd.yml`; past
+it the run fails and the next green commit retries. A failing doctor fails the
+run and changes nothing else - there is no automatic rollback.
+
+Runner setup, once per machine:
+
+1. Add a repository runner (Settings, Actions, Runners) labelled `gamepc` on
+   `TILLMAN-DESKTOP` and `k15` on the K15.
+2. Run it interactively - `run.cmd` with a shortcut in `shell:startup` - not as
+   a service. The K15's lanes must relaunch inside the logged-in session or
+   they reach neither the Puck nor the audio devices, and the PC's doctor reads
+   display state that session 0 does not have.
+3. On the K15 the runner never checks the repository out: it runs
+   `k15\deploy.py` from the live checkout, which must already be on `main`,
+   clean, and current. Set the repository variable `K15_CHECKOUT` if that
+   checkout is not at `C:\Users\minipc\Desktop\slopstation`.
+
+`deploy.py` fast-forwards the checkout, kills each running agent so its
+supervisor relaunches it on the new code, then runs `doctor.py`. It never
+starts a lane: an agent that does not come back is reported, not restarted.
 
 ## Operate and diagnose
 
