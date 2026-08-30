@@ -60,6 +60,12 @@ a different movie profile updates Radarr, starts an upgrade search, and keeps
 the durable operation active until Radarr replaces the prior file. An
 existing series profile change does the same per requested aired episode.
 An incomplete item gets the requested profile, a new search, and an operation.
+For a newly added series with selected seasons, Sonarr may return the series
+before its episode metadata exists. The operation records that search as
+pending; the monitor submits it after Sonarr exposes every selected season,
+explicitly monitors the selected episode ids, and then starts the search. The
+voice request does not block and, once recorded, a voice-agent restart cannot
+lose it.
 
 ## Operation lifecycle
 
@@ -70,8 +76,9 @@ Media adds two concrete operation kinds to the existing ledger:
 
 The external reference is the Radarr movie id or Sonarr series id. Structured
 metadata records the requested preset, profile name, source catalog id, and
-explicit season list when present. An active operation with the same kind and
-external reference is reused.
+explicit season list when present. A selected-season request can also carry a
+temporary pending-search marker, removed after the monitor submits the search.
+An active operation with the same kind and external reference is reused.
 
 Radarr positively completes a movie operation only when `hasFile` is true.
 Sonarr positively completes a series operation when every requested,
@@ -79,6 +86,8 @@ monitored, already-aired normal episode has `hasFile` true. Future episodes
 remain monitored by Sonarr but do not hold the initial request open. An
 explicit future season with no aired episodes remains running until one airs
 and the requested aired set is present.
+An empty Sonarr episode response remains running as metadata population, not
+as evidence that the requested episodes have not aired.
 
 Missing services, HTTP errors, deleted authority records, and malformed
 responses produce `UNKNOWN`, never `FAILED`. `UNKNOWN`, normal progress, and

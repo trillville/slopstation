@@ -77,6 +77,22 @@ class OperationStore:
     def get(self, operation_id):
         return next((r for r in self.all() if r.get("id") == operation_id), None)
 
+    def update_metadata(self, operation_id, updates=None, remove=()):
+        now = int(time.time())
+        with self._lock:
+            rows = self._load()
+            row = next((r for r in rows if r.get("id") == operation_id), None)
+            if row is None:
+                return None
+            metadata = dict(row.get("metadata") or {})
+            metadata.update(updates or {})
+            for key in remove:
+                metadata.pop(key, None)
+            if metadata != row.get("metadata", {}):
+                row.update(metadata=metadata, updated=now)
+                self._save(rows)
+            return dict(row)
+
     def track_external(self, kind, authority, external_ref, title, turn=None,
                        state=RUNNING, detail="external authority accepted the request",
                        metadata=None, observed=True):
@@ -351,6 +367,9 @@ class MediaMonitor:
                   if r.get("kind") in self.KINDS]
         for operation in active:
             try:
+                if self.media.dispatch_pending_series_search(operation):
+                    operation = self.store.update_metadata(
+                        operation["id"], remove=("search_pending",)) or operation
                 observation = self.media.observe(operation)
                 state = SUCCEEDED if observation["complete"] else RUNNING
                 self.store.observe(operation["id"], state,

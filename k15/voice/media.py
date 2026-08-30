@@ -318,6 +318,54 @@ class MediaService:
                                          "seriesId": series_id,
                                          "seasonNumber": season})
 
+    @staticmethod
+    def _episode_metadata_ready(rows, seasons):
+        if not isinstance(rows, list) or not rows:
+            return False
+        wanted = set(seasons or [])
+        available = {int(row.get("seasonNumber", 0) or 0) for row in rows
+                     if isinstance(row, dict)}
+        return bool(available - {0}) if not wanted else wanted <= available
+
+    def _monitor_series_episodes(self, rows, seasons):
+        wanted = set(seasons or [])
+        episode_ids = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            season = int(row.get("seasonNumber", 0) or 0)
+            if season <= 0 or (wanted and season not in wanted):
+                continue
+            if row.get("monitored"):
+                continue
+            try:
+                episode_id = int(row["id"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode has no id") from e
+            if episode_id <= 0:
+                raise MediaError("Sonarr episode has no id")
+            episode_ids.append(episode_id)
+        if episode_ids:
+            self.sonarr.put("episode/monitor", {
+                "episodeIds": episode_ids,
+                "monitored": True,
+            })
+
+    def dispatch_pending_series_search(self, operation):
+        metadata = operation.get("metadata") or {}
+        if (operation.get("kind") != "series_acquisition"
+                or not metadata.get("search_pending")):
+            return False
+        series_id = int(operation["external_ref"])
+        seasons = self._seasons(metadata.get("seasons")) \
+            if metadata.get("seasons") is not None else None
+        rows = self.sonarr.get("episode", {"seriesId": series_id})
+        if not self._episode_metadata_ready(rows, seasons):
+            return False
+        self._monitor_series_episodes(rows, seasons)
+        self._search_series(series_id, seasons)
+        return True
+
     def request_series(self, tvdb_id, preset="default", seasons=None):
         try:
             tvdb_id = int(tvdb_id)
@@ -330,6 +378,7 @@ class MediaService:
         existing = self._existing(
             self.sonarr.get("series", {"tvdbId": tvdb_id}),
             "tvdbId", tvdb_id, "Sonarr")
+        search_pending = False
 
         if existing is not None:
             series = dict(existing)
@@ -363,7 +412,10 @@ class MediaService:
             if observation["complete"]:
                 return self._submission("series", series_id, title, tvdb_id,
                                         preset, profile_name, True, seasons)
-            self._search_series(series_id, seasons)
+            if observation["metadata_ready"]:
+                self._search_series(series_id, seasons)
+            else:
+                search_pending = True
         else:
             rows = self.sonarr.get("series/lookup", {"term": f"tvdb:{tvdb_id}"})
             candidate = self._existing(rows, "tvdbId", tvdb_id, "Sonarr")
@@ -391,15 +443,16 @@ class MediaService:
                 series["qualityProfileId"] = profile_id
                 series = self._set_series_seasons(series, seasons)
                 self.sonarr.put(f"series/{series_id}", series)
-                self._search_series(series_id, seasons)
+                search_pending = True
         return self._submission("series", series_id, title, tvdb_id, preset,
                                 profile_name, False, seasons,
-                                baseline_episode_files=baseline_episode_files)
+                                baseline_episode_files=baseline_episode_files,
+                                search_pending=search_pending)
 
     @staticmethod
     def _submission(kind, external_ref, title, catalog_id, preset, profile,
                     already_available, seasons=None, baseline_file_id=None,
-                    baseline_episode_files=None):
+                    baseline_episode_files=None, search_pending=False):
         out = {
             "ok": True,
             "kind": f"{kind}_acquisition",
@@ -417,6 +470,8 @@ class MediaService:
             out["baseline_file_id"] = baseline_file_id
         if baseline_episode_files is not None:
             out["baseline_episode_files"] = baseline_episode_files
+        if search_pending:
+            out["search_pending"] = True
         return out
 
     @staticmethod
@@ -476,6 +531,7 @@ class MediaService:
     def observe_series(self, series_id, seasons=None, now=None,
                        baseline_episode_files=None):
         rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
+        metadata_ready = self._episode_metadata_ready(rows, seasons)
         targets = self._target_episodes(rows, seasons, now)
         baseline = baseline_episode_files or {}
         total = len(targets)
@@ -494,13 +550,17 @@ class MediaService:
         percent = round(ready * 100 / total) if total else 0
         progress = {"episodes": ready, "total_episodes": total,
                     "percent": percent}
-        if not total:
+        if not metadata_ready:
+            detail = "Sonarr is still populating episode metadata"
+            complete = False
+        elif not total:
             detail = "no requested monitored episodes have aired yet"
             complete = False
         else:
             detail = f"{ready} of {total} aired episodes are ready"
             complete = ready == total
-        return {"complete": complete, "progress": progress, "detail": detail}
+        return {"complete": complete, "progress": progress, "detail": detail,
+                "metadata_ready": metadata_ready}
 
     @staticmethod
     def _queue_percent(client, id_key, wanted_id):
@@ -578,7 +638,8 @@ def _track(store, submission):
         return submission
     metadata = {k: submission.get(k) for k in
                 ("catalog_id", "preset", "profile", "seasons",
-                 "baseline_file_id", "baseline_episode_files")
+                 "baseline_file_id", "baseline_episode_files",
+                 "search_pending")
                 if k in submission}
     try:
         operation = store.track_external(

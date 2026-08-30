@@ -48,6 +48,11 @@ class FakeMedia:
         self.result = {"complete": False, "progress": {"percent": 20},
                        "detail": "1 of 5 aired episodes are ready"}
         self.error = None
+        self.search_ready = False
+
+    def dispatch_pending_series_search(self, operation):
+        return self.search_ready and bool(
+            (operation.get("metadata") or {}).get("search_pending"))
 
     def observe(self, operation):
         if self.error:
@@ -134,13 +139,18 @@ def main():
         "series_acquisition", "sonarr", "41", "Breaking Bad",
         detail="Sonarr accepted the request",
         metadata={"catalog_id": 81189, "preset": "2160p",
-                  "profile": "Series UHD", "seasons": [2]})
+                  "profile": "Series UHD", "seasons": [2],
+                  "search_pending": True})
     assert reused["id"] == media_op["id"]
     assert reused["metadata"]["preset"] == "2160p"
     fake_media = FakeMedia()
     media_monitor = operations.MediaMonitor(media_store, fake_media, log)
     assert media_monitor.reconcile_once() == 1
     assert media_store.get(media_op["id"])["progress"]["percent"] == 20
+    assert media_store.get(media_op["id"])["metadata"]["search_pending"]
+    fake_media.search_ready = True
+    media_monitor.reconcile_once()
+    assert "search_pending" not in media_store.get(media_op["id"])["metadata"]
     fake_media.error = RuntimeError("offline")
     media_monitor.reconcile_once()
     assert media_store.get(media_op["id"])["state"] == operations.UNKNOWN

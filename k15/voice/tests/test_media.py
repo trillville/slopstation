@@ -62,6 +62,11 @@ class FakeArr:
 
     def put(self, endpoint, payload):
         self.puts.append((endpoint, json.loads(json.dumps(payload))))
+        if endpoint == "episode/monitor":
+            episode_ids = set(payload["episodeIds"])
+            for episode in self.episodes:
+                if episode.get("id") in episode_ids:
+                    episode["monitored"] = bool(payload["monitored"])
         return dict(payload)
 
 
@@ -174,10 +179,30 @@ def main():
     monitored = {r["seasonNumber"]: r["monitored"]
                  for r in svc.sonarr.puts[0][1]["seasons"]}
     assert monitored == {0: False, 1: False, 2: True}
+    assert not [post for post in svc.sonarr.posts if post[0] == "command"]
+    assert series["seasons"] == [2] and series["search_pending"]
+    pending = {
+        "kind": "series_acquisition", "external_ref": "41",
+        "metadata": {"seasons": [2], "search_pending": True},
+    }
+    assert not svc.dispatch_pending_series_search(pending)
+    svc.sonarr.episodes = [
+        {"id": 101, "seasonNumber": 0, "monitored": False,
+         "hasFile": False, "airDateUtc": "2019-01-01T00:00:00Z"},
+        {"id": 102, "seasonNumber": 2, "monitored": False,
+         "hasFile": False, "airDateUtc": "2020-01-01T00:00:00Z"},
+        {"id": 103, "seasonNumber": 2, "monitored": True,
+         "hasFile": False, "airDateUtc": "2020-01-08T00:00:00Z"},
+    ]
+    assert svc.dispatch_pending_series_search(pending)
+    assert svc.sonarr.puts[-1] == (
+        "episode/monitor", {"episodeIds": [102], "monitored": True})
     assert svc.sonarr.posts[-1] == (
         "command", {"name": "SeasonSearch", "seriesId": 41,
                     "seasonNumber": 2})
-    assert series["seasons"] == [2]
+    observation = svc.observe_series(41, [2])
+    assert observation["progress"] == {
+        "episodes": 0, "total_episodes": 2, "percent": 0}
     try:
         svc.request_series(81189, seasons=[0])
         raise AssertionError("specials accepted as a normal season")
@@ -226,6 +251,9 @@ def main():
     assert svc.observe_movie(50)["complete"]
 
     now = datetime.datetime(2026, 8, 29, tzinfo=datetime.timezone.utc)
+    empty = svc.observe_series(60, [1], now)
+    assert not empty["metadata_ready"]
+    assert empty["detail"] == "Sonarr is still populating episode metadata"
     svc.sonarr.episodes = [
         {"seasonNumber": 0, "monitored": True, "hasFile": False,
          "airDateUtc": "2020-01-01T00:00:00Z"},
@@ -239,6 +267,7 @@ def main():
          "airDateUtc": "2020-01-01T00:00:00Z"},
     ]
     progress = svc.observe_series(60, None, now)
+    assert progress["metadata_ready"]
     assert not progress["complete"]
     assert progress["progress"] == {"episodes": 1, "total_episodes": 2,
                                     "percent": 50}
