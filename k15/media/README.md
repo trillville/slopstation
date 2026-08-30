@@ -76,13 +76,13 @@ indexers, or downloads.
 
 ## Seeding and completed-download cleanup
 
-Use one initial policy for both public indexers: ratio `1.0`, seed-time limit
-`4320` minutes (72 hours), and stop when either limit is reached. Prowlarr owns
+Use one initial policy for both public indexers: ratio `0.25`, seed-time limit
+`60` minutes (one hour), and stop when either limit is reached. Prowlarr owns
 the per-indexer limits; qBittorrent owns the action; Radarr and Sonarr own
 removal after import and seeding.
 
 1. In Prowlarr, show advanced settings and edit **1337x**. Set **Seed Ratio**
-   to `1.0` and **Seed Time** to `4320`, then test and save. Repeat for
+   to `0.25` and **Seed Time** to `60`, then test and save. Repeat for
    **EZTV**. Keep both application connections on **Full Sync** so these values
    reach Radarr and Sonarr.
 2. In native qBittorrent, open **Tools > Options > BitTorrent > Seeding
@@ -136,8 +136,8 @@ Copy these keys from `config.example.json` into the existing `media` object in
     "qbittorrentUsername": "admin",
     "qbittorrentNetworkInterface": "ProtonVPN",
     "managedIndexers": ["1337x", "EZTV"],
-    "seedRatio": 1.0,
-    "seedTimeMinutes": 4320
+    "seedRatio": 0.25,
+    "seedTimeMinutes": 60
 
 These credentials are not required by ordinary movie or series acquisition.
 They are used only by maintenance diagnostics and the explicit port helper.

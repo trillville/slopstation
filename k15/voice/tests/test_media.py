@@ -466,8 +466,8 @@ def main():
         if "/api/v1/indexer" in path:
             return [{
                 "name": name, "enable": True,
-                "fields": [{"name": "seedRatio", "value": 1.0},
-                           {"name": "seedTime", "value": 4320}],
+                "fields": [{"name": "seedRatio", "value": 0.25},
+                           {"name": "seedTime", "value": 60}],
             } for name in ("1337x", "EZTV")]
         if path.endswith("/api/v1/applications"):
             return [{"name": name, "implementation": name,

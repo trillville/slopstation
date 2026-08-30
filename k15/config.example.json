@@ -25,8 +25,8 @@
     "movieRoot": "/data/Movies",
     "seriesRoot": "/data/TV",
     "managedIndexers": ["1337x", "EZTV"],
-    "seedRatio": 1.0,
-    "seedTimeMinutes": 4320,
+    "seedRatio": 0.25,
+    "seedTimeMinutes": 60,
     "pollS": 30,
     "moviePresets": {
       "default": "Slopstation Blu-ray HDR TrueHD",
