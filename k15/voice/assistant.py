@@ -92,10 +92,15 @@ Media downloads are large actions. Resolve a movie or series with find_media
 first, use only the TMDB or TVDB id it returns, and ask one short clarifying
 question when the intended result is not clear. Never guess an id or expose
 torrent release names. A quality preference applies only to that request;
-omit it to use the configured default. Deleting media is destructive but an
-explicit request such as 'delete Andor season one' is authorization. Preserve
-other TV seasons: pass the named positive seasons, and set all_seasons only
-when the user explicitly asks to delete the whole series or every season.
+omit it to use the configured default. A series request must name positive
+season numbers, or set all_seasons only when the user explicitly asks for the
+whole series or every season. A bare series request is ambiguous: ask which
+season, or whether they want all seasons, and call no request tool. After a
+successful request_series call, reply with its acknowledgment exactly and add
+nothing. Deleting media is destructive but an explicit request such as 'delete
+Andor season one' is authorization. Preserve other TV seasons: pass the named
+positive seasons, and set all_seasons only when the user explicitly asks to
+delete the whole series or every season.
 
 Current operation state never comes from the catalog or conversation memory.
 For questions about what is downloading, installing, searching, waiting,
@@ -143,6 +148,13 @@ def known_appids():
     ids = {r["appid"] for r in index.get("installed", [])}
     ids.update(int(a) for a in index.get("owned", {}))
     return ids
+
+
+def _season_scope(seasons):
+    if len(seasons) == 1:
+        return f"season {seasons[0]}"
+    return "seasons " + ", ".join(str(n) for n in seasons[:-1]) \
+        + f" and {seasons[-1]}"
 
 
 def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
@@ -437,6 +449,7 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return submission
         metadata = {k: submission.get(k) for k in
                     ("catalog_id", "preset", "profile", "seasons",
+                     "all_seasons",
                      "baseline_file_id", "baseline_episode_files",
                      "search_pending", "command_ids")
                     if k in submission}
@@ -477,14 +490,51 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         try:
             tvdb_id = int(args.get("tvdb_id", 0))
             preset = args.get("preset", "default")
-            seasons = args.get("seasons")
             if tvdb_id <= 0:
                 return {"ok": False, "error": "tvdb_id must be positive"}
+            seasons = args.get("seasons")
+            all_seasons = args.get("all_seasons", False)
+            if not isinstance(all_seasons, bool):
+                return {"ok": False, "error": "all_seasons must be boolean"}
+            if seasons is not None and all_seasons:
+                return {"ok": False, "error":
+                        "choose explicit seasons or all_seasons, not both"}
+            if seasons is None and not all_seasons:
+                return {"ok": False,
+                        "error": "series request needs explicit scope",
+                        "clarification": "Which season would you like, or "
+                                         "should I download all seasons?"}
+            if seasons is not None:
+                if not isinstance(seasons, list) or not seasons:
+                    return {"ok": False, "error":
+                            "seasons must be a non-empty list"}
+                if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0
+                       for n in seasons):
+                    return {"ok": False, "error":
+                            "season numbers must be positive integers"}
+                seasons = sorted(set(seasons))
             if dispatch.dry_run:
-                detail = f"would request TVDB {tvdb_id} with preset {preset}"
+                scope = "all normal seasons" if all_seasons else \
+                        _season_scope(seasons)
+                detail = (f"would request TVDB {tvdb_id}, {scope}, "
+                          f"with preset {preset}")
                 log("dry_run_would", action=detail)
                 return {"ok": True, "dry_run": True, "detail": detail}
-            return _track_media(media.request_series(tvdb_id, preset, seasons))
+            submission = media.request_series(tvdb_id, preset, seasons)
+            submission["all_seasons"] = all_seasons
+            result = _track_media(submission)
+            scope = "all normal seasons" if all_seasons else _season_scope(seasons)
+            quality = ("using the default quality profile"
+                       if result.get("preset") == "default"
+                       else f"in {result.get('preset')}")
+            if result.get("already_available"):
+                acknowledgment = (f"{result['title']}, {scope}, {quality} is "
+                                  "already available.")
+            else:
+                acknowledgment = (f"Requested {result['title']}, {scope}, "
+                                  f"{quality}. Sonarr is searching in the "
+                                  "background.")
+            return {**result, "acknowledgment": acknowledgment}
         except Exception as e:
             log.error("tool_error", tool="request_series", err=str(e))
             return {"ok": False, "error": str(e)}
@@ -664,10 +714,12 @@ start a large download, so call it only for an explicit request and never with
 a guessed id."""
 
 _REQUEST_SERIES = """\
-Request one series by a tvdb_id returned by find_media. Omit seasons for all
-normal seasons, or pass explicit positive season numbers. preset is default,
+Request one series by a tvdb_id returned by find_media. Pass explicit positive
+season numbers, or set all_seasons=true only when the user explicitly requests
+the whole series or every season. Never omit both scopes. preset is default,
 1080p, or 2160p. This can start many large downloads, so call it only for an
-explicit request and never with a guessed id."""
+explicit request and never with a guessed id. After success, use the returned
+acknowledgment as the entire reply without paraphrasing it."""
 
 _DELETE_MEDIA = """\
 Cleanly cancel or delete media through Radarr or Sonarr. Resolve the title with
@@ -749,7 +801,9 @@ TOOL_DEFS = [
       "preset": {"type": "string",
                  "enum": ["default", "1080p", "2160p"]},
       "seasons": {"type": "array", "items": {"type": "integer"},
-                  "description": "positive season numbers; omit for all normal seasons"}},
+                  "description": "positive season numbers explicitly requested"},
+      "all_seasons": {"type": "boolean",
+                      "description": "true only for an explicit whole-series request"}},
      ["tvdb_id"]),
     ("delete_media", _DELETE_MEDIA,
      {"kind": {"type": "string", "enum": ["movie", "series"]},
@@ -771,6 +825,8 @@ def function_schemas(impls, log=None):
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
+    from pipecat.frames.frames import (FunctionCallResultProperties,
+                                       TTSSpeakFrame)
 
     def _record(name, args, out, log=log):
         """Emit the tool call to both telemetry sinks. Pipecat's llm span
@@ -803,7 +859,17 @@ def function_schemas(impls, log=None):
             # does not lose the OTel context (contextvars are per-task), so
             # this still parents onto Pipecat's llm span.
             _record(name, args, out)
-            await params.result_callback(out)
+            acknowledgment = (out.get("acknowledgment")
+                              if isinstance(out, dict) else None)
+            if acknowledgment:
+                async def speak():
+                    await params.pipeline_worker.queue_frame(
+                        TTSSpeakFrame(str(acknowledgment)))
+                properties = FunctionCallResultProperties(
+                    run_llm=False, on_context_updated=speak)
+                await params.result_callback(out, properties=properties)
+            else:
+                await params.result_callback(out)
         return handler
 
     # Render only tools present in `impls` - the schema half of tool_impls'

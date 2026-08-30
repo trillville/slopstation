@@ -21,13 +21,32 @@ class FakeBackend:
         if "running" in user_text:
             result = impls["list_operations"]({"scope": "active"})
             assert result["operations"][0]["title"] == "Andor"
+        if "download" in user_text:
+            result = impls["request_series"]({
+                "tvdb_id": 393189, "seasons": [1], "preset": "2160p"})
+            assert result["ok"]
         return f"reply {self.turns}: {user_text}"
 
 
 class FakeOperations:
+    def track_external(self, *args, **kwargs):
+        return {"id": "op-andor"}
+
+    def observe(self, operation_id, state, progress, detail):
+        return {"id": operation_id, "state": state, "progress": progress}
+
     def for_assistant(self, scope, acknowledge=False):
         return [{"id": "op-andor", "title": "Andor", "state": "RUNNING",
                  "progress": {"phase": "waiting_for_match"}}]
+
+
+class FakeMedia:
+    def request_series(self, tvdb_id, preset, seasons):
+        return {"ok": True, "kind": "series_acquisition",
+                "authority": "sonarr", "external_ref": "1", "title": "Andor",
+                "catalog_id": tvdb_id, "preset": preset,
+                "profile": "Slopstation Series 2160p", "seasons": seasons,
+                "already_available": False}
 
 
 def request(url, token=None, payload=None):
@@ -55,7 +74,7 @@ def main():
     original = assistant_repl.BACKENDS["anthropic"]
     assistant_repl.BACKENDS["anthropic"] = FakeBackend
     server = text_interface.start(
-        cfg, secrets, log, operations=FakeOperations())
+        cfg, secrets, log, operations=FakeOperations(), media=FakeMedia())
     try:
         host, port = server.server_address
         base = f"http://{host}:{port}"
@@ -72,11 +91,17 @@ def main():
             "session": "couch", "message": "and recently?"})[1]
         assert first["reply"] == "reply 1: what is running?"
         assert second["reply"] == "reply 2: and recently?"
+        acquired = request(base + "/v1/chat", token, {
+            "session": "couch", "message": "download Andor season 1"})[1]
+        assert acquired["reply"] == (
+            "Requested Andor, season 1, in 2160p. "
+            "Sonarr is searching in the background.")
         assert first["turn"] != second["turn"]
-        assert len(log.find("text_request")) == 2
+        assert len(log.find("text_request")) == 3
         calls = log.find("tool_call")
-        assert len(calls) == 1
+        assert len(calls) == 2
         assert calls[0]["tool"] == "list_operations" and calls[0]["ok"]
+        assert calls[1]["tool"] == "request_series" and calls[1]["ok"]
     finally:
         server.shutdown()
         server.server_close()

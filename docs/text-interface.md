@@ -75,6 +75,11 @@ Voice and text accept the same action language. Examples:
 - `Delete Andor season 1.`
 - `Delete every season of Andor.`
 
+A series download must name one or more seasons, or explicitly say every
+season. A bare request such as `Get Andor` asks which season instead of adding
+the whole series. A successful series request always acknowledges the resolved
+title, exact season scope, and requested quality.
+
 Questions about current downloads, searches, imports, and installs refresh the
 durable operation ledger before answering. Only an operation whose structured
 phase is `downloading` is described as downloading; searching, waiting for a
