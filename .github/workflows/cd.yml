@@ -5,6 +5,13 @@ name: cd
 # than by push, so only a commit whose blind suite and mypy went green can
 # reach the machines. workflow_run runs are listed under the default branch and
 # do not appear in the commit's own check list - look for them under Actions.
+#
+# PUBLIC REPO, SELF-HOSTED RUNNERS. The `workflow_run.event == 'push'` guard
+# below is load-bearing, not a tidy-up. A fork's pull request runs ci HERE, and
+# its head branch is whatever the fork called it - `main` included - so the
+# branch filter alone would let a stranger's commit reach the gaming PC as
+# `Deploy.ps1`. Only a push can put a commit on this repo's main, and a fork
+# cannot push. Never widen this to a trigger a fork can reach.
 on:
   workflow_run:
     workflows: [ci]
@@ -33,7 +40,10 @@ env:
 
 jobs:
   gaming-pc:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.event == 'push') }}
     runs-on: [self-hosted, gamepc]
     timeout-minutes: 150
     steps:

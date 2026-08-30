@@ -1,6 +1,7 @@
 # slopstation
 
 [![ci](https://github.com/trillville/slopstation/actions/workflows/ci.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/ci.yml)
+[![cd](https://github.com/trillville/slopstation/actions/workflows/cd.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/cd.yml)
 
 Slopstation turns a Windows gaming PC, a Samsung S90C, and a Steam Controller
 into a couch console. A GMKtec K15 mini PC owns orchestration: it can start a
@@ -231,6 +232,11 @@ marker exists or an Enter/Exit task is running; the K15 waits while the session
 lock is fresh. The budget is `WAIT_MINUTES` in `.github/workflows/cd.yml`; past
 it the run fails and the next green commit retries. A failing doctor fails the
 run and changes nothing else - there is no automatic rollback.
+
+This repository is public and the runners are self-hosted, so `cd` runs only
+for a `push` that reached `main`. A fork's pull request runs `ci` here too, and
+its head branch can be called anything, so the branch filter alone would not
+keep a stranger's commit off the gaming PC.
 
 Runner setup, once per machine:
 
