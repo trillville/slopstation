@@ -37,7 +37,12 @@ def buzz(dev, pattern, what):
 def signal_last_error(dev):
     """couch.py writes state/last_error when a launch dies; tell the hands.
     The marker is consumed on a successful buzz, retained for retry otherwise,
-    discarded past ERR_STALE_S."""
+    discarded past ERR_STALE_S.
+
+    dev is None when the Puck is reporting nothing, and the age-out still
+    runs: a launch started by voice or from a phone leaves nobody holding the
+    controller, so a buzz-gated discard would strand the marker until the next
+    successful launch (2026-08-30, stranded 5 h)."""
     try:
         age = time.time() - cglib.LAST_ERROR.stat().st_mtime
     except OSError:
@@ -46,6 +51,8 @@ def signal_last_error(dev):
         cglib.LAST_ERROR.unlink(missing_ok=True)
         log("stale_error_discarded", age_s=round(age))
         return
+    if dev is None:
+        return                          # nobody is holding it; keep for retry
     if buzz(dev, haptics.PATTERN_FAIL, "fail"):
         try:
             reason = cglib.LAST_ERROR.read_text().strip()
@@ -186,9 +193,9 @@ def main():
                 if b and time.time() - last_partial >= PARTIAL_COOLDOWN_S:
                     log("chord_partial", btn=f"{b:02x}", want=f"{CHORD:02x}")
                     last_partial = time.time()
-            if armed and time.time() - last_err_check >= FAIL_CHECK_S:
-                last_err_check = time.time()
-                signal_last_error(puck.active)
+        if time.time() - last_err_check >= FAIL_CHECK_S:
+            last_err_check = time.time()
+            signal_last_error(puck.active if armed else None)
         time.sleep(0.005)
 
 
