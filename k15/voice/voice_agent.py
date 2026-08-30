@@ -236,18 +236,15 @@ def main():
     import operations as operations_mod
     operation_store = operations_mod.OperationStore(log)
     announcer = None
-    if stt_live:
+    if stt_live and not args.dry_run:
         announcer = announce.Announcer(voice, secrets, log)
         announcer.store = operation_store
         operation_store.on_terminal = announcer.submit
         operation_store.on_notification = announcer.submit_notification
-        # A bench run must not speak the backlog and mark it delivered: the
-        # couch user would never hear those bulletins.
-        if not args.dry_run:
-            for operation in operation_store.pending_announcements():
-                announcer.submit(operation)
-            for notification in operation_store.pending_notifications():
-                announcer.submit_notification(notification)
+        for operation in operation_store.pending_announcements():
+            announcer.submit(operation)
+        for notification in operation_store.pending_notifications():
+            announcer.submit_notification(notification)
 
     # Remote install + download status over ClientComm. Without a refresh token,
     # install_game keeps its controller-driven fallback. Never fatal.
@@ -264,7 +261,7 @@ def main():
         log("lane_disabled", what="steam_session",
             reason="no refresh token - run steam_session.py enroll")
 
-    if steam is not None:
+    if steam is not None and not args.dry_run:
         monitor = operations_mod.SteamMonitor(operation_store, steam, log)
         monitor.start()
         log("lane_up", what="operation_monitor",

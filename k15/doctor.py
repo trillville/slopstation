@@ -390,19 +390,22 @@ def check_media(cfg):
     report(WARN if absent else PASS, "media keys",
            f"missing: {', '.join(absent)}" if absent else "Radarr and Sonarr present",
            "copy each API key from Settings > General into secrets.json")
-    reachable, down = [], []
+    reachable, down, unconfigured = [], [], []
     for name, key in (("Prowlarr", "prowlarrUrl"), ("Radarr", "radarrUrl"),
                       ("Sonarr", "sonarrUrl"), ("qBittorrent", "qbittorrentUrl")):
         if not media.get(key):
+            unconfigured.append(name)
             continue
         try:
             _tcp_reachable(media[key])
             reachable.append(name)
         except Exception:
             down.append(name)
-    report(WARN if down else PASS, "media services",
+    report(WARN if down or unconfigured else PASS, "media services",
            f"reachable: {', '.join(reachable) or 'none'}"
-           + (f" | unreachable: {', '.join(down)}" if down else ""),
+           + (f" | unreachable: {', '.join(down)}" if down else "")
+           + (f" | unconfigured: {', '.join(unconfigured)}"
+              if unconfigured else ""),
            "start k15\\media\\Start-Media.ps1 and native qBittorrent")
 
 

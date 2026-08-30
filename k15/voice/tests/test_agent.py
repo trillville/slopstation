@@ -80,6 +80,7 @@ class FakeOperationStore:
 
     def __init__(self, log, on_terminal=None, path=None):
         self.on_terminal = on_terminal
+        self.on_notification = None
         FakeOperationStore.made.append(self)
 
     def pending_announcements(self):
@@ -276,11 +277,9 @@ def main():
     # dry_run reaches the room side effects and the session
     assert calls and calls[0]["dry_run"] is True
     assert FakeDucker.made and FakeDucker.made[0].dry_run is True
-    # the announcer<->store wiring (two-phase attach)
-    ann, store = FakeAnnouncer.made[0], FakeOperationStore.made[0]
-    assert ann.store is store and store.on_terminal == ann.submit
-    assert store.on_notification == ann.submit_notification
-    assert not ann.submitted, "a dry run must not speak the pending backlog"
+    store = FakeOperationStore.made[0]
+    assert not FakeAnnouncer.made, "a dry run must not construct a live announcer"
+    assert store.on_terminal is None and store.on_notification is None
     assert calls[0]["operations"] is store and calls[0]["matcher"] == "MATCHER"
     assert calls[0]["capture"].stopped >= 1, "capture must be stopped after the session"
     # end_session restores the room while the TV is still on (dispatch calls it)
@@ -308,6 +307,11 @@ def main():
     assert any(r["what"] == "operation_monitor" for r in log.find("lane_up"))
     assert calls[0]["steam"] is FakeSteamMonitor.made[0].steam
     print("  operations: enrolled Steam starts the monitor and reaches the session")
+
+    rc, log, calls = run(["--once", "--dry-run"], config(), setup=steam_online)
+    assert not FakeSteamMonitor.made, "dry run must not observe live Steam operations"
+    assert not FakeAnnouncer.made, "dry run must not deliver operation events"
+    assert isinstance(calls[0]["steam"], FakeSteam)
 
     # --- media configured: independent monitor + tools reach the session -----
     cfg = config()
