@@ -107,7 +107,7 @@ PYTHON = {
     "operation_track_failed": {"appid", "err"},
     "proton_port_synced": {"port", "previous_port", "source_age_s"},
     "proton_port_sync_failed": {"err"},
-    "text_request": {"session", "turn"},
+    "text_request": {"dur_ms", "session", "turn"},
     "text_request_failed": {"err"},
     "pipeline_error": {"err"},
     "preroll_fed": {"audio_s"},

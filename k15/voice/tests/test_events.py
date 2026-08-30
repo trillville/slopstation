@@ -3,6 +3,7 @@ context, the secret scrubber, daily rollover, and fail-soft. Run:
     .venv\\Scripts\\python tests\\test_events.py
 """
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -11,6 +12,9 @@ import _bootstrap  # noqa: F401
 
 import cglib
 import events
+
+
+WORKER_SRC = "import pathlib, sys\nsys.path.insert(0, sys.argv[3])\nimport events\nevents.LOG_DIR = pathlib.Path(sys.argv[1])\nevents._last_day = None\nfor _ in range(120):\n    events.emit('supervisor', 'restart', what=sys.argv[2], code=-1)"
 
 
 def read(path):
@@ -143,6 +147,28 @@ def main():
     assert rec["code"] == 3, f"cmd.exe text must land as a number, got {rec['code']!r}"
     assert events._cli(["nonsense"]) == 2, "a bad CLI call must not pretend to work"
     print("  cli: supervisor restart lands with a numeric exit code")
+
+    # -- concurrent emitters keep every line -----------------------------------
+    # Windows appends by seek-then-write, so two processes racing for the
+    # same offset silently overwrite one another. Start-K15.bat emits while
+    # the supervisor it just bounced also emits: that is where this was found.
+    race = Path(tempfile.mkdtemp())
+    worker = race / 'emit_worker.py'
+    worker.write_text(WORKER_SRC, encoding='utf-8')
+    lane_dir = str(Path(events.__file__).resolve().parent)
+    procs = [subprocess.Popen(
+        [sys.executable, str(worker), str(race), 'w' * 8, lane_dir])
+        for _ in range(6)]
+    for proc in procs:
+        proc.wait()
+    written = list(race.glob('*.jsonl'))
+    assert len(written) == 1, written
+    lines = [l for l in written[0].read_text(encoding='utf-8').splitlines()
+             if l.strip()]
+    for line in lines:
+        json.loads(line)                 # a torn line raises here
+    assert len(lines) == 720, 'lost %d lines to the race' % (720 - len(lines))
+    print('  concurrency: 6 processes x 120 events, none lost or torn')
 
     # -- the shared test double keeps the production shape ---------------------
     cap = cglib.CapturingLog("voice")
