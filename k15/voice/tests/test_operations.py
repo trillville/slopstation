@@ -2,6 +2,7 @@
 import contextlib
 import io
 import sys
+import threading
 import time
 import types
 
@@ -20,6 +21,13 @@ sys.modules["earcons"] = earcons_stub
 import announce
 import cglib
 import operations
+
+
+def _try(failures, fn, *args):
+    try:
+        fn(*args)
+    except Exception as e:
+        failures.append(repr(e))
 
 
 def wait_for(predicate, timeout=2):
@@ -90,7 +98,27 @@ def main():
     assert same["last_observed"] and log.find("operation_observed")
     reloaded = operations.OperationStore(log)
     assert reloaded.get(operation["id"])["turn"] == "4c1d0e"
-    print("  store: atomic persistence and active appid deduplication")
+
+    # Separate stores are what the agent and the CLIs actually hold, so the
+    # load/mutate/write pair has to serialise on the file, not per instance.
+    shared = cglib.STATE / "concurrent.json"
+    writers = [operations.OperationStore(log, path=shared) for _ in range(4)]
+    failures, reading = [], threading.Event()
+    threads = [threading.Thread(target=lambda w=w, k=k: [
+        _try(failures, w.track_steam_install, 1000 + k * 50 + i, f"g{k}{i}")
+        for i in range(25)]) for k, w in enumerate(writers)]
+    # A reader holding the file open denies write_json's replace on Windows,
+    # so reads take the guard too.
+    readers = [threading.Thread(target=lambda: [writers[0].all()
+                                                for _ in iter(reading.is_set, True)],
+                                daemon=True) for _ in range(2)]
+    [r.start() for r in readers]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    reading.set()
+    assert not failures, failures[:3]
+    assert len(writers[0].all()) == 100, len(writers[0].all())
+    print("  store: atomic persistence, appid dedupe, concurrent readers/writers")
 
     steam = FakeSteam()
     installed = set()

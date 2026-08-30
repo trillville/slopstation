@@ -5,7 +5,7 @@ state/, and the scripts that import this.
 """
 from __future__ import annotations
 
-import json, os, pathlib, time
+import contextlib, json, msvcrt, os, pathlib, time
 from typing import Any
 
 import events
@@ -213,6 +213,29 @@ def load_json(path: pathlib.Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
+
+
+@contextlib.contextmanager
+def guard(path: pathlib.Path):
+    """Serialise one state file's load/mutate/write across threads AND
+    processes: write_json is atomic per write, never across the pair, and the
+    voice agent, operations.py and media.py all mutate operations.json.
+    LK_NBLCK spins because LK_LOCK retries on its own 1 s timer. Windows drops
+    the byte lock when the holder dies, so a killed CLI cannot wedge the agent."""
+    lock = path.with_suffix(path.suffix + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as f:
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.005)
+        try:
+            yield
+        finally:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def write_json(path: pathlib.Path, obj: Any, indent: int = 1) -> None:

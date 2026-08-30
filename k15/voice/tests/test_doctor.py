@@ -168,6 +168,14 @@ def main():
     assert levels()["media keys"] == "PASS"
     assert levels()["media services"] == "PASS"
     rows.clear()
+    del media_cfg["media"]["prowlarrUrl"]
+    doctor.check_media(media_cfg)
+    assert levels()["media config"] == "WARN"
+    assert levels()["media services"] == "WARN"
+    service_detail = next(detail for _, name, detail in rows
+                          if name == "media services")
+    assert "unconfigured: Prowlarr" in service_detail
+    rows.clear()
     print("  voice: keys, venv, library, operations, agent rows; no voice section warns")
 
     print("OK - doctor: config, hardware, listener, ssh contract + deploy skew, "

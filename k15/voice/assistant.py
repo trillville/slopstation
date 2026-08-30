@@ -13,6 +13,8 @@ import steamstore
 # tool spans; the module self-gates: REPL/bench are no-ops
 import tracing
 
+ASK_TTL_S = 120                 # a delete confirmation goes stale
+
 WEB_SEARCH_RULE = """\
 You can search the web for current facts the catalog can't answer (release
 dates, game news, prices, and games the user does not own). Search only
@@ -100,10 +102,11 @@ season numbers, or set all_seasons only when the user explicitly asks for the
 whole series or every season. A bare series request is ambiguous: ask which
 season, or whether they want all seasons, and call no request tool. After a
 successful request_series call, reply with its acknowledgment exactly and add
-nothing. Deleting media is destructive but an explicit request such as 'delete
-Andor season one' is authorization. Preserve other TV seasons: pass the named
-positive seasons, and set all_seasons only when the user explicitly asks to
-delete the whole series or every season.
+nothing. Deleting media erases files and cannot be undone, so delete_media
+confirms first: say back the title it returns and delete only on the user's
+yes. Preserve other TV seasons: pass the named positive seasons, and set
+all_seasons only when the user explicitly asks to delete the whole series or
+every season.
 
 Current operation state never comes from the catalog or conversation memory.
 For questions about what is downloading, installing, searching, waiting,
@@ -206,6 +209,10 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return refused
         if library.installed_name(appid) is not None:
             return {"ok": False, "error": "that game is already installed"}
+        if dispatch.dry_run:
+            detail = f"would start the download for appid {appid}"
+            log("dry_run_would", action=detail)
+            return {"ok": True, "dry_run": True, "detail": detail}
         if steam is not None and steam.available():
             try:
                 r = steam.install(appid)
@@ -423,20 +430,10 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         scope = args.get("scope", "active")
         if scope not in ("active", "recent"):
             return {"ok": False, "error": f"unknown operation scope {scope}"}
-        if scope == "active":
-            import operations as operations_mod
-            try:
-                if steam is not None:
-                    operations_mod.SteamMonitor(
-                        operations, steam, log).reconcile_once()
-                if media is not None:
-                    operations_mod.MediaMonitor(
-                        operations, media, log).reconcile_once()
-            except Exception as e:
-                log.error("operation_monitor_failed", err=str(e))
         return {"ok": True, "scope": scope,
                 "operations": operations.for_assistant(
-                    scope, acknowledge=(scope == "recent"))}
+                    scope, acknowledge=(scope == "recent"
+                                        and not dispatch.dry_run))}
 
     def find_media(args):
         kind = str(args.get("kind", ""))
@@ -456,31 +453,9 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return {"ok": False, "error": str(e)}
 
     def _track_media(submission):
-        if submission.get("already_available") or operations is None:
-            return submission
-        metadata = {k: submission.get(k) for k in
-                    ("catalog_id", "preset", "profile", "seasons",
-                     "all_seasons",
-                     "baseline_file_id", "baseline_episode_files",
-                     "search_pending", "command_ids")
-                    if k in submission}
-        try:
-            operation = operations.track_external(
-                submission["kind"], submission["authority"],
-                submission["external_ref"], submission["title"],
-                turn=dispatch.utterance.turn,
-                detail=f"{submission['authority'].title()} accepted the request",
-                metadata=metadata)
-            operation = operations.observe(
-                operation["id"], "RUNNING", {"phase": "searching"},
-                f"{submission['authority'].title()} accepted the request and is searching")
-            return {**submission, "operation_id": operation["id"],
-                    "phase": "searching"}
-        except Exception as e:
-            # The external mutation already succeeded; tracking cannot turn it
-            # into a refusal or cause the model to submit it twice.
-            log.error("tool_error", tool="track_media", err=str(e))
-            return {**submission, "tracking": "failed"}
+        import operations as operations_mod
+        return operations_mod.track(operations, submission,
+                                    dispatch.utterance.turn)
 
     def request_movie(args):
         try:
@@ -550,44 +525,75 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             log.error("tool_error", tool="request_series", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    pending_delete = {}          # delete scope -> (turn that asked, when)
+
     def delete_media(args):
-        kind = str(args.get("kind", ""))
-        catalog_id = int(args.get("catalog_id", 0) or 0)
-        seasons = args.get("seasons")
-        all_seasons = bool(args.get("all_seasons", False))
+        try:
+            kind = str(args.get("kind", ""))
+            catalog_id = int(args.get("catalog_id", 0) or 0)
+            seasons = args.get("seasons")
+            all_seasons = bool(args.get("all_seasons", False))
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "catalog_id must be an integer"}
+        if kind not in ("movie", "series"):
+            return {"ok": False, "error": f"unknown media kind {kind}"}
         if catalog_id <= 0:
             return {"ok": False, "error": "catalog_id must be positive"}
         if kind == "series" and seasons is None and not all_seasons:
             return {"ok": False, "error": "name seasons or explicitly request all seasons"}
+        if seasons is not None:
+            if (not isinstance(seasons, list) or not seasons
+                    or any(isinstance(n, bool) or not isinstance(n, int) or n <= 0
+                           for n in seasons)):
+                return {"ok": False,
+                        "error": "season numbers must be positive integers"}
+            seasons = sorted(set(seasons))
         if dispatch.dry_run:
             scope = "all seasons" if all_seasons else seasons
             detail = f"would delete {kind} {catalog_id} scope {scope}"
             log("dry_run_would", action=detail)
             return {"ok": True, "dry_run": True, "detail": detail}
-        active = []
-        command_ids = []
-        for operation in operations.active() if operations is not None else []:
-            metadata = operation.get("metadata") or {}
-            if operation.get("kind") != f"{kind}_acquisition":
-                continue
-            if int(metadata.get("catalog_id", 0) or 0) != catalog_id:
-                continue
-            operation_seasons = metadata.get("seasons")
-            fully_covered = (kind == "movie" or all_seasons
-                             or (operation_seasons is not None
-                                 and set(operation_seasons) <= set(seasons or [])))
-            if fully_covered:
-                active.append(operation)
-                command_ids.extend(metadata.get("command_ids") or [])
         try:
+            entry = media.library(kind, catalog_id)
+            scope = (kind, catalog_id, tuple(seasons or ()), all_seasons)
+            asked_turn, asked_at = pending_delete.get(scope, (None, 0.0))
+            if entry["in_library"] and (
+                    asked_turn in (None, dispatch.utterance.turn)
+                    or time.time() - asked_at > ASK_TTL_S):
+                pending_delete[scope] = (dispatch.utterance.turn, time.time())
+                named = " ".join(str(part) for part in
+                                 (entry["title"], entry["year"]) if part) \
+                    or f"{kind} {catalog_id}"
+                if all_seasons:
+                    named += ", every season"
+                elif seasons:
+                    named += ", " + _season_scope(seasons)
+                log.warn("tool_refused", tool="delete_media",
+                         reason="unconfirmed", catalog_id=catalog_id)
+                return {"ok": False, "acknowledgment":
+                        f"Delete {named}? That erases the files."}
+            pending_delete.pop(scope, None)
+            active = []
+            command_ids = []
+            for operation in operations.active() if operations is not None else []:
+                metadata = operation.get("metadata") or {}
+                if operation.get("kind") != f"{kind}_acquisition":
+                    continue
+                if int(metadata.get("catalog_id", 0) or 0) != catalog_id:
+                    continue
+                operation_seasons = metadata.get("seasons")
+                fully_covered = (kind == "movie" or all_seasons
+                                 or (operation_seasons is not None
+                                     and set(operation_seasons) <= set(seasons or [])))
+                if fully_covered:
+                    active.append(operation)
+                    command_ids.extend(metadata.get("command_ids") or [])
             if kind == "movie":
                 result = media.delete_movie(catalog_id, command_ids)
-            elif kind == "series":
+            else:
                 result = media.delete_series(
                     catalog_id, seasons=seasons, all_seasons=all_seasons,
                     command_ids=command_ids)
-            else:
-                return {"ok": False, "error": f"unknown media kind {kind}"}
             for operation in active:
                 operations.observe(operation["id"], "CANCELED",
                                    operation.get("progress", {}),
@@ -705,13 +711,11 @@ the title first if there's any doubt; downloads are large."""
 
 _LIST_OPERATIONS = """\
 Read Slopstation's durable operations. Use scope 'active' for current work and
-'recent' for what just finished or what an announcement referred to. These
-records are refreshed from their configured authorities before active results
-are returned. Use this for every general question about current downloads,
-installs, searches, waiting work, imports, or recent completion. Only call an
-operation downloading when progress.phase is downloading; name every other
-phase accurately. Never infer current state from conversation history, the
-catalog, or an absent download."""
+'recent' for what just finished or what an announcement referred to. Use this
+for every general question about current downloads, installs, searches, waiting
+work, imports, or recent completion. Only call an operation downloading when
+progress.phase is downloading; name every other phase accurately. Never infer
+current state from conversation history, the catalog, or an absent download."""
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five
@@ -741,11 +745,15 @@ explicit request and never with a guessed id. After success, use the returned
 acknowledgment as the entire reply without paraphrasing it."""
 
 _DELETE_MEDIA = """\
-Cleanly cancel or delete media through Radarr or Sonarr. Resolve the title with
-find_media first and pass its catalog id. For a series, pass explicit positive
-season numbers, or set all_seasons=true only when the user explicitly asks to
-delete the entire series. This removes active downloads and partial data; it
-also deletes imported files in the requested scope."""
+Cleanly cancel or delete media through Radarr or Sonarr: this erases imported
+files and active downloads in that scope and cannot be undone. Resolve the title
+with find_media first and pass its catalog id. For a series, pass explicit
+positive season numbers, or set all_seasons=true only when the user explicitly
+asks to delete the entire series. The first call on a scope deletes nothing and
+answers with the title the authority itself holds; put that question to the user
+verbatim and call again unchanged only once they have answered yes. A repeat
+inside the same turn is always refused, and so is an ask older than two minutes,
+but nothing else checks their answer - a no is yours to honour."""
 
 TOOL_DEFS = [
     ("launch_game", _LAUNCH_GAME,

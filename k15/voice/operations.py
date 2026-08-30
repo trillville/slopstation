@@ -52,7 +52,6 @@ class OperationStore:
         self.on_terminal = on_terminal
         self.on_notification = on_notification
         self.path = path or OPERATIONS_FILE
-        self._lock = threading.Lock()
 
     def _load(self):
         rows = cglib.load_json(self.path, [])
@@ -62,7 +61,7 @@ class OperationStore:
         cglib.write_json(self.path, rows)
 
     def all(self):
-        with self._lock:
+        with cglib.guard(self.path):
             return [dict(r) for r in self._load()]
 
     def recent(self, limit=10):
@@ -80,7 +79,7 @@ class OperationStore:
 
     def update_metadata(self, operation_id, updates=None, remove=()):
         now = int(time.time())
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -105,7 +104,7 @@ class OperationStore:
         created = None
         reused = None
         previous = None
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             existing = next((r for r in rows
                              if r.get("kind") == kind
@@ -176,7 +175,7 @@ class OperationStore:
         changed = False
         previous = None
         out = None
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -217,7 +216,7 @@ class OperationStore:
     def notify(self, operation_id, key, summary):
         now = int(time.time())
         notification = None
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -247,7 +246,7 @@ class OperationStore:
 
     def mark_notification_delivered(self, operation_id, key):
         now = int(time.time())
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -264,7 +263,7 @@ class OperationStore:
 
     def mark_delivered(self, operation_id):
         now = int(time.time())
-        with self._lock:
+        with cglib.guard(self.path):
             rows = self._load()
             for row in rows:
                 if row.get("id") == operation_id:
@@ -299,6 +298,31 @@ class OperationStore:
                 for r in rows[:limit]]
 
 
+def track(store, submission, turn=None):
+    """Record one accepted external submission. The mutation already happened,
+    so a failed local write reports itself and never invites a second one."""
+    if store is None or submission.get("already_available"):
+        return submission
+    metadata = {k: submission[k] for k in
+                ("catalog_id", "preset", "profile", "seasons", "all_seasons",
+                 "baseline_file_id", "baseline_episode_files",
+                 "search_pending", "command_ids") if k in submission}
+    authority = str(submission["authority"]).title()
+    try:
+        operation = store.track_external(
+            submission["kind"], submission["authority"],
+            submission["external_ref"], submission["title"], turn=turn,
+            detail=f"{authority} accepted the request", metadata=metadata)
+        operation = store.observe(
+            operation["id"], RUNNING, {"phase": "searching"},
+            f"{authority} accepted the request and is searching")
+        return {**submission, "operation_id": operation["id"],
+                "phase": "searching"}
+    except Exception as e:
+        store.log.error("tool_error", tool="track_media", err=str(e))
+        return {**submission, "tracking": "failed"}
+
+
 def _fully_installed_appids():
     return {int(r["appid"]) for r in library.fetch_installed_ssh()
             if int(r.get("state", 0)) & 4}
@@ -313,7 +337,6 @@ class SteamMonitor:
         self.log = log
         self.installed_probe = installed_probe or _fully_installed_appids
         self.poll_s = poll_s
-        self._wake = threading.Event()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
@@ -325,8 +348,7 @@ class SteamMonitor:
                 self.reconcile_once()
             except Exception as e:
                 self.log.error("operation_monitor_failed", err=str(e))
-            self._wake.wait(self.poll_s)
-            self._wake.clear()
+            time.sleep(self.poll_s)
 
     def reconcile_once(self):
         operations = self.store.active(kind="steam_install")
@@ -397,7 +419,6 @@ class MediaMonitor:
         self.media = media
         self.log = log
         self.poll_s = poll_s
-        self._wake = threading.Event()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
@@ -409,8 +430,7 @@ class MediaMonitor:
                 self.reconcile_once()
             except Exception as e:
                 self.log.error("operation_monitor_failed", err=str(e))
-            self._wake.wait(self.poll_s)
-            self._wake.clear()
+            time.sleep(self.poll_s)
 
     def _schedule_search_retry(self, operation, now):
         metadata = operation.get("metadata") or {}

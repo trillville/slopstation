@@ -44,8 +44,8 @@
 
   "textInterface": {
     "enabled": false,
-    "_enabled": "Authenticated HTTP chat hosted by the K15 voice overlay. Enable after setting textInterfaceToken and allowing TCP 8765 only on the private LAN firewall profile.",
-    "host": "0.0.0.0",
+    "_enabled": "Authenticated HTTP chat hosted by the K15 voice overlay. Enable after setting textInterfaceToken. host 127.0.0.1 serves the K15 alone; 0.0.0.0 serves the LAN and needs TCP 8765 allowed on the private firewall profile only.",
+    "host": "127.0.0.1",
     "port": 8765
   },
 

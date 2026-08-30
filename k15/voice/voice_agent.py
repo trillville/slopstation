@@ -236,7 +236,7 @@ def main():
     import operations as operations_mod
     operation_store = operations_mod.OperationStore(log)
     announcer = None
-    if stt_live:
+    if stt_live and not args.dry_run:
         announcer = announce.Announcer(voice, secrets, log)
         announcer.store = operation_store
         operation_store.on_terminal = announcer.submit
@@ -261,7 +261,7 @@ def main():
         log("lane_disabled", what="steam_session",
             reason="no refresh token - run steam_session.py enroll")
 
-    if steam is not None:
+    if steam is not None and not args.dry_run:
         monitor = operations_mod.SteamMonitor(operation_store, steam, log)
         monitor.start()
         log("lane_up", what="operation_monitor",
@@ -270,7 +270,9 @@ def main():
 
     import media as media_mod
     media_service = media_mod.from_config(cfg, secrets, log)
-    if media_service is not None:
+    # Its reconcile dispatches deferred Sonarr searches and indexer-recovery
+    # retries, both of which POST to the authority.
+    if media_service is not None and not args.dry_run:
         poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
         media_monitor = operations_mod.MediaMonitor(
             operation_store, media_service, log, poll_s=poll_s)
@@ -282,14 +284,17 @@ def main():
 
     proton_port_monitor = media_mod.proton_port_monitor_from_config(
         cfg, secrets, log)
-    if proton_port_monitor is not None:
+    # It writes the listening port into a live qBittorrent, so a dry run must
+    # not start it.
+    if proton_port_monitor is not None and not args.dry_run:
         proton_port_monitor.start()
         log("lane_up", what="proton_port_sync",
             poll_s=proton_port_monitor.poll_s)
 
     import text_interface
     text_interface.start(cfg, secrets, log, operations=operation_store,
-                         steam=steam, media=media_service)
+                         steam=steam, media=media_service,
+                         dry_run=args.dry_run)
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
     tracing.setup(cfg, secrets, log)

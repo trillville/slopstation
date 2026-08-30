@@ -8,7 +8,6 @@ import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_URL = "http://192.168.68.75:8765"
 
 
 def _local_settings():
@@ -60,13 +59,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("message", nargs="*")
     parser.add_argument("--url", default=os.environ.get(
-        "SLOPSTATION_URL", local_url or DEFAULT_URL))
+        "SLOPSTATION_URL", local_url))
     parser.add_argument("--token", default=os.environ.get(
         "SLOPSTATION_TOKEN", local_token))
     parser.add_argument("--session", default=uuid.uuid4().hex)
     args = parser.parse_args(argv)
-    if not args.token:
-        print("Set SLOPSTATION_TOKEN or pass --token.")
+    if not (args.url and args.token):
+        print("Set SLOPSTATION_URL and SLOPSTATION_TOKEN, or pass --url/--token.")
         return 2
 
     def one(message):

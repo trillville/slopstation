@@ -153,34 +153,12 @@ def main():
     assert r["ok"] and r["operations"][0]["state"] == "RUNNING"
     assert fake_operations.acknowledged is False
     assert oimpls["list_operations"]({"scope": "recent"})["ok"]
+    assert fake_operations.acknowledged is False    # a dry run eats no bulletin
+    live_ops = assistant.tool_impls(Dispatch(CFG_MIN, log, dry_run=False), log,
+                                    operations=fake_operations)
+    assert live_ops["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is True
     assert not oimpls["list_operations"]({"scope": "nope"})["ok"]
-
-    import operations as operations_mod
-    original_steam_monitor = operations_mod.SteamMonitor
-    original_media_monitor = operations_mod.MediaMonitor
-    refreshed = []
-
-    class RefreshMonitor:
-        def __init__(self, store, authority, event_log):
-            self.authority = authority
-
-        def reconcile_once(self):
-            refreshed.append(self.authority)
-
-    operations_mod.SteamMonitor = RefreshMonitor
-    operations_mod.MediaMonitor = RefreshMonitor
-    steam_authority = object()
-    media_authority = object()
-    try:
-        live_status = assistant.tool_impls(
-            d, log, operations=fake_operations,
-            steam=steam_authority, media=media_authority)
-        assert live_status["list_operations"]({"scope": "active"})["ok"]
-        assert refreshed == [steam_authority, media_authority]
-    finally:
-        operations_mod.SteamMonitor = original_steam_monitor
-        operations_mod.MediaMonitor = original_media_monitor
 
     class FakeMedia:
         def __init__(self):
@@ -192,6 +170,8 @@ def main():
         def library(self, kind, catalog_id):
             self.requests.append(("library", kind, catalog_id))
             return {"kind": kind, "catalog_id": catalog_id, "in_library": True,
+                    "title": "Breaking Bad" if kind == "series" else "Dune",
+                    "year": 2008 if kind == "series" else 2021,
                     "seasons": [{"season": 2, "have": 13, "aired": 13}]}
 
         def request_movie(self, tmdb_id, preset):
@@ -275,11 +255,28 @@ def main():
         "progress": {"phase": "downloading"},
         "metadata": {"catalog_id": 81189, "seasons": [2],
                      "command_ids": [77]}}]
-    deleted = live_media["delete_media"]({
-        "kind": "series", "catalog_id": 81189, "seasons": [2]})
+    for bad in ([], [0], [-1], [True], "2", 2, [2, "3"], (2,)):
+        assert "positive integers" in live_media["delete_media"](
+            {"kind": "series", "catalog_id": 81189, "seasons": bad})["error"], bad
+    assert "integer" in live_media["delete_media"](
+        {"kind": "movie", "catalog_id": "dune"})["error"]
+    ask = {"kind": "series", "catalog_id": 81189, "seasons": [2]}
+    asked = live_media["delete_media"](dict(ask))
+    assert not asked["ok"] and "Breaking Bad 2008, season 2" in asked["acknowledgment"]
+    # a repeat inside the same turn is refused, so the model cannot self-confirm
+    assert not live_media["delete_media"](dict(ask))["ok"]
+    assert not fake_media.requests[-1][0].startswith("delete")
+    assert log.find("tool_refused")[-1]["reason"] == "unconfirmed"
+    live_dispatch.begin_utterance("fa1101", "yes")
+    deleted = live_media["delete_media"](dict(ask))
     assert deleted["ok"]
-    assert fake_media.requests[-1] == (
-        "delete_series", 81189, [2], False, [77])
+    # a question the user declined must not stay armed
+    assistant.ASK_TTL_S, ttl = -1, assistant.ASK_TTL_S
+    live_media["delete_media"](dict(ask))
+    live_dispatch.begin_utterance("fa1102", "later")
+    assert not live_media["delete_media"](dict(ask))["ok"]
+    assistant.ASK_TTL_S = ttl
+    assert ("delete_series", 81189, [2], False, [77]) in fake_media.requests
     assert deleted["operations_canceled"] == ["op-andor"]
     assert fake_operations.observed[-1][1] == "CANCELED"
     assert fake_operations.delivered == ["op-andor"]
@@ -312,8 +309,8 @@ def main():
     rr = with_steam["install_game"]({"appid": 999999999})
     assert not rr["ok"] and "not in the catalog" in rr["error"], rr
     if owned_only:
-        d.begin_utterance("4c1d0e", "install stardew valley")
-        tracked = assistant.tool_impls(d, log, steam=fake_steam,
+        live_dispatch.begin_utterance("4c1d0e", "install stardew valley")
+        tracked = assistant.tool_impls(live_dispatch, log, steam=fake_steam,
                                        operations=fake_operations)
         rr = tracked["install_game"]({"appid": int(owned_only[0])})
         assert rr["ok"] and rr["operation_id"] == "op-test", rr
@@ -337,14 +334,16 @@ def main():
         def available(self): return True
         def install(self, a): raise RuntimeError("token revoked")
         def download_status(self): raise RuntimeError("token revoked")
-    rimpls = assistant.tool_impls(d, log, steam=RaisingSteam())
-    _isn, _nav = library.installed_name, d.nav
+    rimpls = assistant.tool_impls(live_dispatch, log, steam=RaisingSteam())
+    _isn, _nav = library.installed_name, live_dispatch.nav
     library.installed_name = lambda a: None      # not installed -> steam.install
     navd = []
-    d.nav = lambda kind, arg=None: (navd.append((kind, arg)),
+    live_dispatch.nav = lambda kind, arg=None: (navd.append((kind, arg)),
                                     types.SimpleNamespace(ok=True, detail="showing"))[1]
     inst = rimpls["install_game"]({"appid": real_appid})
-    library.installed_name, d.nav = _isn, _nav
+    assert assistant.tool_impls(d, log, steam=fake_steam)[
+        "install_game"]({"appid": real_appid})["dry_run"]
+    library.installed_name, live_dispatch.nav = _isn, _nav
     # A dead token must not end the request: it falls through to the TV path.
     assert inst["ok"] and "press Install" in inst["detail"], inst
     assert navd == [("details", real_appid)], navd
