@@ -10,8 +10,6 @@ run and deploy them. This file holds the process rules an agent session needs.
   no debugging stories, no restating the code. A comment that would cause a bug
   if deleted stays; one that only explains a past decision does not. A moved
   function's comments move with it.
-- **Moves are pure.** A commit that relocates code changes zero behavior. Land
-  behavior first, moves second, never both in one commit.
 - **Tests assert on events, never prose.** Event names are the interface —
   dashboards group by them and alerts fire on them — so rewording a message
   is free and renaming an event must break a test. `cglib.CapturingLog` is
