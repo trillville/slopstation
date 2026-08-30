@@ -56,6 +56,7 @@ class FakeListener:
 
 class FakeAnnouncer:
     made = []
+    submitted = []
 
     def __init__(self, voice, secrets, log):
         self.store = None
@@ -64,8 +65,8 @@ class FakeAnnouncer:
         self.aborted = 0
         FakeAnnouncer.made.append(self)
 
-    def submit(self, job):
-        pass
+    def submit(self, operation):
+        FakeAnnouncer.submitted.append(operation)
 
     def submit_notification(self, notification):
         pass
@@ -82,7 +83,7 @@ class FakeOperationStore:
         FakeOperationStore.made.append(self)
 
     def pending_announcements(self):
-        return []
+        return [{"id": "op-pending"}]
 
     def pending_notifications(self):
         return []
@@ -193,6 +194,7 @@ def stub_everything():
     FakeListener.wakes = []
     FakeListener.built = []
     FakeAnnouncer.made = []
+    FakeAnnouncer.submitted = []
     FakeOperationStore.made = []
     FakeSteamMonitor.made = []
     FakeMediaMonitor.made = []
@@ -278,6 +280,7 @@ def main():
     ann, store = FakeAnnouncer.made[0], FakeOperationStore.made[0]
     assert ann.store is store and store.on_terminal == ann.submit
     assert store.on_notification == ann.submit_notification
+    assert not ann.submitted, "a dry run must not speak the pending backlog"
     assert calls[0]["operations"] is store and calls[0]["matcher"] == "MATCHER"
     assert calls[0]["capture"].stopped >= 1, "capture must be stopped after the session"
     # end_session restores the room while the TV is still on (dispatch calls it)
@@ -320,6 +323,12 @@ def main():
     assert FakeProtonPortMonitor.made and FakeProtonPortMonitor.made[0].started
     assert FakeProtonPortMonitor.made[0].poll_s == 17
     assert any(r["what"] == "proton_port_sync" for r in log.find("lane_up"))
+    FakeProtonPortMonitor.made.clear()
+    FakeMediaMonitor.made.clear()
+    run(["--once", "--dry-run"], cfg,
+        setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())))
+    assert not any(m.started for m in FakeProtonPortMonitor.made), "vpn port"
+    assert not any(m.started for m in FakeMediaMonitor.made), "authority search"
     print("  media: operation and Proton port monitors start and reach the session")
 
     # --- ducking without tvIp -----------------------------------------------------

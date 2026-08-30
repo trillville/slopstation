@@ -312,8 +312,8 @@ def main():
     rr = with_steam["install_game"]({"appid": 999999999})
     assert not rr["ok"] and "not in the catalog" in rr["error"], rr
     if owned_only:
-        d.begin_utterance("4c1d0e", "install stardew valley")
-        tracked = assistant.tool_impls(d, log, steam=fake_steam,
+        live_dispatch.begin_utterance("4c1d0e", "install stardew valley")
+        tracked = assistant.tool_impls(live_dispatch, log, steam=fake_steam,
                                        operations=fake_operations)
         rr = tracked["install_game"]({"appid": int(owned_only[0])})
         assert rr["ok"] and rr["operation_id"] == "op-test", rr
@@ -337,14 +337,16 @@ def main():
         def available(self): return True
         def install(self, a): raise RuntimeError("token revoked")
         def download_status(self): raise RuntimeError("token revoked")
-    rimpls = assistant.tool_impls(d, log, steam=RaisingSteam())
-    _isn, _nav = library.installed_name, d.nav
+    rimpls = assistant.tool_impls(live_dispatch, log, steam=RaisingSteam())
+    _isn, _nav = library.installed_name, live_dispatch.nav
     library.installed_name = lambda a: None      # not installed -> steam.install
     navd = []
-    d.nav = lambda kind, arg=None: (navd.append((kind, arg)),
+    live_dispatch.nav = lambda kind, arg=None: (navd.append((kind, arg)),
                                     types.SimpleNamespace(ok=True, detail="showing"))[1]
     inst = rimpls["install_game"]({"appid": real_appid})
-    library.installed_name, d.nav = _isn, _nav
+    assert assistant.tool_impls(d, log, steam=fake_steam)[
+        "install_game"]({"appid": real_appid})["dry_run"]
+    library.installed_name, live_dispatch.nav = _isn, _nav
     # A dead token must not end the request: it falls through to the TV path.
     assert inst["ok"] and "press Install" in inst["detail"], inst
     assert navd == [("details", real_appid)], navd

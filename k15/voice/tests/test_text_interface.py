@@ -73,6 +73,8 @@ def main():
     log = cglib.CapturingLog("voice")
     original = assistant_repl.BACKENDS["anthropic"]
     assistant_repl.BACKENDS["anthropic"] = FakeBackend
+    dry = text_interface.TextApplication(cfg, secrets, log, dry_run=True)
+    assert dry._new_session()["dispatch"].dry_run
     server = text_interface.start(
         cfg, secrets, log, operations=FakeOperations(), media=FakeMedia())
     try:

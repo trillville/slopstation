@@ -3,7 +3,6 @@ import hmac
 import json
 import re
 import threading
-import time
 import uuid
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,13 +17,15 @@ SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class TextApplication:
-    def __init__(self, cfg, secrets, log, operations=None, steam=None, media=None):
+    def __init__(self, cfg, secrets, log, operations=None, steam=None,
+                 media=None, dry_run=False):
         self.cfg = cfg
         self.secrets = secrets
         self.log = log
         self.operations = operations
         self.steam = steam
         self.media = media
+        self.dry_run = dry_run
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.system_text = assistant.system_instruction(cfg, interface="text")
@@ -37,12 +38,12 @@ class TextApplication:
         backend = backend_type(
             self.secrets, model,
             effort=self.voice["assistantReasoningEffort"], voice=self.voice)
-        dispatch = Dispatch(self.cfg, self.log, dry_run=False)
+        dispatch = Dispatch(self.cfg, self.log, dry_run=self.dry_run)
         impls = assistant.tool_impls(
             dispatch, self.log, operations=self.operations,
             voice=self.voice, steam=self.steam, media=self.media)
         return {"backend": backend, "dispatch": dispatch, "impls": impls,
-                "lock": threading.Lock(), "used": time.time()}
+                "lock": threading.Lock()}
 
     def turn(self, session_id, message):
         if not SESSION_RE.fullmatch(session_id):
@@ -59,7 +60,6 @@ class TextApplication:
                 self.sessions[session_id] = session
             else:
                 self.sessions.move_to_end(session_id)
-            session["used"] = time.time()
         turn = uuid.uuid4().hex[:6]
         with session["lock"]:
             session["dispatch"].begin_utterance(turn, message)
@@ -142,7 +142,8 @@ class TextHandler(BaseHTTPRequestHandler):
             self._json(500, {"ok": False, "error": "assistant request failed"})
 
 
-def start(cfg, secrets, log, operations=None, steam=None, media=None):
+def start(cfg, secrets, log, operations=None, steam=None, media=None,
+          dry_run=False):
     text_cfg = cfg.get("textInterface") or {}
     if not text_cfg.get("enabled"):
         return None
@@ -159,7 +160,7 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None):
         return None
     host = str(text_cfg.get("host", "127.0.0.1"))
     port = int(text_cfg.get("port", 8765))
-    app = TextApplication(cfg, secrets, log, operations, steam, media)
+    app = TextApplication(cfg, secrets, log, operations, steam, media, dry_run)
     try:
         server = ThreadingHTTPServer((host, port), TextHandler)
     except OSError as e:
@@ -169,5 +170,6 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None):
     server.token = str(token)
     threading.Thread(target=server.serve_forever, daemon=True,
                      name="text-interface").start()
-    log("lane_up", what="text_interface", host=host, port=port)
+    log("lane_up", what="text_interface", host=host, port=port,
+        dry_run=dry_run or None)
     return server

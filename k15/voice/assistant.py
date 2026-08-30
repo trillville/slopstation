@@ -206,6 +206,10 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return refused
         if library.installed_name(appid) is not None:
             return {"ok": False, "error": "that game is already installed"}
+        if dispatch.dry_run:
+            detail = f"would start the download for appid {appid}"
+            log("dry_run_would", action=detail)
+            return {"ok": True, "dry_run": True, "detail": detail}
         if steam is not None and steam.available():
             try:
                 r = steam.install(appid)

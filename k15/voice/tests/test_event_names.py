@@ -76,7 +76,7 @@ PYTHON = {
     "intent_unknown": {"intent"},
     "keyterms_capped": {"dropped", "first_dropped", "kept"},
     "lane_disabled": {"err", "reason", "what"},
-    "lane_up": {"active", "backend", "effort", "endpoint", "kind", "lane", "model", "poll_s", "provider", "steamid", "token_expires", "tools", "websearch", "what"},
+    "lane_up": {"active", "backend", "dry_run", "effort", "endpoint", "host", "kind", "lane", "model", "poll_s", "port", "provider", "steamid", "token_expires", "tools", "websearch", "what"},
     "launch_aborted": {"dur_ms", "err"},
     "launch_busy": {"lock_age_s", "reason"},
     "launch_dispatched": {"answer", "appid"},
