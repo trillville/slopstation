@@ -4,8 +4,8 @@
 
 Slopstation turns a Windows gaming PC, a Samsung S90C, and a Steam Controller
 into a couch console. A GMKtec K15 mini PC owns orchestration: it can start a
-session from a controller chord, accept voice and text commands, and track
-long-running Steam and media work across restarts.
+session from a controller chord, accept voice, text, and MCP requests, and
+track long-running Steam and media work across restarts.
 
 Hold **Steam + right trigger** for two seconds, or say **“hey jarvis, play
 Armored Core Six.”**
@@ -16,10 +16,11 @@ Armored Core Six.”**
 flowchart LR
     controller[Controller]
     microphone[Microphone]
-    command[Command line]
+    command[Local or LAN text]
+    remote[Claude app via MCP]
 
     chord[K15 controller chord<br/>start-session gesture]
-    assistant[K15 voice and text assistant<br/>grammar, intent, tools]
+    assistant[K15 assistant<br/>voice, text, MCP · intent and tools]
     control[K15 room and session control]
     operations[K15 operation tracking<br/>Steam and media progress]
 
@@ -30,6 +31,7 @@ flowchart LR
     controller --> chord
     microphone --> assistant
     command --> assistant
+    remote --> assistant
 
     chord -->|start session| control
     assistant -->|TV, game, and session actions| control
@@ -81,7 +83,7 @@ USB, and Steam mutations through scheduled tasks. Teardown wins over launch;
 launch waits for an active teardown and aborts if it cannot obtain a clean
 starting state.
 
-## Voice, text, and tools
+## Voice, text, MCP, and tools
 
 The voice overlay listens locally for the wake word, streams speech to
 Deepgram, and sends each final transcript through two paths:
@@ -91,8 +93,13 @@ Deepgram, and sends each final transcript through two paths:
 
 Shared room and gaming actions use `dispatch.py`; assistant tools add Steam and
 media integrations. The authenticated text client, `k15/slop.py`, reaches the
-same assistant and tools over the K15 LAN endpoint. Voice and text therefore
-share media resolution, Steam actions, deletion guards, and operation status.
+same assistant and tools through `text_interface.py`.
+
+`remote_interface.py` is a small MCP adapter for a Claude custom connector. It
+exposes one tool, `ask_slopstation`, and forwards each call to the text
+interface over localhost. It owns no assistant state or separate action
+surface. Voice, text, and MCP therefore share media resolution, Steam actions,
+deletion guards, operation status, and turn correlation.
 
 Long-running work is stored in `k15/state/operations.json`. Each record names
 the originating turn, authority, external resource, state, progress, and
@@ -127,7 +134,7 @@ correlation suffix; every other command returns `DENIED`.
 | `k15/couch.py`, `chord_listener.py` | Session orchestration and controller input |
 | `k15/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
 | `k15/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
-| `k15/voice/` | Wake word, speech pipeline, assistant tools, durable operations, and text server |
+| `k15/voice/` | Wake word, speech pipeline, assistant tools, durable operations, and text/MCP interfaces |
 | `k15/media/` | Docker Compose media services and their runbook |
 | `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
 | `wake-training/` | Wake-word training and evaluation |
@@ -151,6 +158,34 @@ correlation suffix; every other command returns `DENIED`.
    `.venv\Scripts\python tv_remote.py pair` from `k15\voice` and accept the TV
    prompt.
 7. Run `python doctor.py` from `k15` until no checks fail.
+
+#### Optional MCP access
+
+MCP adds remote access to the existing assistant; it does not create another
+assistant or tool implementation. The request path is:
+
+```text
+Claude app → Cloudflare tunnel → remote_interface.py → text_interface.py → assistant tools
+```
+
+1. Set real `textInterfaceToken` and `remoteInterfaceToken` values in
+   `k15\secrets.json`; each should contain at least 32 random bytes.
+2. Enable both `textInterface` and `remoteInterface` in `k15\config.json`.
+   Keep the remote interface on `127.0.0.1:8766`. The text interface may also
+   remain on localhost unless another LAN client needs it.
+3. Route a Cloudflare named tunnel to `http://127.0.0.1:8766`, install
+   `cloudflared` as a Windows service, and restrict the public hostname to
+   Anthropic’s documented connector egress range (currently
+   `160.79.104.0/21`).
+4. Add a Claude custom connector at `https://<host>/mcp` using
+   `Authorization: Bearer <remoteInterfaceToken>`.
+5. Reload with `Start-K15.bat`, then run `python doctor.py`. The voice agent
+   hosts both local interfaces automatically when they are enabled.
+
+The outer token authenticates the connector and never reaches the assistant;
+`textInterfaceToken` stays on the K15. The MCP adapter holds no conversation
+state, so its tool passes a session ID explicitly and asks the connector to
+make each request self-contained.
 
 ### Gaming PC
 
@@ -212,7 +247,8 @@ cannot safely cancel at the external authority.
 
 The text endpoint requires `textInterfaceToken`. Bind it to `0.0.0.0` only for
 LAN access, allow its port on the Windows **Private** profile for `LocalSubnet`,
-and provide `SLOPSTATION_URL` and `SLOPSTATION_TOKEN` on remote clients.
+and provide `SLOPSTATION_URL` and `SLOPSTATION_TOKEN` on LAN clients. MCP needs
+no inbound firewall rule: its server stays on localhost behind the tunnel.
 
 ## Telemetry
 
@@ -237,7 +273,7 @@ cd k15\voice
 
 Hardware-bound Steam and audio tests skip when their devices are absent;
 `--all` forces them. GitHub Actions runs the blind suite and mypy on Windows for
-every pull request.
+every pull request and every push to `main`.
 
 ## Fixed rig contract
 
@@ -246,7 +282,7 @@ every pull request.
 | Gaming PC | `TILLMAN-DESKTOP`, `192.168.68.67`, user `tillm` |
 | K15 | `K15`, `192.168.68.75`, user `minipc` |
 | TV | Samsung S90C, HDMI 4 for PC, Ex-Link on K15 `COM3` |
-| Controller Puck | VirtualHere device `K15.5`, VID `28DE`, PID `1304` |
+| Controller Puck | VirtualHere device `Steam Controller Puck`, resolved by name because its address can change; VID `28DE`, PID `1304` |
 | Audio | HW-Q990C over eARC; volume writes use TV WebSocket remote keys |
 | TV-primary probe | Primary display height equals `2160` |
 
@@ -254,7 +290,8 @@ Revisit the display probe before adding another 2160-pixel-high desk display.
 The TV acknowledges unsupported Ex-Link volume commands but does not apply
 them; `tv_remote.py` is the working volume path.
 
-Runtime-only state is intentionally absent from Git: real config and secrets,
+Runtime-only state is intentionally absent from Git: real config, secrets, and
+the media `.env`,
 VirtualHere binaries and PINs, DisplayMagician shortcuts, scheduled-task
 registrations, SSH/firewall state, logs, operation state, voice virtual
 environment, and wake-training data.

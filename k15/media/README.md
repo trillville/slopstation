@@ -1,14 +1,15 @@
 # Media acquisition on the K15
 
-Slopstation converts a voice or text request into durable desired state in
-Radarr or Sonarr. Those services select releases, qBittorrent transfers them,
-and Slopstation observes progress without owning the download process.
+Slopstation converts a voice, text, MCP, or direct CLI request into durable
+desired state in Radarr or Sonarr. Those services select releases, qBittorrent
+transfers them, and Slopstation observes progress without owning the download
+process.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    request[Voice, text,<br/>or command line] --> slop[Slopstation<br/>resolve title, scope, preset]
+    request[Voice, text, MCP,<br/>or direct CLI] --> slop[Slopstation<br/>resolve title, scope, preset]
     slop -->|request and observe| managers[Radarr · movies<br/>Sonarr · series]
     managers -->|dispatch| qbit[qBittorrent<br/>transfer and seed]
     qbit --> torrents[C:\Media\torrents]
