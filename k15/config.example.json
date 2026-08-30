@@ -52,6 +52,13 @@
     "port": 8765
   },
 
+  "remoteInterface": {
+    "enabled": false,
+    "_enabled": "The MCP server a Claude custom connector talks to, so the assistant is reachable from a phone. Forwards to textInterface, which must also be enabled. Enable after setting remoteInterfaceToken. host stays 127.0.0.1: reachability is the cloudflared tunnel's job, never an open port.",
+    "host": "127.0.0.1",
+    "port": 8766
+  },
+
   "voice": {
     "inputDeviceName": "",
     "outputDeviceName": "",

@@ -3,6 +3,7 @@ import hmac
 import json
 import re
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -61,6 +62,7 @@ class TextApplication:
             else:
                 self.sessions.move_to_end(session_id)
         turn = uuid.uuid4().hex[:6]
+        started = time.monotonic()
         with session["lock"]:
             session["dispatch"].begin_utterance(turn, message)
             impls = {}
@@ -85,7 +87,8 @@ class TextApplication:
                 self.system_text, message, impls)
             if acknowledgments:
                 reply = acknowledgments[-1]
-        self.log("text_request", turn=turn, session=session_id)
+        self.log("text_request", turn=turn, session=session_id,
+                 dur_ms=int((time.monotonic() - started) * 1000))
         return {"ok": True, "session": session_id, "turn": turn,
                 "reply": reply}
 

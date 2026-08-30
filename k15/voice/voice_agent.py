@@ -303,6 +303,11 @@ def main():
                          steam=steam, media=media_service,
                          dry_run=args.dry_run)
 
+    # Forwards to the text interface over localhost, so it takes no tools and
+    # no dry_run of its own - both ride along inside that hop.
+    import remote_interface
+    remote_interface.start(cfg, secrets, log)
+
     # Before the wake loop, so the first session is traced too. Fail-soft.
     tracing.setup(cfg, secrets, log)
 
