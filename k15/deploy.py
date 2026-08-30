@@ -40,8 +40,8 @@ _KILL_PS = ("$p = @(Get-CimInstance Win32_Process | Where-Object "
             "$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; "
             "exit $p.Count")
 
-_CMDLINES_PS = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" "
-                "| Select-Object -ExpandProperty CommandLine")
+_PIDS_PS = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" "
+            "| ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }")
 
 
 def git(*args: str) -> str:
@@ -52,10 +52,20 @@ def git(*args: str) -> str:
     return r.stdout.strip()
 
 
-def running_agents() -> set[str]:
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", _CMDLINES_PS],
+def agent_pids() -> dict[str, set[int]]:
+    """needle -> the pids of the pythons running it. Pids, not just names:
+    Stop-Process returns before the process leaves the table."""
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", _PIDS_PS],
                        capture_output=True, text=True, timeout=30)
-    return {needle for needle in AGENTS if needle in (r.stdout or "")}
+    out: dict[str, set[int]] = {needle: set() for needle in AGENTS}
+    for line in (r.stdout or "").splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if not pid.isdigit():
+            continue
+        for needle in AGENTS:
+            if needle in cmd:
+                out[needle].add(int(pid))
+    return out
 
 
 def kill(needle: str) -> int:
@@ -85,12 +95,16 @@ def wait_idle(budget_s: float) -> bool:
         time.sleep(IDLE_POLL_S)
 
 
-def wait_relaunch(want: set[str]) -> set[str]:
-    """The agents that did NOT come back. Only the ones that were up before the
-    reload are waited for: the voice overlay is allowed to be off."""
+def wait_fresh(want: set[str], killed: dict[str, set[int]]) -> set[str]:
+    """The agents with no live pid OTHER than the one we just killed. Measured
+    2026-08-30: Stop-Process returns while the corpse is still in the process
+    table, so a name-only check read it as the replacement and passed ~10 s
+    before the supervisor had relaunched anything - which is the entire window
+    this is here to watch."""
     deadline = time.time() + RELAUNCH_S
     while True:
-        missing = want - running_agents()
+        live = agent_pids()
+        missing = {n for n in want if not (live[n] - killed.get(n, set()))}
         if not missing or time.time() >= deadline:
             return missing
         time.sleep(5)
@@ -130,7 +144,8 @@ def main(argv: list[str]) -> int:
         after = git("rev-parse", "--short", "HEAD")
         print(f"checkout {before} -> {after}", flush=True)
 
-        was = running_agents()
+        pids_before = agent_pids()
+        was = {needle for needle, pids in pids_before.items() if pids}
         for needle in sorted(was):
             log("deploy_reloaded", what=AGENTS[needle], killed=kill(needle))
         # The chord lane is required back whether or not it was up to begin
@@ -138,7 +153,7 @@ def main(argv: list[str]) -> int:
         # running, and doctor.py only WARNs about that, so this is the only
         # thing standing between a dead chord lane and a green CD run. Voice is
         # an overlay and may stay off.
-        missing = wait_relaunch(was | {LISTENER})
+        missing = wait_fresh(was | {LISTENER}, pids_before)
         if missing:
             lanes = ", ".join(sorted(AGENTS[m] for m in missing))
             raise RuntimeError(f"{lanes} not running {RELAUNCH_S}s after the "
