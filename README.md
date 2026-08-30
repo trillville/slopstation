@@ -14,16 +14,29 @@ Armored Core Six.”**
 
 ```mermaid
 flowchart LR
-    user[Controller, voice, or text]
-    k15[K15 control plane<br/>controller lane · voice and text assistant<br/>operation tracking]
+    controller[Controller]
+    microphone[Microphone]
+    command[Command line]
+
+    chord[K15 controller lane<br/>couch-session orchestration]
+    assistant[K15 voice and text assistant<br/>intent and tools]
+    operations[K15 operation tracking<br/>progress and completion]
+
     tv[Samsung TV<br/>power, input, volume]
     pc[Gaming PC execution<br/>allowlisted automation · display<br/>controller · Steam and Big Picture]
     media[K15 media subsystem<br/>search, download, import]
 
-    user --> k15
-    k15 -->|power, input, volume| tv
-    k15 <-->|start, launch confirmed, stop| pc
-    k15 -->|request and observe| media
+    controller --> chord
+    microphone --> assistant
+    command --> assistant
+
+    chord -->|power, input, volume| tv
+    chord -->|start and stop| pc
+    pc -. launch confirmed and status .-> chord
+    assistant -->|game commands| pc
+    assistant -->|media requests| media
+    assistant ---|reads and writes| operations
+    media -. progress and completion .-> operations
 ```
 
 The system has three operating constraints:
