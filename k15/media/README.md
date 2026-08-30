@@ -176,6 +176,35 @@ These credentials are not required by ordinary movie or series acquisition.
 They are used by maintenance diagnostics, explicit port commands, and the
 optional background synchronizer.
 
+## Unattended failure watch
+
+Radarr and Sonarr fail quietly: a grab that never becomes a file leaves the
+download in `torrents\`, the episode still missing, and nothing on screen. The
+voice supervisor polls both authorities and emits what it finds on the voice
+lane, so Grafana holds it with everything else.
+
+It is on by default and needs no configuration. To slow it down or silence it,
+add either key to the existing `media` object in `k15\config.json`:
+
+    "healthPollS": 300,
+    "healthSync": false
+
+Polling rather than a webhook is deliberate: a notification connection lives
+only in the container's config database, which is not in the checkout and does
+not survive a rebuilt config volume.
+
+| Event | Level | Fires when |
+|---|---|---|
+| `media_health_issue` | warn/error | a new entry appears in either app's health report; the level follows the app's own `type` |
+| `media_health_cleared` | info | an entry that was present is gone |
+| `media_import_failed` | error | history records a failed or blocked import; `records` counts the per-episode rows a season pack contributed |
+| `media_queue_stalled` | warn | a queue item is `warning` or `error`, one line per download rather than per episode |
+| `media_watch_failed` | error | an authority is unreachable - reported on change, not on every poll |
+
+The first pass after a restart reports current health but only takes a
+watermark from history: replaying what the log still holds would make every
+restart look like an outage.
+
 ## Comprehensive health check
 
 Run the read-only check after setup or after changing media infrastructure:

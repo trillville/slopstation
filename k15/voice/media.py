@@ -30,6 +30,10 @@ PROTON_STATUS_RE = re.compile(
     r"[^\r\n]*Received PortForwarding Status '(?P<status>[^']+)'"
     r"(?P<detail>.*?)(?=^\d{4}-\d{2}-\d{2}T|\Z)")
 PROTON_PORT_RE = re.compile(r"Port pair\s+\d+->(?P<port>\d+)")
+# Servarr history eventTypes that mean a grab did not become a file.
+FAILURE_EVENTS = frozenset(("downloadFailed", "importFailed",
+                            "importBlocked"))
+HEALTH_POLL_S = 300
 
 
 class MediaError(RuntimeError):
@@ -364,6 +368,174 @@ class ProtonPortMonitor:
                     self.log.error("proton_port_sync_failed", err=detail)
                     self._last_failure = detail
             self._stop.wait(self.poll_s)
+
+
+def _history_id(row):
+    try:
+        return int(row.get("id"))
+    except (AttributeError, TypeError, ValueError):
+        return -1
+
+
+def _queue_detail(row):
+    messages = []
+    for entry in row.get("statusMessages") or ():
+        if isinstance(entry, dict):
+            for message in entry.get("messages") or ():
+                messages.append(_clean_text(message, 80))
+    if not messages:
+        messages.append(_clean_text(row.get("errorMessage"), 80))
+    return _clean_text("; ".join(message for message in messages if message))
+
+
+class MediaHealthMonitor:
+    """Report Radarr/Sonarr trouble nobody is sitting in front of.
+
+    Polls rather than taking webhooks: a notification connection lives only in
+    the container's config database, which is not in the checkout and does not
+    survive a rebuilt config volume.
+    """
+
+    def __init__(self, clients, log, poll_s=HEALTH_POLL_S, page_size=50):
+        self.clients = tuple(clients)
+        self.log = log
+        self.poll_s = poll_s
+        self.page_size = page_size
+        self._stop = threading.Event()
+        self._issues = {}
+        self._history_id = {}
+        self._stalled = {}
+        self._last_failure = {}
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True,
+                         name="media-health-monitor").start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        while not self._stop.is_set():
+            self.reconcile_once()
+            self._stop.wait(self.poll_s)
+
+    def reconcile_once(self):
+        for client in self.clients:
+            try:
+                self._health(client)
+                self._history(client)
+                self._queue(client)
+                self._last_failure[client.name] = None
+            except Exception as e:
+                detail = _clean_text(e)
+                # Unchanged failures stay silent; an unreachable app would
+                # otherwise be one line per poll until someone noticed.
+                if detail != self._last_failure.get(client.name):
+                    self.log.error("media_watch_failed", app=client.name,
+                                   err=detail)
+                    self._last_failure[client.name] = detail
+
+    def _health(self, client):
+        rows = client.get("health")
+        if not isinstance(rows, list):
+            raise MediaError(f"{client.name} returned an invalid health report")
+        current = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            source = _clean_text(row.get("source"), 60)
+            if source and source not in current:
+                current[source] = (_clean_text(row.get("type"), 20).lower(),
+                                   _clean_text(row.get("message")))
+        seen = self._issues.get(client.name)
+        for source, (kind, detail) in sorted(current.items()):
+            # seen is None on the first pass: a health issue is current state,
+            # not backlog, so startup reports what is wrong right now.
+            if seen is not None and source in seen:
+                continue
+            # Bound as `log`, not `report`: _events_scan reads emitters from
+            # source, and only the log call shapes are visible to it.
+            log = self.log.error if kind == "error" else self.log.warn
+            log("media_health_issue", app=client.name, source=source,
+                kind=kind, detail=detail)
+        for source in sorted(seen or ()):
+            if source not in current:
+                self.log.info("media_health_cleared", app=client.name,
+                              source=source)
+        self._issues[client.name] = set(current)
+
+    def _history(self, client):
+        page = client.get("history", {"pageSize": self.page_size,
+                                      "sortKey": "date",
+                                      "sortDirection": "descending"})
+        records = page.get("records") if isinstance(page, dict) else None
+        if not isinstance(records, list):
+            raise MediaError(f"{client.name} returned an invalid history page")
+        watermark = self._history_id.get(client.name)
+        newest = watermark
+        failures = {}
+        for row in sorted(records, key=_history_id):
+            row_id = _history_id(row)
+            if row_id < 0:
+                continue
+            if newest is None or row_id > newest:
+                newest = row_id
+            # The first pass only takes the watermark. Replaying whatever the
+            # history still holds would make every restart look like an outage.
+            if watermark is None or row_id <= watermark:
+                continue
+            kind = _clean_text(row.get("eventType"), 40)
+            if kind not in FAILURE_EVENTS:
+                continue
+            data = row.get("data")
+            # A season pack fails once per episode. Collapsing on the download
+            # makes one bad grab one line; `records` keeps the fan-out visible.
+            key = _clean_text(row.get("downloadId"), 60) or str(row_id)
+            entry = failures.get(key)
+            if entry is None:
+                failures[key] = {
+                    "kind": kind,
+                    "title": _clean_text(row.get("sourceTitle"), 120),
+                    "err": _clean_text((data or {}).get("message")
+                                       if isinstance(data, dict) else None),
+                    "records": 1,
+                }
+            else:
+                entry["records"] += 1
+        for entry in failures.values():
+            self.log.error("media_import_failed", app=client.name,
+                           kind=entry["kind"], title=entry["title"],
+                           err=entry["err"], records=entry["records"])
+        # An empty history still has to leave a watermark, or the first
+        # failure to ever land would be skipped as backlog.
+        self._history_id[client.name] = 0 if newest is None else newest
+
+    def _queue(self, client):
+        page = client.get("queue", {"pageSize": self.page_size})
+        records = page.get("records") if isinstance(page, dict) else None
+        if not isinstance(records, list):
+            raise MediaError(f"{client.name} returned an invalid queue page")
+        current = {}
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            status = _clean_text(row.get("trackedDownloadStatus"), 20).lower()
+            if status not in ("warning", "error"):
+                continue
+            # A season pack is one queue record per episode. Keying on the
+            # download collapses it to the one line a human would act on.
+            key = _clean_text(row.get("downloadId") or row.get("id"), 60)
+            if key and key not in current:
+                current[key] = (status, _clean_text(row.get("title"), 120),
+                                _queue_detail(row))
+        seen = self._stalled.get(client.name) or {}
+        for key, (status, title, detail) in sorted(current.items()):
+            if seen.get(key) == status:
+                continue
+            self.log.warn("media_queue_stalled", app=client.name, download=key,
+                          status=status, title=title, err=detail)
+        self._stalled[client.name] = {key: value[0]
+                                      for key, value in current.items()}
 
 
 class MediaService:
@@ -1294,6 +1466,32 @@ def proton_port_monitor_from_config(cfg, secrets, log, transport=None,
             path=path, poll_s=poll_s, now=now)
     except MediaConfigurationError as e:
         log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
+        return None
+
+
+def media_health_monitor_from_config(cfg, secrets, log, transport=None):
+    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+    if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
+            or not media_cfg.get("healthSync", True)):
+        return None
+    missing = [name for name in ("radarrApiKey", "sonarrApiKey")
+               if not cglib.real_key(secrets.get(name))]
+    if missing:
+        log.warn("lane_disabled", what="media_health_sync",
+                 reason="missing media API keys: " + ", ".join(missing))
+        return None
+    try:
+        poll_s = media_cfg.get("healthPollS", HEALTH_POLL_S)
+        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
+            raise MediaConfigurationError("media.healthPollS must be positive")
+        clients = tuple(
+            ArrClient(name, media_cfg[f"{name.lower()}Url"], secrets[key],
+                      transport=transport)
+            for name, key in (("Radarr", "radarrApiKey"),
+                              ("Sonarr", "sonarrApiKey")))
+        return MediaHealthMonitor(clients, log, poll_s=poll_s)
+    except (MediaConfigurationError, KeyError) as e:
+        log.warn("lane_disabled", what="media_health_sync", reason=str(e))
         return None
 
 
