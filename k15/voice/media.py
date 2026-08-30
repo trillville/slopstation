@@ -155,8 +155,8 @@ class QbittorrentClient:
         for key, value in headers.items():
             if str(key).casefold() == "set-cookie":
                 cookie.load(value)
-        for name in ("QBT_SID", "SID"):
-            if name in cookie:
+        for name in cookie:
+            if name in ("QBT_SID", "SID") or name.startswith("QBT_SID_"):
                 self.sid_cookie = name
                 self.sid = cookie[name].value
                 break
