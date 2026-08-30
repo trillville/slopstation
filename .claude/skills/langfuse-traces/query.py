@@ -59,7 +59,7 @@ def credentials():
     if not host:
         for root in repo_roots():
             try:
-                cfg = json.loads((root / "k15" / "config.json").read_text(encoding="utf-8"))
+                cfg = json.loads((root / "k15" / "config.json").read_text(encoding="utf-8-sig"))
             except (OSError, ValueError):
                 continue
             host = cfg.get("voice", {}).get("langfuseHost")

@@ -420,15 +420,23 @@ def check_operations():
             pending = [o for o in rows if o.get("announcement_pending")]
             note = (f"{len(rows)} recorded, {len(active)} active, "
                     f"{len(unknown)} unknown, {len(pending)} pending announcement")
-            if active and "voice_agent" not in _python_cmdlines():
-                report(WARN, "operations", note + " - monitoring is paused",
-                       "start the voice agent; active work will be re-observed")
-            else:
-                report(PASS, "operations", note)
         except Exception as e:
             report(WARN, "operations", f"operations.json unreadable ({e})",
                    "restore or remove the file; external work is unaffected but "
                    "Slopstation correlation will be lost")
+            return
+        # The agent probe is outside the parse: its failure is not a bad ledger.
+        try:
+            paused = active and "voice_agent" not in _python_cmdlines()
+        except Exception as e:
+            report(WARN, "operations", note + f" - agent probe failed ({e})",
+                   "the ledger is intact; whether monitoring runs is unknown")
+            return
+        if paused:
+            report(WARN, "operations", note + " - monitoring is paused",
+                   "start the voice agent; active work will be re-observed")
+        else:
+            report(PASS, "operations", note)
     else:
         report(PASS, "operations", "no operations recorded")
 

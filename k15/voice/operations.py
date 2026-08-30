@@ -640,9 +640,11 @@ def main(argv=None):
         print(json.dumps(operation, indent=2))
         return 0
     if args.command == "cancel":
-        ok, detail = store.cancel(args.operation)
+        # No authority here supports cancellation, so cancel() always refuses
+        # and this exit is unconditional. The tuple stays for one that might.
+        _, detail = store.cancel(args.operation)
         print(detail)
-        return 0 if ok else 1
+        return 1
     if args.command == "abandon":
         operation = store.get(args.operation)
         if operation is None:
