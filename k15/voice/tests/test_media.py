@@ -22,6 +22,9 @@ class FakeArr:
         self.movie_files = []
         self.queue = {"records": []}
         self.root_folders = []
+        self.health = []
+        self.indexers = [{"id": 1, "enable": True,
+                          "enableAutomaticSearch": True}]
         self.status_row = {"version": "1.2.3", "appName": name}
         self.posts = []
         self.puts = []
@@ -57,6 +60,10 @@ class FakeArr:
             return dict(self.status_row)
         if endpoint == "rootfolder":
             return [dict(row) for row in self.root_folders]
+        if endpoint == "health":
+            return [dict(row) for row in self.health]
+        if endpoint == "indexer":
+            return [dict(row) for row in self.indexers]
         raise AssertionError((self.name, "GET", endpoint, params))
 
     def post(self, endpoint, payload):
@@ -366,6 +373,35 @@ def main():
         raise AssertionError("specials accepted as a normal season")
     except media.MediaError:
         pass
+
+    movie_retry = {
+        "kind": "movie_acquisition", "external_ref": "31", "metadata": {}}
+    assert svc.search_available(movie_retry)
+    svc.radarr.health = [{"source": "IndexerSearchCheck"}]
+    assert not svc.search_available(movie_retry)
+    svc.radarr.health = [{"source": "IndexerRssCheck"}]
+    assert svc.search_available(movie_retry), "RSS-only warning blocked a search retry"
+    svc.radarr.health = [{"source": "IndexerStatusCheck"}]
+    assert svc.search_available(movie_retry), "general status warning blocked recovery"
+    svc.radarr.indexers[0]["enableAutomaticSearch"] = False
+    assert not svc.search_available(movie_retry)
+    svc.radarr.indexers[0]["enableAutomaticSearch"] = True
+    svc.radarr.health = []
+    assert svc.retry_search(movie_retry) == [1]
+    assert svc.radarr.posts[-1] == (
+        "command", {"name": "MoviesSearch", "movieIds": [31]})
+
+    series_retry = {
+        "kind": "series_acquisition", "external_ref": "41",
+        "metadata": {"seasons": [1, 2]}}
+    assert svc.retry_search(series_retry) == [2, 3]
+    assert svc.sonarr.posts[-2:] == [
+        ("command", {"name": "SeasonSearch", "seriesId": 41,
+                     "seasonNumber": 1}),
+        ("command", {"name": "SeasonSearch", "seriesId": 41,
+                     "seasonNumber": 2}),
+    ]
+    print("  retry: aggregate search health gates scoped movie and series searches")
 
     svc = service()
     svc.sonarr.library = [{

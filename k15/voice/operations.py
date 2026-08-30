@@ -390,6 +390,7 @@ class MediaMonitor:
     """Observe Radarr/Sonarr imports without seeing release-level data."""
 
     KINDS = {"movie_acquisition", "series_acquisition"}
+    SEARCH_RETRY_DELAYS_S = (5 * 60, 30 * 60, 2 * 60 * 60)
 
     def __init__(self, store, media, log, poll_s=POLL_S):
         self.store = store
@@ -411,7 +412,65 @@ class MediaMonitor:
             self._wake.wait(self.poll_s)
             self._wake.clear()
 
-    def reconcile_once(self):
+    def _schedule_search_retry(self, operation, now):
+        metadata = operation.get("metadata") or {}
+        if metadata.get("search_retry_pending"):
+            return operation
+        count = int(metadata.get("search_retry_count", 0) or 0)
+        if count >= len(self.SEARCH_RETRY_DELAYS_S):
+            return self.store.update_metadata(
+                operation["id"], {"search_retry_exhausted": True}) or operation
+        try:
+            available = self.media.search_available(operation)
+        except Exception:
+            available = False
+        if available:
+            return operation
+        return self.store.update_metadata(operation["id"], {
+            "search_retry_pending": True,
+            "search_retry_after": now + self.SEARCH_RETRY_DELAYS_S[count],
+        }) or operation
+
+    def _dispatch_search_retry(self, operation, now):
+        metadata = operation.get("metadata") or {}
+        if (not metadata.get("search_retry_pending")
+                or now < int(metadata.get("search_retry_after", 0) or 0)):
+            return operation
+        try:
+            if not self.media.search_available(operation):
+                return operation
+        except Exception:
+            return operation
+
+        count = int(metadata.get("search_retry_count", 0) or 0) + 1
+        try:
+            command_ids = self.media.retry_search(operation)
+        except Exception:
+            updates = {"search_retry_count": count}
+            remove = ()
+            if count < len(self.SEARCH_RETRY_DELAYS_S):
+                updates["search_retry_after"] = (
+                    now + self.SEARCH_RETRY_DELAYS_S[count])
+            else:
+                updates["search_retry_exhausted"] = True
+                remove = ("search_retry_pending", "search_retry_after")
+            self.store.update_metadata(operation["id"], updates, remove=remove)
+            raise
+
+        operation = self.store.update_metadata(
+            operation["id"], {
+                "command_ids": command_ids,
+                "search_retry_count": count,
+            }, remove=("search_retry_pending", "search_retry_after",
+                       "search_retry_exhausted")) or operation
+        operation = self.store.observe(
+            operation["id"], RUNNING, {"phase": "searching"},
+            f"{str(operation.get('authority', 'media')).title()} recovered; "
+            "retrying the search") or operation
+        return operation
+
+    def reconcile_once(self, now=None):
+        now = int(time.time()) if now is None else int(now)
         active = [r for r in self.store.active()
                   if r.get("kind") in self.KINDS]
         for operation in active:
@@ -421,14 +480,18 @@ class MediaMonitor:
                     operation = self.store.update_metadata(
                         operation["id"], {"command_ids": command_ids},
                         remove=("search_pending",)) or operation
+                operation = self._dispatch_search_retry(operation, now)
                 observation = self.media.observe(operation)
                 state = (CANCELED if observation.get("canceled") else
                          SUCCEEDED if observation["complete"] else RUNNING)
                 previous_phase = (operation.get("progress") or {}).get("phase")
                 progress = observation.get("progress", {})
+                phase = progress.get("phase")
+                if (state == RUNNING and phase == "waiting_for_match"
+                        and previous_phase == "searching"):
+                    operation = self._schedule_search_retry(operation, now)
                 self.store.observe(operation["id"], state, progress,
                                    observation.get("detail", ""))
-                phase = progress.get("phase")
                 if state == RUNNING and phase != previous_phase:
                     if phase == "downloading":
                         self.store.notify(
@@ -442,6 +505,9 @@ class MediaMonitor:
                             f"{operation['title']} yet. It will keep watching.")
             except Exception as e:
                 authority = str(operation.get("authority", "media")).title()
+                previous_phase = (operation.get("progress") or {}).get("phase")
+                if previous_phase == "searching":
+                    operation = self._schedule_search_retry(operation, now)
                 self.store.observe(operation["id"], UNKNOWN, {},
                                    f"{authority} observation failed: {e}")
         return len(active)
