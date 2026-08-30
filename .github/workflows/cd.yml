@@ -11,7 +11,9 @@ name: cd
 # its head branch is whatever the fork called it - `main` included - so the
 # branch filter alone would let a stranger's commit reach the gaming PC as
 # `Deploy.ps1`. Only a push can put a commit on this repo's main, and a fork
-# cannot push. Never widen this to a trigger a fork can reach.
+# cannot push. Never widen this to a trigger a fork can reach. checkout is
+# held at v7+ for the same reason: from v7 it refuses a fork PR ref under
+# workflow_run on its own, independently of the guard.
 on:
   workflow_run:
     workflows: [ci]
@@ -48,7 +50,7 @@ jobs:
     steps:
       # Deploy.ps1 ships from a checkout and stamps that checkout's rev, so the
       # runner workspace must sit on the commit being deployed.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: deploy
