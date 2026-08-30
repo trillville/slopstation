@@ -7,44 +7,54 @@ and Slopstation observes progress without owning the download process.
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     request[Voice, text, or media.py]
-    slop[Slopstation<br/>resolve, scope, preset]
-    ops[operations.json<br/>durable observation]
+
+    subgraph control[Slopstation control plane]
+        direction LR
+        slop[Resolve title<br/>scope and preset]
+        ops[operations.json<br/>durable observation]
+        slop <--> ops
+    end
 
     subgraph docker[Docker Compose]
-        prowlarr[Prowlarr<br/>indexer management]
-        flaresolverr[FlareSolverr<br/>challenge proxy]
-        radarr[Radarr<br/>movies]
-        sonarr[Sonarr<br/>series]
+        direction TB
+
+        subgraph discovery[Release discovery]
+            direction LR
+            indexers[Configured indexers] <--> prowlarr[Prowlarr<br/>indexer management]
+            prowlarr -. browser challenge .-> flaresolverr[FlareSolverr<br/>challenge proxy]
+        end
+
+        subgraph managers[Desired state and import]
+            direction LR
+            radarr[Radarr<br/>movies]
+            sonarr[Sonarr<br/>series]
+        end
+
+        prowlarr --> radarr
+        prowlarr --> sonarr
     end
 
     subgraph windows[Native Windows on the K15]
-        qbit[qBittorrent<br/>transfer and seed]
-        proton[Proton VPN<br/>peer traffic]
-        torrents[C:\Media\torrents]
+        direction LR
+        proton[Proton VPN<br/>peer traffic] --- qbit[qBittorrent<br/>transfer and seed]
+        qbit --> torrents[C:\Media\torrents]
     end
 
-    movies[C:\Media\Movies]
-    tv[C:\Media\TV]
-    indexers[Configured indexers]
+    subgraph libraries[Managed libraries]
+        direction LR
+        movies[C:\Media\Movies]
+        tv[C:\Media\TV]
+    end
 
     request --> slop
-    slop --> radarr
-    slop --> sonarr
-    slop <--> ops
-    prowlarr <--> indexers
-    prowlarr -. browser challenge .-> flaresolverr
-    prowlarr --> radarr
-    prowlarr --> sonarr
-    radarr --> qbit
-    sonarr --> qbit
-    proton --- qbit
-    qbit --> torrents
-    torrents --> radarr --> movies
-    torrents --> sonarr --> tv
-    radarr -. status .-> ops
-    sonarr -. status .-> ops
+    slop -->|create and reconcile| radarr
+    slop -->|create and reconcile| sonarr
+    radarr -->|dispatch| qbit
+    sonarr -->|dispatch| qbit
+    torrents -->|Radarr imports| movies
+    torrents -->|Sonarr imports| tv
 ```
 
 | Component | Owns |
