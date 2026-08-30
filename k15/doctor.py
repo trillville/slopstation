@@ -4,7 +4,7 @@ Read-only except one haptic chirp, skipped when the chord listener is running
 (one process owns the Puck). Voice and telemetry rows are WARN-only; only the
 chord chain can FAIL. Exit code = number of FAILs.
 """
-import json, socket, subprocess, sys, time, urllib.parse
+import json, re, socket, subprocess, sys, time, urllib.parse
 
 import cglib
 import haptics
@@ -200,6 +200,96 @@ def check_ssh():
     else:
         report(WARN, "deploy skew", f"PC build '{pcbuild}' vs local {local}",
                "git pull here and/or Deploy.ps1 there until they agree")
+
+
+VH_SERVICE = 'VirtualHere USB Server'
+VH_PORT = '7575'
+
+
+def _vh_sockets():
+    """(listening, connected clients) on the hub port."""
+    out = subprocess.run(['netstat', '-ano', '-p', 'TCP'], capture_output=True,
+                         text=True, timeout=20, encoding='utf-8',
+                         errors='replace').stdout
+    listening = clients = 0
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 4 or not parts[1].endswith(':' + VH_PORT):
+            continue
+        if parts[3] == 'LISTENING':
+            listening += 1
+        elif parts[3] == 'ESTABLISHED':
+            clients += 1
+    return listening, clients
+
+
+def _vh_lan_rule():
+    """Enabled inbound Allow rules admitting the hub on the Private profile,
+    or None when netsh answers in a shape this cannot read (localised
+    Windows). Get-NetFirewallPortFilter cannot enumerate here and the
+    rule-by-rule walk costs 16 s, so this parses netsh's dump (~0.2 s)."""
+    out = subprocess.run(['netsh', 'advfirewall', 'firewall', 'show', 'rule',
+                          'name=all', 'dir=in'], capture_output=True,
+                         text=True, timeout=30, encoding='utf-8',
+                         errors='replace').stdout
+    if 'Rule Name' not in out:
+        return None
+    found = 0
+    for block in out.split(2 * chr(10)):
+        f = dict(re.findall(r'^([A-Za-z ]+):\s+(.*?)\s*$', block, re.M))
+        if (f.get('Enabled') != 'Yes' or f.get('Action') != 'Allow'
+                or f.get('Direction') != 'In'):
+            continue
+        profiles = f.get('Profiles', '')
+        if 'Private' not in profiles and 'Any' not in profiles:
+            continue
+        # Port OR program: a broad any-port rule belongs to its own program,
+        # so matching on port alone would pass on someone else's rule.
+        ports = [x.strip() for x in f.get('LocalPort', '').split(',')]
+        by_port = f.get('Protocol') in ('TCP', 'Any') and VH_PORT in ports
+        by_program = 'vhusbd' in f.get('Program', '').lower()
+        found += bool(by_port or by_program)
+    return found
+
+
+def check_virtualhere():
+    """The USB-over-IP hub that hands the Puck to the gaming PC; every launch
+    claims through it. The firewall row is the load-bearing one: Windows
+    filters connection SETUP, not established flows, so a client that
+    connected before a rule went wrong keeps working and the hub looks
+    healthy until the next restart drops it - which is how a Public-only rule
+    on a Private LAN stayed invisible until the first launch after a K15
+    reboot (2026-08-30)."""
+    try:
+        state = subprocess.run(['sc', 'query', VH_SERVICE], capture_output=True,
+                               text=True, timeout=15).stdout
+        listening, clients = _vh_sockets()
+        admitting = _vh_lan_rule()
+    except Exception as e:
+        report(WARN, 'virtualhere', 'could not query (%s)' % e, '')
+        return
+    if 'RUNNING' not in state:
+        report(FAIL, 'virtualhere', 'USB server service is not running',
+               "Start-Service '%s' - no launch can claim the Puck" % VH_SERVICE)
+        return
+    if not listening:
+        report(FAIL, 'virtualhere',
+               'service running but nothing listens on ' + VH_PORT,
+               'restart it; the hub is the Puck only path to the PC')
+        return
+    if admitting is None:
+        report(WARN, 'virtualhere firewall', 'netsh output not recognised',
+               'check by hand that TCP %s is allowed inbound on Private' % VH_PORT)
+    elif not admitting:
+        report(FAIL, 'virtualhere firewall',
+               'no inbound rule admits TCP %s on the Private profile' % VH_PORT,
+               "New-NetFirewallRule -DisplayName 'VirtualHere USB hub (LAN)' "
+               '-Direction Inbound -Action Allow -Protocol TCP -LocalPort '
+               "%s -Profile Private -RemoteAddress LocalSubnet" % VH_PORT)
+        return
+    # Zero clients is normal: the PC sleeps and reconnects on wake.
+    report(PASS, 'virtualhere',
+           'hub listening, LAN rule present, %d client(s) connected' % clients)
 
 
 def check_session_state():
@@ -555,6 +645,7 @@ if __name__ == "__main__":
     if puck_ok and not listener_running:
         check_haptics()
     check_ssh()
+    check_virtualhere()
     check_session_state()
     check_telemetry()
     check_voice(cfg)

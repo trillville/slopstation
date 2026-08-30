@@ -183,6 +183,20 @@ Two tokens, two hops: the connector's token never reaches the assistant, and
 edit. Ask "download always sunny" from anywhere; follow-ups must be
 self-contained, because the connector sees only what each message carries.
 
+**Puck handoff.** The gaming PC claims the Puck over VirtualHere, so the K15's
+hub has to accept a LAN connection on TCP 7575. Windows filters connection
+setup and not established flows, so a client that connected before the rule
+went wrong keeps working: the break only shows at the next reconnect, which is
+usually the first launch after a K15 reboot. `doctor.py` checks the rule
+itself rather than waiting for that, and zero connected clients is normal -
+the PC sleeps and reconnects on wake.
+
+    New-NetFirewallRule -DisplayName 'VirtualHere USB hub (LAN)' -Direction Inbound `
+      -Action Allow -Protocol TCP -LocalPort 7575 -Profile Private -RemoteAddress LocalSubnet
+
+Give the K15 a DHCP reservation too: the client reconnects by address, and a
+new lease after a reboot is a second way this same launch failure appears.
+
 **Correlate.** Every intent carries a `turn` id from the wake word or the chord
 through to the gaming PC. It appears in `k15/logs/k15-YYYYMMDD.jsonl`, in
 `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`, and in the PC transcript filename:
