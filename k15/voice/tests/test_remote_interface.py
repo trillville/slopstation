@@ -152,14 +152,14 @@ def main():
                 assert json.loads(body)["id"] == payload["id"]
         keep.close()
 
-        # A body we refuse to read closes the connection rather than leaving
-        # it desynced for the next request.
+        # A refused body is drained, answered, then closed. Without the drain
+        # the close RSTs mid-send and the client reads an abort, not the 413.
         big = http.client.HTTPConnection(host, port, timeout=5)
         big.request("POST", "/mcp", "x" * (remote_interface.MAX_BODY + 1),
                     dict(headers, **{"Content-Type": "application/json"}))
         oversized = big.getresponse()
         oversized.read()
-        assert oversized.status == 400
+        assert oversized.status == 413
         assert oversized.getheader("Connection") == "close"
         big.close()
 

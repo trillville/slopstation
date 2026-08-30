@@ -24,6 +24,10 @@ LOCKOUT_AFTER = 5
 LOCKOUT_S = 900
 RATE_LIMIT = 30
 RATE_WINDOW_S = 60
+# A refused body is drained first, up to this much: closing while the
+# client is still writing RSTs on Windows, and it then reads an aborted
+# connection instead of the status we sent.
+DRAIN_MAX = 1024 * 1024
 
 # Newest first. initialize echoes the client's version when we speak it.
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -216,13 +220,20 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.headers.get("Authorization", "").encode("utf-8", "replace"),
             ("Bearer " + self.server.token).encode("utf-8"))
 
-    def _body_length(self):
-        """Content-Length of a body we will read, or None to refuse it."""
+    def _declared_length(self):
+        """Content-Length as sent, or None when absent or unparseable."""
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            return int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return None
-        return length if 0 < length <= MAX_BODY else None
+
+    def _drain(self, length):
+        remaining = min(length, DRAIN_MAX)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
 
     def _mcp_path(self):
         return self.path.split("?")[0].rstrip("/") in ("", "/mcp")
@@ -235,15 +246,22 @@ class RemoteHandler(BaseHTTPRequestHandler):
         app = self.server.app
         # Bound, not app.log.warn(...): the event-name scan reads this shape.
         log = app.log
-        length = self._body_length()
-        if length is None or not self._mcp_path():
+        length = self._declared_length()
+        if length is not None and length > MAX_BODY:
+            self._drain(length)
+            self.close_connection = True
+            self._json(413, {"error": f"body must be at most {MAX_BODY} bytes"})
+            return
+        if not self._mcp_path():
+            self.close_connection = True
+            self._json(404, {"error": "not found"})
+            return
+        if length is None or length <= 0:
             # Nothing was read from the socket, so the stream position is
             # unknown: close rather than let the unread body desync the next
             # request on a connection the client keeps alive.
             self.close_connection = True
-            self._json(404 if length is not None else 400,
-                       {"error": "not found" if length is not None else
-                        f"body must be 1-{MAX_BODY} bytes with Content-Length"})
+            self._json(400, {"error": "body must carry a Content-Length"})
             return
         # Read before every early return below, so a refused request leaves
         # the connection reusable.
