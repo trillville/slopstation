@@ -1,9 +1,10 @@
 """Live Steam store data: deals, search, reviews, news, how-long-to-beat,
 and the state/deals.json precompute. Layer 4 of the catalog - library.py
-builds layers 1-3, what the user owns and has installed. Every fetch
-routes through _get, the one test seam. Only /appreviews and GetNewsForApp
-are officially documented, so parses read defensively and the lane degrades
-rather than crashing.
+builds layers 1-3, what the user owns and has installed. Every HTTP fetch
+routes through _get, the one test seam; fetch_hltb is the exception - it
+delegates to howlongtobeatpy, whose lazy import is its seam. Only /appreviews
+and GetNewsForApp are officially documented, so parses read defensively and the
+lane degrades rather than crashing.
 
 CLI:
     python steamstore.py <deals|search ...|reviews <appid>|news <appid>

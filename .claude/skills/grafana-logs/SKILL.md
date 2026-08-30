@@ -9,8 +9,16 @@ Every event from both machines lands in Grafana Cloud Loki. Query it from the
 terminal — never send the user to a browser for something answerable here.
 
 ```bash
-python .claude/skills/grafana-logs/query.py '{service="k15", level="error"}' --since 24h
+python .claude/skills/grafana-logs/query.py --service k15 --level error --since 24h
 ```
+
+Drive it with flags, not a raw LogQL string: PowerShell strips the double
+quotes out of a selector on its way to a native process, and Loki then reports
+a syntax error for a query nobody typed. The script composes the selector from
+`--service --lane --level --event --turn --session --contains --env --since
+--limit` (`--env` defaults to `prod`, `--since` to `6h`), prints the LogQL it
+built, and takes a raw query as a positional argument only when the flags
+cannot express it.
 
 Stack `narrownuthatch2355` (US West), `https://narrownuthatch2355.grafana.net`.
 A query that returns nothing may mean the pipeline is down rather than the
@@ -48,13 +56,21 @@ travels through dispatch, `couch.py`, the SSH boundary, and the gaming PC's
 scheduled task. **One query returns the whole story across both machines.**
 
 ```bash
-python .claude/skills/grafana-logs/query.py '{service=~"k15|gamepc"} | json | turn="9f2c1a"' --since 24h
+python .claude/skills/grafana-logs/query.py --turn 9f2c1a --since 24h
 ```
+
+`--turn` and `--session` widen to both machines by themselves — the script
+only pins `service` when you pass `--service`.
 
 When investigating any failure: find the failing event, take its `turn`, then
 run that. Do not reconstruct a timeline from timestamps.
 
 ## Recipes
+
+The selectors below are what the flags build — read them as LogQL, and reach
+for the flag form to run one (`--lane launch`, `--event gate_miss`, …). A
+metric query like the liveness one has no flag form; pass it as the positional
+argument, single-quoted, with the inner double quotes escaped.
 
 ```logql
 {service=~"k15|gamepc", env="prod"} | json | level=~"warn|error"   # what broke
