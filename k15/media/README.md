@@ -114,18 +114,47 @@ that can race the importing authority and lose the library copy.
 
 ## Proton forwarded port
 
-After every Proton reconnect, read Proton's current **Active port** and apply
-it explicitly:
+The official Proton Windows client emits its current port-forwarding state to:
+
+    %LOCALAPPDATA%\Proton\Proton VPN\Logs\client-logs.txt
+
+Slopstation can read that local log and keep native qBittorrent synchronized.
+The integration accepts only an active mapping observed within the last 45
+seconds. Stopped, transitional, stale, missing, or unrecognized state never
+changes qBittorrent.
+
+Validate the read-only source first while Proton is connected to a P2P server
+with port forwarding enabled:
+
+    cd C:\Users\minipc\Desktop\slopstation\k15\voice
+    .venv\Scripts\python media.py proton-port
+
+The result must show `"state": "active"` and the same port shown by Proton.
+Next perform one explicit synchronization:
+
+    .venv\Scripts\python media.py sync-proton-port --execute
+
+Confirm `changed` is true when the ports initially differ, and that
+`listen_port` equals `port`. Then add this setting to the existing `media`
+object in `k15\config.json`:
+
+    "protonPortSync": true
+
+Restart with `Start-K15.bat`. The voice supervisor checks immediately and then
+at `media.pollS`; successful changes are logged as `proton_port_synced`. Proton
+log-format changes fail closed and emit `proton_port_sync_failed` without
+changing qBittorrent.
+
+The manual fallback remains available:
 
     cd C:\Users\minipc\Desktop\slopstation\k15\voice
     .venv\Scripts\python media.py set-qbit-port 33125 --execute
 
 Replace `33125` with the current Active port. The command validates the port,
 authenticates to the native qBittorrent Web API, changes only its listening
-port, and reads the value back. It does not infer or scrape Proton state.
-Recheck that qBittorrent still shows `ProtonVPN`, **All addresses**, and
-UPnP/NAT-PMP disabled. A torrent-address test remains the live proof that peer
-traffic exits through Proton.
+port, and reads the value back. Recheck that qBittorrent still shows
+`ProtonVPN`, **All addresses**, and UPnP/NAT-PMP disabled. A torrent-address
+test remains the live proof that peer traffic exits through Proton.
 
 The maintenance commands need two additional local secrets and three policy
 values. Add the secrets to `k15\secrets.json`:
@@ -138,12 +167,14 @@ Copy these keys from `config.example.json` into the existing `media` object in
 
     "qbittorrentUsername": "admin",
     "qbittorrentNetworkInterface": "ProtonVPN",
+    "protonPortSync": false,
     "managedIndexers": ["1337x", "EZTV"],
     "seedRatio": 0.25,
     "seedTimeMinutes": 60
 
 These credentials are not required by ordinary movie or series acquisition.
-They are used only by maintenance diagnostics and the explicit port helper.
+They are used by maintenance diagnostics, explicit port commands, and the
+optional background synchronizer.
 
 ## Comprehensive health check
 
@@ -155,13 +186,13 @@ Run the read-only check after setup or after changing media infrastructure:
 It checks Compose state, all service APIs, Arr health, roots, profiles,
 indexers, download clients, completed-download removal, Prowlarr Full Sync and
 seed values, qBittorrent categories, interface binding, UPnP/NAT-PMP, share
-limit behavior, Web UI authentication, and the listening port. Any `FAIL`
-makes the command exit nonzero; `WARN` does not.
+limit behavior, Web UI authentication, and the listening port. When automatic
+port synchronization is enabled, it also compares qBittorrent with Proton's
+fresh live state. Any `FAIL` makes the command exit nonzero; `WARN` does not.
 
-The doctor never adds a torrent or mutates a service. It cannot read Proton's
-current Windows Active port or prove the torrent-visible address. After a
-Proton reconnect, compare its Active port with the reported qBittorrent port;
-repeat the torrent-address test after VPN or network changes.
+The doctor never adds a torrent or mutates a service. It cannot prove the
+torrent-visible address; repeat a torrent-address test after VPN or network
+changes.
 
 Changing to the NAS later requires stopping the stack and native qBittorrent,
 copying `MEDIA_ROOT`, editing `.env`, changing qBittorrent's download path and

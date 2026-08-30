@@ -142,9 +142,13 @@ The one-time live setup that cannot be committed is:
    series cleanup separately before enabling Arr's automatic removal.
 
 `python media.py doctor` provides the read-only live check. Prowlarr and
-qBittorrent credentials are required only for that command and the explicit
-`set-qbit-port` helper; they do not widen the normal assistant acquisition
-boundary.
+qBittorrent credentials are required for that command, explicit maintenance,
+and optional Proton port synchronization. The synchronizer reads only a fresh
+active mapping from the official Proton Windows client's local log, updates
+qBittorrent through its authenticated Web API, and verifies the saved value.
+Stopped, transitional, stale, missing, and unrecognized Proton states never
+mutate qBittorrent. This maintenance path does not widen the normal assistant
+acquisition boundary.
 
 ## Acceptance
 
@@ -158,7 +162,10 @@ Live validation is intentionally last: provision one indexer, request a small
 movie through the diagnostic CLI, verify qBittorrent transfer and Radarr
 import, repeat by voice with a `1080p` override, request a short or selected
 series season, restart the voice agent during transfer, and confirm exactly one
-completion announcement for each request.
+completion announcement for each request. Before enabling automatic port sync,
+run `media.py proton-port`, run `media.py sync-proton-port --execute`, reconnect
+Proton, and confirm `media.py doctor` reports that Proton's new active port
+matches qBittorrent.
 
 The media CLI remains a provisioning and diagnostic surface. The general text
 client is `python k15/slop.py`; it talks to the authenticated K15 interface and

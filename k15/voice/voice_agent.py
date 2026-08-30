@@ -280,6 +280,13 @@ def main():
         log("lane_up", what="media_operation_monitor", active=active_media,
             poll_s=media_monitor.poll_s)
 
+    proton_port_monitor = media_mod.proton_port_monitor_from_config(
+        cfg, secrets, log)
+    if proton_port_monitor is not None:
+        proton_port_monitor.start()
+        log("lane_up", what="proton_port_sync",
+            poll_s=proton_port_monitor.poll_s)
+
     import text_interface
     text_interface.start(cfg, secrets, log, operations=operation_store,
                          steam=steam, media=media_service)

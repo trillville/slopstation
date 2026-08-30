@@ -97,6 +97,8 @@ PYTHON = {
     "operation_notification": {"key", "operation"},
     "operation_observed": {"changed", "detail", "operation", "previous", "progress", "state"},
     "operation_track_failed": {"appid", "err"},
+    "proton_port_synced": {"port", "previous_port", "source_age_s"},
+    "proton_port_sync_failed": {"err"},
     "text_request": {"session", "turn"},
     "text_request_failed": {"err"},
     "pipeline_error": {"err"},
