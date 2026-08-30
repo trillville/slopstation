@@ -154,8 +154,8 @@ def main():
         qbit_calls.append((method, url, headers, body, timeout))
         path = urllib.parse.urlsplit(url).path
         if path.endswith("/auth/login"):
-            return {"Set-Cookie": "SID=session-1; HttpOnly; path=/"}, b"Ok."
-        assert headers["Cookie"] == "SID=session-1"
+            return {"Set-Cookie": "QBT_SID=session-1; HttpOnly; path=/"}, b""
+        assert headers["Cookie"] == "QBT_SID=session-1"
         if path.endswith("/app/preferences"):
             return {}, json.dumps(qbit_preferences).encode()
         if path.endswith("/app/setPreferences"):

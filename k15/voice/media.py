@@ -124,6 +124,7 @@ class QbittorrentClient:
         self.transport = transport or _qbit_http_transport
         self.timeout = timeout
         self.sid = None
+        self.sid_cookie = None
 
     def _call(self, method, endpoint, payload=None, authenticate=True):
         if authenticate and self.sid is None:
@@ -137,8 +138,8 @@ class QbittorrentClient:
         if payload is not None:
             body = urllib.parse.urlencode(payload).encode("utf-8")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
-        if self.sid is not None:
-            headers["Cookie"] = f"SID={self.sid}"
+        if self.sid is not None and self.sid_cookie is not None:
+            headers["Cookie"] = f"{self.sid_cookie}={self.sid}"
         return self.transport(
             method, f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
             headers, body, self.timeout)
@@ -148,15 +149,19 @@ class QbittorrentClient:
             "username": self.username,
             "password": self.password,
         }, authenticate=False)
-        if raw.decode("utf-8", "replace").strip() != "Ok.":
+        if raw.decode("utf-8", "replace").strip() not in ("", "Ok."):
             raise MediaError("qBittorrent rejected the configured credentials")
         cookie = http.cookies.SimpleCookie()
         for key, value in headers.items():
             if str(key).casefold() == "set-cookie":
                 cookie.load(value)
-        if "SID" not in cookie:
+        for name in ("QBT_SID", "SID"):
+            if name in cookie:
+                self.sid_cookie = name
+                self.sid = cookie[name].value
+                break
+        if self.sid is None:
             raise MediaError("qBittorrent login returned no session cookie")
-        self.sid = cookie["SID"].value
 
     def _text(self, endpoint):
         _, raw = self._call("GET", endpoint)
