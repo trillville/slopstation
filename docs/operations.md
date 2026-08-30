@@ -90,6 +90,14 @@ An explicit request for recent results also clears the pending flag once the
 tool result enters that active voice turn, preventing a duplicate announcement
 after the session closes.
 
+A media search that coincides with an authority-reported indexer outage arms a
+durable recovery retry. The monitor waits until Radarr or Sonarr reports an
+enabled automatic-search indexer without an aggregate search warning,
+then performs at most three retries with 5-minute, 30-minute, and 2-hour minimum
+backoffs. A healthy no-match search is not retried. The pending timestamp and
+attempt count live in operation metadata, so restarting the voice agent neither
+loses the retry nor resets its bound.
+
 There is one notification channel today, so no per-channel delivery ledger is
 part of this design. Add that only when a second production channel exists.
 

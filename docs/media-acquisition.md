@@ -100,6 +100,15 @@ silent. The visible media phases are `searching`, `waiting_for_match`,
 and the first no-match result each create a durable spoken receipt. Only the
 first positive terminal edge queues the completion announcement.
 
+If an initial or recovery search finishes while Radarr or Sonarr reports that
+its automatic-search indexers are unavailable, the operation records a durable
+retry. It waits for the authority's search health to recover and then retries
+after minimum backoffs of 5 minutes, 30 minutes, and 2 hours. There are at most
+three recovery searches. Time spent waiting for healthy indexers does not
+consume an attempt, and a healthy search that simply finds no acceptable
+release does not start a retry loop. Radarr or Sonarr continues its normal RSS
+monitoring after Slopstation's bounded retries end.
+
 Deletion stays inside the authority boundary. A movie delete disables
 monitoring, cancels its active search and queue payload, then asks Radarr to
 delete the record and files. A selected-season delete leaves the Sonarr series
@@ -154,9 +163,10 @@ acquisition boundary.
 
 Checkout-safe tests cover API authentication and payloads, preset lookup,
 separate lookup and mutation, existing-item reuse, selected seasons, durable
-deduplication, restart reconciliation, aired-episode progress, positive-only
-completion, `UNKNOWN` silence, assistant tool gating, imports, lint, typing,
-and the frozen event vocabulary.
+deduplication, restart reconciliation, indexer-recovery retries and their
+attempt bound, aired-episode progress, positive-only completion, `UNKNOWN`
+silence, assistant tool gating, imports, lint, typing, and the frozen event
+vocabulary.
 
 Live validation is intentionally last: provision one indexer, request a small
 movie through the diagnostic CLI, verify qBittorrent transfer and Radarr

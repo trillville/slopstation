@@ -49,6 +49,10 @@ class FakeMedia:
                        "detail": "1 of 5 aired episodes are ready"}
         self.error = None
         self.search_ready = False
+        self.search_available_now = True
+        self.retry_command_ids = [88]
+        self.retry_error = None
+        self.retries = []
 
     def dispatch_pending_series_search(self, operation):
         if self.search_ready and bool(
@@ -60,6 +64,15 @@ class FakeMedia:
         if self.error:
             raise self.error
         return dict(self.result)
+
+    def search_available(self, operation):
+        return self.search_available_now
+
+    def retry_search(self, operation):
+        self.retries.append(operation["id"])
+        if self.retry_error:
+            raise self.retry_error
+        return list(self.retry_command_ids)
 
 
 def main():
@@ -188,6 +201,8 @@ def main():
     media_monitor.reconcile_once()
     assert len(media_store.pending_notifications()) == 1
     assert media_store.pending_notifications()[0]["key"] == "waiting_for_match"
+    assert "search_retry_pending" not in media_store.get(
+        phase_op["id"])["metadata"]
     fake_media.result = {
         "complete": False,
         "progress": {"phase": "downloading", "percent": 2},
@@ -199,9 +214,67 @@ def main():
     assert len(media_store.pending_notifications()) == 2
     print("  phases: waiting and download receipts are durable and edge-triggered")
 
+    fresh_state()
+    retry_store = operations.OperationStore(log)
+    retry_op = retry_store.track_external(
+        "movie_acquisition", "radarr", "61", "Heat",
+        metadata={"catalog_id": 949, "command_ids": [10]})
+    retry_store.observe(retry_op["id"], operations.RUNNING,
+                        {"phase": "searching"}, "Radarr is searching")
+    retry_media = FakeMedia()
+    retry_media.search_available_now = False
+    retry_media.result = {
+        "complete": False,
+        "progress": {"phase": "waiting_for_match"},
+        "detail": "no acceptable release yet"}
+    retry_monitor = operations.MediaMonitor(retry_store, retry_media, log)
+    retry_monitor.reconcile_once(now=1000)
+    scheduled = retry_store.get(retry_op["id"])
+    assert scheduled["metadata"]["search_retry_pending"]
+    assert scheduled["metadata"]["search_retry_after"] == 1300
+    assert not retry_media.retries
+
+    retry_media.search_available_now = True
+    operations.MediaMonitor(retry_store, retry_media, log).reconcile_once(now=1299)
+    assert not retry_media.retries
+    operations.MediaMonitor(retry_store, retry_media, log).reconcile_once(now=1300)
+    retried = retry_store.get(retry_op["id"])
+    assert retry_media.retries == [retry_op["id"]]
+    assert retried["metadata"]["search_retry_count"] == 1
+    assert retried["metadata"]["command_ids"] == [88]
+    assert "search_retry_pending" not in retried["metadata"]
+
+    retry_store.update_metadata(
+        retry_op["id"], {"search_retry_count": 3},
+        remove=("search_retry_pending", "search_retry_after"))
+    retry_store.observe(retry_op["id"], operations.RUNNING,
+                        {"phase": "searching"}, "Radarr is searching")
+    retry_media.search_available_now = False
+    retry_monitor.reconcile_once(now=2000)
+    exhausted = retry_store.get(retry_op["id"])["metadata"]
+    assert exhausted["search_retry_exhausted"]
+    assert "search_retry_pending" not in exhausted
+
+    failed_op = retry_store.track_external(
+        "movie_acquisition", "radarr", "62", "Collateral",
+        metadata={"catalog_id": 1538, "command_ids": [11],
+                  "search_retry_pending": True,
+                  "search_retry_after": 2000})
+    retry_store.observe(failed_op["id"], operations.RUNNING,
+                        {"phase": "waiting_for_match"}, "waiting")
+    retry_media.search_available_now = True
+    retry_media.retry_error = RuntimeError("search submit failed")
+    retry_monitor.reconcile_once(now=2000)
+    failed = retry_store.get(failed_op["id"])
+    assert failed["state"] == operations.UNKNOWN
+    assert failed["metadata"]["search_retry_count"] == 1
+    assert failed["metadata"]["search_retry_after"] == 3800
+    assert failed["metadata"]["search_retry_pending"]
+    print("  retry: durable recovery gate, minimum backoff, and attempt bound")
+
     with contextlib.redirect_stdout(io.StringIO()) as stdout:
         assert operations.main(["list"]) == 0
-    assert media_op["id"] in stdout.getvalue()
+    assert retry_op["id"] in stdout.getvalue()
     print("  CLI: active operations render without a live Steam session")
 
     fresh_state()

@@ -613,6 +613,46 @@ class MediaService:
             command_ids.append(int(command["id"]))
         return command_ids
 
+    def search_available(self, operation):
+        kind = operation.get("kind")
+        if kind == "movie_acquisition":
+            client = self.radarr
+        elif kind == "series_acquisition":
+            client = self.sonarr
+        else:
+            raise MediaError(f"unsupported media operation kind {kind}")
+
+        indexers = client.get("indexer")
+        health = client.get("health")
+        if not isinstance(indexers, list) or not isinstance(health, list):
+            raise MediaError(f"{client.name} returned invalid indexer health")
+        enabled = any(
+            isinstance(row, dict)
+            and row.get("enable", True)
+            and row.get("enableAutomaticSearch", True)
+            for row in indexers)
+        blocked = any(
+            isinstance(row, dict)
+            and str(row.get("source", "")).casefold() == "indexersearchcheck"
+            for row in health)
+        return enabled and not blocked
+
+    def retry_search(self, operation):
+        kind = operation.get("kind")
+        external_ref = int(operation["external_ref"])
+        if kind == "movie_acquisition":
+            command = self._one(
+                self.radarr.post("command", {"name": "MoviesSearch",
+                                              "movieIds": [external_ref]}),
+                "Radarr", "search command")
+            return [int(command["id"])]
+        if kind == "series_acquisition":
+            metadata = operation.get("metadata") or {}
+            seasons = self._seasons(metadata.get("seasons")) \
+                if metadata.get("seasons") is not None else None
+            return self._search_series(external_ref, seasons)
+        raise MediaError(f"unsupported media operation kind {kind}")
+
     @staticmethod
     def _episode_metadata_ready(rows, seasons):
         if not isinstance(rows, list) or not rows:
