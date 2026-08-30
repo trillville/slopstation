@@ -109,8 +109,12 @@ def main(argv: list[str]) -> int:
         branch = git("rev-parse", "--abbrev-ref", "HEAD")
         if branch != "main":
             raise RuntimeError(f"checkout is on {branch!r}, not main")
-        if git("status", "--porcelain"):
-            raise RuntimeError("checkout has uncommitted changes")
+        # Tracked files only: the K15 carries untracked wake-training wavs and
+        # candidate models by design, and none of them stop a fast-forward. A
+        # collision between one and an incoming file fails the merge below, on
+        # its own terms.
+        if git("status", "--porcelain", "--untracked-files=no"):
+            raise RuntimeError("checkout has uncommitted changes to tracked files")
 
         if not wait_idle(a.wait_minutes * 60):
             log.warn("deploy_deferred", reason="gave_up",
