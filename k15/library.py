@@ -31,8 +31,7 @@ from pathlib import Path
 
 import cglib
 
-STATE = cglib.STATE
-LIBRARY = STATE / "library.json"
+LIBRARY = cglib.STATE / "library.json"
 
 log = cglib.make_log("library")
 
@@ -168,7 +167,7 @@ def show() -> int:
 
 # --- layers 2-3: owned/playtime + metadata ------------------------------------
 
-META_CACHE = STATE / "metadata-cache.json"
+META_CACHE = cglib.STATE / "metadata-cache.json"
 _CTRL = {28: "full", 18: "partial"}          # Steam category ids
 
 

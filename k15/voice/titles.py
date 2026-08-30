@@ -130,21 +130,21 @@ def _resolver_from(by_name: dict, threshold: float,
     return resolve
 
 
-def build_resolver(threshold: float, margin: float = 5,
+def build_resolver(threshold: float,
                    rows: list | None = None) -> Callable[[str], tuple] | None:
     """spoken -> (appid, canonical title) or (None, None), over installed games
     (the index's, or `rows` - a session passes its Catalog snapshot)."""
     if rows is None:
         rows = library.load().get("installed", [])
     return _resolver_from({r["name"]: r["appid"] for r in rows if r.get("name")},
-                          threshold, margin)
+                          threshold)
 
 
-def build_collection_resolver(threshold: float, margin: float = 5,
+def build_collection_resolver(threshold: float,
                               rows: list | None = None) -> Callable[[str], tuple] | None:
     """spoken -> (collection id, canonical name) or (None, None), over Big
     Picture collections. None when there are none yet."""
     if rows is None:
         rows = library.load().get("collections", [])
     return _resolver_from({r["name"]: r["id"] for r in rows
-                           if r.get("name") and r.get("id")}, threshold, margin)
+                           if r.get("name") and r.get("id")}, threshold)

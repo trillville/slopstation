@@ -1,7 +1,8 @@
-"""The assistant's bench: each provider's plain SDK loop (one turn, with its
-tool loop, to reply text) and the --text REPL that drives it. Same prompt,
-tool schemas and impls as the voice pipeline (assistant.py); nothing here is
-on the wake path.
+"""Each provider's plain SDK loop (one turn, with its tool loop, to reply text)
+and the --text REPL that drives it. The backends are production: text_interface
+builds one per LAN chat session from BACKENDS. The REPL wires only the base
+tool set, so it is not tool-for-tool with a live session; nothing here is on
+the wake path.
 """
 import json
 import time
@@ -17,7 +18,7 @@ import traces
 
 
 class AnthropicBackend:
-    key = "anthropicApiKey"          # == PROVIDER_KEY["anthropic"]
+    key = assistant.PROVIDER_KEY["anthropic"]
 
     def __init__(self, secrets, model, effort=None, voice=None):
         import anthropic
@@ -71,7 +72,7 @@ class OpenAIBackend:
     """Responses API: reasoning and tool calls coexist here, unlike the legacy
     chat-completions endpoint. State is server-side via previous_response_id,
     which also threads reasoning items across tool calls."""
-    key = "openaiApiKey"             # == PROVIDER_KEY["openai"]
+    key = assistant.PROVIDER_KEY["openai"]
 
     def __init__(self, secrets, model, effort="low", voice=None):
         import openai
@@ -125,10 +126,10 @@ BACKENDS = {"anthropic": AnthropicBackend, "openai": OpenAIBackend}
 
 
 def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
-    """--text mode: type transcripts, see replies + tool calls + latency. Same
-    system prompt, tool schemas, and impls as the voice pipeline, either
-    provider. Pick with --provider anthropic|openai [--model <id>]
-    [--effort none|low|medium|high]."""
+    """--text mode: type transcripts, see replies + tool calls + latency. The
+    voice pipeline's system prompt and tool schemas, but only the base tool set
+    - no operations, media or steam. Pick with --provider anthropic|openai
+    [--model <id>] [--effort none|low|medium|high]."""
     from dispatch import Dispatch
 
     provider = provider or cfg["voice"]["assistantProvider"]
@@ -164,7 +165,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
                 text = backend.turn(system_text, q, impls)
             except Exception as e:
                 # A bad knob value (e.g. an unsupported reasoning effort) or a
-                # transient API error shouldn't kill the bench session.
+                # transient API error shouldn't kill the REPL session.
                 print(f"API error ({time.time() - t0:.1f}s)> {e}")
                 continue
             note = f", {backend.cache_note}" if backend.cache_note else ""
