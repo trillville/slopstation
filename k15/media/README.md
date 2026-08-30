@@ -9,16 +9,17 @@ and Slopstation observes progress without owning the download process.
 ```mermaid
 flowchart LR
     request[Voice, text,<br/>or command line] --> slop[Slopstation<br/>resolve title, scope, preset]
-    slop --> managers[Radarr · movies<br/>Sonarr · series]
+    slop -->|request and observe| managers[Radarr · movies<br/>Sonarr · series]
     managers -->|dispatch| qbit[qBittorrent<br/>transfer and seed]
     qbit --> torrents[C:\Media\torrents]
-    torrents -->|import| libraries[C:\Media\Movies<br/>C:\Media\TV]
+    torrents -->|Radarr / Sonarr import| libraries[C:\Media\Movies<br/>C:\Media\TV]
 
-    ops[Operation tracking<br/>progress and completion] <--> slop
-    indexers[Configured indexers] <--> prowlarr[Prowlarr<br/>indexer management]
-    flaresolverr[FlareSolverr<br/>challenge proxy] -. browser challenge .-> prowlarr
-    prowlarr --> managers
-    proton[Proton VPN<br/>peer traffic] --- qbit
+    slop -->|records progress| ops[Operation tracking<br/>progress and completion]
+    managers -->|release search| prowlarr[Prowlarr<br/>indexer management]
+    prowlarr -->|search and RSS| indexers[Configured indexers]
+    prowlarr -. challenged requests .-> flaresolverr[FlareSolverr<br/>challenge proxy]
+    flaresolverr -. browser-backed fetch .-> indexers
+    qbit -->|peer traffic| proton[Proton VPN<br/>network route]
 ```
 
 Prowlarr, FlareSolverr, Radarr, and Sonarr run in Docker Compose. qBittorrent
