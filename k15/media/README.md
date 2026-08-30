@@ -50,8 +50,8 @@ For unattended voice and text requests, verify this operating state once:
   server before qBittorrent transfers; after a Proton reconnect, its current
   forwarded port still matches qBittorrent's listening port.
 - In both Radarr and Sonarr, qBittorrent is enabled and its **Test** succeeds.
-  **Completed Download Handling** is enabled. Leave automatic removal off
-  until the intended seeding ratio/time policy has been configured.
+  **Completed Download Handling** is enabled. Follow the staged cleanup rollout
+  below before enabling automatic removal.
 - In Prowlarr, both applications test successfully and use **Full Sync**.
   Manage synchronized indexers in Prowlarr, not separately in Radarr or
   Sonarr. Each indexer's RSS, Automatic Search, and Interactive Search modes
@@ -73,6 +73,92 @@ selects its name. Copy the generated Radarr and Sonarr API keys into
 `validate` exits nonzero until both configured root folders and every preset's
 exact quality-profile name exist. It does not inspect or change releases,
 indexers, or downloads.
+
+## Seeding and completed-download cleanup
+
+Use one initial policy for both public indexers: ratio `0.25`, seed-time limit
+`60` minutes (one hour), and stop when either limit is reached. Prowlarr owns
+the per-indexer limits; qBittorrent owns the action; Radarr and Sonarr own
+removal after import and seeding.
+
+1. In Prowlarr, show advanced settings and edit **1337x**. Set **Seed Ratio**
+   to `0.25` and **Seed Time** to `60`, then test and save. Repeat for
+   **EZTV**. Keep both application connections on **Full Sync** so these values
+   reach Radarr and Sonarr.
+2. In native qBittorrent, open **Tools > Options > BitTorrent > Seeding
+   Limits**. Set the limit-combination mode to the first/either limit
+   (`MatchAny`) and the action to **Stop torrent**. Do not select a remove or
+   delete action. The indexer-specific limits take precedence, so global
+   ratio/time defaults do not need to be enabled.
+3. Keep the `radarr` and `sonarr` categories configured in their download
+   clients. Do not use a post-import category change; Arr needs to continue
+   recognizing its torrent while it seeds.
+4. In Radarr and Sonarr, keep global **Completed Download Handling** enabled.
+   Edit the qBittorrent download-client entry, show advanced settings, and
+   leave **Remove Completed Downloads** disabled for the first test.
+5. Request a small movie. Confirm it imports into `C:\Media\Movies`, plays from
+   that library path, and remains in qBittorrent after import. Let it reach
+   either limit and confirm qBittorrent stops it without deleting content.
+6. Enable **Remove Completed Downloads** on Radarr's qBittorrent client.
+   Confirm Radarr removes the stopped torrent and its download payload while
+   the imported movie remains.
+7. Repeat the same staged test with a small episode or season in Sonarr, then
+   enable **Remove Completed Downloads** on Sonarr's qBittorrent client.
+
+Do not enable automatic removal in an Arr application until its controlled
+test reaches the final step. qBittorrent must never delete the content itself;
+that can race the importing authority and lose the library copy.
+
+## Proton forwarded port
+
+After every Proton reconnect, read Proton's current **Active port** and apply
+it explicitly:
+
+    cd C:\Users\minipc\Desktop\slopstation\k15\voice
+    .venv\Scripts\python media.py set-qbit-port 33125 --execute
+
+Replace `33125` with the current Active port. The command validates the port,
+authenticates to the native qBittorrent Web API, changes only its listening
+port, and reads the value back. It does not infer or scrape Proton state.
+Recheck that qBittorrent still shows `ProtonVPN`, **All addresses**, and
+UPnP/NAT-PMP disabled. A torrent-address test remains the live proof that peer
+traffic exits through Proton.
+
+The maintenance commands need two additional local secrets and three policy
+values. Add the secrets to `k15\secrets.json`:
+
+    "prowlarrApiKey": "your-prowlarr-api-key",
+    "qbittorrentPassword": "your-native-web-ui-password"
+
+Copy these keys from `config.example.json` into the existing `media` object in
+`k15\config.json`:
+
+    "qbittorrentUsername": "admin",
+    "qbittorrentNetworkInterface": "ProtonVPN",
+    "managedIndexers": ["1337x", "EZTV"],
+    "seedRatio": 0.25,
+    "seedTimeMinutes": 60
+
+These credentials are not required by ordinary movie or series acquisition.
+They are used only by maintenance diagnostics and the explicit port helper.
+
+## Comprehensive health check
+
+Run the read-only check after setup or after changing media infrastructure:
+
+    cd C:\Users\minipc\Desktop\slopstation\k15\voice
+    .venv\Scripts\python media.py doctor
+
+It checks Compose state, all service APIs, Arr health, roots, profiles,
+indexers, download clients, completed-download removal, Prowlarr Full Sync and
+seed values, qBittorrent categories, interface binding, UPnP/NAT-PMP, share
+limit behavior, Web UI authentication, and the listening port. Any `FAIL`
+makes the command exit nonzero; `WARN` does not.
+
+The ordinary command always warns that Proton's current Windows Active port
+cannot be read through a supported API and that the torrent-visible address
+has not been probed. Those are limits of the evidence, not failures. The
+doctor never adds a torrent or mutates a service.
 
 Changing to the NAS later requires stopping the stack and native qBittorrent,
 copying `MEDIA_ROOT`, editing `.env`, changing qBittorrent's download path and

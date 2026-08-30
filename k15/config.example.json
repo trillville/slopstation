@@ -20,8 +20,13 @@
     "sonarrUrl": "http://127.0.0.1:8989",
     "prowlarrUrl": "http://127.0.0.1:9696",
     "qbittorrentUrl": "http://127.0.0.1:8080",
+    "qbittorrentUsername": "admin",
+    "qbittorrentNetworkInterface": "ProtonVPN",
     "movieRoot": "/data/Movies",
     "seriesRoot": "/data/TV",
+    "managedIndexers": ["1337x", "EZTV"],
+    "seedRatio": 0.25,
+    "seedTimeMinutes": 60,
     "pollS": 30,
     "moviePresets": {
       "default": "Slopstation Blu-ray HDR TrueHD",

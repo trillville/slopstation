@@ -71,7 +71,7 @@ and warns on drift.
 | `calibrate.py` | Rediscovers the controller's HID button bytes after a firmware change. |
 | `haptic_test.py` | Bench tool for the controller's haptic output reports. Run only with the listener stopped. |
 | `config.example.json` | Template for `config.json` (gitignored): MAC, IPs, COM port, TV input mapping, voice tuning. Every key is documented inline. |
-| `secrets.template.json` | Template for `secrets.json` (gitignored): Deepgram, Anthropic, OpenAI, Steam, Radarr, Sonarr, Langfuse, and Grafana keys. |
+| `secrets.template.json` | Template for `secrets.json` (gitignored): Deepgram, Anthropic, OpenAI, Steam, media-service, Langfuse, and Grafana keys. |
 | `Start-K15.bat` | The Startup-folder target, and the one thing to run after a `git pull`. Per lane: supervisor down → start it; supervisor up → kill the *agent* so its supervisor relaunches it on new code. Never bounces a supervisor window, so a live session's watch loop survives. |
 | `Start-Listener.bat` | Chord-lane supervisor: `reconcile` once, then the listener in a 10 s restart loop. Single-instance. |
 | `alloy/config.alloy.example` | Grafana Alloy config template — ships `logs\k15-*.jsonl` to Loki. Copy to `config.alloy` (gitignored). |
@@ -94,7 +94,7 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `assistant.py` | The catalog-in-context LLM lane: prompt, tool schemas and impls (store data, nav, quit, install), optional web search. |
 | `assistant_repl.py` | The bench: each provider's plain SDK loop and the `--text` REPL over the same prompt and tools. |
 | `operations.py` / `announce.py` | Durable correlation for Steam installs and media acquisition: restart-safe observation, a diagnostic CLI, and proactive spoken completion. See `docs/operations.md`. |
-| `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation, and diagnostic CLI. Prowlarr/qBittorrent stay behind the service boundary. See `docs/media-acquisition.md`. |
+| `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation, plus read-only stack diagnostics and an explicit qBittorrent port helper. Prowlarr/qBittorrent stay outside normal acquisition. See `docs/media-acquisition.md`. |
 | `text_interface.py` | Authenticated LAN chat endpoint over the same assistant tools and durable operations as voice. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice, download status, and operation observation over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |

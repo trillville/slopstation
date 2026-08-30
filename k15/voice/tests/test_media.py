@@ -147,6 +147,45 @@ def main():
     assert json.loads(calls[1][3]) == {"name": "MoviesSearch", "movieIds": [7]}
     print("  HTTP: v3 paths, header authentication, encoded query, JSON body")
 
+    qbit_calls = []
+    qbit_preferences = {"listen_port": 6881}
+
+    def qbit_transport(method, url, headers, body, timeout):
+        qbit_calls.append((method, url, headers, body, timeout))
+        path = urllib.parse.urlsplit(url).path
+        if path.endswith("/auth/login"):
+            return {"Set-Cookie": "SID=session-1; HttpOnly; path=/"}, b"Ok."
+        assert headers["Cookie"] == "SID=session-1"
+        if path.endswith("/app/preferences"):
+            return {}, json.dumps(qbit_preferences).encode()
+        if path.endswith("/app/setPreferences"):
+            changes = json.loads(urllib.parse.parse_qs(
+                body.decode())["json"][0])
+            qbit_preferences.update(changes)
+            return {}, b""
+        raise AssertionError((method, path))
+
+    qbit = media.QbittorrentClient(
+        "http://127.0.0.1:8080", "admin", "a-long-qbit-password",
+        transport=qbit_transport)
+    changed_port = qbit.set_listen_port(33125)
+    assert changed_port == {"ok": True, "previous_port": 6881,
+                            "listen_port": 33125, "changed": True}
+    assert qbit_calls[0][2]["Origin"] == "http://127.0.0.1:8080"
+    assert urllib.parse.parse_qs(qbit_calls[0][3].decode()) == {
+        "username": ["admin"], "password": ["a-long-qbit-password"]}
+    assert len([row for row in qbit_calls
+                if row[1].endswith("/app/setPreferences")]) == 1
+    qbit.set_listen_port(33125)
+    assert len([row for row in qbit_calls
+                if row[1].endswith("/app/setPreferences")]) == 1
+    try:
+        qbit.set_listen_port(0)
+        raise AssertionError("invalid qBittorrent port accepted")
+    except media.MediaError:
+        pass
+    print("  qBittorrent: cookie auth, explicit port mutation, read-back verification")
+
     svc = service()
     svc.radarr.lookup = [
         {"tmdbId": n, "title": f"Movie {n}\n", "year": 2000 + n,
@@ -407,6 +446,99 @@ def main():
 
     assert media._track(FailingStore(), failed_submission)["tracking"] == "failed"
     print("  factory: disabled is inert; preflight checks roots and named profiles")
+
+    doctor_cfg = json.loads(json.dumps(_bootstrap.CONFIG))
+    doctor_cfg["media"]["enabled"] = True
+    doctor_secrets = {
+        "radarrApiKey": "radarr-key-long-enough",
+        "sonarrApiKey": "sonarr-key-long-enough",
+        "prowlarrApiKey": "prowlarr-key-long-enough",
+        "qbittorrentPassword": "qbit-password-long-enough",
+    }
+
+    def doctor_arr_transport(method, url, headers, body, timeout):
+        split = urllib.parse.urlsplit(url)
+        path = split.path
+        if path.endswith("/system/status"):
+            return {"version": "1.0.0", "appName": "test"}
+        if path.endswith("/health"):
+            return []
+        if "/api/v1/indexer" in path:
+            return [{
+                "name": name, "enable": True,
+                "fields": [{"name": "seedRatio", "value": 0.25},
+                           {"name": "seedTime", "value": 60}],
+            } for name in ("1337x", "EZTV")]
+        if path.endswith("/api/v1/applications"):
+            return [{"name": name, "implementation": name,
+                     "syncLevel": "fullSync"}
+                    for name in ("Radarr", "Sonarr")]
+        if path.endswith("/rootfolder"):
+            root_path = "/data/Movies" if split.port == 7878 else "/data/TV"
+            return [{"path": root_path}]
+        if path.endswith("/qualityprofile"):
+            key = "moviePresets" if split.port == 7878 else "seriesPresets"
+            return [{"name": name} for name in set(
+                doctor_cfg["media"][key].values())]
+        if path.endswith("/indexer"):
+            return [{"name": "synced", "enable": True}]
+        if path.endswith("/config/downloadclient"):
+            return {"enableCompletedDownloadHandling": True}
+        if path.endswith("/downloadclient"):
+            category = "radarr" if split.port == 7878 else "sonarr"
+            return [{"implementation": "QBittorrent", "enable": True,
+                     "removeCompletedDownloads": True,
+                     "fields": [{"name": "category", "value": category}]}]
+        raise AssertionError((method, url))
+
+    doctor_qbit_preferences = {
+        "current_network_interface": "ProtonVPN",
+        "current_interface_name": "ProtonVPN",
+        "current_interface_address": "",
+        "upnp": False,
+        "listen_port": 33125,
+        "max_ratio_act": 0,
+        "share_limits_mode": "MatchAny",
+        "bypass_local_auth": False,
+        "bypass_auth_subnet_whitelist_enabled": False,
+    }
+
+    def doctor_qbit_transport(method, url, headers, body, timeout):
+        path = urllib.parse.urlsplit(url).path
+        if path.endswith("/auth/login"):
+            return {"Set-Cookie": "SID=doctor; path=/"}, b"Ok."
+        if path.endswith("/app/version"):
+            return {}, b"5.1.4"
+        if path.endswith("/app/preferences"):
+            return {}, json.dumps(doctor_qbit_preferences).encode()
+        if path.endswith("/torrents/categories"):
+            return {}, json.dumps({"radarr": {}, "sonarr": {}}).encode()
+        raise AssertionError((method, url))
+
+    compose_rows = [{"Service": name, "State": "running", "Health": ""}
+                    for name in ("flaresolverr", "prowlarr", "radarr", "sonarr")]
+    doctor = media.media_doctor(
+        doctor_cfg, doctor_secrets, cglib.CapturingLog("voice"),
+        arr_transport=doctor_arr_transport,
+        qbit_transport=doctor_qbit_transport,
+        compose_runner=lambda media_dir: compose_rows)
+    assert doctor["ok"]
+    assert [row["level"] for row in doctor["checks"]].count("WARN") == 2
+    assert any(row["name"] == "qBittorrent share-limit action"
+               and row["level"] == "PASS" for row in doctor["checks"])
+    broken_preferences = dict(doctor_qbit_preferences,
+                              current_network_interface="Ethernet", upnp=True)
+    doctor_qbit_preferences.clear()
+    doctor_qbit_preferences.update(broken_preferences)
+    broken = media.media_doctor(
+        doctor_cfg, doctor_secrets, cglib.CapturingLog("voice"),
+        arr_transport=doctor_arr_transport,
+        qbit_transport=doctor_qbit_transport,
+        compose_runner=lambda media_dir: compose_rows)
+    assert not broken["ok"]
+    assert any(row["name"] == "qBittorrent UPnP/NAT-PMP"
+               and row["level"] == "FAIL" for row in broken["checks"])
+    print("  doctor: live boundaries, policy checks, and proof-limit warnings")
 
     root = Path(__file__).resolve().parents[3]
     compose = (root / "k15" / "media" / "compose.yaml").read_text(encoding="utf-8")
