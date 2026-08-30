@@ -1,229 +1,278 @@
-# K15 media sidecars
+# Media acquisition on the K15
 
-`Start-Media.ps1` creates a local `.env` from the C-drive defaults and starts
-FlareSolverr, Prowlarr, Radarr, and Sonarr. Docker Desktop with Linux containers
-must already be running. qBittorrent runs as the native Windows application so
-Proton VPN's include-only split tunnel can target `qbittorrent.exe`; it must not
-run in this Compose project.
+Slopstation converts a voice, text, MCP, or direct CLI request into durable
+desired state in Radarr or Sonarr. Those services select releases, qBittorrent
+transfers them, and Slopstation observes progress without owning the download
+process.
 
-The web interfaces bind to localhost. Configure them from the K15 or through
-an SSH tunnel; do not expose their management ports to the internet.
+## Architecture
 
-Use these paths and service addresses during one-time setup:
+```mermaid
+flowchart LR
+    request[Voice, text, MCP,<br/>or direct CLI] --> slop[Slopstation<br/>resolve title, scope, preset]
+    slop -->|request and observe| managers[Radarr · movies<br/>Sonarr · series]
+    managers -->|dispatch| qbit[qBittorrent<br/>transfer and seed]
+    qbit --> torrents[C:\Media\torrents]
+    torrents -->|Radarr / Sonarr import| libraries[C:\Media\Movies<br/>C:\Media\TV]
 
-- Native qBittorrent download path: `C:\Media\torrents`
-- Radarr root: `/data/Movies` (`C:\Media\Movies` on the host)
-- Sonarr root: `/data/TV` (`C:\Media\TV` on the host)
-- Radarr/Sonarr qBittorrent host: `host.docker.internal`, port `8080`
-- Radarr category: `radarr`
-- Sonarr category: `sonarr`
-- Radarr/Sonarr remote path mapping: host `host.docker.internal`, remote
-  `C:\Media\torrents`, local `/data/torrents`
-- Prowlarr Radarr URL: `http://radarr:7878`
-- Prowlarr Sonarr URL: `http://sonarr:8989`
-- Prowlarr FlareSolverr URL: `http://flaresolverr:8191`
+    slop -->|records progress| ops[Operation tracking<br/>progress and completion]
+    managers -->|release search| prowlarr[Prowlarr<br/>indexer management]
+    prowlarr -->|search and RSS| indexers[Configured indexers]
+    prowlarr -. challenged requests .-> flaresolverr[FlareSolverr<br/>challenge proxy]
+    flaresolverr -. browser-backed fetch .-> indexers
+    qbit -->|peer traffic| proton[Proton VPN<br/>network route]
+```
 
-FlareSolverr has no published host port. Its unauthenticated browser API is
-reachable only by services on this Compose network. To use it for a protected
-indexer:
+Prowlarr, FlareSolverr, Radarr, and Sonarr run in Docker Compose. qBittorrent
+and Proton VPN run natively on Windows.
 
-1. In Prowlarr, open **Settings > Indexers > Indexer Proxies**, add
-   **FlareSolverr**, and set its host to `http://flaresolverr:8191`.
-2. Give the proxy a tag such as `flaresolverr`, then test and save it.
-3. Add the same `flaresolverr` tag to each indexer that needs the proxy, then
-   test that indexer again. Leave unprotected indexers untagged.
+| Component | Owns |
+|---|---|
+| Slopstation | Title resolution, explicit scope, preset selection, operation tracking, announcements |
+| Prowlarr | Indexer definitions, categories, RSS/search modes, and per-indexer seed limits |
+| Radarr | Movie monitoring, quality decisions, download dispatch, import, and cleanup |
+| Sonarr | Series/season/episode monitoring, quality decisions, download dispatch, import, and cleanup |
+| qBittorrent | Peer transfer, progress, seeding, and stop action |
+| Proton VPN | qBittorrent’s peer-network route and forwarded port |
+| FlareSolverr | Browser challenges for tagged Prowlarr indexers |
 
-If the test still fails, inspect `docker compose logs flaresolverr`; it handles
-browser challenges but does not solve interactive CAPTCHAs.
+The Arr quality profiles own release policy. Slopstation selects a configured
+profile name; it does not score release titles itself. Future monitored episodes
+remain Sonarr desired state after the originating Slopstation operation ends.
 
-The native qBittorrent Web UI must listen on all addresses at port `8080`, use
-authentication, and must not bypass authentication for localhost or allowlisted
-subnets. Its peer connection remains bound to the `ProtonVPN` interface with
-UPnP/NAT-PMP disabled and Proton's current forwarded port. Verify its torrent
-address is the Proton exit IP before submitting media.
+## Storage and addresses
 
-For unattended voice and text requests, verify this operating state once:
+`Start-Media.ps1` maps one Windows media root to `/data` in Radarr and Sonarr.
+The default is `C:\Media`; changing the host root later does not change the
+container paths stored by Slopstation.
 
-- Docker Desktop starts at login. The four Compose services use
-  `restart: unless-stopped`, so they return automatically with Docker.
-- Native qBittorrent and Proton VPN start at login. Proton connects to a P2P
-  server before qBittorrent transfers; after a Proton reconnect, its current
-  forwarded port still matches qBittorrent's listening port.
-- In both Radarr and Sonarr, qBittorrent is enabled and its **Test** succeeds.
-  **Completed Download Handling** is enabled. Follow the staged cleanup rollout
-  below before enabling automatic removal.
-- In Prowlarr, both applications test successfully and use **Full Sync**.
-  Manage synchronized indexers in Prowlarr, not separately in Radarr or
-  Sonarr. Each indexer's RSS, Automatic Search, and Interactive Search modes
-  are enabled, and its categories include movies for Radarr or TV for Sonarr.
-- Radarr and Sonarr show no download-client, root-folder, or indexer warning
-  under **System > Status**. Their quality profiles retain upgrades, cutoffs,
-  custom-format scores, and minimum scores; Slopstation selects those profiles
-  but never repairs their policy.
+| Purpose | Value |
+|---|---|
+| qBittorrent download path | `C:\Media\torrents` |
+| Radarr root | `/data/Movies` → `C:\Media\Movies` |
+| Sonarr root | `/data/TV` → `C:\Media\TV` |
+| Prowlarr UI | `http://127.0.0.1:9696` |
+| Radarr UI | `http://127.0.0.1:7878` |
+| Sonarr UI | `http://127.0.0.1:8989` |
+| qBittorrent UI | `http://127.0.0.1:8080` |
+| Internal FlareSolverr | `http://flaresolverr:8191` |
 
-Create the quality profiles named in `config.json` before enabling the media
-lane. The profile owns quality and custom-format policy; Slopstation only
-selects its name. Copy the generated Radarr and Sonarr API keys into
-`secrets.json`, set `media.enabled` true, then run:
+Use these URLs from the K15. Do not expose management ports to the internet.
 
-    .venv\Scripts\python media.py status
-    .venv\Scripts\python media.py profiles
-    .venv\Scripts\python media.py validate
+## Bootstrap
 
-`validate` exits nonzero until both configured root folders and every preset's
-exact quality-profile name exist. It does not inspect or change releases,
-indexers, or downloads.
+### 1. Start the sidecars
 
-## Seeding and completed-download cleanup
+Install Docker Desktop with Linux containers, then run from the repository
+root:
 
-Use one initial policy for both public indexers: ratio `0.25`, seed-time limit
-`60` minutes (one hour), and stop when either limit is reached. Prowlarr owns
-the per-indexer limits; qBittorrent owns the action; Radarr and Sonarr own
-removal after import and seeding.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\k15\media\Start-Media.ps1
+```
 
-1. In Prowlarr, show advanced settings and edit **1337x**. Set **Seed Ratio**
-   to `0.25` and **Seed Time** to `60`, then test and save. Repeat for
-   **EZTV**. Keep both application connections on **Full Sync** so these values
-   reach Radarr and Sonarr.
-2. In native qBittorrent, open **Tools > Options > BitTorrent > Seeding
-   Limits**. Check ratio `0.25` and total seeding time `60 min`; leave inactive
-   seeding time unchecked. Set the action to **Stop torrent**. qBittorrent
-   evaluates the enabled limits independently. Newer Web API versions call this
-   `MatchAny`; older versions omit the mode field, and the Windows UI has no
-   separate selector. Do not select a remove or delete action. The
-   indexer-specific limits take precedence, so these global values are a
-   matching fallback.
-3. Keep the `radarr` and `sonarr` categories configured in their download
-   clients. Do not use a post-import category change; Arr needs to continue
-   recognizing its torrent while it seeds.
-4. In Radarr and Sonarr, keep global **Completed Download Handling** enabled.
-   Edit the qBittorrent download-client entry, show advanced settings, and
-   leave **Remove Completed Downloads** disabled for the first test.
-5. Request a small movie. Confirm it imports into `C:\Media\Movies`, plays from
-   that library path, and remains in qBittorrent after import. Let it reach
-   either limit and confirm qBittorrent stops it without deleting content.
-6. Enable **Remove Completed Downloads** on Radarr's qBittorrent client.
-   Confirm Radarr removes the stopped torrent and its download payload while
-   the imported movie remains.
-7. Repeat the same staged test with a small episode or season in Sonarr, then
-   enable **Remove Completed Downloads** on Sonarr's qBittorrent client.
+On first run the script copies `.env.example` to `.env`, creates the config and
+media directories, and starts FlareSolverr, Prowlarr, Radarr, and Sonarr. Review
+`.env` before moving the media root from `C:\Media`. Complete the first-run
+authentication prompt in each local UI.
 
-Do not enable automatic removal in an Arr application until its controlled
-test reaches the final step. qBittorrent must never delete the content itself;
-that can race the importing authority and lose the library copy.
+### 2. Configure native qBittorrent and Proton
 
-## Proton forwarded port
+Run qBittorrent as a native Windows application; do not add it to Compose.
 
-The official Proton Windows client emits its current port-forwarding state to:
+- Proton: WireGuard, P2P server, include-only split tunnel containing
+  `qbittorrent.exe`, standard kill switch, LAN access, and port forwarding.
+- qBittorrent peer interface: Proton’s interface; optional IP set to all
+  addresses; UPnP/NAT-PMP disabled.
+- Web UI: port `8080`, authenticated, listening where Docker can reach it, with
+  localhost and subnet authentication bypass disabled.
+- Default save path: `C:\Media\torrents`.
+- Categories: create `radarr` and `sonarr`.
 
-    %LOCALAPPDATA%\Proton\Proton VPN\Logs\client-logs.txt
+Set `media.qbittorrentNetworkInterface` in `k15\config.json` to the exact
+interface name qBittorrent reports.
 
-Slopstation can read that local log and keep native qBittorrent synchronized.
-The integration accepts only an active mapping observed within the last 45
-seconds. Stopped, transitional, stale, missing, or unrecognized state never
-changes qBittorrent.
+### 3. Configure Prowlarr
 
-Validate the read-only source first while Proton is connected to a P2P server
-with port forwarding enabled:
+Add the indexers you are authorized to use, then add both applications with
+**Full Sync**:
 
-    cd C:\Users\minipc\Desktop\slopstation\k15\voice
-    .venv\Scripts\python media.py proton-port
+| Application | Server URL |
+|---|---|
+| Radarr | `http://radarr:7878` |
+| Sonarr | `http://sonarr:8989` |
 
-The result must show `"state": "active"` and the same port shown by Proton.
-Next perform one explicit synchronization:
+Use each application’s API key from **Settings → General**. In the Prowlarr
+sync profile, enable RSS, automatic search, and interactive search. Confirm
+movie categories reach Radarr and TV categories reach Sonarr.
 
-    .venv\Scripts\python media.py sync-proton-port --execute
+For an indexer that needs browser-challenge handling, add a FlareSolverr
+indexer proxy at `http://flaresolverr:8191`, give it a tag, and apply the same
+tag to that indexer. FlareSolverr is internal-only and cannot solve an
+interactive CAPTCHA.
 
-Confirm `changed` is true when the ports initially differ, and that
-`listen_port` equals `port`. Then add this setting to the existing `media`
-object in `k15\config.json`:
+### 4. Configure Radarr and Sonarr
 
-    "protonPortSync": true
+In both applications, enable Completed Download Handling and add native
+qBittorrent at `host.docker.internal:8080` with its Web UI credentials.
 
-Restart with `Start-K15.bat`. The voice supervisor checks immediately and then
-at `media.pollS`; successful changes are logged as `proton_port_synced`. Proton
-log-format changes fail closed and emit `proton_port_sync_failed` without
-changing qBittorrent.
-
-The manual fallback remains available:
-
-    cd C:\Users\minipc\Desktop\slopstation\k15\voice
-    .venv\Scripts\python media.py set-qbit-port 33125 --execute
-
-Replace `33125` with the current Active port. The command validates the port,
-authenticates to the native qBittorrent Web API, changes only its listening
-port, and reads the value back. Recheck that qBittorrent still shows
-`ProtonVPN`, **All addresses**, and UPnP/NAT-PMP disabled. A torrent-address
-test remains the live proof that peer traffic exits through Proton.
-
-The maintenance commands need two additional local secrets and three policy
-values. Add the secrets to `k15\secrets.json`:
-
-    "prowlarrApiKey": "your-prowlarr-api-key",
-    "qbittorrentPassword": "your-native-web-ui-password"
-
-Copy these keys from `config.example.json` into the existing `media` object in
-`k15\config.json`:
-
-    "qbittorrentUsername": "admin",
-    "qbittorrentNetworkInterface": "ProtonVPN",
-    "protonPortSync": false,
-    "managedIndexers": ["1337x", "EZTV"],
-    "seedRatio": 0.25,
-    "seedTimeMinutes": 60
-
-These credentials are not required by ordinary movie or series acquisition.
-They are used by maintenance diagnostics, explicit port commands, and the
-optional background synchronizer.
-
-## Unattended failure watch
-
-Radarr and Sonarr fail quietly: a grab that never becomes a file leaves the
-download in `torrents\`, the episode still missing, and nothing on screen. The
-voice supervisor polls both authorities and emits what it finds on the voice
-lane, so Grafana holds it with everything else.
-
-It is on by default and needs no configuration. To slow it down or silence it,
-add either key to the existing `media` object in `k15\config.json`:
-
-    "healthPollS": 300,
-    "healthSync": false
-
-Polling rather than a webhook is deliberate: a notification connection lives
-only in the container's config database, which is not in the checkout and does
-not survive a rebuilt config volume.
-
-| Event | Level | Fires when |
+| Application | Root | Category |
 |---|---|---|
-| `media_health_issue` | warn/error | a new entry appears in either app's health report; the level follows the app's own `type` |
-| `media_health_cleared` | info | an entry that was present is gone |
-| `media_import_failed` | error | history records a failed or blocked import; `records` counts the per-episode rows a season pack contributed |
-| `media_queue_stalled` | warn | a queue item is `warning` or `error`, one line per download rather than per episode |
-| `media_watch_failed` | error | an authority is unreachable - reported on change, not on every poll |
+| Radarr | `/data/Movies` | `radarr` |
+| Sonarr | `/data/TV` | `sonarr` |
 
-The first pass after a restart reports current health but only takes a
-watermark from history: replaying what the log still holds would make every
-restart look like an outage.
+Add this remote path mapping in each application:
 
-## Comprehensive health check
+| Host | Remote path | Local path |
+|---|---|---|
+| `host.docker.internal` | `C:\Media\torrents` | `/data/torrents` |
 
-Run the read-only check after setup or after changing media infrastructure:
+Test the root, download client, and remote mapping before continuing.
 
-    cd C:\Users\minipc\Desktop\slopstation\k15\voice
-    .venv\Scripts\python media.py doctor
+### 5. Create quality profiles
 
-It checks Compose state, all service APIs, Arr health, roots, profiles,
-indexers, download clients, completed-download removal, Prowlarr Full Sync and
-seed values, qBittorrent categories, interface binding, UPnP/NAT-PMP, share
-limit behavior, Web UI authentication, and the listening port. When automatic
-port synchronization is enabled, it also compares qBittorrent with Proton's
-fresh live state. Any `FAIL` makes the command exit nonzero; `WARN` does not.
+Create every distinct profile name referenced by `moviePresets` and
+`seriesPresets` in `k15\config.json`. The example configuration maps movie
+defaults to Blu-ray/HDR/lossless-audio policy and offers explicit `1080p` and
+`2160p` steering; series presets provide the corresponding TV profiles.
 
-The doctor never adds a torrent or mutates a service. It cannot prove the
-torrent-visible address; repeat a torrent-address test after VPN or network
-changes.
+| Preset | Movie profile | Series profile |
+|---|---|---|
+| `default` | `Slopstation Blu-ray HDR TrueHD` | `Slopstation Series` |
+| `1080p` | `Slopstation 1080p` | `Slopstation Series 1080p` |
+| `2160p` | `Slopstation Blu-ray HDR TrueHD` | `Slopstation Series 2160p` |
 
-Changing to the NAS later requires stopping the stack and native qBittorrent,
-copying `MEDIA_ROOT`, editing `.env`, changing qBittorrent's download path and
-the Arr remote path mappings, and starting them again. Radarr, Sonarr, and
-Slopstation keep their `/data` paths.
+Profiles own allowed qualities, upgrades, cutoffs, custom-format scores, and
+minimum scores. A strict profile waits when no qualifying release exists.
+
+### 6. Enable Slopstation
+
+Copy the Radarr and Sonarr API keys into `k15\secrets.json`. Maintenance and
+port synchronization additionally use the Prowlarr key and qBittorrent Web UI
+password:
+
+```json
+"radarrApiKey": "...",
+"sonarrApiKey": "...",
+"prowlarrApiKey": "...",
+"qbittorrentPassword": "..."
+```
+
+Copy the `media` object from `config.example.json` into `config.json`, set its
+URLs, roots, profile mappings, qBittorrent username/interface, and managed
+indexers, then set `enabled` to `true`.
+
+### 7. Validate and start unattended operation
+
+From `k15\voice`:
+
+```powershell
+.venv\Scripts\python media.py status
+.venv\Scripts\python media.py profiles
+.venv\Scripts\python media.py validate
+.venv\Scripts\python media.py doctor
+```
+
+`validate` checks roots and exact profile names. `doctor` additionally checks
+containers, APIs, health, indexers, download clients, cleanup policy,
+qBittorrent’s VPN binding, categories, Web UI security, and Proton port sync.
+Neither command adds a torrent.
+
+For unattended use, configure Docker Desktop, Proton, and native qBittorrent
+to start at login. Compose services use `restart: unless-stopped`.
+
+## Request lifecycle
+
+For “download Always Sunny season 18 in 4K,” Slopstation resolves a TVDB ID,
+requires explicit season scope, maps `2160p` to a Sonarr profile, and creates or
+updates the monitored season. Sonarr searches immediately and later consumes
+new releases through RSS. A qualifying release is sent to qBittorrent, imported
+into `/data/TV`, and reported through the durable operation ledger.
+
+Operation phases are `searching`, `waiting_for_match`, `downloading`,
+`importing`, and `ready`. The 30-second reconciliation interval is a polling
+cadence, not a timeout. If an authority is unavailable, the operation becomes
+`UNKNOWN` and resumes when observation succeeds.
+
+For a season containing future episodes, the operation can complete after all
+currently aired episodes are ready. Sonarr continues monitoring future episodes
+independently.
+
+## Seeding and cleanup
+
+The configured public-indexer policy is ratio `0.25` or 60 minutes, whichever
+is reached first:
+
+1. Prowlarr stores those values on each managed indexer and synchronizes them
+   to Radarr and Sonarr.
+2. qBittorrent uses matching global limits as a fallback and **stops** the
+   torrent. It must never delete content itself.
+3. Radarr or Sonarr imports the library file, waits for the torrent to stop,
+   then removes the torrent and download payload when **Remove Completed
+   Downloads** is enabled.
+
+Keep the `radarr` and `sonarr` categories after import. Validate cleanup first
+with a small movie and then a small episode: the imported library file must
+remain after the torrent payload is removed.
+
+## Proton forwarded-port synchronization
+
+The Proton Windows client writes current port-forwarding state to:
+
+```text
+%LOCALAPPDATA%\Proton\Proton VPN\Logs\client-logs.txt
+```
+
+Slopstation accepts only a fresh active mapping from that log. Transitional,
+stopped, stale, missing, or unrecognized state never changes qBittorrent.
+
+Validate once:
+
+```powershell
+cd C:\Users\minipc\Desktop\slopstation\k15\voice
+.venv\Scripts\python media.py proton-port
+.venv\Scripts\python media.py sync-proton-port --execute
+```
+
+Confirm the returned port matches Proton and qBittorrent, then set
+`media.protonPortSync` to `true` and reload with `Start-K15.bat`. The monitor
+checks immediately and every `media.pollS` seconds. Log-format changes fail
+closed and emit `proton_port_sync_failed`.
+
+Manual fallback:
+
+```powershell
+.venv\Scripts\python media.py set-qbit-port <active-port> --execute
+```
+
+## Monitoring and incident response
+
+The voice supervisor polls Radarr and Sonarr health every five minutes by
+default. It emits changes rather than repeating the same condition:
+
+| Event | Meaning |
+|---|---|
+| `media_health_issue` / `media_health_cleared` | Arr health entry appeared or cleared |
+| `media_import_failed` | Import was rejected or failed |
+| `media_queue_stalled` | A download queue item is warning or error |
+| `media_watch_failed` | An authority became unreachable |
+
+Set `media.healthSync` to `false` to disable this watch or change
+`media.healthPollS` to adjust its interval.
+
+Start diagnosis with:
+
+```powershell
+.venv\Scripts\python media.py doctor
+.venv\Scripts\python operations.py list --active
+docker compose --project-directory ..\media --env-file ..\media\.env ps
+```
+
+Inspect **System → Status**, **Activity → Queue**, and **History** in the
+relevant Arr application before changing configuration.
+
+## Moving the media root
+
+To migrate from `C:\Media` to a NAS: stop Compose and qBittorrent, copy the
+media root, change `MEDIA_ROOT` in `.env`, change qBittorrent’s save path and
+both Arr remote path mappings, then restart and run `media.py doctor`. Keep the
+container roots `/data/Movies`, `/data/TV`, and `/data/torrents` unchanged.
