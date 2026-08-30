@@ -96,6 +96,7 @@ Own venv, own pins. May import the chord lane's modules; never the reverse.
 | `operations.py` / `announce.py` | Durable correlation for Steam installs and media acquisition: restart-safe observation, a diagnostic CLI, and proactive spoken completion. |
 | `media.py` | Structured Radarr/Sonarr lookup, preset resolution, submission, completion observation (with bounded retries once an indexer outage clears), stack diagnostics, and optional Proton-to-qBittorrent port synchronization. Prowlarr/qBittorrent stay outside normal acquisition. |
 | `text_interface.py` | Authenticated LAN chat endpoint over the same assistant tools and durable operations as voice. |
+| `remote_interface.py` | The phone lane: a hand-rolled MCP server a Claude custom connector calls, forwarding one conversational tool to `text_interface.py`. Stdlib-only, holds no assistant state; a Cloudflare tunnel publishes it. |
 | `steam_session.py` | Optional signed-in Steam account session: install-by-voice, download status, and operation observation over ClientComm. Token-gated. |
 | `earcons.py` | Earcon synthesis from specs at import — no binary audio assets in the repo. |
 | `tracing.py` / `traces.py` / `llm_audit.py` | Langfuse spans, per-conversation JSON dumps under `state/traces/`, and a record of provider-executed tool calls. |
@@ -160,6 +161,27 @@ reads the local config and token. To reach it from the gaming PC, set that block
 `host` to `0.0.0.0`, allow its port inbound on the Private profile only
 (`New-NetFirewallRule -Profile Private -RemoteAddress LocalSubnet`), and set
 `SLOPSTATION_URL` and `SLOPSTATION_TOKEN` in that shell.
+
+**Phone.** The same assistant, reachable from the Claude app when nobody is
+home. `remote_interface.py` speaks MCP to a Claude custom connector and forwards
+to the text interface over localhost, so remote turns run the same tools and log
+the same `turn` id. Enable the text interface first, then put 32 random bytes in
+`secrets.json` as `remoteInterfaceToken` and add the `remoteInterface` block from
+`config.example.json`.
+
+Its host stays `127.0.0.1`: reachability is the tunnel's job, never an open port.
+Route a Cloudflare named tunnel (a domain on Cloudflare is the one external
+dependency) at `http://127.0.0.1:8766`, install `cloudflared` as a service, and
+add a WAF rule allowing only Anthropic's egress range `160.79.104.0/21` — then
+the endpoint answers no one but Anthropic holding a valid token. Add the
+connector in the Claude app with the URL `https://<host>/mcp` and that token as
+its request header. `python doctor.py` reports the config, the port, and the
+tunnel service.
+
+Two tokens, two hops: the connector's token never reaches the assistant, and
+`textInterfaceToken` never leaves the LAN. Rotating the outer one is a connector
+edit. Ask "download always sunny" from anywhere; follow-ups must be
+self-contained, because the connector sees only what each message carries.
 
 **Correlate.** Every intent carries a `turn` id from the wake word or the chord
 through to the gaming PC. It appears in `k15/logs/k15-YYYYMMDD.jsonl`, in

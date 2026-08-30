@@ -249,6 +249,7 @@ def check_voice(cfg):
     check_voice_config(cfg)
     check_steam_session()
     check_media(cfg)
+    check_remote(cfg)
     check_operations()
     check_voice_agent()
 
@@ -407,6 +408,48 @@ def check_media(cfg):
            + (f" | unconfigured: {', '.join(unconfigured)}"
               if unconfigured else ""),
            "start k15\\media\\Start-Media.ps1 and native qBittorrent")
+
+
+def check_remote(cfg):
+    """The phone lane: MCP wrapper + the tunnel that publishes it. WARN-only."""
+    remote = cfg.get("remoteInterface") if isinstance(cfg, dict) else None
+    if not isinstance(remote, dict) or not remote.get("enabled"):
+        report(PASS, "remote interface", "disabled")
+        return
+    text = cfg.get("textInterface") or {}
+    secrets = cglib.load_secrets()
+    missing = [name for name, value in
+               (("remoteInterfaceToken", secrets.get("remoteInterfaceToken")),
+                ("textInterfaceToken", secrets.get("textInterfaceToken")))
+               if not cglib.real_key(value)]
+    if missing or not text.get("enabled"):
+        report(WARN, "remote config",
+               f"missing: {', '.join(missing)}" if missing
+               else "textInterface is disabled",
+               "it forwards to the text interface; both need a real token")
+    else:
+        report(PASS, "remote config", "token present, forwards to textInterface")
+    port = int(remote.get("port", 8766))
+    try:
+        _tcp_reachable(f"http://127.0.0.1:{port}")
+        report(PASS, "remote interface", f"listening on {port}")
+    except Exception:
+        report(WARN, "remote interface", f"nothing listening on {port}",
+               "the voice agent hosts it; check the voice lane above")
+    # Without the tunnel the connector cannot reach the K15 at all.
+    try:
+        out = subprocess.run(["sc", "query", "cloudflared"], capture_output=True,
+                             text=True, timeout=10).stdout
+        if "RUNNING" in out:
+            report(PASS, "remote tunnel", "cloudflared service running")
+        elif "STOPPED" in out:
+            report(WARN, "remote tunnel", "cloudflared installed but STOPPED",
+                   "Start-Service cloudflared - the connector is offline meanwhile")
+        else:
+            report(WARN, "remote tunnel", "cloudflared not installed",
+                   "the wrapper is LAN-only until the tunnel is created")
+    except Exception as e:
+        report(WARN, "remote tunnel", f"could not query ({e})", "")
 
 
 def check_operations():
