@@ -129,8 +129,8 @@ Time to READY, the number the whole system is judged on:
     Flux) — bad transcript vs bad phrasing. Absent on turns where Flux sent no
     per-word data.
   - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
-    session build. Deepgram's ceiling is 100 keyterms (measured; 110 is a 400
-    on connect) and `headroom` is what is left of it, so alert on
+    session build. Deepgram's ceiling is 100 keyterms (documented, and measured;
+    110 is a 400 on connect) and `headroom` is what is left of it, so alert on
     `headroom < 5` rather than waiting for `keyterms_capped`.
   - `audio_device_wait` — the configured mic is not in the device table;
     `waited_s` is how long the agent has been deaf waiting for it. A rebuild

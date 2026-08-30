@@ -330,9 +330,12 @@ def sync(meta_limit: int = 200) -> None:
         _sync_lock.release()
 
 
-def query_terms(limit: int = 30) -> list[str]:
-    """Distinct tags/genres, frequency-ranked, fed to Flux as keyterms: titles
-    alone don't teach the STT this vocabulary ("mech games" -> "met games")."""
+def query_terms(limit: int | None = 30) -> list[str]:
+    """Distinct tags/genres, frequency-ranked: the raw material for the STT
+    vocabulary ("mech games" -> "met games"); None for the whole ranking.
+    Ranking is all this owes - session_runtime.query_keyterms picks the spoken
+    form and drops the generic words, because k15/ must not import the voice
+    lane's spoken_form."""
     counts: dict[str, int] = {}
     for m in load_meta().values():
         for term in (m.get("tags") or []) + (m.get("genres") or []):

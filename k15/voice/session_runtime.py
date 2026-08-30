@@ -17,10 +17,66 @@ import tracing
 log = cglib.make_log("voice")
 
 
-# Deepgram's undocumented ceiling, measured 2026-08-15: 100 keyterms connect,
-# 110 get HTTP 400 at the websocket handshake. A COUNT limit, not URL length
-# (100 long terms, 4.7 kB, pass). Over it, every session fails to open.
+# Deepgram documents two ceilings: "up to 100 terms" and 500 tokens across all
+# of them. 2026-08-15 measured the count half - 100 connect, 110 get HTTP 400
+# at the websocket handshake, and over it every session fails to open. The
+# token half is not close (2026-08-29: ~200 words over 93 terms), so count
+# binds first. Weights are not a lever: Flux ignores a ":2.0" suffix silently
+# and boosts the literal string.
 MAX_KEYTERMS = 100
+
+# Tag/genre slots - the jargon half of the vocabulary. Deepgram's own guidance
+# is 20-50 terms and no generic words.
+QUERY_TERM_SLOTS = 30
+
+# Ordinary English, in spoken_form. Flux gets these right unprompted, so a slot
+# spent here is a slot not spent on a coined word it does get wrong. Steam's
+# tag head is almost nothing else: 21 of the top 30 for a 40-game library
+# (2026-08-29), which is how "mechs" - the mishear query_terms was written for
+# - sat at rank 45 and never reached Flux at all.
+GENERIC_TERMS = frozenset({
+    "2d", "3d", "action", "adventure", "anime", "arcade", "atmospheric",
+    "base building", "beautiful", "building", "casual",
+    "character customization", "choices matter", "cinematic", "city builder",
+    "classic", "colorful", "combat", "comedy", "competitive", "crafting",
+    "cute", "dark", "dark fantasy", "difficult", "driving", "dungeon crawler",
+    "early access", "economy", "education", "epic", "exploration",
+    "family friendly", "fantasy", "fast paced", "female protagonist",
+    "fighting", "first person", "flight", "free to play", "funny", "future",
+    "gore", "grand strategy", "great soundtrack", "historical", "horror",
+    "indie", "local co op", "loot", "magic", "management",
+    "massively multiplayer", "mature", "medieval", "military", "mining",
+    "modern", "multiplayer", "music", "mystery", "mythology", "nature",
+    "nudity", "online", "online co op", "open world", "physics", "platformer",
+    "point click", "political", "psychological", "puzzle", "racing",
+    "realistic", "relaxing", "replay value", "resource management", "retro",
+    "romance", "sandbox", "sci fi", "science", "sexual content", "shooter",
+    "short", "silly", "simulation", "singleplayer", "software", "space",
+    "sports", "stealth", "story", "story rich", "strategy", "survival",
+    "tactical", "third person", "trading", "turn based strategy",
+    "turn based tactics", "underwater", "utilities", "violent", "war",
+    "zombies",
+})
+
+
+def _dedupe(terms):
+    seen, out = set(), []
+    for t in terms:
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def query_keyterms(limit=QUERY_TERM_SLOTS):
+    """The words used to ask ABOUT games, in the form Flux emits them.
+
+    query_terms was the one keyterm source that skipped spoken_form, so Flux
+    was taught SteamSpy's punctuation - 'rogue-like', 'souls-like', 'co-op' -
+    and never the unhyphenated words the couch actually says."""
+    return [t for t in _dedupe(titles.spoken_form(x)
+                               for x in library.query_terms(None))
+            if t not in GENERIC_TERMS][:limit]
 
 
 def load_titles(count, rows=None):
@@ -36,26 +92,21 @@ def stt_keyterms(voice, wake_phrase, catalog=None):
     """Everything Flux is told to expect, in the form it will hear it:
     titles, collection names, tag/genre words.
 
-    Order is the budget policy - the cap truncates the tail, so generic tag
-    words ('action', 'adventure') come last; Flux already knows those, an
-    unseen title it does not. 2026-08: 92 of 100 slots spent (55 title forms
-    from 39 games, 11 collections, 30 tag words). The 162 owned-but-uninstalled
-    titles do not fit, which is why keyterm_forms covers 'hades' off Hades II
-    rather than the list carrying plain Hades. Truncation is logged out loud on
-    stt_vocabulary - a silently short list reads as full coverage."""
+    Order is the budget policy - the cap truncates the tail, and titles come
+    first because they carry every observed launch while collection names and
+    query words carry none (30 days to 2026-08-29). The 162
+    owned-but-uninstalled titles do not fit, which is why keyterm_forms covers
+    'hades' off Hades II rather than the list carrying plain Hades. Truncation
+    is logged out loud - a silently short list reads as full coverage."""
     catalog = catalog or library.Catalog.load()
     terms = [wake_phrase]
     for name in load_titles(voice["keytermCount"], catalog.installed):
         terms += titles.keyterm_forms(name)
     terms += [titles.spoken_form(c["name"])
               for c in catalog.collections if c.get("name")]
-    terms += library.query_terms()
+    terms += query_keyterms()
 
-    seen, out = set(), []
-    for t in terms:
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
+    out = _dedupe(terms)
     if len(out) > MAX_KEYTERMS:
         log.warn("keyterms_capped", kept=MAX_KEYTERMS, dropped=len(out) - MAX_KEYTERMS,
                  first_dropped=out[MAX_KEYTERMS])
