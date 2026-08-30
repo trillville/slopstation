@@ -411,6 +411,47 @@ class MediaService:
                 break
         return out
 
+    def library(self, kind, catalog_id):
+        try:
+            catalog_id = int(catalog_id)
+        except (TypeError, ValueError) as e:
+            raise MediaError("catalog id must be an integer") from e
+        if catalog_id <= 0:
+            raise MediaError("catalog id must be positive")
+        if kind == "movie":
+            movie = self._existing(
+                self.radarr.get("movie", {"tmdbId": catalog_id}),
+                "tmdbId", catalog_id, "Radarr")
+            if movie is None:
+                return {"kind": kind, "catalog_id": catalog_id,
+                        "in_library": False}
+            return {"kind": kind, "catalog_id": catalog_id,
+                    "in_library": True,
+                    "title": _clean_text(movie.get("title"))
+                    or f"TMDB {catalog_id}",
+                    "available": bool(movie.get("hasFile"))}
+        if kind != "series":
+            raise MediaError(f"unknown media kind {kind}")
+        series = self._existing(
+            self.sonarr.get("series", {"tvdbId": catalog_id}),
+            "tvdbId", catalog_id, "Sonarr")
+        if series is None:
+            return {"kind": kind, "catalog_id": catalog_id,
+                    "in_library": False}
+        rows = self.sonarr.get("episode", {"seriesId": int(series["id"])})
+        seasons = {}
+        for episode in self._target_episodes(rows, monitored_only=False):
+            number = int(episode.get("seasonNumber", 0) or 0)
+            row = seasons.setdefault(number, {"season": number, "have": 0,
+                                              "aired": 0})
+            row["aired"] += 1
+            if episode.get("hasFile"):
+                row["have"] += 1
+        return {"kind": kind, "catalog_id": catalog_id, "in_library": True,
+                "title": _clean_text(series.get("title"))
+                or f"TVDB {catalog_id}",
+                "seasons": [seasons[number] for number in sorted(seasons)]}
+
     def profiles(self):
         return {
             "movie": self._profile_names(self.radarr),
@@ -1672,6 +1713,9 @@ def main(argv=None):
     find = sub.add_parser("find")
     find.add_argument("kind", choices=("movie", "series"))
     find.add_argument("query")
+    library = sub.add_parser("library")
+    library.add_argument("kind", choices=("movie", "series"))
+    library.add_argument("catalog_id", type=int)
     movie = sub.add_parser("request-movie")
     movie.add_argument("tmdb_id", type=int)
     movie.add_argument("--preset", choices=PRESETS, default="default")
@@ -1739,6 +1783,8 @@ def main(argv=None):
             result = service.validate()
         elif args.command == "find":
             result = service.find(args.kind, args.query)
+        elif args.command == "library":
+            result = service.library(args.kind, args.catalog_id)
         elif not args.execute:
             print("change not submitted; repeat with --execute")
             return 2

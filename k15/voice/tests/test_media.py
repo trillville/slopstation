@@ -281,6 +281,40 @@ def main():
     assert "overview" not in found[0]
     print("  lookup: five structured catalog candidates, no release text")
 
+    # --- library ------------------------------------------------------------
+    lib = service()
+    assert lib.library("movie", 438631) == {
+        "kind": "movie", "catalog_id": 438631, "in_library": False}
+    lib.radarr.library = [{"id": 32, "tmdbId": 438631, "title": "Dune",
+                           "hasFile": True}]
+    held = lib.library("movie", 438631)
+    assert held["in_library"] and held["available"] and held["title"] == "Dune"
+    assert lib.library("series", 81189)["in_library"] is False
+    lib.sonarr.library = [{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}]
+    lib.sonarr.episodes = [
+        {"id": 1, "seasonNumber": 1, "hasFile": True, "monitored": False,
+         "airDateUtc": "2008-01-20T00:00:00Z"},
+        {"id": 2, "seasonNumber": 1, "hasFile": False, "monitored": False,
+         "airDateUtc": "2008-01-27T00:00:00Z"},
+        {"id": 3, "seasonNumber": 2, "hasFile": True, "monitored": True,
+         "airDateUtc": "2009-03-08T00:00:00Z"},
+        {"id": 4, "seasonNumber": 2, "hasFile": False, "monitored": True,
+         "airDateUtc": "2999-01-01T00:00:00Z"},
+        {"id": 5, "seasonNumber": 0, "hasFile": True, "monitored": True,
+         "airDateUtc": "2009-01-01T00:00:00Z"},
+    ]
+    owned = lib.library("series", 81189)
+    assert owned["title"] == "Breaking Bad"
+    assert owned["seasons"] == [{"season": 1, "have": 1, "aired": 2},
+                                {"season": 2, "have": 1, "aired": 1}]
+    try:
+        lib.library("album", 1)
+        raise AssertionError("unknown kind must raise")
+    except media.MediaError:
+        pass
+    print("  library: per-season aired counts regardless of monitoring; "
+          "specials and unaired excluded")
+
     # --- movies --------------------------------------------------------------
     svc.radarr.lookup_by_id = {"tmdbId": 438631, "title": "Dune", "year": 2021}
     svc.radarr.created = {"id": 31, "tmdbId": 438631, "title": "Dune",
