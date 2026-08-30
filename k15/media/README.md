@@ -88,10 +88,11 @@ removal after import and seeding.
 2. In native qBittorrent, open **Tools > Options > BitTorrent > Seeding
    Limits**. Check ratio `0.25` and total seeding time `60 min`; leave inactive
    seeding time unchecked. Set the action to **Stop torrent**. qBittorrent
-   evaluates the enabled limits independently (the API calls this `MatchAny`),
-   but the Windows UI has no separate mode selector. Do not select a remove or
-   delete action. The indexer-specific limits take precedence, so these global
-   values are a matching fallback.
+   evaluates the enabled limits independently. Newer Web API versions call this
+   `MatchAny`; older versions omit the mode field, and the Windows UI has no
+   separate selector. Do not select a remove or delete action. The
+   indexer-specific limits take precedence, so these global values are a
+   matching fallback.
 3. Keep the `radarr` and `sonarr` categories configured in their download
    clients. Do not use a post-import category change; Arr needs to continue
    recognizing its torrent while it seeds.

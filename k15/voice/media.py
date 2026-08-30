@@ -1259,10 +1259,15 @@ def _check_qbittorrent(report, client, media_cfg):
     action = preferences.get("max_ratio_act")
     report.add("PASS" if action == 0 else "FAIL", "qBittorrent share-limit action",
                "Stop" if action == 0 else "must be Stop, never Remove")
-    mode = str(preferences.get("share_limits_mode", ""))
-    report.add("PASS" if mode.casefold() == "matchany" else "FAIL",
-               "qBittorrent share-limit mode",
-               mode or "must be MatchAny (either limit)")
+    mode = preferences.get("share_limits_mode")
+    if mode is None:
+        report.add("PASS", "qBittorrent share-limit mode",
+                   "legacy either-limit behavior (mode field unavailable)")
+    else:
+        mode_name = str(mode)
+        report.add("PASS" if mode_name.casefold() == "matchany" else "FAIL",
+                   "qBittorrent share-limit mode",
+                   mode_name or "must be MatchAny (either limit)")
     auth_bypass = (preferences.get("bypass_local_auth")
                    or preferences.get("bypass_auth_subnet_whitelist_enabled"))
     report.add("FAIL" if auth_bypass else "PASS", "qBittorrent Web UI auth",
