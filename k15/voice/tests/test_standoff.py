@@ -6,6 +6,7 @@ chord lane goes deaf until someone deletes a file.
 
 Run:  python tests\\test_standoff.py     (system python - no venv needed)
 """
+import os
 import sys
 import time
 import types
@@ -24,6 +25,7 @@ import chord_listener as cl
 
 _real_sleep = time.sleep
 _real_poll = cl.STANDOFF_POLL_S
+_real_fail_check = cl.FAIL_CHECK_S
 
 # main()'s two startup side effects belong to running the lane, not to
 # exercising its loop.
@@ -75,11 +77,17 @@ class FakeHid:
         return h
 
 
-def drive(lock_age_s, stop_after, session_starts_at=None):
+def drive(lock_age_s, stop_after, session_starts_at=None, error_age_s=None):
     """Run main()'s loop, counting sleeps. Returns (captured log, fake hid).
     lock_age_s seeds the lock; session_starts_at makes one appear mid-loop, so
-    the standoff transition is exercised, not just the steady states."""
+    the standoff transition is exercised, not just the steady states.
+    error_age_s seeds a failure marker of that age - FakeHid never returns a
+    report, so this is the Puck sitting untouched."""
     fresh_state(lock_age_s)
+    if error_age_s is not None:
+        cglib.LAST_ERROR.write_text('Enter exited without READY')
+        when = time.time() - error_age_s
+        os.utime(cglib.LAST_ERROR, (when, when))
     cap = cglib.CapturingLog("listener")
     fake = FakeHid()
     ticks = [0]
@@ -94,13 +102,14 @@ def drive(lock_age_s, stop_after, session_starts_at=None):
     cl.log, cl.hid, cl.time.sleep = cap, fake, fake_sleep
     # Check the lock every pass: fake_sleep advances no real clock, and this
     # is about the transition, not the poll rate.
-    cl.STANDOFF_POLL_S = 0
+    cl.STANDOFF_POLL_S = cl.FAIL_CHECK_S = 0
     try:
         cl.main()
     except Stop:
         pass
     finally:
         cl.time.sleep, cl.STANDOFF_POLL_S = _real_sleep, _real_poll
+        cl.FAIL_CHECK_S = _real_fail_check
     return cap, fake
 
 
@@ -166,8 +175,35 @@ def main():
         f"re-opened the Puck {fake.enumerations - 1}x mid-session - the standoff leaks"
     assert ev.count("puck_standoff") == 1, f"logged the transition {ev.count('puck_standoff')}x"
 
+    # The loop itself must reach the age-out while the Puck says nothing:
+    # FakeHid never returns a report, which is the state a voice- or
+    # phone-started launch fails in.
+    cap, _ = drive(lock_age_s=None, stop_after=6,
+                   error_age_s=cl.ERR_STALE_S + 60)
+    assert 'stale_error_discarded' in cap.events(), cap.events()
+    assert not cglib.LAST_ERROR.exists(), 'the loop never aged the marker out'
+    # A launch started by voice or from a phone leaves nobody holding the
+    # Puck. The age-out must not be gated on the buzz, or the marker
+    # strands until the next successful launch (2026-08-30, stranded 5 h).
+    fresh_state()
+    cap = cglib.CapturingLog('listener')
+    cl.log = cap
+    cglib.LAST_ERROR.write_text('Enter exited without READY')
+    stale = time.time() - cl.ERR_STALE_S - 60
+    os.utime(cglib.LAST_ERROR, (stale, stale))
+    cl.signal_last_error(None)
+    assert cap.find('stale_error_discarded'), cap.events()
+    assert not cglib.LAST_ERROR.exists(), 'stale marker survived unheld'
+
+    # Fresh and unheld: kept, so the next hand on the Puck still feels it.
+    cglib.LAST_ERROR.write_text('Enter exited without READY')
+    cap.records.clear()
+    cl.signal_last_error(None)
+    assert not cap.events(), cap.events()
+    assert cglib.LAST_ERROR.exists(), 'fresh marker discarded unheld'
     print("OK - standoff: fresh lock lets go of the Puck, stale lock recovers, "
-          "stand_off reports only the transition; driving main() confirms a live "
+          "stand_off reports only the transition, a stale failure marker ages "
+          "out with nobody holding the Puck; driving main() confirms a live "
           "session never enumerates HID and a mid-loop launch closes every handle")
 
 
