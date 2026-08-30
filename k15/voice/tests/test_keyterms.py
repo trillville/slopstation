@@ -64,6 +64,23 @@ def test_vocabulary_covers_all_three_sources_and_drops_non_games():
     print(f"  OK  {len(terms)} terms: titles + collections + query words, deduped")
 
 
+def test_query_words_are_spoken_forms_not_steamspy_strings():
+    """SteamSpy writes 'Rogue-like'; the couch says 'rogue like'. Tags were the
+    one source that skipped spoken_form."""
+    terms = session_runtime.query_keyterms()
+    assert "rogue like" in terms, terms
+    assert not any("-" in t or t != t.lower() for t in terms), terms
+    print("  OK  tag words carry no SteamSpy punctuation or case")
+
+
+def test_generic_english_does_not_take_a_slot():
+    """A keyterm buys a prior Flux lacks. It already has 'action'."""
+    terms = session_runtime.query_keyterms()
+    assert "action" not in terms, terms
+    assert "mechs" in terms, "the mishear query_terms exists for was filtered out"
+    print("  OK  generic words dropped, 'mechs' kept")
+
+
 def test_the_cap_is_announced_not_silent():
     real = session_runtime.MAX_KEYTERMS
     session_runtime.MAX_KEYTERMS = 3
@@ -106,12 +123,15 @@ def test_confidence_is_read_and_never_raises():
 def main():
     real_load, real_terms = library.load, library.query_terms
     library.load = lambda *a, **k: FAKE_INDEX
-    library.query_terms = lambda *a, **k: ["action", "roguelike"]
+    # As SteamSpy writes them: title case, hyphens, generic head.
+    library.query_terms = lambda *a, **k: ["Action", "Rogue-like", "Mechs"]
     try:
         test_forms_teach_the_short_name_a_person_says()
         test_forms_do_not_cut_a_multi_token_number()
         test_trailing_sequel_number_yields_the_bare_name()
         test_vocabulary_covers_all_three_sources_and_drops_non_games()
+        test_query_words_are_spoken_forms_not_steamspy_strings()
+        test_generic_english_does_not_take_a_slot()
         test_the_cap_is_announced_not_silent()
         test_the_cap_never_exceeds_deepgram_s_measured_ceiling()
         test_confidence_is_read_and_never_raises()
