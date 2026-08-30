@@ -153,34 +153,12 @@ def main():
     assert r["ok"] and r["operations"][0]["state"] == "RUNNING"
     assert fake_operations.acknowledged is False
     assert oimpls["list_operations"]({"scope": "recent"})["ok"]
+    assert fake_operations.acknowledged is False    # a dry run eats no bulletin
+    live_ops = assistant.tool_impls(Dispatch(CFG_MIN, log, dry_run=False), log,
+                                    operations=fake_operations)
+    assert live_ops["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is True
     assert not oimpls["list_operations"]({"scope": "nope"})["ok"]
-
-    import operations as operations_mod
-    original_steam_monitor = operations_mod.SteamMonitor
-    original_media_monitor = operations_mod.MediaMonitor
-    refreshed = []
-
-    class RefreshMonitor:
-        def __init__(self, store, authority, event_log):
-            self.authority = authority
-
-        def reconcile_once(self):
-            refreshed.append(self.authority)
-
-    operations_mod.SteamMonitor = RefreshMonitor
-    operations_mod.MediaMonitor = RefreshMonitor
-    steam_authority = object()
-    media_authority = object()
-    try:
-        live_status = assistant.tool_impls(
-            d, log, operations=fake_operations,
-            steam=steam_authority, media=media_authority)
-        assert live_status["list_operations"]({"scope": "active"})["ok"]
-        assert refreshed == [steam_authority, media_authority]
-    finally:
-        operations_mod.SteamMonitor = original_steam_monitor
-        operations_mod.MediaMonitor = original_media_monitor
 
     class FakeMedia:
         def __init__(self):

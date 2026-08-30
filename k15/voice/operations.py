@@ -312,7 +312,6 @@ class SteamMonitor:
         self.log = log
         self.installed_probe = installed_probe or _fully_installed_appids
         self.poll_s = poll_s
-        self._wake = threading.Event()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
@@ -324,8 +323,7 @@ class SteamMonitor:
                 self.reconcile_once()
             except Exception as e:
                 self.log.error("operation_monitor_failed", err=str(e))
-            self._wake.wait(self.poll_s)
-            self._wake.clear()
+            time.sleep(self.poll_s)
 
     def reconcile_once(self):
         operations = self.store.active(kind="steam_install")
@@ -396,7 +394,6 @@ class MediaMonitor:
         self.media = media
         self.log = log
         self.poll_s = poll_s
-        self._wake = threading.Event()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
@@ -408,8 +405,7 @@ class MediaMonitor:
                 self.reconcile_once()
             except Exception as e:
                 self.log.error("operation_monitor_failed", err=str(e))
-            self._wake.wait(self.poll_s)
-            self._wake.clear()
+            time.sleep(self.poll_s)
 
     def _schedule_search_retry(self, operation, now):
         metadata = operation.get("metadata") or {}

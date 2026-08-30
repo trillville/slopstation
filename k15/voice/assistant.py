@@ -430,20 +430,10 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         scope = args.get("scope", "active")
         if scope not in ("active", "recent"):
             return {"ok": False, "error": f"unknown operation scope {scope}"}
-        if scope == "active":
-            import operations as operations_mod
-            try:
-                if steam is not None:
-                    operations_mod.SteamMonitor(
-                        operations, steam, log).reconcile_once()
-                if media is not None:
-                    operations_mod.MediaMonitor(
-                        operations, media, log).reconcile_once()
-            except Exception as e:
-                log.error("operation_monitor_failed", err=str(e))
         return {"ok": True, "scope": scope,
                 "operations": operations.for_assistant(
-                    scope, acknowledge=(scope == "recent"))}
+                    scope, acknowledge=(scope == "recent"
+                                        and not dispatch.dry_run))}
 
     def find_media(args):
         kind = str(args.get("kind", ""))
@@ -743,13 +733,11 @@ the title first if there's any doubt; downloads are large."""
 
 _LIST_OPERATIONS = """\
 Read Slopstation's durable operations. Use scope 'active' for current work and
-'recent' for what just finished or what an announcement referred to. These
-records are refreshed from their configured authorities before active results
-are returned. Use this for every general question about current downloads,
-installs, searches, waiting work, imports, or recent completion. Only call an
-operation downloading when progress.phase is downloading; name every other
-phase accurately. Never infer current state from conversation history, the
-catalog, or an absent download."""
+'recent' for what just finished or what an announcement referred to. Use this
+for every general question about current downloads, installs, searches, waiting
+work, imports, or recent completion. Only call an operation downloading when
+progress.phase is downloading; name every other phase accurately. Never infer
+current state from conversation history, the catalog, or an absent download."""
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five
