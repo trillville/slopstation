@@ -7,7 +7,9 @@ silently: it emits pins only, so it eats the header carrying that file's own
 rules, and under PowerShell 5.1 `>` writes UTF-16, which is not a pins file.
 
 Refuses to run outside a venv - a system-python freeze would pin this box's
-whole site-packages as the voice lane's constraints.
+whole site-packages as the voice lane's constraints - and off cp313, because a
+cp311 freeze silently drops audioop-lts and downgrades pins to whatever that
+box resolved. Both refusals have fired on a dev box.
 """
 from __future__ import annotations
 
@@ -22,6 +24,13 @@ CONSTRAINTS = HERE / "constraints.txt"
 def main() -> int:
     if sys.prefix == sys.base_prefix:
         print("refuse: not a venv - run .venv\Scripts\python refreeze.py")
+        return 1
+
+    # The K15's interpreter, mirrored in ci.yml and mypy.ini. Any other version
+    # resolves a different set and writes it over the one CD installs from.
+    if sys.version_info[:2] != (3, 13):
+        print(f"refuse: python {sys.version_info.major}.{sys.version_info.minor}"
+              " - constraints.txt is the K15's cp313 freeze; run this there")
         return 1
 
     r = subprocess.run([sys.executable, "-m", "pip", "freeze"],
