@@ -2,8 +2,8 @@
 share (it is dependency-free) stay equal to their one home in
 CouchGaming.common.ps1 - marker paths, the nav-collection charset, the
 emitter-owned key list, the event timestamp format, the vdf root regex -
-plus the Set-Turn-after-guards order. Stdlib only, so it runs on system
-python as well as in the venv. Run:
+plus the Set-Turn-after-guards order and the deploy set. Stdlib only, so it
+runs on system python as well as in the venv. Run:
     .venv\\Scripts\\python tests\\test_ps_parse.py
 """
 import base64
@@ -79,6 +79,13 @@ def verb_arms(text):
     return arms
 
 
+def name_list(text, var, where):
+    """The single-quoted names in a `$var = @( ... )` array literal."""
+    m = re.search(r"\$" + var + r"\s*=\s*@\(([^)]*)\)", text, re.S)
+    assert m, f"{where}: no ${var} list"
+    return set(re.findall(r"'([^']+)'", m.group(1)))
+
+
 def owned(text, fn):
     body = text[text.index(f"function {fn}"):]
     m = re.search(r"\$owned\s*=\s*@\(([^)]*)\)", body)
@@ -149,8 +156,23 @@ def main():
     assert vdf[0] == vdf[1], f"vdf root regex drift: {vdf}"
     print(f"  ts format {ts[0]!r} and vdf regex {vdf[0]!r} in both")
 
+    # 7. The deploy set covers every script. Deploy.ps1 aborts on a LISTED
+    #    file that is missing, but silently ignores one that is not listed, so
+    #    a new script would deploy green and simply be absent on the PC. It
+    #    does not copy itself. Doctor.ps1 keeps its own list and must check
+    #    everything that ships.
+    on_disk = {p.name for p in PC.glob("*.ps1")} - {"Deploy.ps1"}
+    shipped = name_list(read(PC / "Deploy.ps1"), "scripts", "Deploy.ps1")
+    assert shipped == on_disk, (
+        f"Deploy.ps1 ships {len(shipped)} of {len(on_disk)} scripts: "
+        f"never copied {sorted(on_disk - shipped)}, "
+        f"listed but absent {sorted(shipped - on_disk)}")
+    checked = name_list(read(PC / "Doctor.ps1"), "files", "Doctor.ps1")
+    assert on_disk <= checked,         f"Doctor.ps1 $files does not check {sorted(on_disk - checked)}"
+    print(f"  deploy set: all {len(on_disk)} scripts ship and are doctored")
+
     print("OK - ps parse: every script parses; markers, charset, turn order, owned keys, "
-          "ts format, vdf regex agree")
+          "ts format, vdf regex, deploy set agree")
 
 
 if __name__ == "__main__":

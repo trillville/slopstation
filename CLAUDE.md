@@ -65,8 +65,10 @@ Every test that touches the K15 modules begins with `import _bootstrap`
 rename is a deliberate edit there), `test_imports` (imports without config or
 hardware; every `module.attr` resolves - run it after any move), `test_lint`
 (pyflakes + the lane rule from the AST), `test_ps_parse` (every `.ps1` parses;
-the PC-side contract agrees with itself). `test_turn.py` reads the SHIPPING
-`Dispatch.ps1`, so gaming-pc regex changes are drilled from here.
+the PC-side contract agrees with itself; every gaming-pc script is in
+`Deploy.ps1`'s set - one that is not deploys green and is simply absent).
+`test_turn.py` reads the SHIPPING `Dispatch.ps1`, so gaming-pc regex changes
+are drilled from here.
 `test_library` needs a local Steam (the gaming PC); `test_session_pipeline`
 needs audio devices (the K15).
 
@@ -82,3 +84,31 @@ needs audio devices (the K15).
   while a session is live and never rolls back. Hand-deploying stays
   valid - it is the same two scripts.
 
+Two properties of the K15 leg that change what a session may leave behind:
+
+- `deploy.py` runs from the LIVE checkout and refuses one that is dirty
+  (tracked files) or off `main`. A session that leaves that checkout on a
+  branch has disabled CD until someone switches it back.
+- It runs the PREVIOUS commit's copy of itself, because it is the thing that
+  updates the checkout. A change to `deploy.py` takes effect one deploy later,
+  and a new deployer has to be pulled by hand once before CD can use it.
+
+### What CD does not do
+
+Land the change, then TELL THE USER which of these it needs. Each fails at
+`doctor.py` rather than at the thing that broke, so the deploy goes red with a
+diagnosis - but nobody fixes it automatically.
+
+- **`constraints.txt`** is a `pip freeze` on the K15, committed by hand: it
+  records the cp313 venv's transitives, and no other machine can produce it.
+  The voice supervisor's install gate compares `requirements.txt` ALONE
+  against `.venv\deps-ok`, so a requirements change installs itself on the
+  next CD deploy, while a constraints-only change that is meant to alter what
+  gets installed must ride a `requirements.txt` touch. Regenerating it to
+  match a venv that already resolved needs no touch. Command and encoding
+  trap: that file's header.
+- **System-python packages** (`pyserial`, `hidapi`) sit outside every venv.
+- **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
+  the K15; the file is gitignored.
+- **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`
+  warns about but never touches (`vhui64.exe`, the DisplayMagician `.lnk`s).
