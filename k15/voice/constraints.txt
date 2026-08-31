@@ -1,10 +1,13 @@
 # Voice venv constraints - as-built transitive versions, enforced at install
 # (Start-Voice.bat passes `-c constraints.txt`).
 #
-# Regenerate ON THE K15 after a deliberate upgrade:
-#   .venv\Scripts\python -m pip freeze > constraints.txt
-# and touch requirements.txt too - the supervisor's reinstall gate compares
-# THAT file alone, so a constraints-only change would not install itself.
+# Regenerate ON THE K15 after a deliberate upgrade. Let cmd own the
+# redirection - PowerShell 5.1's `>` writes UTF-16, which is not a pins file:
+#   cmd /c ".venv\Scripts\python -m pip freeze > constraints.txt"
+# Touch requirements.txt too when the new pins are meant to INSTALL: the
+# supervisor's gate compares THAT file alone against .venv\deps-ok, so a
+# constraints-only change would not install itself. A freeze that merely
+# records a venv which already resolved needs no touch.
 #
 # Re-seeded 2026-08-30 from a clean cp311 resolve of the pipecat 1.8.1 pin
 # set; a real K15 (cp313) freeze should add the deeper transitives - do NOT
