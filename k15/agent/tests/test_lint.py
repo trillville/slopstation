@@ -71,6 +71,12 @@ def top_level_imports(path):
 # covered the day it is written.
 AGENT_PKG = "agent"
 
+# Frozen, and checked both ways: a subpackage that loses its __init__.py falls
+# out of the walk silently, and a new one added without a line here would go
+# unguarded. Keyed on __init__.py, never on "holds .py files" - the lane's
+# untracked runtime dirs (worker_home/ on the K15) are not subpackages.
+SUBPACKAGES = {"speech", "brain", "tools", "interfaces", "telemetry"}
+
 
 def lane_violations(name, tree):
     return [f"{name}:{line} imports the agent lane ({mod}) - k15/ must not"
@@ -129,13 +135,12 @@ def main():
     # The walk follows __init__.py, so a subpackage that loses one drops out
     # SILENTLY - and `checked` above does not notice: tests/ alone clears any
     # floor a lost subpackage would breach. Count the PACKAGE, not the sweep.
-    walked = {f.parent for f in _bootstrap.agent_modules()}
-    for d in sorted(AGENT.iterdir()):
-        if (not d.is_dir() or d.name.startswith((".", "__"))
-                or d.name in {"tests", "bench", "models"}):
-            continue
-        assert d in walked, (f"{d.name}/ holds modules but is not in the package "
-                             "walk - it lost its __init__.py and fell out")
+    have = {d.name for d in AGENT.iterdir()
+            if d.is_dir() and (d / "__init__.py").exists()}
+    assert have == SUBPACKAGES, (
+        f"agent subpackages are {sorted(have)}, frozen list says "
+        f"{sorted(SUBPACKAGES)} - a lost __init__.py drops one out of the walk "
+        "SILENTLY; a new one belongs in SUBPACKAGES")
     assert not problems, f"{len(problems)} pyflakes issue(s)"
     lanes = check_lanes() + check_bare_lane_imports()
     for b in lanes:
