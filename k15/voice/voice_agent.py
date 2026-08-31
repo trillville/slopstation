@@ -16,7 +16,7 @@ Modes:
   --wake-trials         log wake detections + confidences; never start sessions
   --false-accept-soak   count spurious wakes over hours; never start sessions
   --once                exactly one session, then exit (bench)
-  --text                the assistant REPL (assistant_repl.py); --provider,
+  --text                the assistant REPL (agent_backends.py); --provider,
                         --model, --effort pick the A/B side
 
 Composition root and wake loop only; audio.py owns PortAudio,
@@ -109,7 +109,7 @@ def bench_mode(args, cfg, secrets):
         return 0
 
     if args.text:
-        from assistant_repl import repl
+        from agent_backends import repl
         return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
                     model=args.model, effort=args.effort)
     return None

@@ -39,11 +39,10 @@ MODULES += TESTS
 # temp log and state dir, a config fixture - and is never referenced.
 UNUSED_EXEMPT = {"_bootstrap"}
 
-# Runs on system python (no venv): the chord lane plus the K15 tools.
+# Runs on system python (no venv): every module in k15/. A glob, not a list -
+# a hand-kept list silently exempts whatever nobody remembered to add.
 # Third-party allowed: hid, serial.
-SYSTEM_PYTHON = {"cglib", "events", "couch", "chord_listener", "exlink", "tv",
-                 "haptics", "gamepc", "doctor", "deploy", "calibrate",
-                 "haptic_test"}
+SYSTEM_PYTHON = {p.stem for p in K15.glob("*.py")}
 THIRD_PARTY_OK = {"hid", "serial"}
 STDLIB = set(sys.stdlib_module_names)
 

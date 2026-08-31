@@ -5,7 +5,7 @@ import urllib.request
 
 import _bootstrap
 
-import assistant_repl
+import agent_backends
 import cglib
 import text_interface
 
@@ -71,8 +71,8 @@ def main():
     secrets = {"textInterfaceToken": token,
                "anthropicApiKey": "a" * 64}
     log = cglib.CapturingLog("voice")
-    original = assistant_repl.BACKENDS["anthropic"]
-    assistant_repl.BACKENDS["anthropic"] = FakeBackend
+    original = agent_backends.BACKENDS["anthropic"]
+    agent_backends.BACKENDS["anthropic"] = FakeBackend
     dry = text_interface.TextApplication(cfg, secrets, log, dry_run=True)
     assert dry._new_session()["dispatch"].dry_run
     server = text_interface.start(
@@ -107,7 +107,7 @@ def main():
     finally:
         server.shutdown()
         server.server_close()
-        assistant_repl.BACKENDS["anthropic"] = original
+        agent_backends.BACKENDS["anthropic"] = original
     print("OK - text interface: bearer auth, health, and session continuity")
 
 

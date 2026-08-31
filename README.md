@@ -82,17 +82,19 @@ USB, and Steam mutations through scheduled tasks. Teardown wins over launch;
 launch waits for an active teardown and aborts if it cannot obtain a clean
 starting state.
 
-## Voice, text, MCP, and tools
+## The agent: voice, text, and MCP
 
-The voice overlay listens locally for the wake word, streams speech to
-Deepgram, and sends each final transcript through two paths:
+One agent answers on three front-ends. The voice one listens locally for the
+wake word, streams speech to Deepgram, and sends each final transcript through
+two paths:
 
 1. `grammar_gate.py` handles deterministic room and gaming commands.
 2. `assistant.py` handles open-ended requests through typed tools.
 
 Shared room and gaming actions use `dispatch.py`; assistant tools add Steam and
 media integrations. The authenticated text client, `k15/slop.py`, reaches the
-same assistant and tools through `text_interface.py`.
+same assistant and tools through `text_interface.py`, which builds one
+`agent_backends.py` backend per chat session.
 
 `remote_interface.py` is a small MCP adapter for a Claude custom connector. It
 exposes one tool, `ask_slopstation`, and forwards each call to the text
@@ -133,7 +135,14 @@ correlation suffix; every other command returns `DENIED`.
 | `k15/couch.py`, `chord_listener.py` | Session orchestration and controller input |
 | `k15/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
 | `k15/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
-| `k15/voice/` | Wake word, speech pipeline, assistant tools, durable operations, and text/MCP interfaces |
+| `k15/library.py`, `steamstore.py` | Steam catalogue, metadata, and store facets |
+| `k15/voice/` | The agent lane, in its own venv. Only the speech path below needs that venv |
+| `k15/voice/voice_agent.py`, `audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py` | Wake word, capture, earcons, and the speech pipeline |
+| `k15/voice/assistant.py`, `agent_backends.py`, `dispatch.py`, `llm_audit.py` | The agent brain and the action surface, shared by all three front-ends |
+| `k15/voice/media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py` | Domain tools: Radarr/Sonarr, the durable ledger, Steam, the TV |
+| `k15/voice/text_interface.py`, `remote_interface.py` | Front-ends: LAN HTTP, and the MCP adapter over localhost |
+| `k15/voice/tracing.py`, `traces.py` | Per-turn traces and the Langfuse exporter |
+| `k15/voice/tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
 | `k15/media/` | Docker Compose media services and their runbook |
 | `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
 | `wake-training/` | Wake-word training and evaluation |
