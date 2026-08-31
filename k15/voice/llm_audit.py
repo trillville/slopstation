@@ -92,7 +92,11 @@ def install(service, log, tracing=None, context=None):
             tracing.tool_span(kind, query, status)
 
     async def audited(**params):
-        return _Tee(await create(**params), sink)
+        response = await create(**params)
+        # Tee only the streaming surface: a non-streaming create (pipecat's
+        # run_inference passes stream=False and reads .output_text) must come
+        # back untouched.
+        return _Tee(response, sink) if params.get("stream") else response
 
     responses.create = audited
 

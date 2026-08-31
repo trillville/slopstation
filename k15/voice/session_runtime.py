@@ -1,7 +1,7 @@
 """One voice session: the per-wake Pipecat pipeline (mic -> Flux STT ->
-GrammarGate -> speaker, plus the optional LLM assistant lane) and the
-cross-session context carry. "Session" here is the voice session, not the
-couch session (the lock in state/).
+turn resolver -> GrammarGate -> speaker, plus the optional LLM assistant
+lane) and the cross-session context carry. "Session" here is the voice
+session, not the couch session (the lock in state/).
 
 Heavy imports (pipecat, provider SDKs) stay INSIDE Session.run so importing
 this module is cheap.
@@ -179,8 +179,8 @@ def _make_llm(voice, secrets, system_text):
 
 class Session:
     """One voice session, from a wake to idle or an exit phrase: build the
-    pipeline (mic -> Flux -> GrammarGate -> speaker, plus the LLM lane), run
-    it, then save the transcript and the carry."""
+    pipeline (mic -> Flux -> turn resolver -> GrammarGate -> speaker, plus
+    the LLM lane), run it, then save the transcript and the carry."""
 
     def __init__(self, cfg, secrets, matcher, dry_run, input_idx, output_idx,
                  capture=None, operations=None, ack=None, steam=None,
@@ -207,6 +207,9 @@ class Session:
         from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
         from pipecat.transports.local.audio import (LocalAudioTransport,
                                                     LocalAudioTransportParams)
+        from pipecat.turns.user_turn_processor import UserTurnProcessor
+        from pipecat.turns.user_turn_strategies import (
+            ExternalUserTurnStrategies)
         from pipecat.workers.runner import WorkerRunner
 
         from assistant import PROVIDER_KEY
@@ -267,17 +270,28 @@ class Session:
         )
 
         feeder = PrerollFeeder(log)
-        stages = [transport.input(), feeder, stt, gate]
+        # Flux only PROPOSES turn edges since pipecat 1.8, and its stop
+        # proposal is a queued ControlFrame - resolved downstream of a gate
+        # whose queue blocks on dispatch, a stale stop can land after the next
+        # turn's start. This resolver sits upstream of the gate, is never
+        # blocked, and turns proposals into the real UserStarted/Stopped
+        # frames every consumer keys on (the gate, idle reset, turn tracking)
+        # in arrival order - in BOTH pipelines. It also sees every transcript
+        # before the gate can swallow it, which its stop strategy waits on.
+        #
+        # enable_interruptions=True is 1.7's LIVE behavior: Flux broadcast an
+        # interruption on every talk-over and the output transport honored it,
+        # cutting the answer (the old "no barge-in" comment here described
+        # intent, not what shipped). False = answers play through talk-over.
+        turns = UserTurnProcessor(
+            user_turn_strategies=ExternalUserTurnStrategies(
+                enable_interruptions=True))
+        stages = [transport.input(), feeder, stt, turns, gate]
         if assistant_live:
             stages += self._assistant_stages(transport, dispatcher, gate)
         else:
             stages += [transport.output()]
 
-        # No barge-in: the transport has no vad_analyzer and the assistant
-        # lane's turn strategies are built with enable_interruptions=False
-        # (see _assistant_stages), so a command the gate matches, spoken
-        # mid-answer, DISPATCHES while the answer keeps playing.
-        #
         # enable_metrics is what populates token counts and time to first
         # byte in the spans;
         # enable_tracing belongs on PipelineWorker, not PipelineTask.
@@ -295,8 +309,9 @@ class Session:
             conversation_id=tracing.conversation_id() if tracing_on else None,
             additional_span_attributes=tracing.span_attributes() if tracing_on else None,
             idle_timeout_secs=voice["holdWindowS"],
-            # ProposedUserStartedSpeaking is Flux's start-of-turn under 1.8;
-            # the real frame exists only where an aggregator resolves it.
+            # The real start frame comes from the turns resolver; the proposal
+            # is Flux's own push and resets the clock even if that wiring
+            # moves.
             idle_timeout_frames=(TranscriptionFrame, InterimTranscriptionFrame,
                                  UserStartedSpeakingFrame,
                                  ProposedUserStartedSpeakingFrame,
@@ -314,15 +329,28 @@ class Session:
             log("session_idle_timeout")
             await worker.cancel(reason="idle")
 
+        # A setup exception (device open, Flux connect - both run in setup
+        # under 1.8) is swallowed by the runner's gather(return_exceptions);
+        # without this flag a failed build reads as a clean instant close and
+        # session_crashed never fires.
+        started = False
+
+        @worker.event_handler("on_pipeline_started")
+        async def _on_started(worker, frame):
+            nonlocal started
+            started = True
+
         runner = WorkerRunner(handle_sigint=False)
-        if self.capture is not None:
-            # Stop as late as possible: only worker start + mic-open remain,
-            # so the uncaptured gap is ~100-200 ms, not the whole session
-            # build.
-            feeder.pcm = self.capture.stop()
+        # Handed over LIVE, stopped by the feeder at StartFrame: 1.8 runs the
+        # Flux connect during setup, before StartFrame starts the mic, so a
+        # capture stopped here would lose that window (0.3-1.5 s of speech).
+        feeder.capture = self.capture
         try:
             await runner.add_workers(worker)
             await runner.run()
+            if not started:
+                raise RuntimeError("pipeline setup failed before StartFrame - "
+                                   "the underlying error is console-only")
         finally:
             # pipecat (still in 1.8.1) never terminates the PyAudio handle it
             # creates and exposes no public cleanup; a fresh transport per wake
@@ -365,17 +393,16 @@ class Session:
                                 voice=voice, steam=self.steam, media=self.media),
                     log),                   # -> one tool_call event per call
                 custom_tools={AdapterType.OPENAI: native} if native else None))
-        # Flux detects turns server-side; the aggregator resolves its proposed
-        # frames. Passed explicitly for two reasons: enable_interruptions=False
-        # keeps barge-in off (the 1.7 behavior - see the worker comment), and
-        # the default strategies build a per-session smart-turn ONNX model
-        # that Flux's own ExternalUserTurnStrategies recommendation would then
-        # discard anyway.
+        # Strategies passed explicitly so the aggregator does not build its
+        # default per-session smart-turn ONNX model; turn resolution itself
+        # happens upstream in the turns resolver (see run()), so these only
+        # adopt already-real frames. enable_interruptions matches the
+        # resolver's.
         user_agg, asst_agg = LLMContextAggregatorPair(
             self.context,
             user_params=LLMUserAggregatorParams(
                 user_turn_strategies=ExternalUserTurnStrategies(
-                    enable_interruptions=False)))
+                    enable_interruptions=True)))
         llm = _make_llm(voice, secrets, system_instruction(self.cfg))
         if native:
             # Pipecat (still in 1.8.1) has no handling for provider-executed

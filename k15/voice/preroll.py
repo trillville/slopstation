@@ -1,11 +1,14 @@
 """Wake pre-roll: keep mic audio flowing across the wake->pipeline gap.
 
-The session transport reopens the mic ~0.5-2 s after detection, so without
-this "hey jarvis volume up" loses "volume up". WakeCapture keeps reading the
-wake stream; PrerollFeeder, a stage between transport.input() and Flux,
-replays that PCM during StartFrame processing - frames move serially through
-one queue, so Flux sees [StartFrame, pre-roll, live mic] in order, and Flux
-holds queued audio until its websocket handshake is confirmed.
+The session transport delivers mic audio only from StartFrame, and pipecat
+1.8 runs the Flux websocket connect during pipeline SETUP, before StartFrame
+- so without this "hey jarvis volume up" loses "volume up". WakeCapture keeps
+reading the wake stream through the whole session build; PrerollFeeder, a
+stage between transport.input() and Flux, stops it on StartFrame and replays
+the PCM - frames move serially through one queue, so Flux sees [StartFrame,
+pre-roll, live mic] in order. The capture must run until StartFrame, not be
+stopped at build start: the setup window (Flux handshake, 0.3-1.5 s) is
+otherwise covered by neither the capture nor the live mic.
 
 The transcript therefore starts with the wake phrase; grammar_gate.strip_wake
 removes it text-side.
@@ -120,13 +123,17 @@ class WakeCapture:
 
 
 class PrerollFeeder(FrameProcessor):
-    """Replays wake-capture PCM ahead of live mic audio. pcm is assigned right
-    before the runner starts, so capture covers most of the session build."""
+    """Replays wake-capture PCM ahead of live mic audio. The capture is handed
+    over LIVE and stopped here on StartFrame (see the module docstring); the
+    wake stream and the transport's mic stream overlap for the tail of the
+    build, so the last few chunks are captured twice - bounded by one
+    StartFrame hop, and silence in the normal cadence."""
 
     def __init__(self, log) -> None:
         super().__init__()
         self._log = log
-        self.pcm = b""
+        self.capture = None     # WakeCapture, stopped on StartFrame
+        self.pcm = b""          # or pre-stopped PCM (tests)
 
     def _frames(self) -> list:
         return [InputAudioRawFrame(audio=self.pcm[i:i + CHUNK_BYTES],
@@ -136,8 +143,13 @@ class PrerollFeeder(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
-        if isinstance(frame, StartFrame) and self.pcm:
-            self._log("preroll_fed", audio_s=round(len(self.pcm) / BYTES_PER_S, 1))
-            for f in self._frames():
-                await self.push_frame(f)
-            self.pcm = b""
+        if isinstance(frame, StartFrame):
+            if self.capture is not None:
+                self.pcm = self.capture.stop()
+                self.capture = None
+            if self.pcm:
+                self._log("preroll_fed",
+                          audio_s=round(len(self.pcm) / BYTES_PER_S, 1))
+                for f in self._frames():
+                    await self.push_frame(f)
+                self.pcm = b""

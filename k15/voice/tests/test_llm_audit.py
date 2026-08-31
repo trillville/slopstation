@@ -1,8 +1,8 @@
 """Blind test: provider-executed tool calls (OpenAI web_search). Run:
     .venv\\Scripts\\python tests\\test_llm_audit.py
 
-Pipecat 1.7 ignores server-side tool items, so llm_audit tees the event
-stream. The tee sits in the path of every token of every conversation: it
+Pipecat (through 1.8.1) ignores server-side tool items, so llm_audit tees the
+event stream. The tee sits in the path of every token of every conversation: it
 must pass events through unchanged and in order, and never raise into the
 pipeline. Fakes only - no network, no keys.
 """
@@ -90,7 +90,7 @@ def main():
     ctx = FakeContext()
     assert llm_audit.install(svc, log, tracing=tracing, context=ctx) is True
 
-    stream = asyncio.run(svc._client.responses.create(model="x"))
+    stream = asyncio.run(svc._client.responses.create(model="x", stream=True))
     got = asyncio.run(drain(stream))
     assert got == evs, "the tee altered or reordered the event stream"
     print("  tee: every event passes through unchanged and in order")
@@ -114,7 +114,7 @@ def main():
     ]))
     log2 = cglib.CapturingLog("audit")
     llm_audit.install(svc2, log2)
-    asyncio.run(drain(asyncio.run(svc2._client.responses.create())))
+    asyncio.run(drain(asyncio.run(svc2._client.responses.create(stream=True))))
     hits = [r for r in log2.records if r["event"] == "web_search"]
     assert len(hits) == 1, f"expected one record, got {hits}"
     print("  search: counted once (not on `added`), function_call ignored")
@@ -124,7 +124,7 @@ def main():
         ev("response.output_item.done", search_item("f", kind="file_search_call"))]))
     log3 = cglib.CapturingLog("audit")
     llm_audit.install(svc3, log3)
-    asyncio.run(drain(asyncio.run(svc3._client.responses.create())))
+    asyncio.run(drain(asyncio.run(svc3._client.responses.create(stream=True))))
     assert [r["kind"] for r in log3.records if r["event"] == "web_search"] \
         == ["file_search_call"]
     print("  search: matches the family, not one literal type")
@@ -150,7 +150,8 @@ def main():
             raise RuntimeError("tracing is down")
 
     llm_audit.install(boom, log, tracing=Angry())
-    out = asyncio.run(drain(asyncio.run(boom._client.responses.create())))
+    out = asyncio.run(drain(asyncio.run(
+        boom._client.responses.create(stream=True))))
     assert len(out) == 1, "a throwing sink swallowed an event"
 
     # A pipecat internal that moved must disable the audit, not the voice.
@@ -161,10 +162,19 @@ def main():
     s = FakeStream([])
     svc4 = FakeService(s)
     llm_audit.install(svc4, log)
-    tee = asyncio.run(svc4._client.responses.create())
+    tee = asyncio.run(svc4._client.responses.create(stream=True))
     asyncio.run(tee.close())
     assert s.closed, "close() did not reach the wrapped stream"
     print("  close: forwarded, so no socket outlives the turn")
+
+    # Non-streaming create (pipecat's run_inference passes stream=False and
+    # reads .output_text) must come back raw - the tee has no such surface.
+    plain = types.SimpleNamespace(output_text="hi")
+    svc5 = FakeService(plain)
+    llm_audit.install(svc5, log)
+    out = asyncio.run(svc5._client.responses.create(stream=False))
+    assert out is plain, "a non-streaming response must pass through untouched"
+    print("  non-stream: create(stream=False) returns the raw response")
 
     # -- against the REAL pipecat class ---------------------------------------
     # Fakes would survive a pipecat move of _client; check the real one.

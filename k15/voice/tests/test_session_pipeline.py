@@ -30,6 +30,8 @@ async def run():
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
     from pipecat.transports.local.audio import (LocalAudioTransport,
                                                 LocalAudioTransportParams)
+    from pipecat.turns.user_turn_processor import UserTurnProcessor
+    from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
     from pipecat.workers.runner import WorkerRunner
 
     log = cglib.CapturingLog("voice", echo=True)
@@ -44,8 +46,13 @@ async def run():
         audio_in_enabled=True, audio_in_sample_rate=16000,
         audio_out_enabled=True, audio_out_sample_rate=16000,
     ))
+    # The turns resolver rides in the same seat as production (between STT
+    # and the gate); scripted transcripts pass through it untouched.
+    turns = UserTurnProcessor(
+        user_turn_strategies=ExternalUserTurnStrategies(
+            enable_interruptions=True))
     worker = PipelineWorker(
-        Pipeline([transport.input(), gate, transport.output()]),
+        Pipeline([transport.input(), turns, gate, transport.output()]),
         params=PipelineParams(audio_in_sample_rate=16000,
                               audio_out_sample_rate=16000),
         enable_rtvi=False,

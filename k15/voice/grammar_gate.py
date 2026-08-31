@@ -21,8 +21,6 @@ from rapidfuzz import fuzz
 from pipecat.frames.frames import (BotStartedSpeakingFrame,
                                    BotStoppedSpeakingFrame, EndWorkerFrame,
                                    ErrorFrame, Frame, OutputAudioRawFrame,
-                                   ProposedUserStartedSpeakingFrame,
-                                   ProposedUserStoppedSpeakingFrame,
                                    TranscriptionFrame,
                                    UserStartedSpeakingFrame,
                                    UserStoppedSpeakingFrame)
@@ -127,6 +125,11 @@ class GrammarGate(FrameProcessor):
     # deferring. Covers think-before-speak (GPT at low effort) and a 15s ssh.
     ASSISTANT_WAIT_S = 30
 
+    # Cap on a claimed-open user turn: a Flux socket that dies mid-turn never
+    # delivers the stop edge, and an unbounded flag would defer the idle
+    # handler forever - the session would never close.
+    SPEAKING_WAIT_S = 30
+
     # A local command dispatches in ~100 ms, so its ok earcon would land on
     # the still-ringing wake chime; fold it in. Anything longer (ssh, a
     # launch) clears the window and acks normally.
@@ -144,7 +147,7 @@ class GrammarGate(FrameProcessor):
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
         self.ack = ack                          # preroll.WakeAck; None = no chime
-        self._speaking = False                  # user turn open (Flux)
+        self._speaking = 0.0                    # ts of the open user turn; 0 = closed
         self._dispatching = 0                   # blocking calls in flight
         self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
         self._stop_after_reply = False          # stop_listening tool armed one
@@ -170,10 +173,13 @@ class GrammarGate(FrameProcessor):
         """True while the user is mid-turn, a dispatch is running, or an
         assistant answer is in flight (cleared when the bot starts speaking).
         Without the in-flight check a model slower than holdWindowS is killed
-        mid-answer."""
+        mid-answer. Both time flags expire, so a lost frame cannot defer the
+        idle handler forever."""
         pending = (self._assistant_pending
                    and time.time() - self._assistant_pending < self.ASSISTANT_WAIT_S)
-        return self._speaking or self._dispatching > 0 or bool(pending)
+        speaking = (self._speaking
+                    and time.time() - self._speaking < self.SPEAKING_WAIT_S)
+        return bool(speaking) or self._dispatching > 0 or bool(pending)
 
     async def _earcon(self, name):
         await self.push_frame(OutputAudioRawFrame(
@@ -271,18 +277,13 @@ class GrammarGate(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        # Both spellings of a turn edge: pipecat 1.8 Flux PROPOSES turns, and
-        # only the user context aggregator resolves proposals into the real
-        # frames - the no-assistant pipeline has no aggregator, so there the
-        # proposals are the only signal. In the assistant pipeline both arrive
-        # (proposal downstream, real frame broadcast back); handling both is
-        # idempotent - _speaking is a bool and the ack claims once.
-        if isinstance(frame, (UserStartedSpeakingFrame,
-                              ProposedUserStartedSpeakingFrame)):
-            self._speaking = True
-        elif isinstance(frame, (UserStoppedSpeakingFrame,
-                                ProposedUserStoppedSpeakingFrame)):
-            self._speaking = False
+        # Turn edges arrive as real frames from the turns resolver
+        # (session_runtime wires it into both pipelines; Flux itself only
+        # PROPOSES turns since pipecat 1.8).
+        if isinstance(frame, UserStartedSpeakingFrame):
+            self._speaking = time.time()
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            self._speaking = 0.0
             await self._ack_wake()              # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._assistant_pending = 0.0       # answer arrived; idle clock owns it now
