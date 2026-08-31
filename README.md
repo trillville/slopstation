@@ -93,10 +93,10 @@ two paths:
 
 Shared room and gaming actions use `dispatch.py`; assistant tools add Steam and
 media integrations. The authenticated text client, `k15/slop.py`, reaches the
-same assistant and tools through `text_interface.py`, which builds one
-`agent_backends.py` backend per chat session.
+same assistant and tools through `agent/interfaces/text.py`, which builds one
+`agent/brain/backends.py` backend per chat session.
 
-`remote_interface.py` is a small MCP adapter for a Claude custom connector. It
+`agent/interfaces/remote.py` is a small MCP adapter for a Claude custom connector. It
 exposes one tool, `ask_slopstation`, and forwards each call to the text
 interface over localhost. It owns no assistant state or separate action
 surface. Voice, text, and MCP therefore share media resolution, Steam actions,
@@ -135,14 +135,13 @@ correlation suffix; every other command returns `DENIED`.
 | `k15/couch.py`, `chord_listener.py` | Session orchestration and controller input |
 | `k15/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
 | `k15/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
-| `k15/library.py`, `steamstore.py` | Steam catalogue, metadata, and store facets |
-| `k15/voice/` | The agent lane, in its own venv. Only the speech path below needs that venv |
-| `k15/voice/voice_agent.py`, `audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py` | Wake word, capture, earcons, and the speech pipeline |
-| `k15/voice/assistant.py`, `agent_backends.py`, `dispatch.py`, `llm_audit.py` | The agent brain and the action surface, shared by all three front-ends |
-| `k15/voice/media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py` | Domain tools: Radarr/Sonarr, the durable ledger, Steam, the TV |
-| `k15/voice/text_interface.py`, `remote_interface.py` | Front-ends: LAN HTTP, and the MCP adapter over localhost |
-| `k15/voice/tracing.py`, `traces.py` | Per-turn traces and the Langfuse exporter |
-| `k15/voice/tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
+| `k15/agent/` | The agent lane, a package in its own venv. Only the speech path below needs that venv |
+| `k15/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
+| `k15/agent/brain/` (`assistant.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
+| `k15/agent/tools/` (`media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py`, `library.py`, `steamstore.py`) | Domain tools: Radarr/Sonarr, the durable ledger, the Steam catalogue and store, the TV |
+| `k15/agent/interfaces/` (`text.py`, `remote.py`) | Front-ends: LAN HTTP, and the MCP adapter over localhost |
+| `k15/agent/telemetry/` (`tracing.py`, `traces.py`) | Per-turn traces and the Langfuse exporter |
+| `k15/agent/tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
 | `k15/media/` | Docker Compose media services and their runbook |
 | `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
 | `wake-training/` | Wake-word training and evaluation |
@@ -172,7 +171,7 @@ correlation suffix; every other command returns `DENIED`.
    environment and installs the pinned dependencies.
 6. Put a shortcut to `Start-K15.bat` in `shell:startup`.
 7. If TV volume ducking is enabled, run
-   `.venv\Scripts\python tv_remote.py pair` from `k15\voice` and accept the TV
+   `.venv\Scripts\python tools\tv_remote.py pair` from `k15\agent` and accept the TV
    prompt.
 8. Run `python doctor.py` from `k15` until no checks fail.
 
@@ -182,7 +181,7 @@ MCP adds remote access to the existing assistant; it does not create another
 assistant or tool implementation. The request path is:
 
 ```text
-Claude app → Cloudflare tunnel → remote_interface.py → text_interface.py → assistant tools
+Claude app → Cloudflare tunnel → interfaces/remote.py → interfaces/text.py → assistant tools
 ```
 
 1. Set real `textInterfaceToken` and `remoteInterfaceToken` values in
@@ -295,14 +294,14 @@ python k15\slop.py
 python k15\slop.py "what is downloading?"
 
 # Durable Steam and media work
-cd k15\voice
-.venv\Scripts\python operations.py list
-.venv\Scripts\python operations.py list --active
-.venv\Scripts\python operations.py show <operation-id>
-.venv\Scripts\python operations.py reconcile
+cd k15\agent
+.venv\Scripts\python tools\operations.py list
+.venv\Scripts\python tools\operations.py list --active
+.venv\Scripts\python tools\operations.py show <operation-id>
+.venv\Scripts\python tools\operations.py reconcile
 ```
 
-`operations.py abandon <operation-id> --execute` performs authoritative media
+`tools\operations.py abandon <operation-id> --execute` performs authoritative media
 cleanup through Radarr or Sonarr. The generic `cancel` command refuses work it
 cannot safely cancel at the external authority.
 
@@ -328,7 +327,7 @@ Use the repository’s Grafana and Langfuse skills for remote diagnosis.
 Run the blind suite as scripts, not through pytest:
 
 ```powershell
-cd k15\voice
+cd k15\agent
 .venv\Scripts\python tests\run.py
 ```
 
@@ -349,7 +348,7 @@ every pull request and every push to `main`.
 
 Revisit the display probe before adding another 2160-pixel-high desk display.
 The TV acknowledges unsupported Ex-Link volume commands but does not apply
-them; `tv_remote.py` is the working volume path.
+them; `agent/tools/tv_remote.py` is the working volume path.
 
 Runtime-only state is intentionally absent from Git: real config, secrets, the
 media `.env`, VirtualHere binaries and PINs, DisplayMagician shortcuts,

@@ -166,13 +166,13 @@ indexers, then set `enabled` to `true`.
 
 ### 7. Validate and start unattended operation
 
-From `k15\voice`:
+From `k15\agent`:
 
 ```powershell
-.venv\Scripts\python media.py status
-.venv\Scripts\python media.py profiles
-.venv\Scripts\python media.py validate
-.venv\Scripts\python media.py doctor
+.venv\Scripts\python tools\media.py status
+.venv\Scripts\python tools\media.py profiles
+.venv\Scripts\python tools\media.py validate
+.venv\Scripts\python tools\media.py doctor
 ```
 
 `validate` checks roots and exact profile names. `doctor` additionally checks
@@ -231,9 +231,9 @@ stopped, stale, missing, or unrecognized state never changes qBittorrent.
 Validate once:
 
 ```powershell
-cd C:\Users\minipc\Desktop\slopstation\k15\voice
-.venv\Scripts\python media.py proton-port
-.venv\Scripts\python media.py sync-proton-port --execute
+cd C:\Users\minipc\Desktop\slopstation\k15\agent
+.venv\Scripts\python tools\media.py proton-port
+.venv\Scripts\python tools\media.py sync-proton-port --execute
 ```
 
 Confirm the returned port matches Proton and qBittorrent, then set
@@ -244,7 +244,7 @@ closed and emit `proton_port_sync_failed`.
 Manual fallback:
 
 ```powershell
-.venv\Scripts\python media.py set-qbit-port <active-port> --execute
+.venv\Scripts\python tools\media.py set-qbit-port <active-port> --execute
 ```
 
 ## Monitoring and incident response
@@ -265,8 +265,8 @@ Set `media.healthSync` to `false` to disable this watch or change
 Start diagnosis with:
 
 ```powershell
-.venv\Scripts\python media.py doctor
-.venv\Scripts\python operations.py list --active
+.venv\Scripts\python tools\media.py doctor
+.venv\Scripts\python tools\operations.py list --active
 docker compose --project-directory ..\media --env-file ..\media\.env ps
 ```
 
@@ -277,5 +277,5 @@ relevant Arr application before changing configuration.
 
 To migrate from `C:\Media` to a NAS: stop Compose and qBittorrent, copy the
 media root, change `MEDIA_ROOT` in `.env`, change qBittorrent’s save path and
-both Arr remote path mappings, then restart and run `media.py doctor`. Keep the
+both Arr remote path mappings, then restart and run `tools\media.py doctor`. Keep the
 container roots `/data/Movies`, `/data/TV`, and `/data/torrents` unchanged.

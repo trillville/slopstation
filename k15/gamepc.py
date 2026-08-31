@@ -1,6 +1,6 @@
 """The gaming PC as the K15 sees it: one ssh call per Dispatch.ps1 verb, the
 turn tag on the mutating ones, and the answer words. Dispatch.ps1 is the
-server; voice/tests/test_turn.py holds the two in step.
+server; agent/tests/test_turn.py holds the two in step.
 """
 from __future__ import annotations
 

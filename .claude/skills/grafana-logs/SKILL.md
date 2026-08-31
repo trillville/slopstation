@@ -179,7 +179,7 @@ Time to READY, the number the whole system is judged on:
   `install_queued` `install_failed` — the account session. The lane label means
   **hand-run**, like `manual` does for `exlink.py`: the agent passes its own
   logger in, so a voice-driven session files these under `lane="voice"` and
-  only `python steam_session.py …` at the console lands on `lane="steam"`.
+  only `python tools/steam_session.py …` at the console lands on `lane="steam"`.
   Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter - true means the first TV-GAMING apply missed and the retry rescued the launch) `profile_retry` `puck_claimed` `ready` (carries `focused`, `fg` = the window that actually held the foreground, and `running_appid` = a game already up at Enter, 0 if none) `enter_failed` `exit_done` `game_launched` `nav_fired` (carries the `steam://` url) `nav_failed` `game_stopped` (carries `method` — `app_stop` / `wm_close` / `kill` / `already-gone`, i.e. WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
 
@@ -201,7 +201,7 @@ Time to READY, the number the whole system is judged on:
   on `lane="wake-safety"`.
 
 The frozen list - every name, its field keys and its lane - is
-`k15/voice/tests/test_event_names.py`; a rename is a deliberate edit there.
+`k15/agent/tests/test_event_names.py`; a rename is a deliberate edit there.
 
 Event names are a closed vocabulary and never contain variable data — an
 appid or a score is always a field.

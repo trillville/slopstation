@@ -18,7 +18,7 @@ run and deploy them. This file holds the process rules an agent session needs.
   directly in `k15/`: load-bearing, runs on system python, and must stay
   stdlib-only at import (`events.py` documents why; `test_lint` globs the
   directory rather than keeping a list, so a new module is in the lane the
-  moment it lands). The agent lane in `k15/voice/` has its own venv and may
+  moment it lands). The agent lane in `k15/agent/` has its own venv and may
   depend on chord-lane modules, never the reverse.
 - **Telemetry never costs a session.** Anything on an emit path is fail-soft
   by construction — see `events.emit`'s positional-only signature for the
@@ -55,7 +55,7 @@ deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
 The blind suite runs as scripts, not pytest — `events._env()` detects tests
 by `sys.argv[0]`, so pytest would mislabel events as env=prod:
 
-    .venv\Scripts\python tests\run.py      (from k15\voice\; --all forces the
+    .venv\Scripts\python tests\run.py      (from k15\agent\; --all forces the
                                             machine-bound tests; on the K15
                                             set CG_TEST_AUDIO=1 first)
 
@@ -111,11 +111,18 @@ diagnosis - but nobody fixes it automatically.
   next CD deploy, while a constraints-only change that is meant to alter what
   gets installed must ride a `requirements.txt` touch. Regenerating it to
   match a venv that already resolved needs no touch. Use
-  `k15/voice/refreeze.py`, never a hand-rolled `pip freeze >`: that writes
+  `k15/agent/refreeze.py`, never a hand-rolled `pip freeze >`: that writes
   pins only and eats the header, and PowerShell 5.1's `>` writes UTF-16.
 - **System-python packages** (`k15/system-requirements.txt`) sit outside
   every venv. `doctor.py`'s import rows are what catch a missing one.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored.
+- **A deploy that MOVES a lane's supervisor `.bat`.** cmd.exe re-reads the file
+  between lines, so the running supervisor dies the moment `deploy.py` kills its
+  agent, and nothing relaunches it; `deploy.py` then waits out its whole budget
+  and fails. Its death does release the fd-9 lock, so the fix is one
+  `Start-K15.bat` on the K15 - that creates the venv at the new path and
+  installs the pins itself. The old lane directory survives the pull (its venv
+  is gitignored) and is yours to delete.
 - **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`
   warns about but never touches (`vhui64.exe`, the DisplayMagician `.lnk`s).

@@ -30,7 +30,7 @@ call :supervised "%TEMP%\couch-voice-supervisor.lock"
 if errorlevel 1 (
   echo [start-k15] voice lane down - starting it
   python "%~dp0events.py" emit supervisor lane_started what=voice >nul 2>&1
-  start "K15 voice" /min /d "%~dp0voice" Start-Voice.bat
+  start "K15 voice" /min /d "%~dp0agent" Start-Voice.bat
 ) else (
   set "RELOADED=1"
   call :reload voice_agent.py "voice agent" voice
