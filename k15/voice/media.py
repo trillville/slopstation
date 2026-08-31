@@ -1,7 +1,6 @@
 """Radarr and Sonarr request/observation boundary.
 
-Prowlarr and qBittorrent stay behind the two authorities. No release or
-indexer result crosses this module's public interface.
+No release or indexer result crosses this module's public interface.
 """
 
 import argparse

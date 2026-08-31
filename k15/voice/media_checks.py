@@ -1,5 +1,11 @@
 """doctor rows for the media stack: Compose, Radarr/Sonarr, Prowlarr,
-qBittorrent, and the Proton port."""
+qBittorrent, and the Proton port.
+
+The only module that reaches Prowlarr or qBittorrent directly, and only to
+report configuration: no release title and no indexer name from an API
+response may enter a row. Every indexer name reported comes from
+media.managedIndexers, which the operator wrote.
+"""
 
 import json
 import subprocess

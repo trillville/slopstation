@@ -39,10 +39,15 @@ MODULES += TESTS
 # temp log and state dir, a config fixture - and is never referenced.
 UNUSED_EXEMPT = {"_bootstrap"}
 
-# Runs on system python (no venv): every module in k15/. A glob, not a list -
-# a hand-kept list silently exempts whatever nobody remembered to add.
+# Runs on system python (no venv): every module in k15/ except the two that
+# reach venv-only packages lazily - library imports requests and
+# howlongtobeatpy, steamstore imports requests. A glob minus that pair, not a
+# hand-kept list: a list silently exempts whatever nobody remembered to add,
+# and subtracting the pair keeps `import library` in a chord-lane module a
+# FAILURE rather than a runtime death on the K15's system python.
 # Third-party allowed: hid, serial.
-SYSTEM_PYTHON = {p.stem for p in K15.glob("*.py")}
+VENV_ONLY = {"library", "steamstore"}
+SYSTEM_PYTHON = {p.stem for p in K15.glob("*.py")} - VENV_ONLY
 THIRD_PARTY_OK = {"hid", "serial"}
 STDLIB = set(sys.stdlib_module_names)
 
