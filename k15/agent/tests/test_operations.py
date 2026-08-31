@@ -9,14 +9,16 @@ import types
 import _bootstrap  # noqa: F401
 from _bootstrap import fresh_state
 
-# Announcer's queue/store contract needs no Pipecat or audio hardware.
-audio_stub = types.ModuleType("audio")
+# Announcer's queue/store contract needs no Pipecat or audio hardware. Keyed on
+# the DOTTED names: announce does `from agent.speech import audio`, so a bare
+# "audio" entry intercepts nothing and the real module loads instead.
+audio_stub = types.ModuleType("agent.speech.audio")
 audio_stub.resolve_device = lambda *a, **kw: None
-earcons_stub = types.ModuleType("earcons")
+earcons_stub = types.ModuleType("agent.speech.earcons")
 earcons_stub.SAMPLE_RATE = 16000
 earcons_stub.pcm = lambda name: b"earcon"
-sys.modules["audio"] = audio_stub
-sys.modules["earcons"] = earcons_stub
+sys.modules["agent.speech.audio"] = audio_stub
+sys.modules["agent.speech.earcons"] = earcons_stub
 
 from agent.speech import announce
 import cglib

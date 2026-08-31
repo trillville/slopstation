@@ -26,22 +26,11 @@ if errorlevel 1 (
   call :reload chord_listener.py "chord listener" listener
 )
 
-rem The pre-migration supervisor holds this SAME lock and can never relaunch:
-rem its requirements.txt moved to agent\, so its gate pip-installs a file that
-rem is gone and wedges at a pause. The lock name must not change to dodge it -
-rem a second supervisor puts two agents on one microphone. The tell is the venv
-rem git could not move. No pause below: this file also runs at boot.
-set "LEGACYVOICE="
-if exist "%~dp0voice\.venv" set "LEGACYVOICE=1"
-
 call :supervised "%TEMP%\couch-voice-supervisor.lock"
 if errorlevel 1 (
   echo [start-k15] voice lane down - starting it
   python "%~dp0events.py" emit supervisor lane_started what=voice >nul 2>&1
   start "K15 voice" /min /d "%~dp0agent" Start-Voice.bat
-) else if defined LEGACYVOICE (
-  echo [start-k15] the PRE-MIGRATION voice supervisor holds the lock and cannot
-  echo [start-k15] relaunch - close the "K15 voice" window, then run this again
 ) else (
   set "RELOADED=1"
   call :reload voice_agent.py "voice agent" voice

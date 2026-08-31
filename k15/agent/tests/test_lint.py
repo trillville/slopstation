@@ -78,7 +78,7 @@ def lane_violations(name, tree):
 
 
 def check_bare_lane_imports():
-    """The agent lane must reach itself ONLY through `agent.`. The supervisor
+    r"""The agent lane must reach itself ONLY through `agent.`. The supervisor
     runs voice_agent.py with cwd=k15\agent, so k15\agent is on sys.path too
     and a bare `from speech import earcons` resolves - to a SECOND module
     object, which a test rebind then misses. Measured, not theorised."""
@@ -97,7 +97,7 @@ def check_bare_lane_imports():
 def check_lanes():
     # Both halves of the vacuity guard: the package has to be there, and the
     # rule has to fire on it.
-    assert (AGENT / "__init__.py").exists(),         f"no {AGENT}\__init__.py - the lane rule would pass vacuously"
+    assert (AGENT / "__init__.py").exists(),         f"no {AGENT}\\__init__.py - the lane rule would pass vacuously"
     assert lane_violations("probe.py", ast.parse("import agent.tools.media")),         "lane rule does not flag `import agent.tools.media` - the rule is dead"
     bad = []
     for p in K15.glob("*.py"):
@@ -129,10 +129,13 @@ def main():
     # The walk follows __init__.py, so a subpackage that loses one drops out
     # SILENTLY - and `checked` above does not notice: tests/ alone clears any
     # floor a lost subpackage would breach. Count the PACKAGE, not the sweep.
-    package = _bootstrap.agent_modules()
-    assert len(package) >= 30, (
-        f"only {len(package)} files in the agent package - a subpackage lost "
-        "its __init__.py and fell out of the walk")
+    walked = {f.parent for f in _bootstrap.agent_modules()}
+    for d in sorted(AGENT.iterdir()):
+        if (not d.is_dir() or d.name.startswith((".", "__"))
+                or d.name in {"tests", "bench", "models"}):
+            continue
+        assert d in walked, (f"{d.name}/ holds modules but is not in the package "
+                             "walk - it lost its __init__.py and fell out")
     assert not problems, f"{len(problems)} pyflakes issue(s)"
     lanes = check_lanes() + check_bare_lane_imports()
     for b in lanes:

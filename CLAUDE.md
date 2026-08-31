@@ -117,5 +117,12 @@ diagnosis - but nobody fixes it automatically.
   every venv. `doctor.py`'s import rows are what catch a missing one.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored.
+- **A deploy that MOVES a lane's supervisor `.bat`.** cmd.exe re-reads the file
+  between lines, so the running supervisor dies the moment `deploy.py` kills its
+  agent, and nothing relaunches it; `deploy.py` then waits out its whole budget
+  and fails. Its death does release the fd-9 lock, so the fix is one
+  `Start-K15.bat` on the K15 - that creates the venv at the new path and
+  installs the pins itself. The old lane directory survives the pull (its venv
+  is gitignored) and is yours to delete.
 - **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`
   warns about but never touches (`vhui64.exe`, the DisplayMagician `.lnk`s).

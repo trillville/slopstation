@@ -21,7 +21,7 @@ for name in ("hid", "serial"):
 
 def modules():
     """(path, import name) for everything this walk imports. The agent half
-    comes from the package walk, never rglob: agent\.venv is ~11.6k files."""
+    comes from the package walk, never rglob: agent/.venv is ~11.6k files."""
     for p in sorted(K15.glob("*.py")) + _bootstrap.agent_modules():
         yield p, _bootstrap.modname(p)
 

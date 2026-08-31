@@ -1,4 +1,4 @@
-"""Rewrite constraints.txt from the venv running this, header intact.
+r"""Rewrite constraints.txt from the venv running this, header intact.
 
     .venv\Scripts\python refreeze.py      (from k15\agent, ON THE K15)
 
@@ -23,7 +23,7 @@ CONSTRAINTS = HERE / "constraints.txt"
 
 def main() -> int:
     if sys.prefix == sys.base_prefix:
-        print("refuse: not a venv - run .venv\Scripts\python refreeze.py")
+        print(r"refuse: not a venv - run .venv\Scripts\python refreeze.py")
         return 1
 
     # The K15's interpreter, mirrored in ci.yml and mypy.ini. Any other version
