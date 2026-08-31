@@ -10,13 +10,16 @@ jobs:
   # required: the tests assume Windows paths and test_ps_parse shells to the
   # real PowerShell parser. test_library and test_session_pipeline self-skip
   # (no Steam, no audio devices on a runner).
+  # 3.13 because that is what the K15 runs. constraints.txt is frozen from
+  # that venv, so an older CI cannot resolve it - scipy 1.18.0 ships no
+  # cp311 wheel, which is how the mismatch surfaced.
   tests:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: pip
           cache-dependency-path: |
             k15/voice/requirements.txt
@@ -31,7 +34,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
       - run: pip install mypy==2.3.1
       - name: chord lane
         shell: bash
