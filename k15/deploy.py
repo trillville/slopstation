@@ -32,6 +32,18 @@ LISTENER = "chord_listener.py"
 
 IDLE_POLL_S = 15
 RELAUNCH_S = 90         # supervisor backoff is 10 s; this is that with room
+# A relaunch that has to pip install first. Start-Voice.bat calls it "a minute
+# or two"; a cold venv on this box is longer, and this is a ceiling that only
+# elapses when something is genuinely stuck, not a wait that is spent.
+REINSTALL_S = 900
+
+# Start-Voice.bat's dependency gate, read rather than guessed: it is
+# `fc /b requirements.txt .venv\deps-ok`, inside its restart loop, so killing
+# the agent is what makes it fire. The sentinel is written only after pip
+# succeeds, so a failed install leaves the reinstall pending too - which a
+# diff of the commits being landed would not show.
+REQUIREMENTS = cglib.BASE / "voice" / "requirements.txt"
+DEPS_OK = cglib.BASE / "voice" / ".venv" / "deps-ok"
 
 # Name-filtered to python* so the powershell doing the filtering - its own
 # command line contains the needle - cannot match itself.
@@ -95,13 +107,23 @@ def wait_idle(budget_s: float) -> bool:
         time.sleep(IDLE_POLL_S)
 
 
-def wait_fresh(want: set[str], killed: dict[str, set[int]]) -> set[str]:
+def reinstall_pending() -> bool:
+    """True when the voice supervisor will pip install before it relaunches
+    its agent, so the relaunch wait has to cover that too."""
+    try:
+        return REQUIREMENTS.read_bytes() != DEPS_OK.read_bytes()
+    except OSError:
+        return True     # no venv, or no sentinel: the gate fires
+
+
+def wait_fresh(want: set[str], killed: dict[str, set[int]],
+               budget_s: float) -> set[str]:
     """The agents with no live pid OTHER than the one we just killed. Measured
     2026-08-30: Stop-Process returns while the corpse is still in the process
     table, so a name-only check read it as the replacement and passed ~10 s
     before the supervisor had relaunched anything - which is the entire window
     this is here to watch."""
-    deadline = time.time() + RELAUNCH_S
+    deadline = time.time() + budget_s
     while True:
         live = agent_pids()
         missing = {n for n in want if not (live[n] - killed.get(n, set()))}
@@ -153,17 +175,23 @@ def main(argv: list[str]) -> int:
         # running, and doctor.py only WARNs about that, so this is the only
         # thing standing between a dead chord lane and a green CD run. Voice is
         # an overlay and may stay off.
-        missing = wait_fresh(was | {LISTENER}, pids_before)
+        reinstall = reinstall_pending()
+        budget = REINSTALL_S if reinstall else RELAUNCH_S
+        if reinstall:
+            print("pins changed - the supervisor pip installs before the "
+                  f"agent comes back; waiting up to {budget / 60:.0f} min",
+                  flush=True)
+        missing = wait_fresh(was | {LISTENER}, pids_before, budget)
         if missing:
             lanes = ", ".join(sorted(AGENTS[m] for m in missing))
-            raise RuntimeError(f"{lanes} not running {RELAUNCH_S}s after the "
+            raise RuntimeError(f"{lanes} not running {budget:.0f}s after the "
                                "reload - no supervisor to relaunch it? run "
                                "Start-K15.bat there")
 
         fails = subprocess.run([sys.executable, "doctor.py"],
                                cwd=str(cglib.BASE), timeout=900).returncode
         log("deploy_done", sha=after, was=before, fails=fails,
-            dur_ms=int((time.time() - t0) * 1000))
+            reinstall=int(reinstall), dur_ms=int((time.time() - t0) * 1000))
         return fails
     except Exception as e:
         log.error("deploy_failed", err=str(e), sha=a.sha[:12])
