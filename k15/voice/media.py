@@ -225,11 +225,6 @@ class MediaService:
                     raise MediaError("Radarr movie file has no id") from e
             movie.update(qualityProfileId=profile_id, monitored=True)
             self.radarr.put(f"movie/{movie_id}", movie)
-            command = self._one(
-                self.radarr.post("command", {"name": "MoviesSearch",
-                                              "movieIds": [movie_id]}),
-                "Radarr", "search command")
-            command_ids = [int(command["id"])]
         else:
             candidate = self._one(
                 self.radarr.get("movie/lookup/tmdb", {"tmdbId": tmdb_id}),
@@ -248,11 +243,11 @@ class MediaService:
             movie_id = int(movie["id"])
             title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
             baseline_file_id = None
-            command = self._one(
-                self.radarr.post("command", {"name": "MoviesSearch",
-                                              "movieIds": [movie_id]}),
-                "Radarr", "search command")
-            command_ids = [int(command["id"])]
+        command = self._one(
+            self.radarr.post("command", {"name": "MoviesSearch",
+                                          "movieIds": [movie_id]}),
+            "Radarr", "search command")
+        command_ids = [int(command["id"])]
         return self._submission("movie", movie_id, title, tmdb_id, preset,
                                 profile_name, False,
                                 baseline_file_id=baseline_file_id,
@@ -759,10 +754,8 @@ class MediaService:
                 (operation.get("progress") or {}).get("phase"))
         raise MediaError(f"unsupported media operation kind {kind}")
 
-    @staticmethod
-    def _queue_delete_params():
-        return {"removeFromClient": True, "blocklist": False,
-                "skipRedownload": True, "changeCategory": False}
+    QUEUE_DELETE_PARAMS = {"removeFromClient": True, "blocklist": False,
+                           "skipRedownload": True, "changeCategory": False}
 
     @staticmethod
     def _cancel_commands(client, command_ids):
@@ -785,7 +778,7 @@ class MediaService:
             if key in seen:
                 continue
             seen.add(key)
-            client.delete(f"queue/{int(row['id'])}", self._queue_delete_params())
+            client.delete(f"queue/{int(row['id'])}", self.QUEUE_DELETE_PARAMS)
             removed += 1
         return removed
 
@@ -958,11 +951,8 @@ def from_config(cfg, secrets, log, transport=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Inspect and request media")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("status")
-    sub.add_parser("profiles")
-    sub.add_parser("validate")
-    sub.add_parser("doctor")
-    sub.add_parser("proton-port")
+    for name in ("status", "profiles", "validate", "doctor", "proton-port"):
+        sub.add_parser(name)
     proton_sync = sub.add_parser("sync-proton-port")
     proton_sync.add_argument("--execute", action="store_true")
     qbit_port = sub.add_parser("set-qbit-port")

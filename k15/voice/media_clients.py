@@ -1,10 +1,9 @@
-"""Authenticated transports for the media sidecars, and the names every media
-module shares.
+"""Authenticated transports for the media sidecars, and the vocabulary every
+media module shares.
 
-Nothing above this module speaks HTTP. The shared vocabulary - the errors,
-KINDS, _kind, _clean_text, _root_and_profile_gaps, _qbit_from_config - lives
-here because its callers span media.py, media_proton.py and media_checks.py.
-This is the leaf: it imports no sibling.
+Nothing above this module speaks HTTP. The shared names live here rather than
+in media.py because their callers span three modules and this is the leaf of
+the import graph - anywhere else is a cycle.
 """
 
 import http.cookies
