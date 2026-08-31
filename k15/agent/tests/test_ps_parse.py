@@ -38,9 +38,20 @@ def read(p):
 def parse_all():
     script = PARSE_PS.format(pc=str(PC), media=str(MEDIA_START))
     enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-EncodedCommand", enc],
-                       capture_output=True, text=True, timeout=120)
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-EncodedCommand", enc]
+    # 2-3s in CI, 0.8s locally - but a runner stalled powershell's start past
+    # the timeout once (2026-08-31), which failed the suite and SKIPPED that
+    # commit's deploy. Retry once: a cold-start stall does not repeat, and a
+    # real hang still trips twice and fails.
+    for attempt in (1, 2):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise
+            print("  powershell did not start within 120s - retrying once")
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     errors = [ln for ln in lines if "|" in ln]
     parsed = [ln for ln in lines if ln.startswith("PARSED ")]
