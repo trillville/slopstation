@@ -214,14 +214,16 @@ def main():
 
     import cglib
     from pipecat.frames.frames import (BotStoppedSpeakingFrame, EndWorkerFrame,
-                                       ErrorFrame)
+                                       ErrorFrame, UserStartedSpeakingFrame,
+                                       UserStoppedSpeakingFrame)
     from pipecat.processors.frame_processor import FrameDirection
+    from preroll import WakeAck
 
-    def drive(frames, arm):
+    def drive(frames, arm, ack=None):
         """Feed frames to a fresh gate with push_frame stubbed; return the
-        EndWorkerFrames it pushed, and its log."""
+        EndWorkerFrames it pushed, its log, and the gate."""
         glog = cglib.CapturingLog("voice")
-        gate = GrammarGate(m, None, glog)
+        gate = GrammarGate(m, None, glog, ack=ack)
         pushed = []
 
         async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
@@ -236,21 +238,39 @@ def main():
                 await gate.process_frame(f, FrameDirection.UPSTREAM)
 
         asyncio.run(run())
-        return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog
+        return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog, gate
 
-    ended, glog = drive([BotStoppedSpeakingFrame()], arm=True)
+    ended, glog, _ = drive([BotStoppedSpeakingFrame()], arm=True)
     if len(ended) != 1:
         failures.append(f"an armed stop must end the session exactly once, "
                         f"got {len(ended)}")
     if "session_stop_requested" not in glog.events():
         failures.append("arming the stop must log session_stop_requested")
-    ended, _ = drive([BotStoppedSpeakingFrame()], arm=False)
+    ended, _, _ = drive([BotStoppedSpeakingFrame()], arm=False)
     if ended:
         failures.append("finishing an ordinary answer must not end the session")
     # The goodbye can die between the model and the speaker; the ask stands.
-    ended, _ = drive([ErrorFrame(error="synthetic tts failure")], arm=True)
+    ended, _, _ = drive([ErrorFrame(error="synthetic tts failure")], arm=True)
     if len(ended) != 1:
         failures.append("a failed answer must still honour an armed stop")
+
+    # Turn edges (the resolver's real frames): busy mid-turn defers the idle
+    # handler, the stop claims the chime, and the flag EXPIRES - a Flux socket
+    # that dies mid-turn never sends the stop edge and must not pin the
+    # session open.
+    ack = WakeAck()
+    _, _, gate = drive([UserStartedSpeakingFrame()], arm=False, ack=ack)
+    if not gate.is_busy():
+        failures.append("an open user turn must read as mid-turn")
+    gate._speaking = _t.time() - (GrammarGate.SPEAKING_WAIT_S + 1)
+    if gate.is_busy():
+        failures.append("a lost stop edge must not pin the session open")
+    _, _, gate = drive([UserStartedSpeakingFrame(), UserStoppedSpeakingFrame()],
+                       arm=False, ack=ack)
+    if gate.is_busy():
+        failures.append("a closed user turn must not read as mid-turn")
+    if ack.claim():
+        failures.append("the turn stop must claim the wake chime")
 
     # An assistant turn is silent while it works: the only sounds are the
     # answer itself and, on error, the fail earcon.
@@ -265,7 +285,8 @@ def main():
           f"risky-command narrowness; "
           f"{len(STRIP) + len(STRIP_ALFRED) + len(STRIP_JOIN)} wake-strip "
           f"cases ({len(STRIP_JOIN)} two-token join); "
-          f"is_busy defers for in-flight assistant turns; an armed stop ends "
+          f"is_busy defers for in-flight assistant turns and open user turns, "
+          f"both bounded; the turn stop claims the chime; an armed stop ends "
           f"the session after the goodbye, never before")
 
 

@@ -1,8 +1,9 @@
 """Provider-executed tool calls, made visible.
 
-OpenAI's web_search runs server-side inside the completion call, and pipecat
-1.7's Responses service handles only function_call and reasoning items - a
-search streams past ignored, pushes no frame, and never enters the context.
+OpenAI's web_search runs server-side inside the completion call, and pipecat's
+Responses service (still in 1.8.1) handles only function_call and reasoning
+items - a search streams past ignored, pushes no frame, and never enters the
+context.
 So nothing records the lookup and the model itself cannot tell it searched;
 hence the write-back into the context, not just telemetry.
 
@@ -91,7 +92,11 @@ def install(service, log, tracing=None, context=None):
             tracing.tool_span(kind, query, status)
 
     async def audited(**params):
-        return _Tee(await create(**params), sink)
+        response = await create(**params)
+        # Tee only the streaming surface: a non-streaming create (pipecat's
+        # run_inference passes stream=False and reads .output_text) must come
+        # back untouched.
+        return _Tee(response, sink) if params.get("stream") else response
 
     responses.create = audited
 

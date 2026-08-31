@@ -12,7 +12,8 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 import cglib
-from preroll import CHUNK_BYTES, CHUNK_SAMPLES, PrerollFeeder, WakeAck, WakeCapture
+from preroll import (CHUNK_BYTES, CHUNK_SAMPLES, SAMPLE_RATE, PrerollFeeder,
+                     WakeAck, WakeCapture)
 
 
 class FakeStream:
@@ -325,9 +326,55 @@ def test_feeder_chunking():
     print("OK - feeder: chunking preserves bytes, empty pcm feeds nothing")
 
 
+async def test_feeder_stops_capture_at_startframe():
+    """The capture must survive until StartFrame: pipecat 1.8 runs the Flux
+    connect during setup, and words spoken there exist only if the wake
+    stream is still pumping when setup runs."""
+    from pipecat.frames.frames import InputAudioRawFrame, StartFrame
+    from pipecat.processors.frame_processor import (FrameDirection,
+                                                    FrameProcessor)
+
+    feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
+    marker = b"\xbb" * CHUNK_BYTES
+    capture = WakeCapture(FakeStream(), [marker])
+    feeder.capture = capture
+    pushed = []
+
+    async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
+        pushed.append(frame)
+
+    async def base_noop(self, frame, direction):
+        pass                # StartFrame bookkeeping needs a live pipeline
+
+    feeder.push_frame = fake_push
+    orig = FrameProcessor.process_frame
+    FrameProcessor.process_frame = base_noop
+    try:
+        await feeder.process_frame(
+            InputAudioRawFrame(audio=b"\x00" * CHUNK_BYTES,
+                               sample_rate=SAMPLE_RATE, num_channels=1),
+            FrameDirection.DOWNSTREAM)
+        assert feeder.capture is capture and capture._pcm is None, \
+            "the capture must keep pumping until StartFrame"
+        await feeder.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
+    finally:
+        FrameProcessor.process_frame = orig
+    assert capture._pcm is not None, "StartFrame must stop the capture"
+    fed = [f for f in pushed if isinstance(f, InputAudioRawFrame)
+           and f.audio[:1] == b"\xbb"]
+    assert len(fed) == 1, "the captured PCM must be fed as pre-roll"
+    assert feeder.capture is None and feeder.pcm == b""
+    print("OK - feeder: capture pumps through the build, stopped and fed at "
+          "StartFrame")
+
+
 async def test_pipeline_ordering():
     """A live worker delivers StartFrame, then the whole pre-roll, then live
-    mic frames - strictly in that order."""
+    mic frames - strictly in that order. The pre-roll comes from a REAL
+    WakeCapture handed over live, so this also drills the 1.8 overlap: the
+    wake stream stays open while the transport opens its own stream on the
+    same mic during setup."""
+    import pyaudio
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -351,7 +398,13 @@ async def test_pipeline_ordering():
 
     marker = b"".join(bytes([0xA0 + i]) * CHUNK_BYTES for i in range(4))
     feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
-    feeder.pcm = marker
+    pa = pyaudio.PyAudio()
+    wake_stream = pa.open(format=pyaudio.paInt16, channels=1,
+                          rate=SAMPLE_RATE, input=True,
+                          frames_per_buffer=CHUNK_SAMPLES)
+    feeder.capture = WakeCapture(
+        wake_stream, [marker[i:i + CHUNK_BYTES]
+                      for i in range(0, len(marker), CHUNK_BYTES)])
     collector = Collector()
 
     transport = LocalAudioTransport(LocalAudioTransportParams(
@@ -369,19 +422,23 @@ async def test_pipeline_ordering():
     await runner.add_workers(worker)
     run_task = asyncio.create_task(runner.run())
 
-    await asyncio.sleep(1.5)            # pipeline up + live mic flowing
-    await worker.cancel(reason="test done")
-    await asyncio.wait_for(run_task, timeout=10)
+    try:
+        await asyncio.sleep(1.5)        # pipeline up + live mic flowing
+        await worker.cancel(reason="test done")
+        await asyncio.wait_for(run_task, timeout=10)
+    finally:
+        pa.terminate()
 
     kinds = [k for k, _ in collector.events]
     assert kinds and kinds[0] == "start", f"first event was {kinds[:3]}"
     audio = [a for k, a in collector.events if k == "audio"]
-    assert len(audio) > 4, "no live mic frames followed the pre-roll"
+    assert len(audio) > 4, "no mic frames followed the pre-roll seed"
     assert b"".join(audio[:4]) == marker, \
         "pre-roll must arrive complete and first, before any live mic frame"
     assert audio[4][:1] != b"\xa0", "live frames must not repeat the pre-roll"
-    print(f"OK - pipeline: StartFrame -> 4 pre-roll chunks -> "
-          f"{len(audio) - 4} live mic frames, strictly ordered")
+    print(f"OK - pipeline: StartFrame -> 4 seeded pre-roll chunks -> "
+          f"{len(audio) - 4} captured+live mic frames, strictly ordered, "
+          f"wake stream open through transport setup")
 
 
 def main():
@@ -395,6 +452,7 @@ def main():
     test_wake_chime_waits_for_the_end_of_speech()
     test_wake_ack_is_claimed_exactly_once()
     test_feeder_chunking()
+    asyncio.run(test_feeder_stops_capture_at_startframe())
     # LocalAudioTransport opens PortAudio's default devices for real - the one
     # test here that a deviceless machine (CI) cannot run.
     if _bootstrap.has("audio"):

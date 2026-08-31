@@ -1,10 +1,11 @@
 """K15 voice agent: wake word -> session pipeline -> dispatch.
 
-Each wake builds ONE PipelineWorker (mic -> Flux STT -> GrammarGate ->
-speaker), torn down at session end; the wake loop itself is raw PyAudio +
-openWakeWord, outside Pipecat. Forced by Flux: it connects on StartFrame with
-no app-facing connect/disconnect and its socket dies ~20-30 s after audio
-stops. Sessions end on an exit phrase or the idle timeout (holdWindowS).
+Each wake builds ONE PipelineWorker (mic -> Flux STT -> turn resolver ->
+GrammarGate -> speaker), torn down at session end; the wake loop itself is
+raw PyAudio + openWakeWord, outside Pipecat. Forced by Flux: it connects when the pipeline
+comes up (during setup since pipecat 1.8) with no app-facing
+connect/disconnect, and its socket dies ~20-30 s after audio stops. Sessions
+end on an exit phrase or the idle timeout (holdWindowS).
 
 Modes:
   (default)             run the agent
@@ -56,14 +57,28 @@ def prewarm_imports_bg(provider):
     on the K15's U-class CPU, once ~6.5 s of dead air on the first wake.
     Safe off-thread - imports are idempotent and lock-protected."""
     def warm():
+        import pipecat.pipeline.pipeline            # noqa: F401
+        import pipecat.pipeline.worker              # noqa: F401
         import pipecat.processors.aggregators.llm_response_universal  # noqa: F401
         import pipecat.services.deepgram.flux.stt   # noqa: F401
         import pipecat.services.deepgram.tts        # noqa: F401
         import pipecat.transports.local.audio       # noqa: F401
+        import pipecat.turns.user_turn_processor    # noqa: F401
+        import pipecat.workers.runner               # noqa: F401
         if provider == "openai":
             import pipecat.services.openai.responses.llm  # noqa: F401
         else:
             import pipecat.services.anthropic.llm   # noqa: F401
+        # Last and guarded: pipecat 1.8 defers nltk (+sklearn) to a warm that
+        # otherwise runs INSIDE the first worker's setup - StartFrame waits on
+        # it (~0.9 s dev box), and a missing punkt_tab even runs nltk.download
+        # there against the 20 s setup ceiling. Internal module, so a pipecat
+        # rename must not cost the imports above.
+        try:
+            from pipecat.utils.prewarm import warm_deferred_imports
+            warm_deferred_imports()
+        except Exception:
+            pass
     threading.Thread(target=warm, daemon=True).start()
 
 
