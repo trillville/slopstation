@@ -43,7 +43,7 @@ def check_imports():
             report(PASS, f"import {mod}", "ok")
         except Exception as e:
             report(FAIL, f"import {mod}", str(e),
-                   "pip install pyserial hidapi (hidapi, NOT the 'hid' package)")
+                   "pip install -r k15\\system-requirements.txt")
 
 
 def check_com(cfg):

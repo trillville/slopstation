@@ -1,0 +1,11 @@
+# System python on the K15 - the chord lane's interpreter, not a venv.
+# Installed by hand; CD never touches it. doctor.py's `import serial` and
+# `import hid` rows are what catch a missing one.
+#
+#     python -m pip install -r k15\system-requirements.txt
+#
+# Unpinned on purpose: no machine has ever frozen this set, and both are stable
+# C bindings. hidapi, NOT the 'hid' package - different project, same import
+# name.
+pyserial
+hidapi

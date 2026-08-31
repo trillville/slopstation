@@ -113,7 +113,8 @@ diagnosis - but nobody fixes it automatically.
   match a venv that already resolved needs no touch. Use
   `k15/voice/refreeze.py`, never a hand-rolled `pip freeze >`: that writes
   pins only and eats the header, and PowerShell 5.1's `>` writes UTF-16.
-- **System-python packages** (`pyserial`, `hidapi`) sit outside every venv.
+- **System-python packages** (`k15/system-requirements.txt`) sit outside
+  every venv. `doctor.py`'s import rows are what catch a missing one.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored.
 - **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`
