@@ -1,7 +1,7 @@
 """Assistant lane: system prompt, tool schemas, and tool impls.
 
-Shared by the Pipecat pipeline (voice) and assistant_repl.py (the --text
-bench); every tool routes through the same dispatch.py as the grammar gate.
+Shared by the Pipecat pipeline (voice) and agent_backends.py (text and MCP);
+every tool routes through the same dispatch.py as the grammar gate.
 An appid that isn't in the index is refused at the tool boundary.
 """
 import json

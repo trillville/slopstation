@@ -9,6 +9,10 @@ import _bootstrap  # noqa: F401
 
 import cglib
 import media
+import media_checks
+import media_clients
+import media_health
+import media_proton
 import operations
 
 
@@ -144,7 +148,7 @@ def main():
         calls.append((method, url, headers, body, timeout))
         return {"ok": True}
 
-    client = media.ArrClient("Radarr", "http://127.0.0.1:7878/", "secret-key",
+    client = media_clients.ArrClient("Radarr", "http://127.0.0.1:7878/", "secret-key",
                              transport=transport)
     assert client.get("movie/lookup", {"term": "Dune 2021"}) == {"ok": True}
     client.post("command", {"name": "MoviesSearch", "movieIds": [7]})
@@ -163,7 +167,7 @@ def main():
         if path.endswith("/auth/login"):
             return {"Set-Cookie": "QBT_SID_8080=session-1; HttpOnly; path=/"}, b""
         if headers.get("Cookie") == "QBT_SID_8080=expired":
-            raise media.QbittorrentAuthError("expired session")
+            raise media_clients.QbittorrentAuthError("expired session")
         assert headers["Cookie"] == "QBT_SID_8080=session-1"
         if path.endswith("/app/preferences"):
             return {}, json.dumps(qbit_preferences).encode()
@@ -174,7 +178,7 @@ def main():
             return {}, b""
         raise AssertionError((method, path))
 
-    qbit = media.QbittorrentClient(
+    qbit = media_clients.QbittorrentClient(
         "http://127.0.0.1:8080", "admin", "a-long-qbit-password",
         transport=qbit_transport)
     changed_port = qbit.set_listen_port(33125)
@@ -191,7 +195,7 @@ def main():
     try:
         qbit.set_listen_port(0)
         raise AssertionError("invalid qBittorrent port accepted")
-    except media.MediaError:
+    except media_clients.MediaError:
         pass
     qbit.sid = "expired"
     assert qbit.preferences()["listen_port"] == 33125
@@ -217,10 +221,10 @@ def main():
         encoding="utf-8")
     proton_now = datetime.datetime(2026, 8, 30, 4, 10, 40,
                                    tzinfo=datetime.timezone.utc)
-    source = media.read_proton_port_state(proton_log, now=proton_now)
+    source = media_proton.read_proton_port_state(proton_log, now=proton_now)
     assert source["state"] == "active" and source["port"] == 39733
     qbit_preferences["listen_port"] = 33125
-    proton_monitor = media.ProtonPortMonitor(
+    proton_monitor = media_proton.ProtonPortMonitor(
         qbit, cglib.CapturingLog("voice"), path=proton_log, now=proton_now)
     synced = proton_monitor.reconcile_once()
     assert synced["changed"] and synced["previous_port"] == 33125
@@ -246,7 +250,7 @@ def main():
     try:
         proton_monitor.reconcile_once()
         raise AssertionError("stale Proton state was accepted")
-    except media.MediaError:
+    except media_clients.MediaError:
         pass
     proton_log.write_text(
         proton_event("2026-08-30T04:12:01.000Z", "Starting"),
@@ -254,16 +258,16 @@ def main():
     proton_monitor.now = datetime.datetime(
         2026, 8, 30, 4, 12, 2, tzinfo=datetime.timezone.utc)
     assert proton_monitor.reconcile_once()["state"] == "transitional"
-    assert media.read_proton_port_state(
+    assert media_proton.read_proton_port_state(
         proton_dir / "missing.txt", now=proton_now)["state"] == "missing"
     proton_log.write_text("not a Proton status line", encoding="utf-8")
-    assert media.read_proton_port_state(
+    assert media_proton.read_proton_port_state(
         proton_log, now=proton_now)["state"] == "unknown"
     proton_backup = proton_dir / "client-logs.1.txt"
     proton_backup.write_text(
         proton_event("2026-08-30T04:12:03.000Z",
                      "SleepingUntilRefresh", 40123), encoding="utf-8")
-    rotated = media.read_proton_port_state(
+    rotated = media_proton.read_proton_port_state(
         proton_log, now=datetime.datetime(
             2026, 8, 30, 4, 12, 4, tzinfo=datetime.timezone.utc))
     assert rotated["state"] == "active" and rotated["port"] == 40123
@@ -285,7 +289,7 @@ def main():
          "trackedDownloadStatus": "warning",
          "statusMessages": [{"messages": ["Not a preferred word upgrade"]}]}]}
     watch_log = cglib.CapturingLog("voice")
-    watch = media.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
+    watch = media_health.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
 
     watch.reconcile_once()
     issue = watch_log.find("media_health_issue")
@@ -324,10 +328,10 @@ def main():
         name = "Sonarr"
 
         def get(self, endpoint, params=None):
-            raise media.MediaError("connection refused")
+            raise media_clients.MediaError("connection refused")
 
     watch_log.records.clear()
-    dead = media.MediaHealthMonitor((DeadArr(),), watch_log)
+    dead = media_health.MediaHealthMonitor((DeadArr(),), watch_log)
     dead.reconcile_once()
     dead.reconcile_once()
     # An app that stays down is one line, not one line per poll.
@@ -377,7 +381,7 @@ def main():
     try:
         lib.library("album", 1)
         raise AssertionError("unknown kind must raise")
-    except media.MediaError:
+    except media_clients.MediaError:
         pass
     print("  library: per-season aired counts regardless of monitoring; "
           "specials and unaired excluded")
@@ -498,7 +502,7 @@ def main():
     try:
         svc.request_series(81189, seasons=[0])
         raise AssertionError("specials accepted as a normal season")
-    except media.MediaError:
+    except media_clients.MediaError:
         pass
 
     movie_retry = {
@@ -649,7 +653,7 @@ def main():
     try:
         svc.delete_series(393189)
         raise AssertionError("unscoped series deletion was accepted")
-    except media.MediaError:
+    except media_clients.MediaError:
         pass
     removed_all = svc.delete_series(393189, all_seasons=True)
     assert removed_all["all_seasons"] and not svc.sonarr.library
@@ -766,7 +770,7 @@ def main():
                      "SleepingUntilRefresh", 33125), encoding="utf-8")
     doctor_now = datetime.datetime(
         2026, 8, 30, 5, 0, 5, tzinfo=datetime.timezone.utc)
-    doctor = media.media_doctor(
+    doctor = media_checks.media_doctor(
         doctor_cfg, doctor_secrets, cglib.CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,
@@ -783,7 +787,7 @@ def main():
                               share_limits_mode="MatchAll", listen_port=1234)
     doctor_qbit_preferences.clear()
     doctor_qbit_preferences.update(broken_preferences)
-    broken = media.media_doctor(
+    broken = media_checks.media_doctor(
         doctor_cfg, doctor_secrets, cglib.CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,

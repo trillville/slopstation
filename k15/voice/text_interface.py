@@ -9,7 +9,7 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import assistant
-import assistant_repl
+import agent_backends
 import cglib
 from dispatch import Dispatch
 
@@ -34,7 +34,7 @@ class TextApplication:
         self.lock = threading.Lock()
 
     def _new_session(self):
-        backend_type = assistant_repl.BACKENDS[self.provider]
+        backend_type = agent_backends.BACKENDS[self.provider]
         model = assistant.default_model(self.voice, self.provider)
         backend = backend_type(
             self.secrets, model,

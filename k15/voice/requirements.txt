@@ -10,7 +10,16 @@ opentelemetry-exporter-otlp-proto-http==1.44.0
 openwakeword==0.6.0
 hassil==3.12.0
 rapidfuzz==3.14.6
+# dispatch.py reaches tv.exlink_send_hex, which imports serial lazily, so the
+# venv needs this as well as system python (k15\system-requirements.txt).
 pyserial==3.5
+# grammar_gate.py imports yaml at MODULE scope to read grammar.yaml. It arrives
+# as a pipecat transitive; named here so a pipecat that drops it fails at
+# install rather than at the first wake word.
+PyYAML==6.0.3
+# steam_session.py imports it lazily, as do library.py and steamstore.py in the
+# chord lane. Also a pipecat transitive today; same reason to name it.
+requests==2.34.2
 pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
 # how-long-to-beat hours (assistant game-details facet). library.py imports it
 # lazily and fail-soft. New transitives not yet in constraints.txt:

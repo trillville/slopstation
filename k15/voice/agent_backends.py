@@ -1,8 +1,10 @@
-"""Each provider's plain SDK loop (one turn, with its tool loop, to reply text)
-and the --text REPL that drives it. The backends are production: text_interface
-builds one per LAN chat session from BACKENDS. The REPL wires only the base
-tool set, so it is not tool-for-tool with a live session; nothing here is on
-the wake path.
+"""Each provider's plain SDK loop - one turn, with its tool loop, to reply text
+- and the --text REPL that drives one locally.
+
+The backends are production: text_interface builds one per LAN chat session
+from BACKENDS, so this is the conversation path for text and MCP. The REPL
+wires only the base tool set, so it is not tool-for-tool with a live session;
+nothing here is on the wake path.
 """
 import json
 import time

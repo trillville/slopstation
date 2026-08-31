@@ -17,6 +17,7 @@ import cglib
 import events
 import media
 import operations
+import operations_monitors
 import steam_session
 import tracing
 import voice_agent as va
@@ -183,8 +184,8 @@ def stub_everything():
     tracing.setup = lambda cfg, secrets, log: False
     announce.Announcer = FakeAnnouncer
     operations.OperationStore = FakeOperationStore
-    operations.SteamMonitor = FakeSteamMonitor
-    operations.MediaMonitor = FakeMediaMonitor
+    operations_monitors.SteamMonitor = FakeSteamMonitor
+    operations_monitors.MediaMonitor = FakeMediaMonitor
     media.from_config = lambda cfg, secrets, log: (
         "MEDIA" if cfg.get("media", {}).get("enabled") else None)
     media.proton_port_monitor_from_config = lambda cfg, secrets, log: (

@@ -14,12 +14,12 @@ run and deploy them. This file holds the process rules an agent session needs.
   dashboards group by them and alerts fire on them — so rewording a message
   is free and renaming an event must break a test. `cglib.CapturingLog` is
   the double; don't hand-roll one.
-- **Two lanes, one direction of dependency.** The chord lane (`cglib.py`,
-  `events.py`, `couch.py`, `chord_listener.py`, `tv.py`, `haptics.py`,
-  `gamepc.py`) is load-bearing, runs on system python, and must stay
-  stdlib-only (`events.py` documents why; `test_lint` enforces it).
-  Voice is an overlay with its own venv and may depend on the chord lane's
-  modules, never the reverse.
+- **Two lanes, one direction of dependency.** The chord lane is EVERY module
+  directly in `k15/`: load-bearing, runs on system python, and must stay
+  stdlib-only at import (`events.py` documents why; `test_lint` globs the
+  directory rather than keeping a list, so a new module is in the lane the
+  moment it lands). The agent lane in `k15/voice/` has its own venv and may
+  depend on chord-lane modules, never the reverse.
 - **Telemetry never costs a session.** Anything on an emit path is fail-soft
   by construction — see `events.emit`'s positional-only signature for the
   standard this has to meet.
@@ -113,7 +113,8 @@ diagnosis - but nobody fixes it automatically.
   match a venv that already resolved needs no touch. Use
   `k15/voice/refreeze.py`, never a hand-rolled `pip freeze >`: that writes
   pins only and eats the header, and PowerShell 5.1's `>` writes UTF-16.
-- **System-python packages** (`pyserial`, `hidapi`) sit outside every venv.
+- **System-python packages** (`k15/system-requirements.txt`) sit outside
+  every venv. `doctor.py`'s import rows are what catch a missing one.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored.
 - **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`

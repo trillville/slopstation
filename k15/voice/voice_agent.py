@@ -16,7 +16,7 @@ Modes:
   --wake-trials         log wake detections + confidences; never start sessions
   --false-accept-soak   count spurious wakes over hours; never start sessions
   --once                exactly one session, then exit (bench)
-  --text                the assistant REPL (assistant_repl.py); --provider,
+  --text                the assistant REPL (agent_backends.py); --provider,
                         --model, --effort pick the A/B side
 
 Composition root and wake loop only; audio.py owns PortAudio,
@@ -109,7 +109,7 @@ def bench_mode(args, cfg, secrets):
         return 0
 
     if args.text:
-        from assistant_repl import repl
+        from agent_backends import repl
         return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
                     model=args.model, effort=args.effort)
     return None
@@ -249,6 +249,7 @@ def main():
     # Durable external operations and their out-of-session delivery.
     import announce
     import operations as operations_mod
+    import operations_monitors
     operation_store = operations_mod.OperationStore(log)
     announcer = None
     if stt_live and not args.dry_run:
@@ -277,7 +278,7 @@ def main():
             reason="no refresh token - run steam_session.py enroll")
 
     if steam is not None and not args.dry_run:
-        monitor = operations_mod.SteamMonitor(operation_store, steam, log)
+        monitor = operations_monitors.SteamMonitor(operation_store, steam, log)
         monitor.start()
         log("lane_up", what="operation_monitor",
             active=len(operation_store.active(kind="steam_install")),
@@ -289,7 +290,7 @@ def main():
     # retries, both of which POST to the authority.
     if media_service is not None and not args.dry_run:
         poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
-        media_monitor = operations_mod.MediaMonitor(
+        media_monitor = operations_monitors.MediaMonitor(
             operation_store, media_service, log, poll_s=poll_s)
         media_monitor.start()
         active_media = sum(len(operation_store.active(kind=kind)) for kind in
