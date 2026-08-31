@@ -222,9 +222,6 @@ def main():
         return rc
 
     cglib.rotate_log()
-    # Waits for a configured mic still enumerating (~15 s on a cold boot).
-    pa, input_idx, output_idx = open_audio(voice)
-
     stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
         log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
@@ -326,6 +323,11 @@ def main():
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
     tracing.setup(cfg, secrets, log)
+
+    # LAST: open_audio blocks until the configured device answers (~15 s on a
+    # cold boot; forever on a dead mic). Everything above must already be
+    # serving - text, MCP, and the monitors must not wait on a microphone.
+    pa, input_idx, output_idx = open_audio(voice)
 
     try:
         listener = WakeListener(pa, voice, input_idx)

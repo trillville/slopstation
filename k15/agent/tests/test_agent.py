@@ -345,6 +345,28 @@ def main():
     assert not FakeDucker.made
     print("  ducking: steps without tvIp warns and stays off")
 
+    # --- audio opens LAST -----------------------------------------------------
+    # open_audio blocks until the configured device answers - forever on a
+    # dead mic - so the monitors must already exist when it is called, or a
+    # microphone failure takes the whole control plane down with it.
+    at_audio = {}
+
+    def audio_last():
+        FakeSteam.available_answer = True
+        FakeListener.wakes.append((0.7, FakeCapture()))
+        def counting_open(voice):
+            at_audio["monitors"] = (len(FakeSteamMonitor.made)
+                                    + len(FakeMediaMonitor.made))
+            return ("PA", 0, 1)
+        va.open_audio = counting_open
+    cfg = config()
+    cfg["media"] = {"enabled": True}
+    rc, log, calls = run(["--once"], cfg, setup=audio_last)
+    assert at_audio["monitors"] == 2, (
+        f"open_audio ran with {at_audio['monitors']} monitor(s) built - "
+        "the control plane must be up before the mic wait")
+    print("  audio last: both monitors exist before open_audio can block")
+
     # --- a crashing session -------------------------------------------------------
     def boom():
         raise RuntimeError("pipeline died")
