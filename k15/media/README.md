@@ -275,14 +275,21 @@ relevant Arr application before changing configuration.
 
 ## Pinning the containers
 
-All four images ride `:latest` until frozen. Freeze from the K15, from what is
-running - upstream may already be ahead. Each app prints its own version at
-System > Status on the setup pages above; FlareSolverr's is on its `/` page
-and in `docker compose ps` output.
+All four images ride `:latest` until frozen. Freeze the exact images running on
+the K15; upstream may already be ahead. From the checkout root:
 
-Write each version into `compose.yaml` in place of `latest` and commit. After
-that, an upgrade is a deliberate tag edit plus `Start-Media.ps1`, not a side
-effect of the next `docker compose pull`.
+```powershell
+'flaresolverr', 'prowlarr', 'radarr', 'sonarr' | ForEach-Object {
+    $container = docker compose --project-directory k15\media --env-file k15\media\.env ps -q $_
+    $image = docker inspect --format '{{.Image}}' $container
+    docker image inspect --format '{{index .RepoDigests 0}}' $image
+}
+```
+
+Each output is an immutable `repository@sha256:...` reference. Put the matching
+reference in that service's `image:` field and commit. After that, an upgrade
+is a deliberate digest edit plus `Start-Media.ps1`, not a side effect of the
+next `docker compose pull`.
 
 ## Backup and restore
 
