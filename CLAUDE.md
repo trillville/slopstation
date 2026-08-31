@@ -70,7 +70,9 @@ the PC-side contract agrees with itself; every gaming-pc script is in
 `test_turn.py` reads the SHIPPING `Dispatch.ps1`, so gaming-pc regex changes
 are drilled from here.
 `test_library` needs a local Steam (the gaming PC); `test_session_pipeline`
-needs audio devices (the K15).
+needs audio devices (the K15). The python in `ci.yml` and `mypy.ini` MIRRORS
+the K15's interpreter and is not a floor: `constraints.txt` is frozen from that
+venv, so a cp313 pin has no wheel for an older CI and the install fails.
 
 ## Deploying
 
@@ -83,6 +85,9 @@ needs audio devices (the K15).
   doctors on self-hosted runners after a green `ci` on `main`. It parks
   while a session is live and never rolls back. Hand-deploying stays
   valid - it is the same two scripts.
+- PRs are SQUASH-merged. A push that races the user's merge loses - what
+  lands is the head GitHub had cached, not the branch tip. Push, then let
+  them merge; never force-push a PR that is theirs to land.
 
 Two properties of the K15 leg that change what a session may leave behind:
 
@@ -105,8 +110,9 @@ diagnosis - but nobody fixes it automatically.
   against `.venv\deps-ok`, so a requirements change installs itself on the
   next CD deploy, while a constraints-only change that is meant to alter what
   gets installed must ride a `requirements.txt` touch. Regenerating it to
-  match a venv that already resolved needs no touch. Command and encoding
-  trap: that file's header.
+  match a venv that already resolved needs no touch. Use
+  `k15/voice/refreeze.py`, never a hand-rolled `pip freeze >`: that writes
+  pins only and eats the header, and PowerShell 5.1's `>` writes UTF-16.
 - **System-python packages** (`pyserial`, `hidapi`) sit outside every venv.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored.
