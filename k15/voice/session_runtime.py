@@ -344,6 +344,11 @@ class Session:
         # Handed over LIVE, stopped by the feeder at StartFrame: 1.8 runs the
         # Flux connect during setup, before StartFrame starts the mic, so a
         # capture stopped here would lose that window (0.3-1.5 s of speech).
+        # The can't-tell chime deadline must not ride into that extra window -
+        # it counts from the wake, and a one-breath command is still mid-word
+        # at 1.5 s.
+        if self.capture is not None:
+            self.capture.disarm_deadline()
         feeder.capture = self.capture
         try:
             await runner.add_workers(worker)

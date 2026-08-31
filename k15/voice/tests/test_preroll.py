@@ -260,6 +260,7 @@ def test_wake_chime_waits_for_the_end_of_speech():
         """_watch's state without a thread or a stream."""
         cap = WakeCapture.__new__(WakeCapture)
         cap._t0, cap._quiet, cap._peak = time.monotonic(), 0, 0.0
+        cap._chime_deadline = True
         return cap
 
     fired = []
@@ -286,8 +287,24 @@ def test_wake_chime_waits_for_the_end_of_speech():
     late._watch(chunk(8000))
     time.sleep(0.05)
     assert len(fired) == 2, "noisy room never got its chime"
+
+    # Disarmed at the pipeline handoff, the deadline must NOT beep over a
+    # one-breath command still being spoken (the pump outlives the old stop
+    # point by the whole setup) - but a real gap still chimes.
+    held = watcher()
+    held._on_quiet = lambda: fired.append(time.monotonic())
+    held._t0 -= WakeCapture.CHIME_BY_S
+    held.disarm_deadline()
+    for _ in range(12):                 # still talking, past the deadline
+        held._watch(chunk(8000))
+    time.sleep(0.05)
+    assert len(fired) == 2, "disarmed deadline still beeped over speech"
+    for _ in range(6):                  # the real gap still earns the chime
+        held._watch(chunk(60))
+    time.sleep(0.05)
+    assert len(fired) == 3, "quiet detection must survive the disarm"
     print("OK - wake chime: held through speech, fired once at the gap, "
-          "and forced after CHIME_BY_S when the room is too loud to tell")
+          "forced after CHIME_BY_S only while armed (disarmed at handoff)")
 
 
 def test_wake_ack_is_claimed_exactly_once():
