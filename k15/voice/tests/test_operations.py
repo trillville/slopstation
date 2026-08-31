@@ -21,6 +21,7 @@ sys.modules["earcons"] = earcons_stub
 import announce
 import cglib
 import operations
+import operations_monitors
 
 
 def _try(failures, fn, *args):
@@ -129,7 +130,7 @@ def main():
 
     steam = FakeSteam()
     installed = set()
-    monitor = operations.SteamMonitor(store, steam, log,
+    monitor = operations_monitors.SteamMonitor(store, steam, log,
                                       installed_probe=lambda: installed)
     steam.downloads = [{"appid": 413150, "name": "Stardew Valley",
                         "percent": 25, "paused": False, "queue": 0}]
@@ -194,7 +195,7 @@ def main():
     assert reused["id"] == media_op["id"]
     assert reused["metadata"]["preset"] == "2160p"
     fake_media = FakeMedia()
-    media_monitor = operations.MediaMonitor(media_store, fake_media, log)
+    media_monitor = operations_monitors.MediaMonitor(media_store, fake_media, log)
     assert media_monitor.reconcile_once() == 1
     assert media_store.get(media_op["id"])["progress"]["percent"] == 20
     assert media_store.get(media_op["id"])["metadata"]["search_pending"]
@@ -262,7 +263,7 @@ def main():
         "complete": False,
         "progress": {"phase": "waiting_for_match"},
         "detail": "no acceptable release yet"}
-    retry_monitor = operations.MediaMonitor(retry_store, retry_media, log)
+    retry_monitor = operations_monitors.MediaMonitor(retry_store, retry_media, log)
     retry_monitor.reconcile_once(now=1000)
     scheduled = retry_store.get(retry_op["id"])
     assert scheduled["metadata"]["search_retry_pending"]
@@ -270,9 +271,9 @@ def main():
     assert not retry_media.retries
 
     retry_media.search_available_now = True
-    operations.MediaMonitor(retry_store, retry_media, log).reconcile_once(now=1299)
+    operations_monitors.MediaMonitor(retry_store, retry_media, log).reconcile_once(now=1299)
     assert not retry_media.retries
-    operations.MediaMonitor(retry_store, retry_media, log).reconcile_once(now=1300)
+    operations_monitors.MediaMonitor(retry_store, retry_media, log).reconcile_once(now=1300)
     retried = retry_store.get(retry_op["id"])
     assert retry_media.retries == [retry_op["id"]]
     assert retried["metadata"]["search_retry_count"] == 1
@@ -323,7 +324,7 @@ def main():
     give_op = give_store.track_external(
         "series_acquisition", "sonarr", "71", "Rick and Morty",
         metadata={"catalog_id": 275274, "seasons": None})
-    give_monitor = operations.MediaMonitor(give_store, give_media, log)
+    give_monitor = operations_monitors.MediaMonitor(give_store, give_media, log)
     give_monitor.reconcile_once(now=5000)
     assert give_store.get(give_op["id"])["metadata"]["waiting_since"] == 5000
     assert not give_media.abandoned
@@ -405,7 +406,7 @@ def main():
         "complete": False, "canceled": True,
         "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
         "detail": "requested episodes are unmonitored"}
-    operations.MediaMonitor(canceled_store, canceled_media, log).reconcile_once()
+    operations_monitors.MediaMonitor(canceled_store, canceled_media, log).reconcile_once()
     assert canceled_store.get(canceled_op["id"])["state"] == operations.CANCELED
     print("  media: externally unmonitored scope reconciles to cancellation")
 
