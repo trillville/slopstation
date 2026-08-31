@@ -76,6 +76,7 @@ class WakeCapture:
         self._on_quiet = on_quiet
         self._t0 = time.monotonic()
         self._quiet = 0
+        self._chime_deadline = True     # CHIME_BY_S armed; see disarm_deadline
         # The wake phrase in the ring sets the speech scale.
         self._peak = max([_rms(c) for c in self._chunks] or [0.0]) if on_quiet else 0.0
         self._stopping = threading.Event()
@@ -93,9 +94,19 @@ class WakeCapture:
         self._peak = max(self._peak, level)
         self._quiet = 0 if level >= self._peak * self.QUIET_RATIO else self._quiet + 1
         if (self._quiet * CHUNK_MS >= self.QUIET_MS
-                or time.monotonic() - self._t0 >= self.CHIME_BY_S):
+                or (self._chime_deadline
+                    and time.monotonic() - self._t0 >= self.CHIME_BY_S)):
             fn, self._on_quiet = self._on_quiet, None
             threading.Thread(target=fn, daemon=True).start()
+
+    def disarm_deadline(self) -> None:
+        """Retire the CHIME_BY_S fallback; quiet detection stays armed. Called
+        at the pipeline handoff: the pump now outlives the old stop point by
+        the whole setup (the Flux connect), where a one-breath command is
+        still mid-word at 1.5 s - the deadline would beep over it. Past the
+        handoff, quiet detection and the gate's final-transcript backstop own
+        the chime."""
+        self._chime_deadline = False
 
     def _pump(self) -> None:
         limit = self.MAX_S * BYTES_PER_S // CHUNK_BYTES
