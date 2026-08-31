@@ -43,7 +43,7 @@ def check_imports():
             report(PASS, f"import {mod}", "ok")
         except Exception as e:
             report(FAIL, f"import {mod}", str(e),
-                   "pip install -r k15\\system-requirements.txt")
+                   "pip install -r system-requirements.txt")
 
 
 def check_com(cfg):
