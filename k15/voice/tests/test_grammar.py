@@ -208,10 +208,38 @@ def main():
     if g.is_busy():
         failures.append("expired assistant turn must not pin the session")
 
-    # The stop_listening tool ARMS the gate; the session ends only once the
-    # goodbye is spoken, since the tool runs before the model has said a word.
+    # Turn edges, both spellings: pipecat 1.8 Flux only PROPOSES turns, and
+    # the no-assistant pipeline has no aggregator to resolve the proposals, so
+    # the gate must read them directly - busy mid-turn (defers the idle
+    # handler), chime claimed on the stop.
     import asyncio
 
+    from pipecat.frames.frames import (ProposedUserStartedSpeakingFrame,
+                                       ProposedUserStoppedSpeakingFrame)
+    from pipecat.processors.frame_processor import FrameDirection as _FD
+    from preroll import WakeAck
+
+    async def turn_edges():
+        ack = WakeAck()
+        gate = GrammarGate(m, None, lambda s: None, ack=ack)
+
+        async def swallow(frame, direction=_FD.DOWNSTREAM):
+            pass
+
+        gate.push_frame = swallow
+        await gate.process_frame(ProposedUserStartedSpeakingFrame(), _FD.DOWNSTREAM)
+        if not gate.is_busy():
+            failures.append("a proposed turn start must read as mid-turn")
+        await gate.process_frame(ProposedUserStoppedSpeakingFrame(), _FD.DOWNSTREAM)
+        if gate.is_busy():
+            failures.append("a proposed turn stop must clear mid-turn")
+        if ack.claim():
+            failures.append("a proposed turn stop must claim the wake chime")
+
+    asyncio.run(turn_edges())
+
+    # The stop_listening tool ARMS the gate; the session ends only once the
+    # goodbye is spoken, since the tool runs before the model has said a word.
     import cglib
     from pipecat.frames.frames import (BotStoppedSpeakingFrame, EndWorkerFrame,
                                        ErrorFrame)
@@ -265,8 +293,9 @@ def main():
           f"risky-command narrowness; "
           f"{len(STRIP) + len(STRIP_ALFRED) + len(STRIP_JOIN)} wake-strip "
           f"cases ({len(STRIP_JOIN)} two-token join); "
-          f"is_busy defers for in-flight assistant turns; an armed stop ends "
-          f"the session after the goodbye, never before")
+          f"is_busy defers for in-flight assistant turns; proposed turn edges "
+          f"track mid-turn and claim the chime; an armed stop ends the "
+          f"session after the goodbye, never before")
 
 
 if __name__ == "__main__":

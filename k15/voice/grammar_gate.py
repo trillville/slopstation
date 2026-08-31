@@ -21,6 +21,8 @@ from rapidfuzz import fuzz
 from pipecat.frames.frames import (BotStartedSpeakingFrame,
                                    BotStoppedSpeakingFrame, EndWorkerFrame,
                                    ErrorFrame, Frame, OutputAudioRawFrame,
+                                   ProposedUserStartedSpeakingFrame,
+                                   ProposedUserStoppedSpeakingFrame,
                                    TranscriptionFrame,
                                    UserStartedSpeakingFrame,
                                    UserStoppedSpeakingFrame)
@@ -269,9 +271,17 @@ class GrammarGate(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if isinstance(frame, UserStartedSpeakingFrame):
+        # Both spellings of a turn edge: pipecat 1.8 Flux PROPOSES turns, and
+        # only the user context aggregator resolves proposals into the real
+        # frames - the no-assistant pipeline has no aggregator, so there the
+        # proposals are the only signal. In the assistant pipeline both arrive
+        # (proposal downstream, real frame broadcast back); handling both is
+        # idempotent - _speaking is a bool and the ack claims once.
+        if isinstance(frame, (UserStartedSpeakingFrame,
+                              ProposedUserStartedSpeakingFrame)):
             self._speaking = True
-        elif isinstance(frame, UserStoppedSpeakingFrame):
+        elif isinstance(frame, (UserStoppedSpeakingFrame,
+                                ProposedUserStoppedSpeakingFrame)):
             self._speaking = False
             await self._ack_wake()              # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):

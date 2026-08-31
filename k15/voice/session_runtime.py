@@ -199,6 +199,7 @@ class Session:
     async def run(self):
         from pipecat.frames.frames import (BotSpeakingFrame,
                                            InterimTranscriptionFrame,
+                                           ProposedUserStartedSpeakingFrame,
                                            TranscriptionFrame,
                                            UserStartedSpeakingFrame)
         from pipecat.pipeline.pipeline import Pipeline
@@ -238,9 +239,10 @@ class Session:
             settings=DeepgramFluxSTTService.Settings(
                 model="flux-general-en",
                 eot_threshold=voice["eotThreshold"],
-                # Dormant: pipecat 1.7 forwards Flux's EagerEndOfTurn as an
-                # InterimTranscriptionFrame, which GrammarGate (finals only)
-                # never sees. Its one live effect is resetting the idle clock.
+                # Dormant: pipecat (still in 1.8.1) forwards Flux's
+                # EagerEndOfTurn as an InterimTranscriptionFrame, which
+                # GrammarGate (finals only) never sees. Its one live effect is
+                # resetting the idle clock.
                 eager_eot_threshold=(voice["eagerEotThreshold"]
                                      if voice.get("eagerEnabled", True) else None),
                 numerals=True,
@@ -271,9 +273,10 @@ class Session:
         else:
             stages += [transport.output()]
 
-        # No barge-in: nothing here constructs an InterruptionWorkerFrame and
-        # the transport has no vad_analyzer, so a command the gate matches,
-        # spoken mid-answer, DISPATCHES while the answer keeps playing.
+        # No barge-in: the transport has no vad_analyzer and the assistant
+        # lane's turn strategies are built with enable_interruptions=False
+        # (see _assistant_stages), so a command the gate matches, spoken
+        # mid-answer, DISPATCHES while the answer keeps playing.
         #
         # enable_metrics is what populates token counts and time to first
         # byte in the spans;
@@ -292,8 +295,12 @@ class Session:
             conversation_id=tracing.conversation_id() if tracing_on else None,
             additional_span_attributes=tracing.span_attributes() if tracing_on else None,
             idle_timeout_secs=voice["holdWindowS"],
+            # ProposedUserStartedSpeaking is Flux's start-of-turn under 1.8;
+            # the real frame exists only where an aggregator resolves it.
             idle_timeout_frames=(TranscriptionFrame, InterimTranscriptionFrame,
-                                 UserStartedSpeakingFrame, BotSpeakingFrame),
+                                 UserStartedSpeakingFrame,
+                                 ProposedUserStartedSpeakingFrame,
+                                 BotSpeakingFrame),
             cancel_on_idle_timeout=False,       # we decide - see the handler
         )
 
@@ -317,9 +324,10 @@ class Session:
             await runner.add_workers(worker)
             await runner.run()
         finally:
-            # pipecat 1.7 never terminates the PyAudio handle it creates and
-            # exposes no public cleanup; a fresh transport per wake would leak
-            # one each time. Guarded so an upstream rename logs, not crashes.
+            # pipecat (still in 1.8.1) never terminates the PyAudio handle it
+            # creates and exposes no public cleanup; a fresh transport per wake
+            # would leak one each time. Guarded so an upstream rename logs, not
+            # crashes.
             pa = getattr(transport, "_pyaudio", None)
             if pa is not None:
                 try:
@@ -336,14 +344,16 @@ class Session:
                                                            ToolsSchema)
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.aggregators.llm_response_universal import (
-            LLMContextAggregatorPair)
+            LLMContextAggregatorPair, LLMUserAggregatorParams)
+        from pipecat.turns.user_turn_strategies import (
+            ExternalUserTurnStrategies)
 
         voice, secrets = self.voice, self.secrets
         carry = (list(CARRY["messages"])
                  if time.time() - CARRY["t"] < voice["followupCarryS"] else [])
         # Native (provider-executed) tools ride custom_tools. Only the OpenAI
-        # adapter has that passthrough in pipecat 1.7 (AdapterType has no
-        # ANTHROPIC), so the knob is a no-op under the anthropic provider.
+        # adapter has that passthrough (AdapterType still has no ANTHROPIC in
+        # 1.8.1), so the knob is a no-op under the anthropic provider.
         native = server_tools(voice, "openai") if self.provider == "openai" else []
         self.context = LLMContext(
             messages=carry,
@@ -355,12 +365,22 @@ class Session:
                                 voice=voice, steam=self.steam, media=self.media),
                     log),                   # -> one tool_call event per call
                 custom_tools={AdapterType.OPENAI: native} if native else None))
-        user_agg, asst_agg = LLMContextAggregatorPair(self.context)
+        # Flux detects turns server-side; the aggregator resolves its proposed
+        # frames. Passed explicitly for two reasons: enable_interruptions=False
+        # keeps barge-in off (the 1.7 behavior - see the worker comment), and
+        # the default strategies build a per-session smart-turn ONNX model
+        # that Flux's own ExternalUserTurnStrategies recommendation would then
+        # discard anyway.
+        user_agg, asst_agg = LLMContextAggregatorPair(
+            self.context,
+            user_params=LLMUserAggregatorParams(
+                user_turn_strategies=ExternalUserTurnStrategies(
+                    enable_interruptions=False)))
         llm = _make_llm(voice, secrets, system_instruction(self.cfg))
         if native:
-            # Pipecat 1.7 has no handling for provider-executed tools: a
-            # web_search never reaches the context, so the model cannot tell
-            # that it searched.
+            # Pipecat (still in 1.8.1) has no handling for provider-executed
+            # tools: a web_search never reaches the context, so the model
+            # cannot tell that it searched.
             import llm_audit
             if llm_audit.install(llm, log, tracing=tracing, context=self.context):
                 log("lane_up", what="search_audit", tools=len(native))

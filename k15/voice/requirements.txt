@@ -1,25 +1,29 @@
-# Voice venv pins - frozen 2026-08-10 against PyPI, as-built on the K15.
-# Pipecat moves weekly: re-read its docs for every service used and re-run
-# tests/ before bumping. The chord listener stays on system python.
-pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.7.0
+# Voice venv pins - bumped 2026-08-30 against PyPI (1.7.0 -> 1.8.1: the
+# proposed-turn-frame rework; grammar_gate and session_runtime carry the
+# compensations). Pipecat moves weekly: re-read its docs for every service
+# used and re-run tests/ before bumping. The chord listener stays on system
+# python.
+pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.8.1
 # Langfuse's OTLP endpoint is HTTP-only (no gRPC), and pipecat's own tracing
 # example imports the gRPC exporter - pin http so it cannot resolve by accident.
 opentelemetry-exporter-otlp-proto-http==1.44.0
 openwakeword==0.6.0
-hassil==3.11.0
-rapidfuzz==3.14.5
+hassil==3.12.0
+rapidfuzz==3.14.6
 pyserial==3.5
 pyflakes==3.4.0   # test-only: undefined-name guard (test_lint.py)
 # how-long-to-beat hours (assistant game-details facet). library.py imports it
 # lazily and fail-soft. New transitives not yet in constraints.txt:
 # fake_useragent, beautifulsoup4, aiounittest.
-howlongtobeatpy==1.0.22
+howlongtobeatpy==1.0.23
 # TV remote keys over WebSocket (tv_remote.py) - the volume write path that
 # works with eARC audio; imported lazily and fail-soft. New transitives not
 # yet in constraints.txt: websocket-client, yarl.
 samsungtvws==3.0.5
 # Transitives are enforced via constraints.txt (the supervisor installs with
-# `-c constraints.txt`); its header has the regeneration rule. As-built:
-# pyaudio 0.2.14 (cp313 win_amd64 wheel exists), onnxruntime 1.24.4,
-# deepgram-sdk 7.6.0, anthropic 0.121.0, openai 2.53.0, numpy 2.4.6,
+# `-c constraints.txt`); its header has the regeneration rule. Clean resolve
+# 2026-08-30 (cp311 dev box): pyaudio 0.2.14 (cp313 win_amd64 wheel exists),
+# onnxruntime 1.24.4 (pipecat caps ~=1.24.3), deepgram-sdk 7.8.0,
+# anthropic 0.125.0 (pipecat caps <1), openai 2.54.0 (pipecat caps <3),
+# numpy 2.4.6 (numba caps <2.5),
 # opentelemetry-{api,sdk,proto} 1.44.0 (+ semantic-conventions 0.65b0).

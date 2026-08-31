@@ -2,9 +2,10 @@
 
 Each wake builds ONE PipelineWorker (mic -> Flux STT -> GrammarGate ->
 speaker), torn down at session end; the wake loop itself is raw PyAudio +
-openWakeWord, outside Pipecat. Forced by Flux: it connects on StartFrame with
-no app-facing connect/disconnect and its socket dies ~20-30 s after audio
-stops. Sessions end on an exit phrase or the idle timeout (holdWindowS).
+openWakeWord, outside Pipecat. Forced by Flux: it connects when the pipeline
+comes up (during setup since pipecat 1.8) with no app-facing
+connect/disconnect, and its socket dies ~20-30 s after audio stops. Sessions
+end on an exit phrase or the idle timeout (holdWindowS).
 
 Modes:
   (default)             run the agent
