@@ -1,5 +1,10 @@
 name: slopstation-media
 
+# Tags are frozen BY HAND from the K15, the constraints.txt rule: pin what is
+# RUNNING there, never upstream latest (the runbook's Pinning section has the
+# procedure). ':latest' means nobody has frozen yet, and the next
+# `docker compose pull` upgrades all four services at once.
+
 services:
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
