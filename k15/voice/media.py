@@ -55,10 +55,9 @@ def _clean_text(value, limit=160):
                    if c.isprintable())[:limit]
 
 
-"""Everything that differs between a movie and a series, in one row each, so
-a change is an edit here rather than a sweep. `authority` is the lowercase
-name the operation ledger and the download-client category use; ArrClient.name
-is the capitalized one the API errors carry."""
+"""`authority` is the lowercase name the operation ledger and the
+download-client category use; ArrClient.name is the capitalized one the API
+errors carry."""
 KINDS = {
     "movie": {"client": "radarr", "authority": "radarr", "resource": "movie",
               "id_key": "tmdbId", "public_key": "tmdb_id",
@@ -72,7 +71,6 @@ KINDS = {
 
 
 def _kind(kind):
-    """The column set for one media kind. The single 'unknown media kind'."""
     try:
         return KINDS[kind]
     except KeyError:

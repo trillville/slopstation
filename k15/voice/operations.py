@@ -185,7 +185,6 @@ class OperationStore:
         return dict(created)
 
     def track_steam_install(self, appid, title, turn=None, verified=False):
-        """Create one tracker per active appid, or reuse the existing one."""
         return self.track_external(
             "steam_install", "steam", str(int(appid)), title, turn=turn,
             state=RUNNING if verified else QUEUED,
@@ -675,7 +674,7 @@ def main(argv=None):
         return 0
     if args.command == "cancel":
         # No authority here supports cancellation, so cancel() always refuses
-        # and this exit is unconditional. The tuple stays for one that might.
+        # and this exit is unconditional.
         _, detail = store.cancel(args.operation)
         print(detail)
         return 1
