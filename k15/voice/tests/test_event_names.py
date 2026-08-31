@@ -38,7 +38,7 @@ PYTHON = {
     "config_suspect": {"reason", "setting", "value"},
     "deals_synced": {"specials", "wishlist"},
     "deploy_deferred": {"budget_s", "reason", "waited_s"},
-    "deploy_done": {"dur_ms", "fails", "sha", "was"},
+    "deploy_done": {"dur_ms", "fails", "reinstall", "sha", "was"},
     "deploy_failed": {"err", "sha"},
     "deploy_reloaded": {"killed", "what"},
     "deploy_start": {"at", "sha"},
