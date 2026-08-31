@@ -1,26 +1,107 @@
 # Voice venv constraints - as-built transitive versions, enforced at install
 # (Start-Voice.bat passes `-c constraints.txt`).
 #
-# Regenerate ON THE K15 after a deliberate upgrade. Let cmd own the
-# redirection - PowerShell 5.1's `>` writes UTF-16, which is not a pins file:
-#   cmd /c ".venv\Scripts\python -m pip freeze > constraints.txt"
+# Regenerate ON THE K15, with the voice venv's own python:
+#   .venv\Scripts\python refreeze.py
+# Do not redirect `pip freeze` by hand: it writes pins only and would eat this
+# header, and PowerShell 5.1's `>` writes UTF-16, which is not a pins file.
+#
 # Touch requirements.txt too when the new pins are meant to INSTALL: the
 # supervisor's gate compares THAT file alone against .venv\deps-ok, so a
 # constraints-only change would not install itself. A freeze that merely
 # records a venv which already resolved needs no touch.
 #
-# Re-seeded 2026-08-30 from a clean cp311 resolve of the pipecat 1.8.1 pin
-# set; a real K15 (cp313) freeze should add the deeper transitives - do NOT
-# freeze from a cp311 box, its list would miss audioop-lts (py>=3.13 only).
+# Frozen 2026-08-30 from the K15's cp313 venv. Freeze ONLY from there: a cp311
+# list misses audioop-lts (py>=3.13 only), and a cp313 pin has no wheel for an
+# older CI - which is why ci.yml runs 3.13 too.
 # semantic-conventions 0.65b0 is sdk 1.44.0's lockstep partner under its own
 # 0.x scheme.
-pyaudio==0.2.14
-onnxruntime==1.24.4
-deepgram-sdk==7.8.0
+
+Markdown==3.10.3
+PyAudio==0.2.14
+PyYAML==6.0.3
+RapidFuzz==3.14.6
+aiofiles==25.1.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+aiounittest==1.5.0
+annotated-types==0.8.0
 anthropic==0.125.0
-openai==2.54.0
+anyio==4.14.2
+attrs==26.1.0
+audioop-lts==0.2.2
+beautifulsoup4==4.15.0
+certifi==2026.7.22
+charset-normalizer==3.4.9
+click==8.4.2
+colorama==0.4.6
+deepgram-sdk==7.8.0
+defusedxml==0.7.1
+distro==1.9.0
+docopt==0.6.2
+docstring_parser==0.18.0
+fake-useragent==2.2.0
+flatbuffers==25.12.19
+frozenlist==1.8.0
+googleapis-common-protos==1.75.1
+h11==0.16.0
+hassil==3.12.0
+howlongtobeatpy==1.0.23
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+jiter==0.16.0
+joblib==1.5.3
+llvmlite==0.48.0
+loguru==0.7.3
+loudness==0.2.0
+mpmath==1.3.0
+multidict==6.7.1
+narwhals==2.24.0
+nltk==3.10.2
+num2words==0.5.14
+numba==0.66.0
 numpy==2.4.6
+onnxruntime==1.24.4
+openai==2.54.0
 opentelemetry-api==1.44.0
-opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-common==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-instrumentation==0.65b0
 opentelemetry-proto==1.44.0
+opentelemetry-sdk==1.44.0
 opentelemetry-semantic-conventions==0.65b0
+openwakeword==0.6.0
+packaging==26.3
+pillow==12.3.0
+pipecat-ai==1.8.1
+propcache==0.5.2
+protobuf==6.33.6
+pydantic==2.13.4
+pydantic_core==2.46.4
+pyflakes==3.4.0
+pyloudnorm==0.2.0
+pypdf==6.16.1
+pyserial==3.5
+regex==2026.7.19
+requests==2.34.2
+resampy==0.4.3
+samsungtvws==3.0.5
+scikit-learn==1.9.0
+scipy==1.18.0
+sniffio==1.3.1
+soupsieve==2.9.2
+soxr==1.0.0
+sympy==1.14.0
+threadpoolctl==3.6.0
+tqdm==4.70.0
+typing-inspection==0.4.3
+typing_extensions==4.16.0
+unicode-rbnf==2.4.0
+urllib3==2.7.0
+websocket-client==1.9.0
+websockets==17.0.1
+win32_setctime==1.2.0
+wrapt==2.3.0
+yarl==1.24.5
