@@ -273,6 +273,42 @@ docker compose --project-directory ..\media --env-file ..\media\.env ps
 Inspect **System → Status**, **Activity → Queue**, and **History** in the
 relevant Arr application before changing configuration.
 
+## Pinning the containers
+
+All four images ride `:latest` until frozen. Freeze from the K15, from what is
+running - upstream may already be ahead. Each app prints its own version at
+System > Status on the setup pages above; FlareSolverr's is on its `/` page
+and in `docker compose ps` output.
+
+Write each version into `compose.yaml` in place of `latest` and commit. After
+that, an upgrade is a deliberate tag edit plus `Start-Media.ps1`, not a side
+effect of the next `docker compose pull`.
+
+## Backup and restore
+
+Everything the bootstrap sections above configure by hand - API keys, indexer
+definitions, quality profiles, root folders, download-client entries - lives
+only in the config databases under `MEDIA_CONFIG_ROOT`, one directory per
+service. None of it is in this repo, and none of it survives a rebuilt config
+volume (which is also why the health monitor polls instead of taking
+webhooks: a notification connection would live in the same database).
+
+`MEDIA_CONFIG_ROOT` lives in `k15\media\.env`, not the shell environment, so
+read it the way `Start-Media.ps1` does. Back up while the stack is stopped, or
+the SQLite files may copy mid-write. From the checkout root:
+
+```
+$cfg = @{}; Get-Content k15\media\.env | ForEach-Object { if ($_ -match '^\s*([^#=]+)=(.*)$') { $cfg[$Matches[1].Trim()] = $Matches[2].Trim() } }
+docker compose --project-directory k15\media --env-file k15\media\.env stop
+Copy-Item -Recurse $cfg.MEDIA_CONFIG_ROOT "$($cfg.MEDIA_CONFIG_ROOT)-backup"
+.\k15\media\Start-Media.ps1
+```
+
+Restore is the reverse: stop, copy the backup over `MEDIA_CONFIG_ROOT`, start.
+Native qBittorrent keeps its own config outside the stack at
+`%APPDATA%\qBittorrent` and `%LOCALAPPDATA%\qBittorrent`; back those up with
+it or the category/port setup re-does by hand.
+
 ## Moving the media root
 
 To migrate from `C:\Media` to a NAS: stop Compose and qBittorrent, copy the
