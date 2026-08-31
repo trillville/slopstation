@@ -18,7 +18,7 @@ $CG = @{
     StateDir    = 'C:\ProgramData\CouchGaming'   # cross-context state, not under Root
 }
 # Markers under StateDir, shared with the dependency-free Dispatch.ps1 as
-# literals; voice/tests/test_ps_parse.py holds the two sets equal. Dispatch
+# literals; agent/tests/test_ps_parse.py holds the two sets equal. Dispatch
 # writes turn/launch-app/nav-target/stop-app (schtasks /Run can't pass args)
 # and reads ready.
 $CG.ReadyMarker  = Join-Path $CG.StateDir 'ready'

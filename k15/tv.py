@@ -1,7 +1,7 @@
 """The TV, from the K15: Ex-Link over serial (power, inputs, the refused
 volume family) and the two pairing-free HTTP reads (power state, volume).
 Chord-safe: stdlib plus a lazy pyserial import. The venv-only write path over
-WebSocket is voice/tv_remote.py.
+WebSocket is agent/tools/tv_remote.py.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import time
 # checksum = (0x100 - sum(first 6)) & 0xFF. Serial is 9600 baud, 8N1.
 # Volume/mute family from Samsung's RS-232 worksheet. DANGER: a one-byte slip
 # in this family is power_off - frozen literals, cross-checked against
-# exlink_frame() by voice/tests/test_exlink.py.
+# exlink_frame() by agent/tests/test_exlink.py.
 EXLINK_FRAMES = {
     "power_on":  "082200000002d4",
     "power_off": "082200000001d5",
@@ -110,7 +110,7 @@ def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
     READ half only: with eARC audio the set refuses every direct volume WRITE
     (SetVolume answers UPnP 501; Ex-Link volume frames ack, then pop "Not
     Available" on screen - 2026-08-21). Writes go through remote keys over
-    HDMI-CEC, voice/tv_remote.py, verified by this read. None = unknown, not
+    HDMI-CEC, agent/tools/tv_remote.py, verified by this read. None = unknown, not
     zero: unreachable, or the TV's UPnP renderer asleep (it goes down with
     the panel, unlike /api/v2/ above)."""
     import urllib.request

@@ -22,11 +22,11 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: |
-            k15/voice/requirements.txt
-            k15/voice/constraints.txt
-      - run: pip install -r k15/voice/requirements.txt -c k15/voice/constraints.txt
+            k15/agent/requirements.txt
+            k15/agent/constraints.txt
+      - run: pip install -r k15/agent/requirements.txt -c k15/agent/constraints.txt
       - run: python tests/run.py
-        working-directory: k15/voice
+        working-directory: k15/agent
 
   types:
     runs-on: windows-latest
@@ -39,10 +39,9 @@ jobs:
       - name: chord lane
         shell: bash
         run: mypy k15/*.py
-      # MYPYPATH resolves the voice lane's sibling imports (cglib, events,
-      # gamepc) the same way the runtime sys.path does - without it the
-      # cross-lane surface goes unchecked.
-      - name: voice
-        shell: bash
-        run: MYPYPATH=.. mypy --config-file ../../mypy.ini *.py
-        working-directory: k15/voice
+      # A DIRECTORY, not a file list: mypy walks up past agent/__init__.py,
+      # adopts k15/ as the search root, and resolves the lane's sibling imports
+      # (cglib, events, gamepc) the way the runtime sys.path does. That is what
+      # MYPYPATH=.. bought before the package existed.
+      - name: agent lane
+        run: mypy k15/agent

@@ -42,8 +42,8 @@ REINSTALL_S = 900
 # the agent is what makes it fire. The sentinel is written only after pip
 # succeeds, so a failed install leaves the reinstall pending too - which a
 # diff of the commits being landed would not show.
-REQUIREMENTS = cglib.BASE / "voice" / "requirements.txt"
-DEPS_OK = cglib.BASE / "voice" / ".venv" / "deps-ok"
+REQUIREMENTS = cglib.BASE / "agent" / "requirements.txt"
+DEPS_OK = cglib.BASE / "agent" / ".venv" / "deps-ok"
 
 # Name-filtered to python* so the powershell doing the filtering - its own
 # command line contains the needle - cannot match itself.

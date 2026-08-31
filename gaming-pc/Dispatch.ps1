@@ -2,7 +2,7 @@
 # (administrators_authorized_keys). Everything not matched below is DENIED.
 # Dependency-free - no dot-sourcing in the sshd context. The marker paths
 # below mirror $CG.ReadyMarker/TurnMarker/LaunchMarker/NavMarker/StopMarker in
-# CouchGaming.common.ps1; voice/tests/test_ps_parse.py holds them equal.
+# CouchGaming.common.ps1; agent/tests/test_ps_parse.py holds them equal.
 #
 # The switch below is the verb catalog. Its five mutating verbs
 # (enter/exit/launch/nav/stop) take an optional ` --turn <hex>`; the read-only
@@ -31,7 +31,7 @@ $stopMarker = 'C:\ProgramData\CouchGaming\stop-app'
 #  * The turn group is wrapped in (?-i: ) because switch -Regex is
 #    case-insensitive by default, so plain [0-9a-f] would accept '9F2C1A'.
 #    The verbs themselves stay case-insensitive.
-# voice/tests/test_turn.py reads these patterns out of this file and fails if
+# agent/tests/test_turn.py reads these patterns out of this file and fails if
 # one loses its anchor or its bound.
 #
 # Ordering inside a verb: Set-Turn AFTER the verb's guards (a refused launch

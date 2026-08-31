@@ -315,8 +315,8 @@ def _steam_mint_probe(days):
     Shells `steam_session.py token` (exit 0 = mint works) in the voice venv,
     since doctor runs on system python. No answer (no venv, offline) = PASS.
     """
-    vpy = cglib.BASE / "voice" / ".venv" / "Scripts" / "python.exe"
-    script = cglib.BASE / "voice" / "steam_session.py"
+    vpy = cglib.BASE / "agent" / ".venv" / "Scripts" / "python.exe"
+    script = cglib.BASE / "agent" / "tools" / "steam_session.py"
     if not vpy.exists():
         return (PASS, "steam session",
                 f"enrolled, token good for {days:.0f} days (venv absent, mint unchecked)")
@@ -334,8 +334,8 @@ def _steam_mint_probe(days):
     return (WARN, "steam session",
             f"enrolled but CANNOT mint - {why[-1][:120] if why else 'unknown'}",
             "install-by-voice falls back to opening the game's page; "
-            "re-run voice\\.venv\\Scripts\\python "
-            "voice\\steam_session.py enroll")
+            "re-run agent\\.venv\\Scripts\\python "
+            "agent\\tools\\steam_session.py enroll")
 
 
 def check_voice(cfg):
@@ -374,26 +374,26 @@ def check_voice_keys():
 
 
 def check_voice_venv(cfg):
-    voice_dir = cglib.BASE / "voice"
-    if (voice_dir / ".venv" / "deps-ok").exists():
+    agent_dir = cglib.BASE / "agent"
+    if (agent_dir / ".venv" / "deps-ok").exists():
         report(PASS, "voice venv", "bootstrapped (deps-ok sentinel present)")
         model = cfg["voice"].get("wakeModel", "")
         # Same resolution order as audio.py _resolve_model.
-        vendored = voice_dir / "models" / f"{model}.onnx"
-        onnx = (voice_dir / ".venv" / "Lib" / "site-packages" / "openwakeword"
+        vendored = agent_dir / "models" / f"{model}.onnx"
+        onnx = (agent_dir / ".venv" / "Lib" / "site-packages" / "openwakeword"
                 / "resources" / "models" / f"{model}.onnx")
         if vendored.exists():
-            report(PASS, "wake model", f"{model}.onnx vendored in voice\\models")
+            report(PASS, "wake model", f"{model}.onnx vendored in agent\\models")
         elif onnx.exists():
             report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
         else:
             report(WARN, "wake model", f"{model}.onnx not present",
                    "a pretrained name is auto-fetched on the agent's first "
                    "run; a custom one has no upstream and must be committed "
-                   "to voice\\models")
+                   "to agent\\models")
     else:
         report(WARN, "voice venv", "not bootstrapped (no .venv\\deps-ok)",
-               "run voice\\Start-Voice.bat once (~2 min with network)")
+               "run agent\\Start-Voice.bat once (~2 min with network)")
 
 
 def check_voice_library():
@@ -453,12 +453,12 @@ def check_steam_session():
             days = (exp - time.time()) / 86400 if exp else -1
             if days < 0:
                 report(WARN, "steam session", "refresh token unreadable or expired",
-                       "re-run voice\\.venv\\Scripts\\python "
-                       "voice\\steam_session.py enroll")
+                       "re-run agent\\.venv\\Scripts\\python "
+                       "agent\\tools\\steam_session.py enroll")
             elif days < 14:
                 report(WARN, "steam session", f"token expires in {days:.0f} days",
-                       "re-scan soon: voice\\.venv\\Scripts\\python "
-                       "voice\\steam_session.py enroll")
+                       "re-scan soon: agent\\.venv\\Scripts\\python "
+                       "agent\\tools\\steam_session.py enroll")
             else:
                 # Unexpired != working: QR enrolment can yield a web-audience
                 # token (aud=[web,renew,derive]) that AccessDenies every mint
@@ -466,8 +466,8 @@ def check_steam_session():
                 report(*_steam_mint_probe(days))
         except Exception as e:
             report(WARN, "steam session", f"token unreadable ({e})",
-                   "re-run voice\\.venv\\Scripts\\python "
-                   "voice\\steam_session.py enroll")
+                   "re-run agent\\.venv\\Scripts\\python "
+                   "agent\\tools\\steam_session.py enroll")
 
 
 def _tcp_reachable(url, timeout=1):
@@ -594,7 +594,7 @@ def check_voice_agent():
         "voice agent", "voice_agent",
         "running (wake word armed)",
         "not running - wake word deaf (chord unaffected)",
-        "run voice\\Start-Voice.bat or the startup shortcut")
+        "run agent\\Start-Voice.bat or the startup shortcut")
 
 
 def check_telemetry():

@@ -32,26 +32,26 @@ __pycache__/
 # into the venv and stays out of here; a hand-trained model has no upstream to
 # re-fetch from, so it is vendored and travels with the repo. Contents are
 # ignored rather than the directory itself - git cannot re-include a file whose
-# parent directory is excluded, so `k15/voice/models/` would beat the negation.
-k15/voice/models/*
-!k15/voice/models/*.onnx
+# parent directory is excluded, so `k15/agent/models/` would beat the negation.
+k15/agent/models/*
+!k15/agent/models/*.onnx
 # The custom verifier (bench/train_verifier.py) travels for the same reason:
 # it is fitted against ONE .onnx from clips off this couch, so losing it means
 # re-labelling the clips, not re-downloading anything.
-!k15/voice/models/*.pkl
+!k15/agent/models/*.pkl
 
 # Voice: room recordings for wake-word training - tens of MB of the TV, and
 # the gaming PC is where they are consumed, not here (bench/record_room.py)
-k15/voice/room.wav
-k15/voice/room_*.wav
+k15/agent/room.wav
+k15/agent/room_*.wav
 
 # Voice: background-worker scratch - the briefing is committed, everything a
 # worker writes is runtime state. The guardrail is workers.py's
 # --disallowedTools and nothing else: a settings.json deny list used to sit here too, and it was
 # measured (2026-08-14) not to hold - Read(**/x) was ignored and the file read
 # anyway - while naming only tools the denylist already removes.
-k15/voice/worker_home/*
-!k15/voice/worker_home/AGENTS.md
+k15/agent/worker_home/*
+!k15/agent/worker_home/AGENTS.md
 
 # OS / editor cruft
 Thumbs.db
