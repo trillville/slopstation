@@ -334,7 +334,8 @@ def _steam_mint_probe(days):
     return (WARN, "steam session",
             f"enrolled but CANNOT mint - {why[-1][:120] if why else 'unknown'}",
             "install-by-voice falls back to opening the game's page; "
-            "re-run k15\\voice\\steam_session.py enroll to restore it")
+            "re-run voice\\.venv\\Scripts\\python "
+            "voice\\steam_session.py enroll")
 
 
 def check_voice(cfg):
@@ -452,10 +453,12 @@ def check_steam_session():
             days = (exp - time.time()) / 86400 if exp else -1
             if days < 0:
                 report(WARN, "steam session", "refresh token unreadable or expired",
-                       "re-run k15\\voice\\steam_session.py enroll")
+                       "re-run voice\\.venv\\Scripts\\python "
+                       "voice\\steam_session.py enroll")
             elif days < 14:
                 report(WARN, "steam session", f"token expires in {days:.0f} days",
-                       "re-scan soon: steam_session.py enroll")
+                       "re-scan soon: voice\\.venv\\Scripts\\python "
+                       "voice\\steam_session.py enroll")
             else:
                 # Unexpired != working: QR enrolment can yield a web-audience
                 # token (aud=[web,renew,derive]) that AccessDenies every mint
@@ -463,7 +466,8 @@ def check_steam_session():
                 report(*_steam_mint_probe(days))
         except Exception as e:
             report(WARN, "steam session", f"token unreadable ({e})",
-                   "re-run steam_session.py enroll")
+                   "re-run voice\\.venv\\Scripts\\python "
+                   "voice\\steam_session.py enroll")
 
 
 def _tcp_reachable(url, timeout=1):
@@ -508,7 +512,7 @@ def check_media(cfg):
            + (f" | unreachable: {', '.join(down)}" if down else "")
            + (f" | unconfigured: {', '.join(unconfigured)}"
               if unconfigured else ""),
-           "start k15\\media\\Start-Media.ps1 and native qBittorrent")
+           "start media\\Start-Media.ps1 and native qBittorrent")
 
 
 def check_remote(cfg):
