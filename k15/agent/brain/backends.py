@@ -14,6 +14,12 @@ import cglib
 from agent.brain import llm_audit
 from agent.telemetry import traces
 
+# Both SDKs default to 600 s per attempt plus retries. remote.py abandons its
+# forward at 280 s and text.py holds the session lock for the whole turn, so a
+# stalled attempt has to die before every caller's patience, not after.
+LLM_TIMEOUT_S = 90
+LLM_MAX_RETRIES = 1
+
 
 # --- provider backends: one turn (with its tool loop) -> reply text -----------
 # Each backend holds its own conversation state.
@@ -24,7 +30,9 @@ class AnthropicBackend:
 
     def __init__(self, secrets, model, effort=None, voice=None):
         import anthropic
-        self.client = anthropic.Anthropic(api_key=secrets[self.key])
+        self.client = anthropic.Anthropic(
+            api_key=secrets[self.key], timeout=LLM_TIMEOUT_S,
+            max_retries=LLM_MAX_RETRIES)
         self.model = model
         self.messages = []
         self.cache_note = ""
@@ -78,7 +86,9 @@ class OpenAIBackend:
 
     def __init__(self, secrets, model, effort="low", voice=None):
         import openai
-        self.client = openai.OpenAI(api_key=secrets[self.key])
+        self.client = openai.OpenAI(
+            api_key=secrets[self.key], timeout=LLM_TIMEOUT_S,
+            max_retries=LLM_MAX_RETRIES)
         self.model = model
         self.effort = effort            # none|minimal|low|medium|high (model-dep)
         self.prev = None

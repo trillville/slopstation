@@ -1,5 +1,6 @@
 """Blind test: authenticated text API and shared conversational session."""
 import json
+import threading
 import urllib.error
 import urllib.request
 
@@ -9,6 +10,9 @@ from agent.brain import backends
 import cglib
 from agent.interfaces import text
 from agent.telemetry import traces
+
+BLOCKED = threading.Event()     # a "stall" turn signals it is inside turn()
+RELEASE = threading.Event()     # and waits here, wedging its session
 
 
 class FakeBackend:
@@ -27,6 +31,9 @@ class FakeBackend:
             result = impls["request_series"]({
                 "tvdb_id": 393189, "seasons": [1], "preset": "2160p"})
             assert result["ok"]
+        if "stall" in user_text:
+            BLOCKED.set()
+            assert RELEASE.wait(timeout=10)
         self.messages.append({"role": "user", "content": user_text})
         return f"reply {self.turns}: {user_text}"
 
@@ -63,7 +70,8 @@ def request(url, token=None, payload=None):
         headers["Content-Type"] = "application/json"
         method = "POST"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=2) as response:
+    # Above BUSY_GRACE_S: a busy reply arrives only after the lock grace.
+    with urllib.request.urlopen(req, timeout=8) as response:
         return response.status, json.loads(response.read().decode("utf-8"))
 
 
@@ -117,12 +125,47 @@ def main():
         assert [n for _, n, _, _ in saved] == [1, 2, 3]
         assert {s for _, _, s, _ in saved} == {"couch"}
         assert len({stem for _, _, _, stem in saved}) == 1
+
+        # A turn stuck inside the backend must not wedge its session: the
+        # next request on it 503s as busy, while other sessions keep working.
+        stalled = {}
+
+        def stalled_turn():
+            stalled["result"] = request(base + "/v1/chat", token, {
+                "session": "wedged", "message": "please stall"})
+        stall_thread = threading.Thread(target=stalled_turn)
+        stall_thread.start()
+        assert BLOCKED.wait(timeout=5)
+        try:
+            request(base + "/v1/chat", token, {
+                "session": "wedged", "message": "hello?"})
+            raise AssertionError("busy session accepted a second turn")
+        except urllib.error.HTTPError as e:
+            assert e.code == 503
+            assert "previous message" in json.loads(
+                e.read().decode("utf-8"))["error"]
+        busy = log.find("text_session_busy")
+        assert len(busy) == 1 and busy[0]["session"] == "wedged"
+        status, other = request(base + "/v1/chat", token, {
+            "session": "elsewhere", "message": "still with me?"})
+        assert status == 200 and other["ok"]
+        RELEASE.set()
+        stall_thread.join(timeout=10)
+        assert stalled["result"][1]["ok"]
+
+        # The SDK clients carry explicit deadlines: without them a stalled
+        # provider stream outlives remote.py's 280 s forwarding budget.
+        real = backends.AnthropicBackend(
+            {"anthropicApiKey": "a" * 64}, "claude-test")
+        assert real.client.timeout == backends.LLM_TIMEOUT_S
+        assert real.client.max_retries == backends.LLM_MAX_RETRIES
     finally:
         server.shutdown()
         server.server_close()
         traces.save = original_save
         backends.BACKENDS["anthropic"] = original
-    print("OK - text interface: bearer auth, health, and session continuity")
+    print("OK - text interface: bearer auth, health, session continuity, "
+          "busy signal")
 
 
 if __name__ == "__main__":
