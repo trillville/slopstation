@@ -119,6 +119,7 @@ PYTHON = {
     "proton_port_sync_failed": {"err"},
     "text_request": {"dur_ms", "session", "turn"},
     "text_request_failed": {"err"},
+    "text_session_busy": {"session"},
     "pipeline_error": {"err"},
     "preroll_fed": {"audio_s"},
     "puck_present": {"interfaces"},

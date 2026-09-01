@@ -16,6 +16,14 @@ from agent.brain.dispatch import Dispatch
 
 MAX_BODY = 64 * 1024
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Grace, not a queue: a second turn on a session waits this long for the
+# first, then 503s. Blocking forever leaks one handler thread per retry
+# while a stalled turn holds the session lock.
+BUSY_GRACE_S = 2.0
+
+
+class SessionBusy(RuntimeError):
+    """The session's previous turn is still running."""
 
 
 class TextApplication:
@@ -67,7 +75,12 @@ class TextApplication:
                 self.sessions.move_to_end(session_id)
         turn = uuid.uuid4().hex[:6]
         started = time.monotonic()
-        with session["lock"]:
+        if not session["lock"].acquire(timeout=BUSY_GRACE_S):
+            self.log.warn("text_session_busy", session=session_id)
+            raise SessionBusy(
+                "this session is still answering its previous message; "
+                "retry shortly or start a new session")
+        try:
             session["dispatch"].begin_utterance(turn, message)
             impls = {}
             acknowledgments = []
@@ -95,6 +108,8 @@ class TextApplication:
             # to the same list. The MCP adapter forwards to here, so its turns
             # trace too - remote_request carries the same turn id.
             messages = list(getattr(session["backend"], "messages", ()))
+        finally:
+            session["lock"].release()
         self.log("text_request", turn=turn, session=session_id,
                  dur_ms=int((time.monotonic() - started) * 1000))
         traces.save("text", messages, meta={"session": session_id,
@@ -151,6 +166,10 @@ class TextHandler(BaseHTTPRequestHandler):
             self._json(200, result)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
             self._json(400, {"ok": False, "error": str(e)})
+        except SessionBusy as e:
+            # 503 with the reason: remote.py surfaces an HTTP error's
+            # `error` field to the caller, so the busy text reaches the app.
+            self._json(503, {"ok": False, "error": str(e)})
         except Exception as e:
             log = self.server.app.log
             log.error("text_request_failed", err=str(e))
