@@ -26,8 +26,8 @@ flowchart LR
 
 
 
-Prowlarr, FlareSolverr, Radarr, and Sonarr run in Docker Compose. qBittorrent
-and Proton VPN run natively on Windows.
+Prowlarr, FlareSolverr, Radarr, Sonarr, and the Homarr dashboard run in Docker
+Compose. qBittorrent and Proton VPN run natively on Windows.
 
 | Component | Owns |
 |---|---|
@@ -38,6 +38,7 @@ and Proton VPN run natively on Windows.
 | qBittorrent | Peer transfer, progress, seeding, and stop action |
 | Proton VPN | qBittorrent’s peer-network route and forwarded port |
 | FlareSolverr | Browser challenges for tagged Prowlarr indexers |
+| Homarr | Read-only LAN dashboard over the services above; owns no pipeline state |
 
 The Arr quality profiles own release policy. Slopstation selects a configured
 profile name; it does not score release titles itself. Future monitored episodes
@@ -64,8 +65,11 @@ the Arr databases store, and they never change.
 | Sonarr UI | `http://127.0.0.1:8989` |
 | qBittorrent UI | `http://127.0.0.1:8080` |
 | Internal FlareSolverr | `http://flaresolverr:8191` |
+| Homarr UI | `http://127.0.0.1:8575`, LAN `http://192.168.68.75:8575` |
 
 Use these URLs from the K15. Do not expose management ports to the internet.
+Homarr is the one service bound LAN-wide on purpose, and on 8575 because
+VirtualHere owns host port 7575; everything else stays on localhost.
 
 ## Bootstrap
 
@@ -78,10 +82,11 @@ root:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\k15\media\Start-Media.ps1
 ```
 
-On first run the script copies `.env.example` to `.env`, creates the config and
-media directories, and starts FlareSolverr, Prowlarr, Radarr, and Sonarr. Review
-`.env` and set `MEDIA_ROOT` before the first run. Complete the first-run
-authentication prompt in each local UI.
+On first run the script copies `.env.example` to `.env`, generates Homarr's
+`SECRET_ENCRYPTION_KEY`, creates the config and media directories, and starts
+FlareSolverr, Prowlarr, Radarr, Sonarr, and Homarr. Review `.env` and set
+`MEDIA_ROOT` before the first run. Complete the first-run authentication
+prompt in each local UI.
 
 ### 2. Configure native qBittorrent and Proton
 
@@ -187,6 +192,38 @@ Neither command adds a torrent.
 
 For unattended use, configure Docker Desktop, Proton, and native qBittorrent
 to start at login. Compose services use `restart: unless-stopped`.
+
+### 8. Configure the Homarr dashboard
+
+Homarr gives the gaming PC (or any LAN browser) a read-only view of the
+pipeline. It talks to the other services server-side, so nothing else needs to
+leave localhost.
+
+Allow its port once, from an elevated PowerShell:
+
+```powershell
+New-NetFirewallRule -DisplayName 'Homarr dashboard (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8575 -Profile Private -RemoteAddress LocalSubnet
+```
+
+Open `http://127.0.0.1:8575`, complete onboarding, and create the admin user.
+Then add the integrations. Use the container names, not `127.0.0.1` — Homarr
+calls them from inside the Compose network:
+
+| Integration | URL | Credential |
+|---|---|---|
+| Radarr | `http://radarr:7878` | `radarrApiKey` |
+| Sonarr | `http://sonarr:8989` | `sonarrApiKey` |
+| Prowlarr | `http://prowlarr:9696` | `prowlarrApiKey` |
+| qBittorrent | `http://host.docker.internal:8080` | Web UI username and password |
+
+Build a board (Sonarr/Radarr calendar, download queue, indexer health), then
+mark it public in the board's settings. The root URL always redirects
+anonymous visitors to the login page; only the direct board URL renders
+without auth, so bookmark `http://192.168.68.75:8575/boards/<name>` on the
+gaming PC.
+
+App tiles that link to the Radarr/Sonarr/qBittorrent UIs only resolve from the
+K15 itself while those ports stay on localhost; widgets work from anywhere.
 
 ## Request lifecycle
 
@@ -341,11 +378,11 @@ relevant Arr application before changing configuration.
 
 ## Pinning the containers
 
-All four images ride `:latest` until frozen. Freeze the exact images running on
+All five images ride `:latest` until frozen. Freeze the exact images running on
 the K15; upstream may already be ahead. From the checkout root:
 
 ```powershell
-'flaresolverr', 'prowlarr', 'radarr', 'sonarr' | ForEach-Object {
+'flaresolverr', 'prowlarr', 'radarr', 'sonarr', 'homarr' | ForEach-Object {
     $container = docker compose --project-directory k15\media --env-file k15\media\.env ps -q $_
     $image = docker inspect --format '{{.Image}}' $container
     docker image inspect --format '{{index .RepoDigests 0}}' $image
@@ -376,6 +413,10 @@ docker compose --project-directory k15\media --env-file k15\media\.env stop
 Copy-Item -Recurse $cfg.MEDIA_CONFIG_ROOT "$($cfg.MEDIA_CONFIG_ROOT)-backup"
 .\k15\media\Start-Media.ps1
 ```
+
+Back up `k15\media\.env` alongside the config root: Homarr's database is
+encrypted with the `SECRET_ENCRYPTION_KEY` that lives there, so a restored
+`homarr` directory without that exact key has lost every stored credential.
 
 Restore is the reverse: stop, copy the backup over `MEDIA_CONFIG_ROOT`, start.
 Native qBittorrent keeps its own config outside the stack at
