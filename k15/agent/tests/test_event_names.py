@@ -40,6 +40,7 @@ PYTHON = {
     "deploy_deferred": {"budget_s", "reason", "waited_s"},
     "deploy_done": {"dur_ms", "fails", "reinstall", "sha", "was"},
     "deploy_failed": {"err", "sha"},
+    "deploy_media": {"dur_ms"},
     "deploy_reloaded": {"killed", "what"},
     "deploy_start": {"at", "sha"},
     "disk_space_cleared": {"free_gb", "mount", "pct_free"},

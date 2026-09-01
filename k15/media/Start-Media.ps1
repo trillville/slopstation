@@ -42,6 +42,9 @@ foreach ($Directory in @(
 }
 
 docker compose --project-directory $Here --env-file $EnvironmentFile up -d --remove-orphans
+# -File exits with the LAST native command's code, and the ps/Write-Host below
+# are what run last: without this a failed `up` returns 0 to CD.
+if ($LASTEXITCODE -ne 0) { throw "docker compose up failed ($LASTEXITCODE)." }
 docker compose --project-directory $Here --env-file $EnvironmentFile ps
 
 Write-Host ''
