@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from agent.brain import assistant
 from agent.brain import backends
+from agent.telemetry import traces
 import cglib
 from agent.brain.dispatch import Dispatch
 
@@ -44,7 +45,10 @@ class TextApplication:
             dispatch, self.log, operations=self.operations,
             voice=self.voice, steam=self.steam, media=self.media)
         return {"backend": backend, "dispatch": dispatch, "impls": impls,
-                "lock": threading.Lock()}
+                "lock": threading.Lock(),
+                # Taken once, so every turn of this conversation rewrites the
+                # one trace file rather than adding another.
+                "stem": time.strftime("%Y%m%d-%H%M%S")}
 
     def turn(self, session_id, message):
         if not SESSION_RE.fullmatch(session_id):
@@ -87,8 +91,15 @@ class TextApplication:
                 self.system_text, message, impls)
             if acknowledgments:
                 reply = acknowledgments[-1]
+            # Copied under the lock: a concurrent turn on this session appends
+            # to the same list. The MCP adapter forwards to here, so its turns
+            # trace too - remote_request carries the same turn id.
+            messages = list(getattr(session["backend"], "messages", ()))
         self.log("text_request", turn=turn, session=session_id,
                  dur_ms=int((time.monotonic() - started) * 1000))
+        traces.save("text", messages, meta={"session": session_id,
+                                            "turn": turn},
+                    stem=session["stem"])
         return {"ok": True, "session": session_id, "turn": turn,
                 "reply": reply}
 

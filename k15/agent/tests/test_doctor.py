@@ -6,6 +6,7 @@ the hints are prose. Run:
 import json
 import subprocess
 import sys
+import time
 import types
 
 import _bootstrap  # noqa: F401
@@ -176,7 +177,50 @@ def main():
                           if name == "media services")
     assert "unconfigured: Prowlarr" in service_detail
     rows.clear()
+
+    # --- monitored-and-missing outside active work ---------------------------
+    media_cfg = json.loads(json.dumps(cfg))
+    media_cfg["media"]["enabled"] = True
+    old_aired = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                              time.gmtime(time.time() - 30 * 86400))
+    fresh_aired = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    wanted = {"records": [
+        # Owned by the active operation below: not drift.
+        {"seriesId": 7, "seasonNumber": 1, "airDateUtc": old_aired,
+         "series": {"title": "Andor"}},
+        # Aired tonight: still in flight, not drift.
+        {"seriesId": 3, "seasonNumber": 18, "airDateUtc": fresh_aired,
+         "series": {"title": "Sunny"}},
+        # Aired years ago, nothing chasing it: the surprise-download hole.
+        {"seriesId": 3, "seasonNumber": 1, "airDateUtc": old_aired,
+         "series": {"title": "Sunny"}},
+        {"seriesId": 3, "seasonNumber": 2, "airDateUtc": old_aired,
+         "series": {"title": "Sunny"}}]}
+    doctor._arr_get = lambda url, key, path, params=None, timeout=4: wanted
+    cglib.write_json(cglib.STATE / "operations.json", [{
+        "kind": "series_acquisition", "state": "RUNNING", "external_ref": "7",
+        "metadata": {"seasons": [1]}}])
+    doctor.check_media_monitoring(media_cfg)
+    assert levels()["media monitoring"] == "WARN"
+    detail = next(d for _, n, d in rows if n == "media monitoring")
+    assert "2 episode(s)" in detail and "Sunny (2)" in detail, detail
+    rows.clear()
+    # A whole-series operation (seasons: null) accounts for every season of
+    # it, so with both series owned nothing is left armed.
+    cglib.write_json(cglib.STATE / "operations.json", [
+        {"kind": "series_acquisition", "state": "RUNNING", "external_ref": "7",
+         "metadata": {"seasons": [1]}},
+        {"kind": "series_acquisition", "state": "RUNNING", "external_ref": "3",
+         "metadata": {"seasons": None}}])
+    doctor.check_media_monitoring(media_cfg)
+    assert levels()["media monitoring"] == "PASS"
+    rows.clear()
+    cglib.load_secrets = lambda: {}
+    doctor.check_media_monitoring(media_cfg)
+    assert levels()["media monitoring"] == "WARN"
+    rows.clear()
     print("  voice: keys, venv, library, operations, agent rows; no voice section warns")
+    print("  media: armed episodes no active operation owns are a WARN row")
 
     print("OK - doctor: config, hardware, listener, ssh contract + deploy skew, "
           "session state, telemetry, voice rows")

@@ -340,7 +340,47 @@ def main():
 
     assert media.media_health_monitor_from_config(
         {"media": {"enabled": True, "healthSync": False}}, {}, watch_log) is None
+
+    # --- grabs no operation asked for ---------------------------------------
+    class FakeLedger:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def active(self, kind=None):
+            return list(self.rows)
+
+    grab_sonarr = FakeArr("Sonarr")
+    watch_log.records.clear()
+    grabs = media_health.MediaHealthMonitor(
+        (grab_sonarr,), watch_log,
+        operations=FakeLedger([{"authority": "sonarr", "external_ref": "3"}]))
+    grabs.reconcile_once()
+    grab_sonarr.history["records"].extend([
+        {"id": 20, "eventType": "grabbed", "seriesId": 3, "downloadId": "MINE",
+         "sourceTitle": "Asked.For.S05", "data": {"indexer": "1337x"}},
+        {"id": 21, "eventType": "grabbed", "seriesId": 9, "downloadId": "LOOSE",
+         "sourceTitle": "Nobody.Asked.S01", "data": {"indexer": "1337x"}},
+        {"id": 22, "eventType": "grabbed", "seriesId": 9, "downloadId": "LOOSE",
+         "sourceTitle": "Nobody.Asked.S01", "data": {"indexer": "1337x"}}])
+    grabs.reconcile_once()
+    loose = watch_log.find("media_grab_unattributed")
+    # The owned grab stays silent; the season pack is one line, not two.
+    assert [r["title"] for r in loose] == ["Nobody.Asked.S01"]
+    assert loose[0]["records"] == 2 and loose[0]["indexer"] == "1337x"
+    assert loose[0]["level"] == "info" and loose[0]["app"] == "Sonarr"
+
+    watch_log.records.clear()
+    blind = media_health.MediaHealthMonitor((grab_sonarr,), watch_log)
+    blind.reconcile_once()
+    grab_sonarr.history["records"].append(
+        {"id": 23, "eventType": "grabbed", "seriesId": 9, "downloadId": "Z",
+         "sourceTitle": "Still.Nobody.S01", "data": {"indexer": "1337x"}})
+    blind.reconcile_once()
+    # No ledger means no attribution, so the row stays quiet rather than
+    # calling every grab unattributed.
+    assert not watch_log.find("media_grab_unattributed")
     print("  watch: health state, failure watermark, season-pack stalls collapse")
+    print("  watch: an unowned grab is the only record that it happened")
 
     # --- disk watch ---------------------------------------------------------
     GB = 1024 ** 3
@@ -622,6 +662,18 @@ def main():
     svc.sonarr.episodes[1].update(hasFile=True, episodeFileId=302)
     assert svc.observe(upgrade_operation)["complete"]
     print("  series: selected seasons, implicit specials excluded, upgrades tracked")
+
+    # A series Slopstation creates is scoped exactly; one that was already in
+    # the library keeps the seasons somebody else monitored, which is what
+    # lets a part-aired season keep filling in after the operation closes.
+    library_row = {"seasons": [{"seasonNumber": 1, "monitored": True},
+                               {"seasonNumber": 2, "monitored": False},
+                               {"seasonNumber": 3, "monitored": True}]}
+    kept = svc._set_series_seasons(library_row, [2])
+    assert [s["monitored"] for s in kept["seasons"]] == [True, True, True]
+    scoped = svc._set_series_seasons(library_row, [2], exclusive=True)
+    assert [s["monitored"] for s in scoped["seasons"]] == [False, True, False]
+    print("  series: an existing series keeps monitoring Slopstation did not set")
 
     # --- positive completion evidence --------------------------------------
     svc = service()

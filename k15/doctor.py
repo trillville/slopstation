@@ -4,12 +4,16 @@ Read-only except one haptic chirp, skipped when the chord listener is running
 (one process owns the Puck). Voice and telemetry rows are WARN-only; only the
 chord chain can FAIL. Exit code = number of FAILs.
 """
-import json, re, socket, subprocess, sys, time, urllib.parse
+import json, re, socket, subprocess, sys, time
+import urllib.parse, urllib.request
 
 import cglib
 import haptics
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
+# An episode aired this long ago, still monitored and still missing, is not
+# in flight: nothing searches for it, so it is armed for an RSS grab forever.
+MONITOR_STALE_DAYS = 7
 _counts = {PASS: 0, WARN: 0, FAIL: 0}
 
 
@@ -351,6 +355,7 @@ def check_voice(cfg):
     check_voice_config(cfg)
     check_steam_session()
     check_media(cfg)
+    check_media_monitoring(cfg)
     check_remote(cfg)
     check_operations()
     check_voice_agent()
@@ -513,6 +518,92 @@ def check_media(cfg):
            + (f" | unconfigured: {', '.join(unconfigured)}"
               if unconfigured else ""),
            "start media\\Start-Media.ps1 and native qBittorrent")
+
+
+def _arr_get(url, key, path, params=None, timeout=4):
+    query = "?" + urllib.parse.urlencode(params) if params else ""
+    request = urllib.request.Request(str(url).rstrip("/") + path + query,
+                                     headers={"X-Api-Key": key})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _owned_seasons():
+    """series id -> monitored seasons an active operation owns, None meaning
+    the whole series. Unreadable ledger owns nothing: the row then over-
+    reports, which is the safe direction."""
+    owned = {}
+    try:
+        rows = json.loads(
+            (cglib.STATE / "operations.json").read_text(encoding="utf-8"))
+        for row in rows if isinstance(rows, list) else ():
+            if (not isinstance(row, dict)
+                    or row.get("kind") != "series_acquisition"
+                    or row.get("state") not in ("QUEUED", "RUNNING", "UNKNOWN")):
+                continue
+            seasons = (row.get("metadata") or {}).get("seasons")
+            key = str(row.get("external_ref"))
+            if seasons is None or (key in owned and owned[key] is None):
+                owned[key] = None
+            else:
+                owned.setdefault(key, set()).update(int(n) for n in seasons)
+    except Exception:
+        return owned
+    return owned
+
+
+def check_media_monitoring(cfg):
+    """Monitored-and-missing episodes no active operation owns. Sonarr never
+    searches for these, but RSS grabs any NEW upload that matches one - which
+    is how an unrequested release arrives. WARN-only."""
+    media = cfg.get("media") if isinstance(cfg, dict) else None
+    if (not isinstance(media, dict) or not media.get("enabled")
+            or not media.get("sonarrUrl")):
+        report(PASS, "media monitoring", "disabled")
+        return
+    key = cglib.load_secrets().get("sonarrApiKey")
+    if not cglib.real_key(key):
+        report(WARN, "media monitoring", "no Sonarr API key",
+               "copy it from Sonarr Settings > General into secrets.json")
+        return
+    try:
+        page = _arr_get(media["sonarrUrl"], key, "/api/v3/wanted/missing",
+                        {"pageSize": 500, "sortKey": "airDateUtc",
+                         "sortDirection": "descending", "monitored": "true",
+                         "includeSeries": "true"})
+        records = page.get("records") if isinstance(page, dict) else None
+        if not isinstance(records, list):
+            raise ValueError("no records in the wanted/missing page")
+    except Exception as e:
+        report(WARN, "media monitoring", f"Sonarr did not answer ({e})",
+               "check the media services row above")
+        return
+    # ISO-8601 UTC sorts lexicographically, so the cutoff needs no parse.
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                           time.gmtime(time.time() - MONITOR_STALE_DAYS * 86400))
+    owned = _owned_seasons()
+    drift = {}
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        aired = row.get("airDateUtc")
+        if not isinstance(aired, str) or aired >= cutoff:
+            continue                    # unaired, or young enough to be in flight
+        scope = owned.get(str(row.get("seriesId")), ())
+        if scope is None or row.get("seasonNumber") in scope:
+            continue
+        title = (row.get("series") or {}).get("title") or "?"
+        drift[title] = drift.get(title, 0) + 1
+    if not drift:
+        report(PASS, "media monitoring",
+               "no stale monitored episodes outside active work")
+        return
+    listed = ", ".join(f"{title} ({count})" for title, count
+                       in sorted(drift.items(), key=lambda kv: -kv[1])[:4])
+    report(WARN, "media monitoring",
+           f"{sum(drift.values())} episode(s) armed with nobody chasing them: "
+           + listed,
+           "unmonitor the scope you did not ask for; RSS can grab into it")
 
 
 def check_remote(cfg):

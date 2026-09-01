@@ -20,14 +20,19 @@ def _jsonable(o):
     return dump() if callable(dump) else str(o)
 
 
-def save(kind, messages, meta=None):
+def save(kind, messages, meta=None, stem=None):
     """Write {stamp}-{kind}.json and prune expired traces. Fail-soft: a full
-    disk or an unserializable object costs the trace, not the caller."""
+    disk or an unserializable object costs the trace, not the caller.
+
+    `stem` replaces the stamp so a conversation that saves on every turn
+    rewrites ONE file instead of leaving one per turn. Pass the stamp taken
+    when the conversation opened, so the name still sorts by start time.
+    """
     if not messages:
         return
     try:
         DIR.mkdir(parents=True, exist_ok=True)
-        path = DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{kind}.json"
+        path = DIR / f"{stem or time.strftime('%Y%m%d-%H%M%S')}-{kind}.json"
         doc = dict(meta or {}, kind=kind,
                    t=time.strftime("%Y-%m-%d %H:%M:%S"), messages=messages)
         path.write_text(json.dumps(doc, indent=1, default=_jsonable),

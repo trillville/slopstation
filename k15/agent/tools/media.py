@@ -268,7 +268,13 @@ class MediaService:
             raise MediaError("season numbers must be positive; specials are explicit")
         return seasons
 
-    def _set_series_seasons(self, series, selected):
+    def _set_series_seasons(self, series, selected, exclusive=False):
+        """`exclusive` clears the seasons outside `selected`, and is only for
+        a series Slopstation just created. On one that was already in the
+        library the monitored seasons are somebody else's desired state -
+        clearing them is what would stop a part-aired season from filling in
+        as episodes air.
+        """
         out = dict(series)
         seasons = []
         for season in out.get("seasons") or []:
@@ -278,6 +284,8 @@ class MediaService:
             number = int(row.get("seasonNumber", -1))
             if number > 0 and (selected is None or number in selected):
                 row["monitored"] = True
+            elif exclusive and number > 0:
+                row["monitored"] = False
             seasons.append(row)
         out.update(monitored=True, seasons=seasons)
         return out
@@ -498,7 +506,8 @@ class MediaService:
             baseline_episode_files = None
             if seasons is not None:
                 series["qualityProfileId"] = profile_id
-                series = self._set_series_seasons(series, seasons)
+                series = self._set_series_seasons(series, seasons,
+                                                  exclusive=True)
                 self.sonarr.put(f"series/{series_id}", series)
             search_pending = True
         return self._submission("series", series_id, title, tvdb_id, preset,
@@ -890,7 +899,8 @@ def proton_port_monitor_from_config(cfg, secrets, log, transport=None,
         return None
 
 
-def media_health_monitor_from_config(cfg, secrets, log, transport=None):
+def media_health_monitor_from_config(cfg, secrets, log, transport=None,
+                                     operations=None):
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
     if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
             or not media_cfg.get("healthSync", True)):
@@ -910,7 +920,8 @@ def media_health_monitor_from_config(cfg, secrets, log, transport=None):
                       transport=transport)
             for name, key in (("Radarr", "radarrApiKey"),
                               ("Sonarr", "sonarrApiKey")))
-        return MediaHealthMonitor(clients, log, poll_s=poll_s)
+        return MediaHealthMonitor(clients, log, poll_s=poll_s,
+                                  operations=operations)
     except (MediaConfigurationError, KeyError) as e:
         log.warn("lane_disabled", what="media_health_sync", reason=str(e))
         return None
