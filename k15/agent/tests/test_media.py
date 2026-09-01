@@ -8,6 +8,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 import cglib
+from agent.tools import disk_health
 from agent.tools import media
 from agent.tools import media_checks
 from agent.tools import media_clients
@@ -340,6 +341,67 @@ def main():
     assert media.media_health_monitor_from_config(
         {"media": {"enabled": True, "healthSync": False}}, {}, watch_log) is None
     print("  watch: health state, failure watermark, season-pack stalls collapse")
+
+    # --- disk watch ---------------------------------------------------------
+    GB = 1024 ** 3
+
+    class Usage:
+        def __init__(self, total, free):
+            self.total, self.free, self.used = total, free, total - free
+
+    class FakeShutil:
+        def __init__(self, table):
+            self.table = table
+
+        def disk_usage(self, mount):
+            value = self.table[mount]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+    table = {"M:": Usage(1000 * GB, 100 * GB), "C:": Usage(1000 * GB, 900 * GB)}
+    real_shutil = disk_health.shutil
+    disk_health.shutil = FakeShutil(table)
+    try:
+        disk_log = cglib.CapturingLog("voice")
+        disk = disk_health.DiskHealthMonitor(("M:", "C:"), disk_log,
+                                             free_warn_bytes=250 * GB)
+        disk.reconcile_once()
+        low = disk_log.find("disk_space_low")
+        # The roomy volume is silent; only the one below the threshold reports.
+        assert len(low) == 1 and low[0]["mount"] == "M:"
+        assert low[0]["free_gb"] == 100.0 and low[0]["pct_free"] == 10.0
+        assert low[0]["level"] == "warn"
+        disk.reconcile_once()
+        # A full disk stays full: the crossing is the news, not the state.
+        assert len(disk_log.find("disk_space_low")) == 1
+
+        table["M:"] = Usage(1000 * GB, 600 * GB)
+        disk.reconcile_once()
+        assert len(disk_log.find("disk_space_cleared")) == 1
+        table["M:"] = Usage(1000 * GB, 100 * GB)
+        disk.reconcile_once()
+        # Cleared re-arms, or a drive that oscillates would report once ever.
+        assert len(disk_log.find("disk_space_low")) == 2
+
+        disk_log.records.clear()
+        table["M:"] = OSError("the device is not ready")
+        disk.reconcile_once()
+        disk.reconcile_once()
+        # An unplugged enclosure is one line, not one line per poll.
+        failed = disk_log.find("disk_watch_failed")
+        assert len(failed) == 1 and failed[0]["mount"] == "M:"
+    finally:
+        disk_health.shutil = real_shutil
+
+    assert media.disk_health_monitor_from_config(
+        {"media": {"enabled": True, "diskWatch": False}}, disk_log) is None
+    # No .env means no host root to resolve: a checkout that is not the K15
+    # runs the supervisor without inventing a volume to watch.
+    assert media.disk_health_monitor_from_config(
+        {"media": {"enabled": True}}, disk_log,
+        env_path=Path("no-such.env")) is None
+    print("  disk: low-space crossing, recovery, and a vanished volume each stay one line")
 
     svc = service()
     svc.radarr.lookup = [

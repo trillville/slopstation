@@ -262,6 +262,67 @@ default. It emits changes rather than repeating the same condition:
 Set `media.healthSync` to `false` to disable this watch or change
 `media.healthPollS` to adjust its interval.
 
+### Disk and SMART
+
+Two watches, split by privilege: the supervisor runs as the desktop user and
+can read free space but not a raw device, so smartd holds the SMART half as a
+SYSTEM service. Both land in the same event stream.
+
+| Event | Emitted by | Meaning |
+|---|---|---|
+| `disk_space_low` / `disk_space_cleared` | supervisor | A watched volume crossed `media.diskFreeWarnGb` |
+| `disk_watch_failed` | supervisor | A volume could not be read - an unplugged enclosure looks like this |
+| `smart_warning` | smartd | An attribute moved, a self-test failed, or a temperature limit was crossed |
+
+The free-space watch covers the media root's volume (from `MEDIA_ROOT` in
+`.env`) and the checkout's volume, deduplicated to one entry per volume. Set
+`media.diskWatch` to `false` to silence it; `media.diskPollS` and
+`media.diskFreeWarnGb` tune it. The 250 GB default is sized against a 2160p
+remux at ~70 GB - a smaller margin reports a volume that already cannot take
+the next grab.
+
+smartd is a hand install on the K15 that CD never performs; `doctor.py` reports
+it absent. Run from the checkout root; every step needs Administrator:
+
+```powershell
+Copy-Item k15\smartd.conf.example "$env:ProgramFiles\smartmontools\bin\smartd.conf"
+& "$env:ProgramFiles\smartmontools\bin\smartd.exe" install
+Start-Service smartd
+```
+
+Edit the device number and the `-M exec` path in that file first. smartd runs
+with `system32` as its working directory, so a relative path never fires, and
+the physical disk number is not stable across enclosure changes - confirm it
+with `smartctl --scan`. Edit `PY` in `smart-alert.bat` too: smartd runs as
+SYSTEM, Python here is a per-user install, and a bare `python` resolves to
+nothing under that account.
+
+Prove the chain rather than assuming it. Nothing about a running service says
+its alerts arrive - a broken interpreter path fails exactly like a healthy
+disk. Add `-M test` to the device line, restart, and confirm one
+`smart_warning` lands, then take it back out:
+
+```powershell
+Restart-Service smartd
+Select-String -Path (Join-Path $env:USERPROFILE `
+    'Desktop\slopstation\k15\logs\k15-*.jsonl') -Pattern smart_warning |
+    Select-Object -Last 3
+```
+
+A config that names no monitorable device makes smartd exit at once, leaving
+an Automatic service sitting Stopped with nothing in the event log. If that
+happens, run it in the foreground to see the reason:
+
+```powershell
+& "$env:ProgramFiles\smartmontools\bin\smartd.exe" `
+    -c "$env:ProgramFiles\smartmontools\bin\smartd.conf" -q onecheck -d
+```
+
+A USB bridge hides the drive from Windows' storage stack, so `Get-PhysicalDisk`
+reports `MediaType: Unspecified` and carries no counters. smartctl reaches it
+anyway through SAT translation (`-d sat`), which is the only route to SMART on
+this hardware.
+
 Start diagnosis with:
 
 ```powershell

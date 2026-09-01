@@ -33,6 +33,10 @@
     "healthSync": true,
     "_healthSync": "OPTIONAL: when true (the default), the voice supervisor polls Radarr and Sonarr for health issues, failed imports, and stalled queue items, and emits them on the voice lane. Set false to silence the watch.",
     "healthPollS": 300,
+    "diskWatch": true,
+    "_diskWatch": "OPTIONAL: when true (the default), the voice supervisor polls free space on the media root's volume and the checkout's volume, and emits disk_space_low when either falls below diskFreeWarnGb. Set false to silence the watch. SMART is a separate service - see smartd in k15/media/README.md.",
+    "diskPollS": 300,
+    "diskFreeWarnGb": 250,
     "moviePresets": {
       "default": "Slopstation Blu-ray HDR TrueHD",
       "1080p": "Slopstation 1080p",

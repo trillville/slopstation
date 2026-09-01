@@ -639,6 +639,23 @@ def check_telemetry():
     except Exception as e:
         report(WARN, "log shipper", f"could not query ({e})", "")
 
+    # SMART needs Administrator for raw device access, so it is a service and
+    # not part of any lane. A rebuilt K15 has it absent until someone registers
+    # it by hand.
+    try:
+        out = subprocess.run(["sc", "query", "smartd"], capture_output=True,
+                             text=True, timeout=10).stdout
+        if "RUNNING" in out:
+            report(PASS, "smart watch", "smartd service running")
+        elif "STOPPED" in out:
+            report(WARN, "smart watch", "smartd installed but STOPPED",
+                   "Start-Service smartd - a failing disk says nothing meanwhile")
+        else:
+            report(WARN, "smart watch", "smartd not installed",
+                   "disk attributes unwatched; see k15/smartd.conf.example")
+    except Exception as e:
+        report(WARN, "smart watch", f"could not query ({e})", "")
+
 
 if __name__ == "__main__":
     cfg = check_config()
