@@ -94,6 +94,7 @@ PYTHON = {
     "launch_start": {"appid", "tv"},
     "lock_kept": {"reason"},
     "lock_recycled": {"lock_age_s"},
+    "media_grab_unattributed": {"app", "indexer", "records", "title"},
     "media_health_cleared": {"app", "source"},
     "media_health_issue": {"app", "detail", "kind", "source"},
     "media_import_failed": {"app", "err", "kind", "records",

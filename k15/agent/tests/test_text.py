@@ -8,12 +8,14 @@ import _bootstrap
 from agent.brain import backends
 import cglib
 from agent.interfaces import text
+from agent.telemetry import traces
 
 
 class FakeBackend:
     def __init__(self, secrets, model, effort=None, voice=None):
         self.model = model
         self.turns = 0
+        self.messages = []
 
     def turn(self, system_text, user_text, impls):
         assert "general text assistant" in system_text
@@ -25,6 +27,7 @@ class FakeBackend:
             result = impls["request_series"]({
                 "tvdb_id": 393189, "seasons": [1], "preset": "2160p"})
             assert result["ok"]
+        self.messages.append({"role": "user", "content": user_text})
         return f"reply {self.turns}: {user_text}"
 
 
@@ -73,6 +76,10 @@ def main():
     log = cglib.CapturingLog("voice")
     original = backends.BACKENDS["anthropic"]
     backends.BACKENDS["anthropic"] = FakeBackend
+    saved = []
+    original_save = traces.save
+    traces.save = lambda kind, messages, meta=None, stem=None: saved.append(
+        (kind, len(messages), (meta or {}).get("session"), stem))
     dry = text.TextApplication(cfg, secrets, log, dry_run=True)
     assert dry._new_session()["dispatch"].dry_run
     server = text.start(
@@ -104,9 +111,16 @@ def main():
         assert len(calls) == 2
         assert calls[0]["tool"] == "list_operations" and calls[0]["ok"]
         assert calls[1]["tool"] == "request_series" and calls[1]["ok"]
+        # Every turn of a session rewrites ONE trace file, so an MCP or LAN
+        # request is as recoverable afterwards as a voice one.
+        assert [k for k, _, _, _ in saved] == ["text"] * 3
+        assert [n for _, n, _, _ in saved] == [1, 2, 3]
+        assert {s for _, _, s, _ in saved} == {"couch"}
+        assert len({stem for _, _, _, stem in saved}) == 1
     finally:
         server.shutdown()
         server.server_close()
+        traces.save = original_save
         backends.BACKENDS["anthropic"] = original
     print("OK - text interface: bearer auth, health, and session continuity")
 

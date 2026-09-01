@@ -7,6 +7,9 @@ from agent.tools.media_clients import (MediaError, _clean_text)
 # Servarr history eventTypes that mean a grab did not become a file.
 FAILURE_EVENTS = frozenset(("downloadFailed", "importFailed",
                             "importBlocked"))
+GRAB_EVENT = "grabbed"
+# The history field naming the library row a grab belongs to, per app.
+GRAB_REF = {"Sonarr": "seriesId", "Radarr": "movieId"}
 HEALTH_POLL_S = 300
 
 
@@ -38,10 +41,13 @@ class MediaHealthMonitor:
 
     PAGE_SIZE = 50
 
-    def __init__(self, clients, log, poll_s=HEALTH_POLL_S):
+    def __init__(self, clients, log, poll_s=HEALTH_POLL_S, operations=None):
         self.clients = tuple(clients)
         self.log = log
         self.poll_s = poll_s
+        # Without the ledger a grab cannot be attributed, so that row stays
+        # silent rather than calling everything unattributed.
+        self.operations = operations
         self._stop = threading.Event()
         self._issues = {}
         self._history_id = {}
@@ -115,6 +121,7 @@ class MediaHealthMonitor:
         watermark = self._history_id.get(client.name)
         newest = watermark
         failures = {}
+        grabs = {}
         for row in sorted(records, key=_history_id):
             row_id = _history_id(row)
             if row_id < 0:
@@ -126,6 +133,24 @@ class MediaHealthMonitor:
             if watermark is None or row_id <= watermark:
                 continue
             kind = _clean_text(row.get("eventType"), 40)
+            if kind == GRAB_EVENT:
+                # Same collapse as failures: a season pack grabs once per
+                # episode and is one line to a human.
+                key = _clean_text(row.get("downloadId"), 60) or str(row_id)
+                entry = grabs.get(key)
+                if entry is None:
+                    grabs[key] = {
+                        "ref": _clean_text(
+                            row.get(GRAB_REF.get(client.name, "")), 20),
+                        "title": _clean_text(row.get("sourceTitle"), 120),
+                        "indexer": _clean_text(
+                            (row.get("data") or {}).get("indexer")
+                            if isinstance(row.get("data"), dict) else None, 60),
+                        "records": 1,
+                    }
+                else:
+                    entry["records"] += 1
+                continue
             if kind not in FAILURE_EVENTS:
                 continue
             data = row.get("data")
@@ -147,9 +172,36 @@ class MediaHealthMonitor:
             self.log.error("media_import_failed", app=client.name,
                            kind=entry["kind"], title=entry["title"],
                            err=entry["err"], records=entry["records"])
+        for entry in self._unattributed(client, grabs).values():
+            # INFO, not warn: a monitored season legitimately keeps grabbing
+            # new episodes long after the operation that requested it closed.
+            # This is the audit trail for a grab the ledger cannot explain -
+            # the only record that a release nobody asked for arrived.
+            self.log.info("media_grab_unattributed", app=client.name,
+                          title=entry["title"], indexer=entry["indexer"],
+                          records=entry["records"])
         # An empty history still has to leave a watermark, or the first
         # failure to ever land would be skipped as backlog.
         self._history_id[client.name] = 0 if newest is None else newest
+
+    def _unattributed(self, client, grabs):
+        """The grabs no active operation accounts for. Attribution is by
+        library row, not season: the question is whether anything asked for
+        this title at all."""
+        if self.operations is None or not grabs:
+            return {}
+        authority = client.name.casefold()
+        owned = set()
+        for operation in self.operations.active():
+            if not isinstance(operation, dict):
+                continue
+            if _clean_text(operation.get("authority"), 20).casefold() != authority:
+                continue
+            ref = _clean_text(operation.get("external_ref"), 20)
+            if ref:
+                owned.add(ref)
+        return {key: entry for key, entry in grabs.items()
+                if entry["ref"] and entry["ref"] not in owned}
 
     def _queue(self, client):
         page = client.get("queue", {"pageSize": self.PAGE_SIZE})

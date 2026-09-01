@@ -305,7 +305,7 @@ def main():
             poll_s=proton_port_monitor.poll_s)
 
     media_health_monitor = media_mod.media_health_monitor_from_config(
-        cfg, secrets, log)
+        cfg, secrets, log, operations=operation_store)
     if media_health_monitor is not None:
         media_health_monitor.start()
         log("lane_up", what="media_health_sync",
