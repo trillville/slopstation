@@ -45,6 +45,13 @@ REINSTALL_S = 900
 REQUIREMENTS = cglib.BASE / "agent" / "requirements.txt"
 DEPS_OK = cglib.BASE / "agent" / ".venv" / "deps-ok"
 
+# Compose reads compose.yaml only when something runs `up`, so a landed edit to
+# it changes nothing until this script runs - the containers keep the shape
+# they were created with. `up -d` is a no-op when nothing changed, so this runs
+# every deploy rather than diffing the commits.
+MEDIA_SCRIPT = cglib.BASE / "media" / "Start-Media.ps1"
+MEDIA_S = 900           # a compose up that has to pull an image first
+
 # Name-filtered to python* so the powershell doing the filtering - its own
 # command line contains the needle - cannot match itself.
 _KILL_PS = ("$p = @(Get-CimInstance Win32_Process | Where-Object "
@@ -86,6 +93,30 @@ def kill(needle: str) -> int:
     r = subprocess.run(["powershell", "-NoProfile", "-Command", _KILL_PS % needle],
                        capture_output=True, text=True, timeout=60)
     return r.returncode
+
+
+def media_enabled() -> bool:
+    """config.json's media.enabled. deploy.py reads the file for nothing else,
+    so an unreadable one means no stack here, not a failed deploy."""
+    try:
+        media = cglib.config().get("media")
+    except (OSError, ValueError):
+        return False
+    return bool(isinstance(media, dict) and media.get("enabled"))
+
+
+def start_media() -> None:
+    """Bring the media stack onto the compose file just landed. Fails the
+    deploy: it only runs where the stack is enabled, and a stack that will not
+    come up is what this step exists to make visible - doctor.py's media rows
+    are WARNs, so nothing else here goes red."""
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy",
+                        "Bypass", "-File", str(MEDIA_SCRIPT)],
+                       capture_output=True, text=True, timeout=MEDIA_S)
+    if r.returncode:
+        tail = (r.stderr or r.stdout).strip().splitlines()
+        raise RuntimeError("media stack did not come up: "
+                           + (tail[-1] if tail else f"exit {r.returncode}"))
 
 
 def wait_idle(budget_s: float) -> bool:
@@ -187,6 +218,11 @@ def main(argv: list[str]) -> int:
             raise RuntimeError(f"{lanes} not running {budget:.0f}s after the "
                                "reload - no supervisor to relaunch it? run "
                                "Start-K15.bat there")
+
+        if media_enabled():
+            t_media = time.time()
+            start_media()
+            log("deploy_media", dur_ms=int((time.time() - t_media) * 1000))
 
         fails = subprocess.run([sys.executable, "doctor.py"],
                                cwd=str(cglib.BASE), timeout=900).returncode

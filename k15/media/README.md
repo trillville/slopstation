@@ -196,6 +196,12 @@ Neither command adds a torrent.
 For unattended use, configure Docker Desktop, Proton, and native qBittorrent
 to start at login. Compose services use `restart: unless-stopped`.
 
+CD re-runs `Start-Media.ps1` on every K15 deploy while `media.enabled` is true,
+so a landed `compose.yaml` change takes effect without a hand run; `up -d` is a
+no-op when nothing changed. A compose edit that lands mid-download recreates
+the affected containers - qBittorrent is native and unaffected, and a recreated
+Radarr or Sonarr retries its completed-download handling.
+
 ### 8. Configure the Homarr dashboard
 
 Homarr gives the gaming PC (or any LAN browser) a read-only view of the

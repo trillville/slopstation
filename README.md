@@ -268,7 +268,10 @@ supervisor relaunches it on the new code, then runs `doctor.py`. It never
 starts a lane: an agent that does not come back is reported, not restarted. The
 chord lane must be running when it finishes - `doctor.py` only WARNs about a
 dead one, so without that check a deploy onto a K15 with no supervisors would
-report success.
+report success. Where `media.enabled` is true it also runs
+`k15\media\Start-Media.ps1` before the doctor: containers keep the compose
+file they were created with, so a landed `compose.yaml` edit is inert until
+something runs `up`. A stack that will not come up fails the deploy.
 
 ## Operate and diagnose
 
