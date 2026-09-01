@@ -877,7 +877,8 @@ def main():
         raise AssertionError((method, url))
 
     compose_rows = [{"Service": name, "State": "running", "Health": ""}
-                    for name in ("flaresolverr", "prowlarr", "radarr", "sonarr")]
+                    for name in ("flaresolverr", "prowlarr", "radarr", "sonarr",
+                                 "homarr")]
     doctor_proton_log = proton_dir / "doctor-client-logs.txt"
     doctor_proton_log.write_text(
         proton_event("2026-08-30T05:00:00.000Z",
@@ -920,7 +921,8 @@ def main():
     compose = (root / "k15" / "media" / "compose.yaml").read_text(encoding="utf-8")
     start_media = (root / "k15" / "media" / "Start-Media.ps1").read_text(
         encoding="utf-8")
-    for sidecar in ("flaresolverr:", "prowlarr:", "radarr:", "sonarr:"):
+    for sidecar in ("flaresolverr:", "prowlarr:", "radarr:", "sonarr:",
+                    "homarr:"):
         assert sidecar in compose
     assert "qbittorrent:" not in compose
     assert "ghcr.io/flaresolverr/flaresolverr:latest" in compose
@@ -928,8 +930,14 @@ def main():
     assert compose.count("source: ${MEDIA_ROOT}") == 2
     assert "127.0.0.1:7878:7878" in compose
     assert "127.0.0.1:8989:8989" in compose
+    # Homarr is LAN-wide by design, and host 7575 belongs to VirtualHere.
+    assert "ghcr.io/homarr-labs/homarr:latest" in compose
+    assert "8575:7575" in compose
+    assert "127.0.0.1:8575" not in compose
+    assert "7575:7575" not in compose
     assert "--remove-orphans" in start_media
     assert "logs qbittorrent" not in start_media
+    assert "SECRET_ENCRYPTION_KEY" in start_media
     assert _bootstrap.CONFIG["media"]["movieRoot"] == "/data/Movies"
     assert _bootstrap.CONFIG["media"]["seriesRoot"] == "/data/TV"
     print("  deployment: Arr sidecars share /data; native qBittorrent stays VPN-bound")

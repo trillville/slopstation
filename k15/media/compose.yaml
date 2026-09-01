@@ -3,7 +3,7 @@ name: slopstation-media
 # Tags are frozen BY HAND from the K15, the constraints.txt rule: pin what is
 # RUNNING there, never upstream latest (the runbook's Pinning section has the
 # procedure). ':latest' means nobody has frozen yet, and the next
-# `docker compose pull` upgrades all four services at once.
+# `docker compose pull` upgrades all five services at once.
 
 services:
   flaresolverr:
@@ -64,3 +64,20 @@ services:
         target: /data
     ports:
       - 127.0.0.1:8989:8989
+
+  homarr:
+    image: ghcr.io/homarr-labs/homarr:latest
+    restart: unless-stopped
+    environment:
+      # 64 hex chars; Start-Media.ps1 generates it into .env. Changing it
+      # orphans every credential Homarr has stored.
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY}
+      TZ: ${TZ:-America/Los_Angeles}
+    volumes:
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/homarr
+        target: /appdata
+    ports:
+      # LAN-wide on purpose - the gaming PC reads it. Host 8575 because
+      # VirtualHere owns 7575.
+      - 8575:7575
