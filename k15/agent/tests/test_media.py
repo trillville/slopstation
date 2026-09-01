@@ -878,7 +878,7 @@ def main():
 
     compose_rows = [{"Service": name, "State": "running", "Health": ""}
                     for name in ("flaresolverr", "prowlarr", "radarr", "sonarr",
-                                 "homarr", "glances")]
+                                 "homarr", "glances", "scrutiny")]
     doctor_proton_log = proton_dir / "doctor-client-logs.txt"
     doctor_proton_log.write_text(
         proton_event("2026-08-30T05:00:00.000Z",
@@ -922,7 +922,7 @@ def main():
     start_media = (root / "k15" / "media" / "Start-Media.ps1").read_text(
         encoding="utf-8")
     for sidecar in ("flaresolverr:", "prowlarr:", "radarr:", "sonarr:",
-                    "homarr:", "glances:"):
+                    "homarr:", "glances:", "scrutiny:"):
         assert sidecar in compose
     assert "qbittorrent:" not in compose
     assert "ghcr.io/flaresolverr/flaresolverr:latest" in compose
@@ -947,9 +947,15 @@ def main():
     glances_conf = (root / "k15" / "media" / "glances.conf").read_text(
         encoding="utf-8")
     assert "allow=9p" in glances_conf
+    # Scrutiny's UI is LAN-wide for the iFrame widget; its collector is a
+    # native scheduled task, so the container gets no device mounts.
+    assert "ghcr.io/analogj/scrutiny:master-omnibus" in compose
+    assert "8085:8080" in compose
+    assert "/dev/" not in compose
     assert "--remove-orphans" in start_media
     assert "logs qbittorrent" not in start_media
     assert "SECRET_ENCRYPTION_KEY" in start_media
+    assert "scrutiny" in start_media
     assert _bootstrap.CONFIG["media"]["movieRoot"] == "/data/Movies"
     assert _bootstrap.CONFIG["media"]["seriesRoot"] == "/data/TV"
     print("  deployment: Arr sidecars share /data; native qBittorrent stays VPN-bound")

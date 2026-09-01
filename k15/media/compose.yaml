@@ -3,7 +3,7 @@ name: slopstation-media
 # Tags are frozen BY HAND from the K15, the constraints.txt rule: pin what is
 # RUNNING there, never upstream latest (the runbook's Pinning section has the
 # procedure). ':latest' means nobody has frozen yet, and the next
-# `docker compose pull` upgrades all six services at once.
+# `docker compose pull` upgrades all seven services at once.
 
 services:
   flaresolverr:
@@ -88,6 +88,26 @@ services:
     ports:
       # Host 8575 because VirtualHere owns 7575.
       - 8575:7575
+
+  scrutiny:
+    # SMART history UI (web + its InfluxDB). The collector is NOT in here:
+    # Docker Desktop's VM never sees the physical drives, so a scheduled task
+    # on the K15 runs native smartctl and posts to the API - runbook, "Disk
+    # and SMART". Web and API share container port 8080.
+    image: ghcr.io/analogj/scrutiny:master-omnibus
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+    volumes:
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/scrutiny/config
+        target: /opt/scrutiny/config
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}/scrutiny/influxdb
+        target: /opt/scrutiny/influxdb
+    ports:
+      # LAN-wide: Homarr's iFrame widget loads it in the viewer's browser.
+      - 8085:8080
 
   glances:
     # Feeds Homarr's system-resources and disk widgets. Internal-only:

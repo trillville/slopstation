@@ -1,0 +1,18 @@
+# Copy to C:\ProgramData\Slopstation\scrutiny-collector\collector.yaml and set
+# the device from `smartctl --scan` - the drive letter/number is not stable
+# across enclosure changes, the smartd.conf caveat. The USB bridge hides SMART
+# from Windows' storage stack, so `sat` translation is the only route to the
+# media drive; auto-scan on Windows is unreliable, which is why every device
+# is explicit here.
+version: 1
+host:
+  id: k15
+api:
+  endpoint: http://127.0.0.1:8085
+devices:
+  # The media drive behind its USB bridge.
+  - device: /dev/sdb
+    type: sat
+  # Add the internal drive with its own type once confirmed via --scan, e.g.:
+  # - device: /dev/sda
+  #   type: nvme

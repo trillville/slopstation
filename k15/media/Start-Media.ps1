@@ -33,6 +33,8 @@ foreach ($Directory in @(
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'radarr'),
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'sonarr'),
     (Join-Path $Settings.MEDIA_CONFIG_ROOT 'homarr'),
+    (Join-Path $Settings.MEDIA_CONFIG_ROOT 'scrutiny\config'),
+    (Join-Path $Settings.MEDIA_CONFIG_ROOT 'scrutiny\influxdb'),
     $Settings.MEDIA_ROOT,
     (Join-Path $Settings.MEDIA_ROOT 'torrents'),
     (Join-Path $Settings.MEDIA_ROOT 'Movies'),
@@ -50,5 +52,6 @@ docker compose --project-directory $Here --env-file $EnvironmentFile ps
 Write-Host ''
 Write-Host 'Local setup pages: Prowlarr http://127.0.0.1:9696, Radarr http://127.0.0.1:7878, Sonarr http://127.0.0.1:8989'
 Write-Host 'Homarr dashboard: http://127.0.0.1:8575 locally, http://192.168.68.75:8575 from the LAN (needs the firewall rule in the runbook).'
+Write-Host 'Scrutiny disk health: http://127.0.0.1:8085 - empty until the collector task posts (runbook, Disk and SMART).'
 Write-Host 'FlareSolverr is internal-only at http://flaresolverr:8191 for Prowlarr indexer proxies.'
 Write-Host 'qBittorrent runs natively through Proton VPN; see README.md before configuring the Arr download clients.'

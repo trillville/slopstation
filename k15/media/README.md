@@ -26,8 +26,9 @@ flowchart LR
 
 
 
-Prowlarr, FlareSolverr, Radarr, Sonarr, the Homarr dashboard, and its Glances
-stats feeder run in Docker Compose. qBittorrent and Proton VPN run natively on
+Prowlarr, FlareSolverr, Radarr, Sonarr, the Homarr dashboard, its Glances
+stats feeder, and the Scrutiny disk-health UI run in Docker Compose.
+qBittorrent, Proton VPN, and Scrutiny's SMART collector run natively on
 Windows.
 
 | Component | Owns |
@@ -41,6 +42,7 @@ Windows.
 | FlareSolverr | Browser challenges for tagged Prowlarr indexers |
 | Homarr | Read-only LAN dashboard over the services above; owns no pipeline state |
 | Glances | Volume-fill and resource numbers for Homarr's system widgets |
+| Scrutiny | SMART attribute history and failure thresholds; fed by a native collector task |
 
 The Arr quality profiles own release policy. Slopstation selects a configured
 profile name; it does not score release titles itself. Future monitored episodes
@@ -69,6 +71,7 @@ the Arr databases store, and they never change.
 | Internal FlareSolverr | `http://flaresolverr:8191` |
 | Internal Glances | `http://glances:61208` |
 | Homarr UI | `http://192.168.68.75:8575` (host 8575: VirtualHere owns 7575) |
+| Scrutiny UI | `http://192.168.68.75:8085` |
 
 Every web UI binds LAN-wide so Homarr's dashboard links resolve from any
 machine; each one requires a login, and the bootstrap firewall rules scope
@@ -89,9 +92,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\k15\media\Start-Media.ps1
 
 On first run the script copies `.env.example` to `.env`, generates Homarr's
 `SECRET_ENCRYPTION_KEY`, creates the config and media directories, and starts
-FlareSolverr, Prowlarr, Radarr, Sonarr, and Homarr. Review `.env` and set
-`MEDIA_ROOT` before the first run. Complete the first-run authentication
-prompt in each local UI.
+FlareSolverr, Prowlarr, Radarr, Sonarr, Homarr, Glances, and Scrutiny. Review
+`.env` and set `MEDIA_ROOT` before the first run. Complete the first-run
+authentication prompt in each local UI.
 
 ### 2. Configure native qBittorrent and Proton
 
@@ -215,6 +218,7 @@ Allow the web UIs once, from an elevated PowerShell:
 New-NetFirewallRule -DisplayName 'Homarr dashboard (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8575 -Profile Private -RemoteAddress LocalSubnet
 New-NetFirewallRule -DisplayName 'Media web UIs (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9696,7878,8989 -Profile Private -RemoteAddress LocalSubnet
 New-NetFirewallRule -DisplayName 'qBittorrent Web UI (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080 -Profile Private -RemoteAddress LocalSubnet
+New-NetFirewallRule -DisplayName 'Scrutiny web UI (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8085 -Profile Private -RemoteAddress LocalSubnet
 ```
 
 Open `http://127.0.0.1:8575`, complete onboarding, and create the admin user.
@@ -239,7 +243,9 @@ reports only through `MEDIA_ROOT` in `.env`, the same contract as the Arrs.
 The Docker-containers widget instead reads the socket mounted into Homarr and
 needs no integration.
 
-Build a board (Sonarr/Radarr calendar, download queue, indexer health), then
+Build a board (Sonarr/Radarr calendar, download queue, indexer health; an
+iFrame widget on `http://192.168.68.75:8085` embeds Scrutiny once its
+collector runs), then
 mark it public in the board's settings. The root URL always redirects
 anonymous visitors to the login page; only the direct board URL renders
 without auth, so bookmark `http://192.168.68.75:8575/boards/<name>` on the
@@ -389,6 +395,38 @@ reports `MediaType: Unspecified` and carries no counters. smartctl reaches it
 anyway through SAT translation (`-d sat`), which is the only route to SMART on
 this hardware.
 
+### Scrutiny: SMART history
+
+smartd is the alarm; Scrutiny is the trend line - per-attribute history and
+Backblaze failure-rate thresholds at `http://192.168.68.75:8085`, embeddable
+in Homarr's iFrame widget. Its UI has no authentication: LAN-only, never the
+internet. The web/InfluxDB container rides Compose, but the collector must be
+native for the same reason smartd is - Docker Desktop's VM never sees the
+physical drives - and it is a hand install CD never performs:
+
+1. Download `scrutiny-collector-metrics-windows-amd64.exe` from
+   <https://github.com/AnalogJ/scrutiny/releases/latest> into
+   `C:\ProgramData\Slopstation\scrutiny-collector\`.
+2. Copy `k15\media\scrutiny-collector.example.yaml` there as `collector.yaml`
+   and set each device from `smartctl --scan` - the media drive needs
+   `type: sat`, and the device number moves across enclosure changes, exactly
+   like smartd.conf.
+3. Register the hourly task from an elevated PowerShell. SYSTEM, like smartd:
+   SAT passthrough needs an elevated caller.
+
+   ```powershell
+   Register-ScheduledTask -TaskName 'Scrutiny Collector' -User 'SYSTEM' -RunLevel Highest -Action (New-ScheduledTaskAction -Execute 'C:\ProgramData\Slopstation\scrutiny-collector\scrutiny-collector-metrics-windows-amd64.exe' -Argument 'run --config C:\ProgramData\Slopstation\scrutiny-collector\collector.yaml') -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1))
+   ```
+
+4. Prove the chain, the smartd rule: run the task once by hand
+   (`Start-ScheduledTask 'Scrutiny Collector'`) and confirm the drive appears
+   in the UI with fresh attributes before trusting the hourly cadence.
+
+Scrutiny never alerts here - `smart_warning` from smartd stays the alerting
+path, so a broken collector task costs history, not warnings. The InfluxDB
+under `MEDIA_CONFIG_ROOT\scrutiny` is that history; losing it loses trends
+and nothing else.
+
 Start diagnosis with:
 
 ```powershell
@@ -402,11 +440,12 @@ relevant Arr application before changing configuration.
 
 ## Pinning the containers
 
-All six images ride `:latest` until frozen. Freeze the exact images running on
-the K15; upstream may already be ahead. From the checkout root:
+All seven images ride a moving tag until frozen (`:latest`, or Scrutiny's
+`:master-omnibus`). Freeze the exact images running on the K15; upstream may
+already be ahead. From the checkout root:
 
 ```powershell
-'flaresolverr', 'prowlarr', 'radarr', 'sonarr', 'homarr', 'glances' | ForEach-Object {
+'flaresolverr', 'prowlarr', 'radarr', 'sonarr', 'homarr', 'glances', 'scrutiny' | ForEach-Object {
     $container = docker compose --project-directory k15\media --env-file k15\media\.env ps -q $_
     $image = docker inspect --format '{{.Image}}' $container
     docker image inspect --format '{{index .RepoDigests 0}}' $image
