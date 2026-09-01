@@ -3,7 +3,7 @@ name: slopstation-media
 # Tags are frozen BY HAND from the K15, the constraints.txt rule: pin what is
 # RUNNING there, never upstream latest (the runbook's Pinning section has the
 # procedure). ':latest' means nobody has frozen yet, and the next
-# `docker compose pull` upgrades all five services at once.
+# `docker compose pull` upgrades all six services at once.
 
 services:
   flaresolverr:
@@ -77,7 +77,38 @@ services:
       - type: bind
         source: ${MEDIA_CONFIG_ROOT}/homarr
         target: /appdata
+      # Docker-containers widget. The socket grants container control, so
+      # board actions stay auth-gated; anonymous viewers are read-only.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
     ports:
       # LAN-wide on purpose - the gaming PC reads it. Host 8575 because
       # VirtualHere owns 7575.
       - 8575:7575
+
+  glances:
+    # Feeds Homarr's system-resources and disk widgets. Internal-only:
+    # Homarr polls http://glances:61208 server-side.
+    image: nicolargo/glances:latest-full
+    restart: unless-stopped
+    environment:
+      GLANCES_OPT: -C /etc/glances.conf -w
+      TZ: ${TZ:-America/Los_Angeles}
+    volumes:
+      - type: bind
+        source: ./glances.conf
+        target: /etc/glances.conf
+        read_only: true
+      # statvfs on these binds is what reports each volume's real fill;
+      # glances.conf documents the 9p allow that makes them visible.
+      - type: bind
+        source: ${MEDIA_ROOT}
+        target: /mnt/media
+        read_only: true
+      - type: bind
+        source: ${MEDIA_CONFIG_ROOT}
+        target: /mnt/k15-system
+        read_only: true
+    expose:
+      - "61208"

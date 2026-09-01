@@ -26,8 +26,9 @@ flowchart LR
 
 
 
-Prowlarr, FlareSolverr, Radarr, Sonarr, and the Homarr dashboard run in Docker
-Compose. qBittorrent and Proton VPN run natively on Windows.
+Prowlarr, FlareSolverr, Radarr, Sonarr, the Homarr dashboard, and its Glances
+stats feeder run in Docker Compose. qBittorrent and Proton VPN run natively on
+Windows.
 
 | Component | Owns |
 |---|---|
@@ -39,6 +40,7 @@ Compose. qBittorrent and Proton VPN run natively on Windows.
 | Proton VPN | qBittorrent’s peer-network route and forwarded port |
 | FlareSolverr | Browser challenges for tagged Prowlarr indexers |
 | Homarr | Read-only LAN dashboard over the services above; owns no pipeline state |
+| Glances | Volume-fill and resource numbers for Homarr's system widgets |
 
 The Arr quality profiles own release policy. Slopstation selects a configured
 profile name; it does not score release titles itself. Future monitored episodes
@@ -65,6 +67,7 @@ the Arr databases store, and they never change.
 | Sonarr UI | `http://127.0.0.1:8989` |
 | qBittorrent UI | `http://127.0.0.1:8080` |
 | Internal FlareSolverr | `http://flaresolverr:8191` |
+| Internal Glances | `http://glances:61208` |
 | Homarr UI | `http://127.0.0.1:8575`, LAN `http://192.168.68.75:8575` |
 
 Use these URLs from the K15. Do not expose management ports to the internet.
@@ -215,6 +218,14 @@ calls them from inside the Compose network:
 | Sonarr | `http://sonarr:8989` | `sonarrApiKey` |
 | Prowlarr | `http://prowlarr:9696` | `prowlarrApiKey` |
 | qBittorrent | `http://host.docker.internal:8080` | Web UI username and password |
+| Glances | `http://glances:61208` | none |
+
+Glances exists only to feed Homarr's system-resources and disk widgets. Its
+drive gauges read the bind mounts under `/mnt` - the media root and the
+config root's volume - so a moved media root changes what the dashboard
+reports only through `MEDIA_ROOT` in `.env`, the same contract as the Arrs.
+The Docker-containers widget instead reads the socket mounted into Homarr and
+needs no integration.
 
 Build a board (Sonarr/Radarr calendar, download queue, indexer health), then
 mark it public in the board's settings. The root URL always redirects
@@ -378,11 +389,11 @@ relevant Arr application before changing configuration.
 
 ## Pinning the containers
 
-All five images ride `:latest` until frozen. Freeze the exact images running on
+All six images ride `:latest` until frozen. Freeze the exact images running on
 the K15; upstream may already be ahead. From the checkout root:
 
 ```powershell
-'flaresolverr', 'prowlarr', 'radarr', 'sonarr', 'homarr' | ForEach-Object {
+'flaresolverr', 'prowlarr', 'radarr', 'sonarr', 'homarr', 'glances' | ForEach-Object {
     $container = docker compose --project-directory k15\media --env-file k15\media\.env ps -q $_
     $image = docker inspect --format '{{.Image}}' $container
     docker image inspect --format '{{index .RepoDigests 0}}' $image

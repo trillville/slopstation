@@ -369,7 +369,8 @@ def media_doctor(cfg, secrets, log, arr_transport=None, qbit_transport=None,
         states = {str(row.get("Service", row.get("service", ""))).casefold(): row
                   for row in rows}
         bad = []
-        for name in ("flaresolverr", "prowlarr", "radarr", "sonarr", "homarr"):
+        for name in ("flaresolverr", "prowlarr", "radarr", "sonarr", "homarr",
+                     "glances"):
             row = states.get(name)
             state = str((row or {}).get("State", (row or {}).get("state", "")))
             health = str((row or {}).get("Health", (row or {}).get("health", "")))
@@ -378,8 +379,8 @@ def media_doctor(cfg, secrets, log, arr_transport=None, qbit_transport=None,
                 bad.append(name)
         report.add("FAIL" if bad else "PASS", "Docker media containers",
                    "not ready: " + ", ".join(bad) if bad
-                   else "FlareSolverr, Prowlarr, Radarr, Sonarr, and Homarr "
-                        "are running")
+                   else "FlareSolverr, Prowlarr, Radarr, Sonarr, Homarr, "
+                        "and Glances are running")
     except MediaError as e:
         report.add("FAIL", "Docker media containers", str(e))
 
