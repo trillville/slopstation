@@ -12,8 +12,8 @@ flowchart LR
     request[Voice, text, MCP,<br/>or direct CLI] --> slop[Slopstation<br/>resolve title, scope, preset]
     slop -->|request and observe| managers[Radarr · movies<br/>Sonarr · series]
     managers -->|dispatch| qbit[qBittorrent<br/>transfer and seed]
-    qbit --> torrents[C:\Media\torrents]
-    torrents -->|Radarr / Sonarr import| libraries[C:\Media\Movies<br/>C:\Media\TV]
+    qbit --> torrents[MEDIA_ROOT/torrents]
+    torrents -->|Radarr / Sonarr import| libraries[MEDIA_ROOT/Movies<br/>MEDIA_ROOT/TV]
 
     slop -->|records progress| ops[Operation tracking<br/>progress and completion]
     managers -->|release search| prowlarr[Prowlarr<br/>indexer management]
@@ -46,14 +46,19 @@ remain Sonarr desired state after the originating Slopstation operation ends.
 ## Storage and addresses
 
 `Start-Media.ps1` maps one Windows media root to `/data` in Radarr and Sonarr.
-The default is `C:\Media`; changing the host root later does not change the
-container paths stored by Slopstation.
+That root is `MEDIA_ROOT` in `k15\media\.env` - written there, not in the
+shell environment, and gitignored, so read the live value rather than assuming
+one. `.env.example` starts it at `C:\Media`.
+
+Below, `<MEDIA_ROOT>` stands for whatever that file currently says. Only the
+host side of these pairs moves: the container paths are what Slopstation and
+the Arr databases store, and they never change.
 
 | Purpose | Value |
 |---|---|
-| qBittorrent download path | `C:\Media\torrents` |
-| Radarr root | `/data/Movies` → `C:\Media\Movies` |
-| Sonarr root | `/data/TV` → `C:\Media\TV` |
+| qBittorrent download path | `<MEDIA_ROOT>\torrents` |
+| Radarr root | `/data/Movies` → `<MEDIA_ROOT>\Movies` |
+| Sonarr root | `/data/TV` → `<MEDIA_ROOT>\TV` |
 | Prowlarr UI | `http://127.0.0.1:9696` |
 | Radarr UI | `http://127.0.0.1:7878` |
 | Sonarr UI | `http://127.0.0.1:8989` |
@@ -75,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\k15\media\Start-Media.ps1
 
 On first run the script copies `.env.example` to `.env`, creates the config and
 media directories, and starts FlareSolverr, Prowlarr, Radarr, and Sonarr. Review
-`.env` before moving the media root from `C:\Media`. Complete the first-run
+`.env` and set `MEDIA_ROOT` before the first run. Complete the first-run
 authentication prompt in each local UI.
 
 ### 2. Configure native qBittorrent and Proton
@@ -88,7 +93,7 @@ Run qBittorrent as a native Windows application; do not add it to Compose.
   addresses; UPnP/NAT-PMP disabled.
 - Web UI: port `8080`, authenticated, listening where Docker can reach it, with
   localhost and subnet authentication bypass disabled.
-- Default save path: `C:\Media\torrents`.
+- Default save path: `<MEDIA_ROOT>\torrents`.
 - Categories: create `radarr` and `sonarr`.
 
 Set `media.qbittorrentNetworkInterface` in `k15\config.json` to the exact
@@ -127,7 +132,7 @@ Add this remote path mapping in each application:
 
 | Host | Remote path | Local path |
 |---|---|---|
-| `host.docker.internal` | `C:\Media\torrents` | `/data/torrents` |
+| `host.docker.internal` | `<MEDIA_ROOT>\torrents` | `/data/torrents` |
 
 Test the root, download client, and remote mapping before continuing.
 
@@ -379,7 +384,42 @@ it or the category/port setup re-does by hand.
 
 ## Moving the media root
 
-To migrate from `C:\Media` to a NAS: stop Compose and qBittorrent, copy the
-media root, change `MEDIA_ROOT` in `.env`, change qBittorrent’s save path and
-both Arr remote path mappings, then restart and run `tools\media.py doctor`. Keep the
-container roots `/data/Movies`, `/data/TV`, and `/data/torrents` unchanged.
+Every path the Arr databases store is a container path, so a move is host-side
+only: nothing in `config.json`, `compose.yaml`, or either Arr database changes.
+
+1. **Quiesce.** Let the download queue drain, then `docker compose
+   --project-directory k15\media --env-file k15\media\.env down`, and exit
+   qBittorrent from its tray icon rather than just closing its window.
+
+2. **Copy the whole root in one pass, and keep the old tree** until the new one
+   is verified by file count and byte total. Moving the libraries but leaving
+   downloads behind turns every later import from a hardlink into a full copy.
+
+3. **Change the host-side knobs, and only these:**
+
+   | Knob | Where |
+   |---|---|
+   | `MEDIA_ROOT` | `k15\media\.env` |
+   | Default save path | qBittorrent; categories with a blank save path inherit it |
+   | Remote path mapping | Radarr and Sonarr, one entry each |
+   | Share path | the SMB share publishing the root, if there is one |
+
+   The share is the one that gets missed: it breaks playback rather than
+   acquisition, so it fails later and somewhere else. `Set-SmbShare` cannot
+   change a path - remove the share and recreate it under the same name, which
+   keeps every client's UNC path valid.
+
+4. **Re-apply NTFS permissions.** `robocopy /COPY:DAT` carries no ACLs. An
+   account that reached the old root through an explicit ACE rather than group
+   membership has none on the new one, and playback fails with access denied
+   while every service still reports healthy.
+
+5. **Verify the mount, not the string.** `tools\media.py doctor` compares root
+   paths as text and passes on a bind mount that is broken or empty. Confirm
+   each Arr root reports the new volume's free space, and that `docker exec
+   slopstation-media-radarr-1 df -h /data` names it.
+
+Keep the container roots `/data/Movies`, `/data/TV`, and `/data/torrents`
+unchanged throughout. Delete the old tree only after one request completes end
+to end on the new root: downloaded, imported, torrent removed, library file
+still there.
