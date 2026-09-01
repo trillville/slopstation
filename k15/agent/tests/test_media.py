@@ -929,8 +929,12 @@ def main():
     assert "8191:8191" not in compose
     # The Arrs' two /data mounts plus Glances' read-only fill gauge.
     assert compose.count("source: ${MEDIA_ROOT}") == 3
-    assert "127.0.0.1:7878:7878" in compose
-    assert "127.0.0.1:8989:8989" in compose
+    # Web UIs are LAN-wide (runbook firewall rules scope them); only
+    # FlareSolverr and Glances stay off the host entirely.
+    assert "9696:9696" in compose
+    assert "7878:7878" in compose
+    assert "8989:8989" in compose
+    assert "127.0.0.1:" not in compose
     # Homarr is LAN-wide by design, and host 7575 belongs to VirtualHere.
     assert "ghcr.io/homarr-labs/homarr:latest" in compose
     assert "8575:7575" in compose

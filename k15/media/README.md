@@ -62,17 +62,19 @@ the Arr databases store, and they never change.
 | qBittorrent download path | `<MEDIA_ROOT>\torrents` |
 | Radarr root | `/data/Movies` → `<MEDIA_ROOT>\Movies` |
 | Sonarr root | `/data/TV` → `<MEDIA_ROOT>\TV` |
-| Prowlarr UI | `http://127.0.0.1:9696` |
-| Radarr UI | `http://127.0.0.1:7878` |
-| Sonarr UI | `http://127.0.0.1:8989` |
-| qBittorrent UI | `http://127.0.0.1:8080` |
+| Prowlarr UI | `http://192.168.68.75:9696` |
+| Radarr UI | `http://192.168.68.75:7878` |
+| Sonarr UI | `http://192.168.68.75:8989` |
+| qBittorrent UI | `http://192.168.68.75:8080` |
 | Internal FlareSolverr | `http://flaresolverr:8191` |
 | Internal Glances | `http://glances:61208` |
-| Homarr UI | `http://127.0.0.1:8575`, LAN `http://192.168.68.75:8575` |
+| Homarr UI | `http://192.168.68.75:8575` (host 8575: VirtualHere owns 7575) |
 
-Use these URLs from the K15. Do not expose management ports to the internet.
-Homarr is the one service bound LAN-wide on purpose, and on 8575 because
-VirtualHere owns host port 7575; everything else stays on localhost.
+Every web UI binds LAN-wide so Homarr's dashboard links resolve from any
+machine; each one requires a login, and the bootstrap firewall rules scope
+them to LocalSubnet on the Private profile. `127.0.0.1` still works from the
+K15 itself. FlareSolverr and Glances stay internal to the Compose network.
+Never expose any of these to the internet.
 
 ## Bootstrap
 
@@ -205,25 +207,29 @@ Radarr or Sonarr retries its completed-download handling.
 ### 8. Configure the Homarr dashboard
 
 Homarr gives the gaming PC (or any LAN browser) a read-only view of the
-pipeline. It talks to the other services server-side, so nothing else needs to
-leave localhost.
+pipeline, with click-through into each service's own UI.
 
-Allow its port once, from an elevated PowerShell:
+Allow the web UIs once, from an elevated PowerShell:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'Homarr dashboard (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8575 -Profile Private -RemoteAddress LocalSubnet
+New-NetFirewallRule -DisplayName 'Media web UIs (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9696,7878,8989 -Profile Private -RemoteAddress LocalSubnet
+New-NetFirewallRule -DisplayName 'qBittorrent Web UI (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080 -Profile Private -RemoteAddress LocalSubnet
 ```
 
 Open `http://127.0.0.1:8575`, complete onboarding, and create the admin user.
-Then add the integrations. Use the container names, not `127.0.0.1` — Homarr
-calls them from inside the Compose network:
+Then add the integrations. Use the K15's LAN address, not a container name:
+Homarr polls it from inside Docker (NAT hairpin), and the same URL is what a
+click on a calendar entry or app tile opens in the viewer's browser — a
+container name would poll fine and 404 for every human. Glances is the
+exception: nothing user-facing links to it, so it stays internal.
 
 | Integration | URL | Credential |
 |---|---|---|
-| Radarr | `http://radarr:7878` | `radarrApiKey` |
-| Sonarr | `http://sonarr:8989` | `sonarrApiKey` |
-| Prowlarr | `http://prowlarr:9696` | `prowlarrApiKey` |
-| qBittorrent | `http://host.docker.internal:8080` | Web UI username and password |
+| Radarr | `http://192.168.68.75:7878` | `radarrApiKey` |
+| Sonarr | `http://192.168.68.75:8989` | `sonarrApiKey` |
+| Prowlarr | `http://192.168.68.75:9696` | `prowlarrApiKey` |
+| qBittorrent | `http://192.168.68.75:8080` | Web UI username and password |
 | Glances | `http://glances:61208` | none |
 
 Glances exists only to feed Homarr's system-resources and disk widgets. Its
@@ -239,8 +245,9 @@ anonymous visitors to the login page; only the direct board URL renders
 without auth, so bookmark `http://192.168.68.75:8575/boards/<name>` on the
 gaming PC.
 
-App tiles that link to the Radarr/Sonarr/qBittorrent UIs only resolve from the
-K15 itself while those ports stay on localhost; widgets work from anywhere.
+Point each app tile's URL at the same LAN address as its integration so the
+tiles open from any machine. The Docker-containers widget shows data only to
+logged-in admins; anonymous viewers see it empty by Homarr design.
 
 ## Request lifecycle
 

@@ -27,7 +27,10 @@ services:
         source: ${MEDIA_CONFIG_ROOT}/prowlarr
         target: /config
     ports:
-      - 127.0.0.1:9696:9696
+      # LAN-wide so dashboard links resolve from other machines; every UI
+      # below authenticates, and the runbook's firewall rules scope them to
+      # LocalSubnet on the Private profile. Never the internet.
+      - 9696:9696
     depends_on:
       - flaresolverr
 
@@ -46,7 +49,7 @@ services:
         source: ${MEDIA_ROOT}
         target: /data
     ports:
-      - 127.0.0.1:7878:7878
+      - 7878:7878
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -63,7 +66,7 @@ services:
         source: ${MEDIA_ROOT}
         target: /data
     ports:
-      - 127.0.0.1:8989:8989
+      - 8989:8989
 
   homarr:
     image: ghcr.io/homarr-labs/homarr:latest
@@ -83,8 +86,7 @@ services:
         source: /var/run/docker.sock
         target: /var/run/docker.sock
     ports:
-      # LAN-wide on purpose - the gaming PC reads it. Host 8575 because
-      # VirtualHere owns 7575.
+      # Host 8575 because VirtualHere owns 7575.
       - 8575:7575
 
   glances:
