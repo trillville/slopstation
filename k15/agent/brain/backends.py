@@ -17,7 +17,7 @@ from agent.telemetry import traces
 # Both SDKs default to 600 s per attempt plus retries. remote.py abandons its
 # forward at 280 s and text.py holds the session lock for the whole turn, so a
 # stalled attempt has to die before every caller's patience, not after.
-LLM_TIMEOUT_S = 120
+LLM_TIMEOUT_S = 90
 LLM_MAX_RETRIES = 1
 
 
