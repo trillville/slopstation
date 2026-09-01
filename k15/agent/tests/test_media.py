@@ -878,7 +878,7 @@ def main():
 
     compose_rows = [{"Service": name, "State": "running", "Health": ""}
                     for name in ("flaresolverr", "prowlarr", "radarr", "sonarr",
-                                 "homarr")]
+                                 "homarr", "glances")]
     doctor_proton_log = proton_dir / "doctor-client-logs.txt"
     doctor_proton_log.write_text(
         proton_event("2026-08-30T05:00:00.000Z",
@@ -922,12 +922,13 @@ def main():
     start_media = (root / "k15" / "media" / "Start-Media.ps1").read_text(
         encoding="utf-8")
     for sidecar in ("flaresolverr:", "prowlarr:", "radarr:", "sonarr:",
-                    "homarr:"):
+                    "homarr:", "glances:"):
         assert sidecar in compose
     assert "qbittorrent:" not in compose
     assert "ghcr.io/flaresolverr/flaresolverr:latest" in compose
     assert "8191:8191" not in compose
-    assert compose.count("source: ${MEDIA_ROOT}") == 2
+    # The Arrs' two /data mounts plus Glances' read-only fill gauge.
+    assert compose.count("source: ${MEDIA_ROOT}") == 3
     assert "127.0.0.1:7878:7878" in compose
     assert "127.0.0.1:8989:8989" in compose
     # Homarr is LAN-wide by design, and host 7575 belongs to VirtualHere.
@@ -935,6 +936,13 @@ def main():
     assert "8575:7575" in compose
     assert "127.0.0.1:8575" not in compose
     assert "7575:7575" not in compose
+    # Glances is internal-only, and its drive gauges depend on the 9p allow.
+    assert "nicolargo/glances:latest-full" in compose
+    assert "61208:61208" not in compose
+    assert "/var/run/docker.sock" in compose
+    glances_conf = (root / "k15" / "media" / "glances.conf").read_text(
+        encoding="utf-8")
+    assert "allow=9p" in glances_conf
     assert "--remove-orphans" in start_media
     assert "logs qbittorrent" not in start_media
     assert "SECRET_ENCRYPTION_KEY" in start_media
