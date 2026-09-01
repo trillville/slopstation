@@ -42,6 +42,9 @@ PYTHON = {
     "deploy_failed": {"err", "sha"},
     "deploy_reloaded": {"killed", "what"},
     "deploy_start": {"at", "sha"},
+    "disk_space_cleared": {"free_gb", "mount", "pct_free"},
+    "disk_space_low": {"free_gb", "mount", "pct_free", "total_gb"},
+    "disk_watch_failed": {"err", "mount"},
     "dispatch": {"detail", "intent", "ok"},
     "download_status_error": {"err"},
     "dry_run_would": {"action"},
@@ -225,6 +228,7 @@ BAT = {
     "lane_reloaded": set(),
     "lane_started": set(),
     "restart": set(),
+    "smart_warning": set(),
     "start": set(),
 }
 

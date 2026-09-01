@@ -12,6 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # k15/
 
 import cglib
+from agent.tools.disk_health import (DISK_POLL_S, FREE_WARN_BYTES,
+                                     DiskHealthMonitor)
 from agent.tools.media_clients import (ArrClient, MediaConfigurationError, MediaError,
                                        _clean_text, _kind, _qbit_from_config,
                                        _root_and_profile_gaps)
@@ -911,6 +913,51 @@ def media_health_monitor_from_config(cfg, secrets, log, transport=None):
         return MediaHealthMonitor(clients, log, poll_s=poll_s)
     except (MediaConfigurationError, KeyError) as e:
         log.warn("lane_disabled", what="media_health_sync", reason=str(e))
+        return None
+
+
+def _media_root(env_path):
+    """MEDIA_ROOT as Compose reads it. The file is gitignored, so a checkout
+    that is not the K15 has none and the watch stays off."""
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "MEDIA_ROOT":
+            return value.strip() or None
+    return None
+
+
+def disk_health_monitor_from_config(cfg, log, env_path=None):
+    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+    if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
+            or not media_cfg.get("diskWatch", True)):
+        return None
+    try:
+        poll_s = media_cfg.get("diskPollS", DISK_POLL_S)
+        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
+            raise MediaConfigurationError("media.diskPollS must be positive")
+        warn_gb = media_cfg.get("diskFreeWarnGb", FREE_WARN_BYTES // 1024 ** 3)
+        if not isinstance(warn_gb, (int, float)) or warn_gb <= 0:
+            raise MediaConfigurationError(
+                "media.diskFreeWarnGb must be positive")
+        if env_path is None:
+            env_path = cglib.BASE / "media" / ".env"
+        root = _media_root(env_path)
+        if not root:
+            raise MediaConfigurationError(
+                f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1")
+        # Both volumes matter and are normally different: the library fills
+        # from downloads, the checkout drive holds the config databases and
+        # the event log. Anchors, so one volume named twice is watched once.
+        mounts = sorted({Path(root).anchor or root,
+                         Path(cglib.BASE).anchor or str(cglib.BASE)})
+        return DiskHealthMonitor(mounts, log, poll_s=poll_s,
+                                 free_warn_bytes=int(warn_gb * 1024 ** 3))
+    except MediaConfigurationError as e:
+        log.warn("lane_disabled", what="disk_watch", reason=str(e))
         return None
 
 

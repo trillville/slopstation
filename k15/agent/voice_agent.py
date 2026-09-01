@@ -311,6 +311,12 @@ def main():
         log("lane_up", what="media_health_sync",
             poll_s=media_health_monitor.poll_s)
 
+    disk_health_monitor = media_mod.disk_health_monitor_from_config(cfg, log)
+    if disk_health_monitor is not None:
+        disk_health_monitor.start()
+        log("lane_up", what="disk_watch", poll_s=disk_health_monitor.poll_s,
+            mounts=" ".join(disk_health_monitor.mounts))
+
     from agent.interfaces import text
     text.start(cfg, secrets, log, operations=operation_store,
                          steam=steam, media=media_service,
