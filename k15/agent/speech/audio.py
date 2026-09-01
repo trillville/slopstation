@@ -40,20 +40,35 @@ def wake_phrase(model_name: str) -> str:
 
 
 def resolve_device(pa, fragment: str | None, want_input: bool,
-                   log=log, required: bool = True) -> int | None:
+                   log=log, required: bool = True,
+                   host_api: str | None = None) -> int | None:
     """Config name-fragment -> PyAudio device index; None = system default.
     Logs the bound NAME: after a rebuild the index alone says nothing about
     which physical endpoint is live. log=None resolves silently. An absent
     configured device raises DeviceMissing rather than quietly becoming the
-    default; required=False keeps the lenient answer for announce.py."""
+    default; required=False keeps the lenient answer for announce.py.
+
+    host_api narrows the search to ONE PortAudio host API. Windows enumerates
+    the same endpoint once per API and PortAudio sorts MME first, so without
+    it the first match is always MME - a binding nobody chose."""
     kind = "input" if want_input else "output"
     if not fragment:
         if log:
             log("audio_device", kind=kind, device="system default")
         return None
+    api_idx = None
+    if host_api:
+        api_idx = next((i for i in range(pa.get_host_api_count())
+                        if pa.get_host_api_info_by_index(i)["name"] == host_api),
+                       None)
     frag = fragment.lower()
-    for i in range(pa.get_device_count()):
+    # A host API PortAudio does not have matches nothing, rather than falling
+    # through to the unpinned first hit - which is the binding a pin replaces.
+    indices = () if host_api and api_idx is None else range(pa.get_device_count())
+    for i in indices:
         d = pa.get_device_info_by_index(i)
+        if api_idx is not None and d["hostApi"] != api_idx:
+            continue
         channels = d["maxInputChannels"] if want_input else d["maxOutputChannels"]
         if channels and frag in d["name"].lower():
             if log:
@@ -224,6 +239,35 @@ def close_stream_quietly(stream) -> None:
             pass
 
 
+class _MonoView:
+    """Channel 0 of an interleaved capture stream, over the read/stop/close
+    surface _listen and WakeCapture use.
+
+    A pinned host API may only open at the device's native width - WASAPI
+    shared mode refuses anything but the engine format - while everything
+    downstream is mono bytes: the pre-roll ring, dump_clip's 1-channel wav,
+    and the PCM handed to the STT. Strided, not reshaped, so a short read
+    cannot raise ValueError past the recovery path's OSError."""
+
+    def __init__(self, stream, channels: int) -> None:
+        import numpy as np
+        self._np = np
+        self._stream = stream
+        self._channels = channels
+
+    def read(self, frames: int, exception_on_overflow: bool = True) -> bytes:
+        data = self._stream.read(frames,
+                                 exception_on_overflow=exception_on_overflow)
+        return self._np.frombuffer(data, self._np.int16)[
+            ::self._channels].tobytes()
+
+    def stop_stream(self) -> None:
+        self._stream.stop_stream()
+
+    def close(self) -> None:
+        self._stream.close()
+
+
 class WakeListener:
     """openWakeWord over a raw PyAudio stream. Owns the mic while DORMANT;
     releases it before a session pipeline opens it."""
@@ -241,6 +285,9 @@ class WakeListener:
     vad_threshold = 0.0
     near_miss_factor = 0.0
     clips_keep = 0
+    channels = 1                    # >1 = opened at the native width, ch0 taken
+    host_api = ""
+    fragment = None
     patience: dict[str, int] = {}
     patience_threshold: dict[str, float] = {}
 
@@ -248,8 +295,12 @@ class WakeListener:
         import numpy as np
         from openwakeword.model import Model
         self.np = np
-        self.pa = pa
-        self.device_index = input_device_index
+        # wakeHostApi pins the WAKE stream ONLY. The session pipeline opens its
+        # own mono stream on the unpinned index (session_runtime), and WASAPI
+        # shared mode would refuse that width.
+        self.host_api = (voice_cfg.get("wakeHostApi") or "").strip()
+        self.fragment = voice_cfg.get("inputDeviceName")
+        self.rebind(pa, input_device_index)
         self.model_name = voice_cfg["wakeModel"]          # e.g. hey_jarvis_v0.1
         self.key = self.model_name.rsplit("_v", 1)[0]     # e.g. hey_jarvis
         # EVERY tuning key below is optional with an off-or-inert default and
@@ -352,9 +403,29 @@ class WakeListener:
 
     def rebind(self, pa, device_index: int | None) -> None:
         """Adopt a fresh PyAudio instance + mic index after an audio rebuild;
-        the wake model and its state carry over untouched."""
+        the wake model and its state carry over untouched.
+
+        wakeHostApi re-resolves HERE: the index and the native width both
+        belong to the instance, and a rebuild can renumber them. A pin that
+        does not resolve warns and keeps the caller's index - the same
+        endpoint on the accidental host API still hears, and a silent
+        fallback to a DIFFERENT endpoint is what open_audio exists to stop."""
         self.pa = pa
         self.device_index = device_index
+        self.channels = 1
+        if not self.host_api:
+            return
+        idx = resolve_device(pa, self.fragment, want_input=True, log=None,
+                             required=False, host_api=self.host_api)
+        if idx is None:
+            log.warn("audio_device_missing", kind="wake", wanted=self.fragment,
+                     host_api=self.host_api)
+            return
+        info = pa.get_device_info_by_index(idx)
+        self.device_index = idx
+        self.channels = int(info["maxInputChannels"])
+        log("audio_device", kind="wake", device=info["name"], index=idx,
+            host_api=self.host_api, channels=self.channels)
 
     def score_chunk(self, chunk_int16) -> float:
         # Only one model is ever loaded. Both dicts empty = stock predict.
@@ -379,9 +450,11 @@ class WakeListener:
 
     def _open_stream(self):
         import pyaudio
-        return self.pa.open(format=pyaudio.paInt16, channels=1, rate=16000,
-                            input=True, frames_per_buffer=self.CHUNK,
-                            input_device_index=self.device_index)
+        stream = self.pa.open(format=pyaudio.paInt16, channels=self.channels,
+                              rate=16000, input=True,
+                              frames_per_buffer=self.CHUNK,
+                              input_device_index=self.device_index)
+        return stream if self.channels == 1 else _MonoView(stream, self.channels)
 
     def _listen(self, stream, threshold, ring, interrupt=None, peak_hops=0):
         """Blocks until the score crosses `threshold`; returns (score, peak),
