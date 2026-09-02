@@ -1,52 +1,60 @@
 ---
-name: grafana-logs
-description: Read the couch system's telemetry from Grafana Cloud Loki - launches, voice sessions, errors, crashes, and liveness across both the K15 and the gaming PC. Use when asked to check the logs or telemetry, find out what happened at a given time, diagnose why a launch or voice command failed, confirm whether a lane is alive, or investigate anything that went wrong while nobody was watching. Also for questions like "is the house up", "did anything break last night", "why didn't the chord work". LEGACY during the Sentry migration: prefer the sentry-logs skill, and use this one only to cross-check a Sentry result or to read something from before the cutover.
+name: sentry-logs
+description: Read the couch system's telemetry from Sentry - launches, voice sessions, errors, crashes, and liveness across both the K15 and the gaming PC. Use when asked to check the logs or telemetry, find out what happened at a given time, diagnose why a launch or voice command failed, confirm whether a lane is alive, or investigate anything that went wrong while nobody was watching. Also for questions like "is the house up", "did anything break last night", "why didn't the chord work". This is the CURRENT log store; the grafana-logs skill is the one being retired.
 ---
 
 # Reading the couch system's logs
 
-Every event from both machines lands in Grafana Cloud Loki. Query it from the
+Every event from both machines lands in one Sentry project. Query it from the
 terminal — never send the user to a browser for something answerable here.
 
 ```bash
-python .claude/skills/grafana-logs/query.py --service k15 --level error --since 24h
+python .claude/skills/sentry-logs/query.py --service k15 --level error --since 24h
 ```
 
-Drive it with flags, not a raw LogQL string: PowerShell strips the double
-quotes out of a selector on its way to a native process, and Loki then reports
-a syntax error for a query nobody typed. The script composes the selector from
-`--service --lane --level --event --turn --session --contains --env --since
---limit` (`--env` defaults to `prod`, `--since` to `6h`), prints the LogQL it
-built, and takes a raw query as a positional argument only when the flags
-cannot express it.
+Drive it with flags, not a raw query string: PowerShell strips the double
+quotes out of a query on its way to a native process. The script composes the
+search from `--service --lane --level --event --turn --session --contains
+--env --since --limit` (`--env` defaults to `prod`, `--since` to `6h`), prints
+the query it built, and takes `--query` for anything the flags cannot express.
 
-Stack `narrownuthatch2355` (US West), `https://narrownuthatch2355.grafana.net`.
+**During the migration** both stores are live. Loki (the `grafana-logs` skill)
+is the fallback while Sentry soaks; prefer this one, and cross-check there if
+a result looks wrong rather than concluding the system was quiet.
+
 A query that returns nothing may mean the pipeline is down rather than the
-query being wrong: check Alloy is running on the machine in question, then
-that its `config.alloy` points at the stack above.
+query being wrong: check the `otelcol-contrib` service is running on the
+machine in question (`python doctor.py` has a row for it), then that its
+config points at the project in `config.json`. That collector is a separate
+process from Alloy, which still ships the same files to Loki until the
+migration finishes - one being down says nothing about the other.
 
-Credentials come from `k15/secrets.json` (gitignored). **Worktrees have no
-copy of it**; the script falls back to the enclosing checkout's automatically,
-so a credentials error means neither checkout has them (env
-`GC_LOKI_USER`/`GC_LOKI_READ_TOKEN` also works).
+Credentials come from `k15/secrets.json` and `k15/config.json` (both
+gitignored). **Worktrees have no copy of either**; the script falls back to the
+enclosing checkout automatically, so a credentials error means neither
+checkout has them (env `SENTRY_READ_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` also
+works).
 
 ## The data model
 
-Four **labels** — cheap to select on, and the only things allowed in `{...}`:
+Everything the emitter wrote is a searchable **attribute** — there is no
+label/field split here, and no `| json |`. What was a Loki label is now just an
+attribute that happens to have few values:
 
-| Label | Values |
+| Attribute | Values |
 |---|---|
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
 | `lane` | k15: `voice`, `launch`, `listener`, `library`, `steam`, `traces`, `supervisor`, `manual` — gamepc: `enter`, `exit`, `launchgame`, `nav`, `stopgame`, `wake-safety`, `office-safety`, `dispatch`, `pc-transcript` |
-| `level` | `info`, `warn`, `error` — the whole set; there is no `debug` |
-| `env` | `prod`, `test` — **always filter `env="prod"`** unless investigating the blind suite |
+| `severity` | `info`, `warn`, `error` — the whole set; there is no `debug`. This is the `level` field, mapped to Sentry's own severity by the shipper |
+| `env` | `prod`, `test` — **always filter `env:prod`** unless investigating the blind suite |
 
-Everything else is a **field inside the JSON line** and needs `| json |`
-first: `event`, `turn`, `session`, `dur_ms`, `err`, `appid`, `score`, …
+`event`, `turn`, `session`, `dur_ms`, `err`, `appid`, `score` and the rest are
+attributes too, and cost nothing extra to filter on. The log body is the
+original JSONL line, which is what the script renders.
 
-```logql
-{service="k15", level="error"}            # label — fast
-{service="k15"} | json | turn="9f2c1a"    # field — needs the parser
+```text
+env:prod service:k15 severity:error       # attributes, all equal
+env:prod turn:9f2c1a                      # no parser step needed
 ```
 
 ## Follow a `turn`
@@ -56,43 +64,48 @@ travels through dispatch, `couch.py`, the SSH boundary, and the gaming PC's
 scheduled task. **One query returns the whole story across both machines.**
 
 ```bash
-python .claude/skills/grafana-logs/query.py --turn 9f2c1a --since 24h
+python .claude/skills/sentry-logs/query.py --turn 9f2c1a --since 24h
 ```
 
-`--turn` and `--session` widen to both machines by themselves — the script
-only pins `service` when you pass `--service`.
+`--turn` and `--session` span both machines by themselves — the script only
+pins `service` when you pass `--service`.
 
 When investigating any failure: find the failing event, take its `turn`, then
 run that. Do not reconstruct a timeline from timestamps.
 
 ## Recipes
 
-The selectors below are what the flags build — read them as LogQL, and reach
-for the flag form to run one (`--lane launch`, `--event gate_miss`, …). A
-metric query like the liveness one has no flag form; pass it as the positional
-argument, single-quoted, with the inner double quotes escaped.
+Each of these has a flag form; the search string is what the script builds.
 
-```logql
-{service=~"k15|gamepc", env="prod"} | json | level=~"warn|error"   # what broke
-{service="k15", lane="launch", env="prod"}                          # launches
-{service="k15", lane="voice", env="prod"} | json | event="gate_miss"  # grammar misses
-{service="k15", lane="supervisor"} | json | event="restart"         # crash loops
-{service="gamepc", lane="pc-transcript"}                            # the PC's raw narrative
-{service="gamepc", lane=~"wake-safety|office-safety"}               # the failsafes - the PC's most frequent lanes
-{service="k15"} | json | session="c32ec7"                           # one voice conversation
-```
-
-Liveness — a lane is dead if this returns 0 (expect ~5, one per minute):
-
-```logql
-sum(count_over_time({service="k15", lane="listener", env="prod"} | json | event="heartbeat" [5m]))
+```text
+env:prod severity:[warn,error]                    # what broke
+env:prod service:k15 lane:launch                  # launches
+env:prod service:k15 lane:voice event:gate_miss   # grammar misses
+env:prod lane:supervisor event:restart            # crash loops
+env:prod service:gamepc lane:pc-transcript        # the PC's raw narrative
+env:prod service:gamepc lane:[wake-safety,office-safety]   # the failsafes
+env:prod session:c32ec7                           # one voice conversation
 ```
 
 Time to READY, the number the whole system is judged on:
 
-```logql
-{service="k15", lane="launch", env="prod"} | json | event="host_ready"
+```bash
+python .claude/skills/sentry-logs/query.py --lane launch --event host_ready --since 7d
 ```
+
+`dur_ms` is a numeric attribute here, so the aggregate the Loki version could
+not do is a chart in Sentry: average and p95 of `dur_ms` on `event:host_ready`.
+
+## Liveness is not a log query any more
+
+**Do not answer "is the lane alive" from the logs.** Each lane checks in to a
+Sentry cron monitor every 60 seconds (`k15/checkin.py`), and a missed check-in
+opens an issue on its own — that signal does not ride the log pipeline, so it
+survives a dead shipper. Read the monitors, not `event:heartbeat`.
+
+The `heartbeat` events still ship and are still worth counting for one thing:
+they prove the SHIPPER is alive. No heartbeats plus a healthy cron monitor
+means Alloy died, not the lane.
 
 ## Event vocabulary
 
@@ -131,7 +144,7 @@ Time to READY, the number the whole system is judged on:
   `tvremote_fail` — the same events from a hand-run `python exlink.py <cmd>`,
   kept off the launch lane so operator probing does not skew launch metrics.
   Drop the lane to see every frame whoever sent it:
-  `| json | event="exlink_send"`
+  `event:exlink_send`
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat`
   - Room ducking (TvDucker): `tv_ducked` / `tv_unducked` (both carry `steps` =
     verified movement vs `asked`, plus `vol` and `ok`; `tv_unducked` may carry
@@ -219,8 +232,8 @@ When a launch fails on the profile, the gaming PC copies the interesting lines
 of DisplayMagician's own log next to the transcript, so it ships under
 `lane="pc-transcript"`:
 
-```logql
-{service="gamepc", lane="pc-transcript"} |= "DisplayMagician"
+```bash
+python .claude/skills/sentry-logs/query.py --service gamepc --lane pc-transcript --contains DisplayMagician
 ```
 
 ## How to answer well
@@ -232,13 +245,14 @@ of DisplayMagician's own log next to the transcript, so it ships under
    step started — elapsed-since-intent, so it always increases down a launch.
 4. **A quiet result can be the answer.** No `heartbeat` means a dead lane; no
    `launch_failed` means launches are fine. Say so rather than "nothing found".
-5. **`couch.log` on the K15 is the offline mirror.** If Loki has a gap, the
+5. **`couch.log` on the K15 is the offline mirror.** If Sentry has a gap, the
    local JSONL (`k15/logs/k15-*.jsonl`) is the source of truth — lines read
    while the shipper was failing are dropped, not queued.
 
 ## When a query returns nothing
 
-Check, in order: is `env="prod"` filtering out what you want; is the time
-range too narrow; is the field name right (`| json |` present?); has the
-gaming PC's shipper been installed (E4). A 401 means the token lacks
-`logs:read` — the shipper's write token gives exactly that error.
+Check, in order: is `env:prod` filtering out what you want; is the time range
+too narrow; is the attribute spelled the way `events.py` wrote it; has that
+machine's otelcol-contrib service been installed and pointed at Sentry. A 401 means the token is
+missing or lacks `org:read` — the DSN public key in `config.json` is an
+ingest key and cannot query. `--json` shows exactly what the API returned.

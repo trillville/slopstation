@@ -32,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import checkin
 import cglib
 from agent.speech import earcons
 import events
@@ -328,7 +329,7 @@ def main():
     remote.start(cfg, secrets, log)
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
-    tracing.setup(cfg, secrets, log)
+    tracing.setup(cfg, log)
 
     # LAST: open_audio blocks until the configured device answers (~15 s on a
     # cold boot; forever on a dead mic). Everything above must already be
@@ -349,6 +350,7 @@ def main():
     # bench mode would page.
     if not (args.wake_trials or args.false_accept_soak or args.once):
         events.start_heartbeat("voice")
+        checkin.start("voice", log)
 
     if args.wake_trials:
         log("wake_trials_start")

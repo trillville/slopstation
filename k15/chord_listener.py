@@ -1,6 +1,7 @@
 import subprocess, sys, time
 import hid
 
+import checkin
 import cglib
 import events
 import haptics
@@ -115,6 +116,9 @@ def main():
     # block in hid.read or the 3 s stand-by sleep, and a heartbeat that stopped
     # while the Puck is claimed would page during every normal session.
     events.start_heartbeat("listener")
+    # Proof of life that does not ride the log shipper: a dead Alloy
+    # can no longer make a dead lane look healthy.
+    checkin.start("listener", log)
 
     puck, held, armed = Puck(), None, False
     last_busy = 0.0

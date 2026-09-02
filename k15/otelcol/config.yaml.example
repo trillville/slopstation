@@ -1,0 +1,87 @@
+# OpenTelemetry Collector (contrib) - K15 log shipper to Sentry. Read by the
+# sentry-logs skill (.claude/skills/sentry-logs/), which documents the
+# attributes below.
+#
+# A SECOND shipper alongside Alloy for the length of the migration: Alloy
+# keeps pushing to Loki, this pushes to Sentry, and neither knows about the
+# other. Deleting one is stopping a service, not editing a shared pipeline -
+# which is the whole reason they are separate processes.
+#
+# Install (contrib, not the core distribution - core has no filelog receiver):
+#   the MSI from github.com/open-telemetry/opentelemetry-collector-releases
+#   registers an `otelcol-contrib` Windows service. Put this file at
+#   C:\ProgramData\otelcol-contrib\config.yaml and:
+#     Restart-Service otelcol-contrib
+#
+# EDIT the three <PLACEHOLDERS> below. All three are in config.json's sentry
+# block and come off the project DSN, which reads
+#   https://<PUBLIC_KEY>@<INGEST_HOST>/<PROJECT_ID>
+# Copy INGEST_HOST verbatim: newer orgs carry a region
+# (o123.ingest.us.sentry.io), older ones do not. The key is public by design (it ships
+# inside client apps), so unlike Alloy's Loki token it is not an environment
+# variable.
+#
+# When shipping stops silently, the Windows Application event log is where the
+# collector says why - same lesson as Alloy's E2 401, which sat there unnoticed
+# for hours.
+
+extensions:
+  # Read offsets survive a service restart. Without this the receiver treats
+  # every file as new on start, seeks to the end, and silently loses whatever
+  # was written while the collector was down.
+  file_storage:
+    directory: C:\ProgramData\otelcol-contrib\storage
+
+receivers:
+  filelog:
+    # EDIT THIS. Do not guess the path - print it on the K15 with:
+    #   cd %USERPROFILE%\Desktop\slopstation\k15
+    #   python -c "import events; print(events.LOG_DIR)"
+    #
+    # The glob is k15-*.jsonl, so blind-suite runs writing test-*.jsonl never
+    # leave the machine. events.py moves anything older than two days into
+    # logs/archive/, which this does not match - that bounds both the backfill
+    # after an outage and the number of files being watched.
+    include: [ "C:/Users/minipc/Desktop/slopstation/k15/logs/k15-*.jsonl" ]
+    storage: file_storage
+    operators:
+      - type: json_parser
+        # The emitter's own UTC stamp, not the moment the collector read the
+        # line: a shipper that was down would otherwise backfill everything
+        # stamped "now" and lose the ordering. %L is milliseconds - events.py
+        # writes exactly three digits.
+        timestamp:
+          parse_from: attributes.ts
+          layout_type: strptime
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        # info/warn/error is the whole vocabulary (events.py) and all three are
+        # names the severity parser already knows. This is what makes
+        # `severity:error` work in Sentry rather than only `level:error`.
+        severity:
+          parse_from: attributes.level
+
+processors:
+  batch:
+
+exporters:
+  otlphttp/sentry:
+    # Set in full: Sentry's path is not the endpoint + "/v1/logs" that the
+    # exporter would otherwise build.
+    logs_endpoint: https://<INGEST_HOST>/api/<PROJECT_ID>/integration/otlp/v1/logs
+    headers:
+      x-sentry-auth: "sentry sentry_key=<PUBLIC_KEY>"
+    compression: gzip
+    # proto, matching Sentry's own published collector config. Their OTLP
+    # ingest is open beta and does not document accepting JSON.
+    encoding: proto
+
+service:
+  extensions: [ file_storage ]
+  pipelines:
+    logs:
+      receivers: [ filelog ]
+      processors: [ batch ]
+      exporters: [ otlphttp/sentry ]
+  # A dead uplink costs telemetry and nothing else: the collector retries, and
+  # nothing in the voice or chord lane waits on it. Lane liveness does not ride
+  # this path at all - see k15/checkin.py.

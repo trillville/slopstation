@@ -1,0 +1,75 @@
+# OpenTelemetry Collector (contrib) - gaming PC log shipper to Sentry. Same
+# install and the same three edits as the K15 copy
+# (k15/otelcol/config.yaml.example has the setup notes); only the paths and
+# the second source differ.
+#
+# Two streams, exactly as the Alloy config splits them:
+#
+#   pc-YYYYMMDD.jsonl   the MILESTONES - enter_start, profile_applied,
+#                       puck_claimed, ready, enter_failed, exit_done.
+#                       Structured, carries the turn id; what dashboards count
+#                       and alerts fire on. pc-dispatch-YYYYMMDD.jsonl is the
+#                       same shape from Dispatch.ps1 (lane=dispatch), in its
+#                       own file because it writes elevated.
+#
+#   enter-*.log etc.    the NARRATIVE - Start-Transcript's full capture of the
+#                       run, shipped as free text under lane=pc-transcript.
+#                       Filename carries the turn id.
+#
+# One Sentry project takes both machines, so a turn still reads as one story
+# in one query.
+
+extensions:
+  file_storage:
+    directory: C:\ProgramData\otelcol-contrib\storage
+
+receivers:
+  # Both structured streams: pc-*.jsonl already matches pc-dispatch-*.jsonl.
+  filelog/events:
+    include: [ "C:/CouchGaming/logs/pc-*.jsonl" ]
+    storage: file_storage
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.ts
+          layout_type: strptime
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        severity:
+          parse_from: attributes.level
+
+  filelog/transcripts:
+    include: [ "C:/CouchGaming/logs/*.log" ]
+    storage: file_storage
+    # start_at beginning for the same reason the Alloy config has no
+    # tail_from_end here: a transcript is written and CLOSED in about ten
+    # seconds, so a receiver that seeks to the end of a new file ships
+    # nothing. Backfill is bounded at the source instead - Clear-OldLogs moves
+    # transcripts older than two days into logs\archive\, out of this glob.
+    start_at: beginning
+    # No parser: a transcript is prose, so the line is the log body. These
+    # four stand in for the labels the Alloy side hard-codes.
+    attributes:
+      service: gamepc
+      lane: pc-transcript
+      env: prod
+      level: info
+
+processors:
+  batch:
+
+exporters:
+  otlphttp/sentry:
+    # EDIT THESE - the same three values as the K15 copy.
+    logs_endpoint: https://<INGEST_HOST>/api/<PROJECT_ID>/integration/otlp/v1/logs
+    headers:
+      x-sentry-auth: "sentry sentry_key=<PUBLIC_KEY>"
+    compression: gzip
+    encoding: proto
+
+service:
+  extensions: [ file_storage ]
+  pipelines:
+    logs:
+      receivers: [ filelog/events, filelog/transcripts ]
+      processors: [ batch ]
+      exporters: [ otlphttp/sentry ]

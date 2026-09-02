@@ -181,7 +181,7 @@ def stub_everything():
     events.start_heartbeat = lambda lane, **kw: None
     cglib.rotate_log = lambda: None
     cglib.load_secrets = lambda: dict(SECRETS)
-    tracing.setup = lambda cfg, secrets, log: False
+    tracing.setup = lambda cfg, log: False
     announce.Announcer = FakeAnnouncer
     operations.OperationStore = FakeOperationStore
     operations_monitors.SteamMonitor = FakeSteamMonitor

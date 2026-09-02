@@ -730,6 +730,34 @@ def check_telemetry():
     except Exception as e:
         report(WARN, "log shipper", f"could not query ({e})", "")
 
+    # The Sentry shipper, and the check-in threads. Both rows appear only once
+    # config.json has a sentry block: before that this machine is not on Sentry
+    # at all and an absent collector is not news.
+    try:
+        import checkin
+        if checkin.sentry_config(cglib.config()):
+            out = subprocess.run(["sc", "query", "otelcol-contrib"],
+                                 capture_output=True, text=True,
+                                 timeout=10).stdout
+            if "RUNNING" in out:
+                report(PASS, "sentry shipper", "otelcol-contrib service running")
+            elif "STOPPED" in out:
+                report(WARN, "sentry shipper", "otelcol-contrib STOPPED",
+                       "Start-Service otelcol-contrib - nothing reaches Sentry "
+                       "meanwhile")
+            else:
+                report(WARN, "sentry shipper", "otelcol-contrib not installed",
+                       "config.json names a Sentry project but nothing ships "
+                       "to it; see otelcol/config.yaml.example")
+            # Liveness does NOT ride the shipper: the lanes check in over their
+            # own HTTP, so this row is about configuration, not reachability.
+            # A dead lane is Sentry's missed check-in to report, not ours.
+            report(PASS, "sentry check-ins",
+                   f"configured ({checkin.slug('listener')}, "
+                   f"{checkin.slug('voice')})")
+    except Exception as e:
+        report(WARN, "sentry shipper", f"could not check ({e})", "")
+
     # SMART needs Administrator for raw device access, so it is a service and
     # not part of any lane. A rebuilt K15 has it absent until someone registers
     # it by hand.

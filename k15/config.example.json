@@ -13,6 +13,14 @@
   "tvIdleCmd":   "hdmi1",
   "tvOffWhenDone": true,
 
+  "_sentry": "Telemetry. All three read off the project DSN https://<publicKey>@o<orgId>.ingest.sentry.io/<projectId>. The key is public by design (it ships inside client apps) and rides the cron check-in URL, so it lives here and not in secrets.json. ingestHost is the DSN's own hostname, copied verbatim - newer orgs carry a region (o<orgId>.ingest.us.sentry.io) and older ones do not; leave it empty for the regionless default. Optional and NOT in REQUIRED_CONFIG: with the block absent the lanes run exactly as before, which is what lets a deploy land before this machine is touched.",
+  "sentry": {
+    "orgId": "",
+    "projectId": "",
+    "publicKey": "",
+    "ingestHost": ""
+  },
+
   "media": {
     "enabled": false,
     "_enabled": "Set true only after the sidecars, roots, quality profiles, and Radarr/Sonarr API keys are configured.",

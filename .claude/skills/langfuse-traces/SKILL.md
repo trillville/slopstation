@@ -1,6 +1,6 @@
 ---
 name: langfuse-traces
-description: Read agent traces from Langfuse - what the voice assistant actually heard, said, which tools it called with what arguments, how long each stage took, and what it cost. Use when asked why the assistant answered a certain way, which tool it reached for (or failed to), why a reply was slow, what a conversation cost or how many tokens it used, whether the grammar or the LLM handled something, or to review agent behaviour and conversation quality. Complements the grafana-logs skill: that one is for ops (launches, crashes, liveness), this one is for what the model did.
+description: Read agent traces from Langfuse - what the voice assistant actually heard, said, which tools it called with what arguments, how long each stage took, and what it cost. Use when asked why the assistant answered a certain way, which tool it reached for (or failed to), why a reply was slow, what a conversation cost or how many tokens it used, whether the grammar or the LLM handled something, or to review agent behaviour and conversation quality. Complements the grafana-logs skill: that one is for ops (launches, crashes, liveness), this one is for what the model did. LEGACY during the Sentry migration: prefer the sentry-traces skill, and use this one only for sessions from before the cutover.
 ---
 
 # Reading agent traces
