@@ -391,7 +391,7 @@ def main():
     tlog = cglib.CapturingLog("voice")
     calls = {"n": 0}
     def spy(kind, query, status=None): calls["n"] += 1
-    _saved_span, assistant.tracing.tool_span = assistant.tracing.tool_span, spy
+    _saved_span, assistant.sentry.tool_span = assistant.sentry.tool_span, spy
     schemas = assistant.function_schemas(
         {"get_now_playing": lambda a: {"ok": True, "game": "Hades"},
          "launch_game": boom}, tlog)
@@ -400,7 +400,7 @@ def main():
         async def result_callback(self, out): pass
     for s in schemas:
         _a.run(s.handler(P2()))
-    assistant.tracing.tool_span = _saved_span
+    assistant.sentry.tool_span = _saved_span
     # Order follows TOOL_DEFS, not the impls dict, so key by tool name.
     rec = {r["tool"]: r for r in tlog.records if r.get("event") == "tool_call"}
     assert set(rec) == {"get_now_playing", "launch_game"}, rec   # the raiser too

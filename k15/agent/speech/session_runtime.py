@@ -12,7 +12,7 @@ import cglib
 from agent.tools import library
 from agent.tools import titles
 from agent.telemetry import traces
-from agent.telemetry import tracing
+from agent.telemetry import sentry
 
 log = cglib.make_log("voice")
 
@@ -295,7 +295,7 @@ class Session:
         # enable_metrics is what populates token counts and time to first
         # byte in the spans;
         # enable_tracing belongs on PipelineWorker, not PipelineTask.
-        tracing_on = tracing.is_on()
+        tracing_on = sentry.is_on()
         worker = PipelineWorker(
             Pipeline(stages),
             params=PipelineParams(audio_in_sample_rate=16000,
@@ -304,10 +304,10 @@ class Session:
             enable_rtvi=False,
             enable_tracing=tracing_on,
             enable_turn_tracking=tracing_on,
-            # Pipecat's conversation id IS our session id: a Langfuse trace
-            # and the JSONL lines around it join on this value.
-            conversation_id=tracing.conversation_id() if tracing_on else None,
-            additional_span_attributes=tracing.span_attributes() if tracing_on else None,
+            # Pipecat's conversation id IS our session id: a Sentry
+            # Conversation and the JSONL lines around it join on this value.
+            conversation_id=sentry.conversation_id() if tracing_on else None,
+            additional_span_attributes=sentry.span_attributes() if tracing_on else None,
             idle_timeout_secs=voice["holdWindowS"],
             # The real start frame comes from the turns resolver; the proposal
             # is Flux's own push and resets the clock even if that wiring
@@ -414,7 +414,7 @@ class Session:
             # tools: a web_search never reaches the context, so the model
             # cannot tell that it searched.
             from agent.brain import llm_audit
-            if llm_audit.install(llm, log, tracing=tracing, context=self.context):
+            if llm_audit.install(llm, log, spans=sentry, context=self.context):
                 log("lane_up", what="search_audit", tools=len(native))
             else:
                 log.warn("lane_disabled", what="search_audit",

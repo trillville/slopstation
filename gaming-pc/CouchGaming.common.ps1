@@ -72,7 +72,7 @@ function Write-CgEvent {
         $rec.host = $env:COMPUTERNAME
         $rec.dur_ms = [int]$script:CgStopwatch.Elapsed.TotalMilliseconds
         # A caller field must never overwrite an emitter-owned key (they are
-        # Loki labels), so it is prefixed rather than dropped.
+        # the log attributes alerts select on), so it is prefixed rather than dropped.
         $owned = @('ts','level','env','service','lane','event','host')
         foreach ($k in $Fields.Keys) {
             if ($owned -contains $k) { $rec["f_$k"] = $Fields[$k] }
@@ -371,7 +371,7 @@ function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | O
 # Transcript retention; called from Office-Safety (logon) and Wake-Safety (wake).
 function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
     # Transcripts and daily jsonl move to archive\ after $ArchiveAfterDays and
-    # are deleted at $Days. The move is for the SHIPPER: Alloy tails every file
+    # are deleted at $Days. The move is for the SHIPPER: it tails every file
     # its glob matches at ~0.04% of a core each (110 finished files was ~4.5%),
     # and only a running transcript or today's jsonl can still grow.
     $archive = Join-Path $CG.LogDir 'archive'

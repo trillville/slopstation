@@ -60,7 +60,7 @@ class _Tee:
                 return
 
 
-def install(service, log, tracing=None, context=None):
+def install(service, log, spans=None, context=None):
     """Wrap `service`'s OpenAI client so server-side searches are recorded.
     Fail-soft: a Pipecat internal that has moved leaves the service untouched
     and voice runs on. True if the audit is live."""
@@ -87,9 +87,9 @@ def install(service, log, tracing=None, context=None):
         status = getattr(item, "status", None)
         seen.append(query)
         log("web_search", query=query[:300], kind=kind, status=status)
-        if tracing is not None:
+        if spans is not None:
             # Nests under Pipecat's open span for this LLM call.
-            tracing.tool_span(kind, query, status)
+            spans.tool_span(kind, query, status)
 
     async def audited(**params):
         response = await create(**params)

@@ -156,7 +156,7 @@ def main():
     assert a == b, f"owned-key drift: Dispatch {a} vs common {b}"
     print(f"  owned keys: {a}")
 
-    # 6. The ts both emitters write is what Alloy's timestamp stage parses and
+    # 6. The ts both emitters write is what the collector's timestamp parser reads and
     #    events.emit produces; the vdf root regex is one text in both resolvers.
     ts = [re.search(r"ToUniversalTime\(\)\.ToString\('([^']+)'\)",
                     text[text.index(f"function {fn}"):]).group(1)

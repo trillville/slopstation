@@ -1,0 +1,126 @@
+# OpenTelemetry Collector (contrib) - gaming PC log shipper. Same MSI and the
+# same two EDIT ME values as the K15 copy (k15/otelcol/config.yaml.example has
+# the install notes); only the paths and the second source differ.
+#
+# Two streams:
+#
+#   pc-YYYYMMDD.jsonl   the MILESTONES - enter_start, profile_applied,
+#                       puck_claimed, ready, enter_failed, exit_done.
+#                       Structured, carries the turn id; what dashboards count
+#                       and alerts fire on. pc-dispatch-YYYYMMDD.jsonl is the
+#                       same shape from Dispatch.ps1 (lane=dispatch), in its
+#                       own file because it writes elevated.
+#
+#   enter-*.log etc.    the NARRATIVE - Start-Transcript's full capture of the
+#                       run, shipped as free text under lane="pc-transcript".
+#                       The filename carries the turn id.
+#
+# COST: ~0.04% of one core per TAILED FILE, whether or not that file ever
+# changes. Measured 2026-08-11 by A/B on a single live process under Alloy:
+#
+#    53 files   2.11 / 2.96 / 1.72 %   mean 2.26
+#   103 files   4.29 / 5.46 / 3.28 %   mean 4.34     (+50 empty .log files)
+#    53 files   back to ~2-3 %          (files removed again)
+#
+# +50 files = +2.08% of a core = 0.042%/file. The cost is POLLING, not
+# throughput - the added files were empty - so the FILE COUNT in these globs is
+# what matters, and it is why Clear-OldLogs archives.
+#
+# MEASUREMENT TRAP: Get-Process / .TotalProcessorTime / .CPU return ZERO for a
+# service, silently - it runs as an account a non-elevated shell cannot read
+# processor time from, and the API reports 0.00% rather than raising. Use
+# Win32_Process (UserModeTime + KernelModeTime, 100ns units) sampled twice,
+# which works unelevated:
+#
+#   $q="SELECT UserModeTime,KernelModeTime FROM Win32_Process WHERE Name='otelcol-contrib.exe'"
+#   $a=Get-CimInstance -Query $q; sleep 60; $b=Get-CimInstance -Query $q
+#   (($b.UserModeTime+$b.KernelModeTime-$a.UserModeTime-$a.KernelModeTime)/1e7)/60*100
+#
+# Do not use lifetime CPU divided by uptime: it averages in the startup file
+# walk and reads high for the first half hour after a restart.
+#
+# Clear-OldLogs moves transcripts and finished pc-*.jsonl out of these globs
+# after two days. Two days is sized for THE SHIPPER BEING DOWN, not for
+# appendability (every producer is a Task Scheduler singleton, so at most one
+# file per tag is ever open and seconds would cover that). Archive-on-close
+# would move a file out of the glob before it was read whenever the service is
+# stopped or the uplink is rejecting writes. Shorten it only alongside an alert
+# that catches a dead shipper faster than the new window.
+
+extensions:
+  file_storage:
+    directory: C:\ProgramData\otelcol-contrib\storage
+
+receivers:
+  # ---------------------------------------------------------------- milestones
+  filelog/pc_events:
+    include:
+      - C:/CouchGaming/logs/pc-*.jsonl
+    start_at: beginning
+    storage: file_storage
+    poll_interval: 10s
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.ts
+          # Write-CgEvent and events.emit produce the same format;
+          # test_ps_parse asserts they never drift apart.
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05.000Z07:00'
+        severity:
+          parse_from: attributes.level
+      - type: copy
+        from: attributes.event
+        to: body
+
+  # --------------------------------------------------------------- transcripts
+  filelog/pc_transcripts:
+    include:
+      - C:/CouchGaming/logs/*.log
+    # NO start_at: end here. A transcript is written and CLOSED in about ten
+    # seconds while the poll interval is 10s, so the collector would discover
+    # every new file already complete, seek past it and ship nothing. Backfill
+    # is bounded at the source instead, by Clear-OldLogs.
+    start_at: beginning
+    storage: file_storage
+    poll_interval: 10s
+    attributes:
+      # Free text, so there is nothing to parse out - the labels are constants.
+      lane: pc-transcript
+      env: prod
+      service: gamepc
+
+processors:
+  resource/gamepc:
+    attributes:
+      - key: service.name
+        value: gamepc
+        action: upsert
+  batch:
+    timeout: 10s
+
+exporters:
+  otlphttp/sentry:
+    # EDIT ME (both lines) - the same project as the K15, so one turn is still
+    # one query across both machines.
+    logs_endpoint: https://oORGID.ingest.us.sentry.io/api/PROJECTID/integration/otlp/v1/logs
+    headers:
+      x-sentry-auth: "sentry sentry_key=PUBLICKEY"
+    compression: gzip
+    encoding: proto
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs:
+      receivers: [filelog/pc_events, filelog/pc_transcripts]
+      processors: [resource/gamepc, batch]
+      exporters: [otlphttp/sentry]
+  telemetry:
+    logs:
+      level: warn

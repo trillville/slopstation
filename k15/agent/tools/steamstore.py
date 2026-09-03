@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # k15/
 import cglib
 from agent.tools import library
 
-# The lane is a Loki label: store events ship as "library" (test_event_names
+# The lane is a log attribute: store events ship as "library" (test_event_names
 # pins the set).
 log = cglib.make_log("library")
 

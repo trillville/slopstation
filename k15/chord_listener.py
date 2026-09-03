@@ -1,6 +1,7 @@
 import subprocess, sys, time
 import hid
 
+import checkin
 import cglib
 import events
 import haptics
@@ -115,6 +116,10 @@ def main():
     # block in hid.read or the 3 s stand-by sleep, and a heartbeat that stopped
     # while the Puck is claimed would page during every normal session.
     events.start_heartbeat("listener")
+    # The heartbeat proves the lane is alive TO THE SHIPPER; this proves it to
+    # Sentry directly, so a dead collector cannot make a dead lane look
+    # healthy. No-ops without a sentryDsn.
+    checkin.start("listener")
 
     puck, held, armed = Puck(), None, False
     last_busy = 0.0

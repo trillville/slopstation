@@ -688,6 +688,64 @@ def check_voice_agent():
         "run agent\\Start-Voice.bat or the startup shortcut")
 
 
+def _tail_records(path, bytes_back=400_000):
+    """The last stretch of a daily JSONL as parsed records. A partial first
+    line from the seek is dropped, and an unparseable one is skipped: this is
+    a diagnosis, not a parser test."""
+    start, raw = 0, []
+    try:
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            start = max(0, f.tell() - bytes_back)
+            f.seek(start)
+            raw = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in (raw[1:] if start else raw):
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
+def check_sentry(today):
+    """The DSN, and whether each lane's cron check-in is landing.
+
+    A rejected check-in is the failure worth naming: every Sentry plan
+    includes ONE cron monitor, so without a pay-as-you-go budget the second
+    lane's monitor never registers - which in Sentry looks exactly like a lane
+    that never started."""
+    import checkin
+    try:
+        dsn = cglib.load_config().get("sentryDsn")
+    except Exception:
+        dsn = None
+    parsed = checkin.parse_dsn(dsn)
+    if parsed is None:
+        report(WARN, "sentry", "sentryDsn not set in config.json",
+               "telemetry stays local; see k15/config.example.json")
+        return
+    report(PASS, "sentry", f"project {parsed[1]} at {parsed[0]}")
+
+    # From the event stream, so this costs no network and cannot create a
+    # false check-in for a lane that is actually down.
+    seen = {}
+    for rec in _tail_records(today):
+        if rec.get("event") in ("checkin", "checkin_failed"):
+            seen[rec.get("lane")] = rec.get("event")
+    failing = sorted(lane for lane, e in seen.items() if e == "checkin_failed")
+    if failing:
+        report(WARN, "cron check-in", f"rejected for {', '.join(failing)}",
+               "a second monitor needs a PAYG budget - Sentry billing settings")
+    elif seen:
+        report(PASS, "cron check-in", f"accepted for {', '.join(sorted(seen))}")
+    else:
+        report(WARN, "cron check-in", "no lane has checked in today",
+               "expected within a minute of a lane starting; reload with Start-K15.bat")
+
+
 def check_telemetry():
     """Event stream written, and anything shipping it? WARN-only."""
     import events
@@ -715,20 +773,22 @@ def check_telemetry():
     except OSError:
         pass
 
-    # The shipper. Absent is expected until Alloy is installed.
+    # The shipper. Absent is expected until the collector is installed.
     try:
-        out = subprocess.run(["sc", "query", "Alloy"], capture_output=True,
-                             text=True, timeout=10).stdout
+        out = subprocess.run(["sc", "query", "otelcol-contrib"],
+                             capture_output=True, text=True, timeout=10).stdout
         if "RUNNING" in out:
-            report(PASS, "log shipper", "Alloy service running")
+            report(PASS, "log shipper", "otelcol-contrib service running")
         elif "STOPPED" in out:
-            report(WARN, "log shipper", "Alloy installed but STOPPED",
-                   "Start-Service Alloy - nothing reaches Grafana meanwhile")
+            report(WARN, "log shipper", "otelcol-contrib installed but STOPPED",
+                   "Start-Service otelcol-contrib - nothing reaches Sentry meanwhile")
         else:
-            report(WARN, "log shipper", "Alloy not installed",
-                   "events are local-only; see alloy/config.alloy.example")
+            report(WARN, "log shipper", "otelcol-contrib not installed",
+                   "events are local-only; see otelcol/config.yaml.example")
     except Exception as e:
         report(WARN, "log shipper", f"could not query ({e})", "")
+
+    check_sentry(today)
 
     # SMART needs Administrator for raw device access, so it is a service and
     # not part of any lane. A rebuilt K15 has it absent until someone registers

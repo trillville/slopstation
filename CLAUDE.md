@@ -44,7 +44,7 @@ end what is on the TV right now, and someone is usually on the couch.
 So before a command that changes state on a live machine, check that the
 evidence supports that specific action. A symptom that pattern-matches a known
 failure often has a different cause, and the `turn` id exists so you can prove
-which one it is rather than inferring it — the log and trace skills answer most
+which one it is rather than inferring it — the `sentry` skill answers most
 of these questions without touching either machine, so start there.
 
 When the ask is a question or a description of something going wrong, the

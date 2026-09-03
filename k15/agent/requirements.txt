@@ -4,9 +4,16 @@
 # used and re-run tests/ before bumping. The chord listener stays on system
 # python.
 pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.8.1
-# Langfuse's OTLP endpoint is HTTP-only (no gRPC), and pipecat's own tracing
+# Sentry's OTLP endpoint is HTTP-only (no gRPC), and pipecat's own tracing
 # example imports the gRPC exporter - pin http so it cannot resolve by accident.
 opentelemetry-exporter-otlp-proto-http==1.44.0
+# Errors as Issues, plus OTLPIntegration's event linking (an exception lands on
+# the span it broke). NO [opentelemetry-otlp] extra: that pulls
+# opentelemetry-distro, which resolves its own otel versions against the pin
+# above. The integration's imports are already satisfied by that exporter and
+# opentelemetry-sdk - if a future version needs the extra, it raises
+# DidNotEnable and telemetry/sentry.py logs lane_disabled rather than crashing.
+sentry-sdk==2.68.1
 openwakeword==0.6.0
 hassil==3.12.0
 rapidfuzz==3.14.6
