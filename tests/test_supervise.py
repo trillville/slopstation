@@ -116,3 +116,30 @@ def test_start_reloads_what_runs_and_starts_what_does_not(monkeypatch):
 def test_start_needs_the_tasks_registered(monkeypatch):
     monkeypatch.setattr(supervise, "query", lambda lane: None)
     assert supervise.start() == 1
+
+
+def test_stop_refuses_to_claim_a_task_that_did_not_end(monkeypatch):
+    # A quiet True here is a deploy that /Runs into IgnoreNew, then takes the
+    # old instance for its relaunch and reports success with the old code up.
+    monkeypatch.setattr(supervise, "STOP_WAIT_S", 0.05)
+    monkeypatch.setattr(
+        supervise, "_schtasks", lambda *a: _completed(CSV)
+    )  # Running, always
+    with pytest.raises(RuntimeError, match="still running"):
+        supervise.stop("listener")
+
+
+def test_run_raises_when_the_scheduler_refuses(monkeypatch):
+    monkeypatch.setattr(supervise, "_schtasks", lambda *a: _completed("", returncode=1))
+    with pytest.raises(RuntimeError, match="/Run"):
+        supervise.run("voice")
+
+
+def test_start_fails_loudly_when_a_reload_does_not_stop(monkeypatch):
+    monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
+
+    def stop(lane):
+        raise RuntimeError("still running")
+
+    monkeypatch.setattr(supervise, "stop", stop)
+    assert supervise.start() == 1

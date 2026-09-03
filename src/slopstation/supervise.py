@@ -83,23 +83,33 @@ def running(lane: str) -> bool:
 
 
 def stop(lane: str) -> bool:
-    """End the task and wait for the scheduler to agree it has stopped, so a
-    /Run straight after is not refused as a second instance. True when there
-    was something to stop."""
+    """End the task and wait for the scheduler to agree it has stopped. True
+    when there was something to stop; raises when it did not stop in time.
+    Never a quiet True: a caller that went on to /Run would be refused as a
+    second instance (IgnoreNew) and then take the OLD instance for its
+    relaunch - a deploy that reports success with the old code running."""
     if not running(lane):
         return False
     _schtasks("/End", "/TN", TASKS[lane])
     deadline = time.time() + STOP_WAIT_S
-    while running(lane) and time.time() < deadline:
+    while running(lane):
+        if time.time() >= deadline:
+            raise RuntimeError(
+                f"{TASKS[lane]} is still running {STOP_WAIT_S}s after schtasks /End"
+            )
         time.sleep(0.5)
     return True
 
 
-def run(lane: str) -> bool:
-    """Start the task. The scheduler starts it in the session it was
+def run(lane: str) -> None:
+    """Start the task, or raise. The scheduler starts it in the session it was
     registered for, whoever asks - which is what lets the deployer bring a
     lane back."""
-    return _schtasks("/Run", "/TN", TASKS[lane]).returncode == 0
+    r = _schtasks("/Run", "/TN", TASKS[lane])
+    if r.returncode:
+        raise RuntimeError(
+            f"schtasks /Run {TASKS[lane]} failed: {(r.stderr or r.stdout).strip()}"
+        )
 
 
 # --- the wrapper the tasks run --------------------------------------------------
@@ -223,15 +233,19 @@ def start() -> int:
                 f"[start] {name}: {TASKS[name]} is not registered - run Setup-K15-Tasks.ps1"
             )
             return 1
-        if info.get("Status") == "Running":
-            stop(name)
-            run(name)
-            print(f"[start] {name}: reloaded")
-            log("lane_reloaded", what=name, killed=1)
-        else:
-            run(name)
-            print(f"[start] {name}: started")
-            log("lane_started", what=name)
+        try:
+            if info.get("Status") == "Running":
+                stop(name)
+                run(name)
+                print(f"[start] {name}: reloaded")
+                log("lane_reloaded", what=name, killed=1)
+            else:
+                run(name)
+                print(f"[start] {name}: started")
+                log("lane_started", what=name)
+        except RuntimeError as e:
+            print(f"[start] {name}: {e}")
+            return 1
     return 0
 
 
