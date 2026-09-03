@@ -1,0 +1,166 @@
+"""Keeps a lane running: start it, restart it after any exit, and emit the
+transitions so a crash LOOP is alertable.
+
+Replaces three cmd.exe supervisors. They carried this logic in a shell that
+re-reads its own file between lines (so a deploy that moved one killed it
+mid-run), needed an fd-9 redirect for single-instance, and could not print a
+parenthesis inside a parenthesised block.
+
+    slopstation-supervise listener     one lane, in this console
+    slopstation-start                  both lanes, or reload them onto new code
+
+Single instance per lane is a byte lock held for the supervising process's
+lifetime. Windows drops it when the holder dies, so a killed supervisor cannot
+wedge the next one.
+"""
+import argparse
+import hashlib
+import msvcrt
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from slopstation import cglib, paths
+
+RESTART_S = 10
+
+# What each lane runs. Module invocations, not paths: the package is installed.
+LANES = {
+    "listener": [sys.executable, "-m", "slopstation.chord_listener"],
+    "voice": [sys.executable, "-m", "slopstation.agent.voice_agent"],
+}
+
+# Bumping a pin has to install itself on the next launch, the way the old
+# voice supervisor's requirements/deps-ok gate did - CD pulls code, not wheels.
+PINS = ("pyproject.toml", "constraints.txt")
+
+
+def _lock_path(lane):
+    return Path(tempfile.gettempdir()) / f"slopstation-{lane}.lock"
+
+
+def _hold(lane):
+    """The single-instance lock, or None when another supervisor holds it."""
+    handle = open(_lock_path(lane), "w")
+    try:
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def _supervised(lane):
+    """True when a supervisor already holds this lane's lock."""
+    handle = _hold(lane)
+    if handle is None:
+        return True
+    handle.close()
+    return False
+
+
+def _pin_digest():
+    h = hashlib.sha256()
+    for name in PINS:
+        try:
+            h.update((paths.HOME / name).read_bytes())
+        except OSError:
+            return None
+    return h.hexdigest()
+
+
+def _install_if_pins_changed(log):
+    """Reinstall when pyproject or constraints moved since the last success.
+    The sentinel is written only AFTER pip succeeds, so a half-built venv
+    retries on the next launch."""
+    digest = _pin_digest()
+    sentinel = Path(sys.prefix) / "deps-ok"
+    if digest is None or (sentinel.exists()
+                          and sentinel.read_text().strip() == digest):
+        return
+    print("[supervisor] pins changed - installing, takes a minute or two...")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-e",
+                        ".[dev]", "-c", "constraints.txt"], cwd=paths.HOME)
+    if r.returncode:
+        print("[supervisor] pip install failed - fix it and relaunch")
+        return
+    sentinel.write_text(digest)
+    log("deps_installed", what="venv")
+
+
+def supervise(lane, passthrough):
+    """One lane, restarted forever. Returns an exit code only when it could
+    not start at all."""
+    log = cglib.make_log("supervisor")
+    handle = _hold(lane)
+    if handle is None:
+        print(f"[supervisor] another {lane} supervisor is running - close it first")
+        return 1
+    _install_if_pins_changed(log)
+    if lane == "listener":
+        # Once per boot, OUTSIDE the loop: re-running it mid-session would
+        # spawn a second watch loop against the live session lock.
+        subprocess.run([sys.executable, "-m", "slopstation.couch", "reconcile"],
+                       cwd=paths.HOME)
+    log("start", what=lane)
+    while True:
+        code = subprocess.run(LANES[lane] + passthrough, cwd=paths.HOME).returncode
+        print(f"[supervisor] {lane} exited (code {code}) - "
+              f"restarting in {RESTART_S}s")
+        log.warn("restart", what=lane, code=code)
+        time.sleep(RESTART_S)
+
+
+def _kill_agent(lane):
+    """Kill the lane's PROCESS, never its supervisor: the supervisor relaunches
+    it on the next loop, which is what makes this a reload. Name-filtered to
+    python* so the matching powershell - whose own command line contains the
+    needle - cannot match itself."""
+    needle = LANES[lane][-1]
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "$p = @(Get-CimInstance Win32_Process | Where-Object { "
+         f"$_.Name -like 'python*' -and $_.CommandLine -like '*{needle}*' }}); "
+         "$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; "
+         "exit $p.Count"],
+        capture_output=True, text=True)
+    return r.returncode
+
+
+def start(argv=None):
+    """Both lanes on the code on disk right now: start a supervisor that is
+    down, reload one that is up. The Windows startup shortcut and the thing to
+    run after a git pull."""
+    log = cglib.make_log("supervisor")
+    reloaded = False
+    for lane in LANES:
+        if _supervised(lane):
+            killed = _kill_agent(lane)
+            reloaded = True
+            print(f"[start] {lane}: {'stopped' if killed else 'already down'}"
+                  " - its supervisor will bring it back")
+            log("lane_reloaded", what=lane, killed=killed)
+        else:
+            print(f"[start] {lane} down - starting it")
+            log("lane_started", what=lane)
+            subprocess.Popen(
+                [sys.executable, "-m", "slopstation.supervise", lane],
+                cwd=paths.HOME, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    if reloaded:
+        print(f"\n[start] reloaded - each supervisor relaunches its lane "
+              f"within ~{RESTART_S}s.")
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("lane", choices=sorted(LANES),
+                    help="which lane to supervise in this console")
+    args, passthrough = ap.parse_known_args(argv)
+    return supervise(args.lane, passthrough)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -81,6 +81,6 @@ jobs:
       # so the copy that runs is the previous commit's - a broken deploy.py is
       # fixed by hand on the K15, like any deployer.
       - name: deploy and doctor
-        run: python "$env:SLOP_HOME\k15\deploy.py" --sha $env:SHA --wait-minutes $env:WAIT_MINUTES
+        run: & "$env:SLOP_HOME\.venv\Scripts\python.exe" -m slopstation.deploy --sha $env:SHA --wait-minutes $env:WAIT_MINUTES
         env:
           SLOP_HOME: ${{ vars.K15_CHECKOUT || 'C:\Users\minipc\Desktop\slopstation' }}

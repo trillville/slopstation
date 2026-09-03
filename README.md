@@ -92,7 +92,7 @@ two paths:
 2. `assistant.py` handles open-ended requests through typed tools.
 
 Shared room and gaming actions use `dispatch.py`; assistant tools add Steam and
-media integrations. The authenticated text client, `k15/slop.py`, reaches the
+media integrations. The authenticated text client, `src/slopstation/slop.py`, reaches the
 same assistant and tools through `agent/interfaces/text.py`, which builds one
 `agent/brain/backends.py` backend per chat session.
 
@@ -102,19 +102,19 @@ interface over localhost. It owns no assistant state or separate action
 surface. Voice, text, and MCP therefore share media resolution, Steam actions,
 deletion guards, operation status, and turn correlation.
 
-Long-running work is stored in `k15/state/operations.json`. Each record names
+Long-running work is stored in `state/operations.json`. Each record names
 the originating turn, authority, external resource, state, progress, and
 announcement status. Background monitors reconcile active records every 30
 seconds. An unreachable authority becomes `UNKNOWN`, not failed. Terminal
 results remain pending until spoken or retrieved through the assistant.
 
-See [the media runbook](k15/media/README.md) for the Radarr/Sonarr pipeline.
+See [the media runbook](media/README.md) for the Radarr/Sonarr pipeline.
 
 ## Runtime layout
 
 | Area | Host | Runtime | Update path |
 |---|---|---|---|
-| `k15/` | `K15` | Repository clone on the Desktop | The `cd` workflow, or `git pull` then `Start-K15.bat` |
+| `slopstation/` | `K15` | Repository clone on the Desktop | The `cd` workflow, or `git pull` then `Start-Slopstation.bat` |
 | `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | The `cd` workflow, or `gaming-pc\Deploy.ps1` from a PC checkout |
 | `wake-training/` | Gaming PC | Checkout plus external training data | Run in place; GPU required |
 
@@ -132,17 +132,17 @@ correlation suffix; every other command returns `DENIED`.
 
 | Path | Responsibility |
 |---|---|
-| `k15/couch.py`, `chord_listener.py` | Session orchestration and controller input |
-| `k15/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
-| `k15/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
-| `k15/agent/` | The agent lane, a package in its own venv. Only the speech path below needs that venv |
-| `k15/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
-| `k15/agent/brain/` (`assistant.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
-| `k15/agent/tools/` (`media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py`, `library.py`, `steamstore.py`) | Domain tools: Radarr/Sonarr, the durable ledger, the Steam catalogue and store, the TV |
-| `k15/agent/interfaces/` (`text.py`, `remote.py`) | Front-ends: LAN HTTP, and the MCP adapter over localhost |
-| `k15/agent/telemetry/` (`sentry.py`, `genai.py`, `traces.py`) | Sentry wiring, the pipecat-to-Sentry span adapter, and per-turn trace dumps |
-| `k15/agent/tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
-| `k15/media/` | Docker Compose media services and their runbook |
+| `src/slopstation/couch.py`, `chord_listener.py` | Session orchestration and controller input |
+| `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
+| `src/slopstation/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
+| `src/slopstation/agent/` | The voice/assistant half of the package |
+| `src/slopstation/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
+| `src/slopstation/agent/brain/` (`assistant.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
+| `src/slopstation/agent/tools/` (`media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py`, `library.py`, `steamstore.py`) | Domain tools: Radarr/Sonarr, the durable ledger, the Steam catalogue and store, the TV |
+| `src/slopstation/agent/interfaces/` (`text.py`, `remote.py`) | Front-ends: LAN HTTP, and the MCP adapter over localhost |
+| `src/slopstation/agent/telemetry/` (`sentry.py`, `genai.py`, `traces.py`) | Sentry wiring, the pipecat-to-Sentry span adapter, and per-turn trace dumps |
+| `tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
+| `media/` | Docker Compose media services and their runbook |
 | `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
 | `wake-training/` | Wake-word training and evaluation |
 
@@ -152,8 +152,8 @@ correlation suffix; every other command returns `DENIED`.
 
 1. Clone the repository to `C:\Users\minipc\Desktop\slopstation` and ensure
    Python is on `PATH`.
-2. Copy `k15\config.example.json` to `k15\config.json` and
-   `k15\secrets.template.json` to `k15\secrets.json`. Set device names,
+2. Copy `config.example.json` to `config.json` and
+   `secrets.template.json` to `secrets.json`. Set device names,
    addresses, API keys, and local tokens; both destination files are ignored by
    Git. `tvIp` enables TV-state evidence and is required for volume ducking.
 3. Install the VirtualHere server and give the K15 a DHCP reservation. Allow
@@ -167,13 +167,19 @@ correlation suffix; every other command returns `DENIED`.
    clients is normal while the gaming PC sleeps.
 4. Connect the TV’s Ex-Link adapter. The configured COM port must identify the
    Ex-Link device.
-5. Run `k15\Start-K15.bat`. The first voice start creates its virtual
-   environment and installs the pinned dependencies.
-6. Put a shortcut to `Start-K15.bat` in `shell:startup`.
+5. Create the environment and install the package:
+
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
+   ```
+
+6. Run `Start-Slopstation.bat`, and put a shortcut to it in `shell:startup`.
+   Later launches reinstall by themselves whenever the pins change.
 7. If TV volume ducking is enabled, run
-   `.venv\Scripts\python tools\tv_remote.py pair` from `k15\agent` and accept the TV
-   prompt.
-8. Run `python doctor.py` from `k15` until no checks fail.
+   `.venv\Scripts\python -m slopstation.agent.tools.tv_remote pair`
+   and accept the TV prompt.
+8. Run `.venv\Scripts\slopstation-doctor` until no checks fail.
 
 #### Optional MCP access
 
@@ -185,8 +191,8 @@ Claude app → Cloudflare tunnel → interfaces/remote.py → interfaces/text.py
 ```
 
 1. Set real `textInterfaceToken` and `remoteInterfaceToken` values in
-   `k15\secrets.json`; each should contain at least 32 random bytes.
-2. Enable both `textInterface` and `remoteInterface` in `k15\config.json`.
+   `secrets.json`; each should contain at least 32 random bytes.
+2. Enable both `textInterface` and `remoteInterface` in `config.json`.
    Keep the remote interface on `127.0.0.1:8766`. The text interface may also
    remain on localhost unless another LAN client needs it.
 3. Route a Cloudflare named tunnel to `http://127.0.0.1:8766`, install
@@ -195,7 +201,7 @@ Claude app → Cloudflare tunnel → interfaces/remote.py → interfaces/text.py
    `160.79.104.0/21`).
 4. Add a Claude custom connector at `https://<host>/mcp` using
    `Authorization: Bearer <remoteInterfaceToken>`.
-5. Reload with `Start-K15.bat`, then run `python doctor.py`. The voice agent
+5. Reload with `Start-Slopstation.bat`, then run `.venv\Scripts\slopstation-doctor`. The voice agent
    hosts both local interfaces automatically when they are enabled.
 
 The outer token authenticates the connector and never reaches the assistant;
@@ -224,7 +230,7 @@ make each request self-contained.
    ```
 
 Media acquisition is optional and has a separate ordered bootstrap in
-[`k15/media/README.md`](k15/media/README.md).
+[`media/README.md`](media/README.md).
 
 ## Continuous deployment
 
@@ -259,7 +265,7 @@ Runner setup, once per machine:
    they reach neither the Puck nor the audio devices, and the PC's doctor reads
    display state that session 0 does not have.
 3. On the K15 the runner never checks the repository out: it runs
-   `k15\deploy.py` from the live checkout, which must already be on `main`,
+   `python -m slopstation.deploy` from the live checkout, which must already be on `main`,
    clean, and current. Set the repository variable `K15_CHECKOUT` if that
    checkout is not at `C:\Users\minipc\Desktop\slopstation`.
 
@@ -269,7 +275,7 @@ starts a lane: an agent that does not come back is reported, not restarted. The
 chord lane must be running when it finishes - `doctor.py` only WARNs about a
 dead one, so without that check a deploy onto a K15 with no supervisors would
 report success. Where `media.enabled` is true it also runs
-`k15\media\Start-Media.ps1` before the doctor: containers keep the compose
+`media\Start-Media.ps1` before the doctor: containers keep the compose
 file they were created with, so a landed `compose.yaml` edit is inert until
 something runs `up`. A stack that will not come up fails the deploy.
 
@@ -279,12 +285,11 @@ After updating the K15 checkout:
 
 ```powershell
 git pull
-cd k15
-.\Start-K15.bat
-python doctor.py
+.\Start-Slopstation.bat
+.venv\Scripts\slopstation-doctor
 ```
 
-`Start-K15.bat` starts missing supervisors or reloads only their child agents.
+`Start-Slopstation.bat` starts missing supervisors or reloads only their child agents.
 It does not replace an active couch-session watch loop, and it does not start
 the optional media Compose stack. Docker Desktop restores those containers
 independently after their initial setup.
@@ -293,15 +298,14 @@ Useful commands:
 
 ```powershell
 # General text interface
-python k15\slop.py
-python k15\slop.py "what is downloading?"
+python -m slopstation.slop
+python -m slopstation.slop "what is downloading?"
 
 # Durable Steam and media work
-cd k15\agent
-.venv\Scripts\python tools\operations.py list
-.venv\Scripts\python tools\operations.py list --active
-.venv\Scripts\python tools\operations.py show <operation-id>
-.venv\Scripts\python tools\operations.py reconcile
+.venv\Scripts\python -m slopstation.agent.tools.operations list
+.venv\Scripts\python -m slopstation.agent.tools.operations list --active
+.venv\Scripts\python -m slopstation.agent.tools.operations show <operation-id>
+.venv\Scripts\python -m slopstation.agent.tools.operations reconcile
 ```
 
 `tools\operations.py abandon <operation-id> --execute` performs authoritative media
@@ -335,15 +339,15 @@ attribute model and the event vocabulary.
 
 ## Tests
 
-Run the blind suite as scripts, not through pytest:
-
 ```powershell
-cd k15\agent
-.venv\Scripts\python tests\run.py
+.venv\Scripts\pytest
 ```
 
-Hardware-bound Steam and audio tests skip when their devices are absent;
-`--all` forces them. GitHub Actions runs the blind suite and mypy on Windows for
+Hardware-bound Steam and audio tests skip themselves when the machine lacks
+what they need: a local Steam install for the library tests, and
+`CG_TEST_AUDIO=1` on the K15 for the ones that open real devices. GitHub
+Actions runs the suite and mypy on Windows for every pull request and every
+push to `main`.
 every pull request and every push to `main`.
 
 ## Fixed rig contract

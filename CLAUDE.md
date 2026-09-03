@@ -31,35 +31,39 @@ deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
 
 ## Running the tests
 
-The blind suite runs as scripts, not pytest — `events._env()` detects tests
-by `sys.argv[0]`, so pytest would mislabel events as env=prod:
+    .venv\Scripts\pytest      (from the repo root; on the K15 set
+                               CG_TEST_AUDIO=1 to include the audio tests)
 
-    .venv\Scripts\python tests\run.py      (from k15\agent\; --all forces the
-                                            machine-bound tests; on the K15
-                                            set CG_TEST_AUDIO=1 first)
+`tests/conftest.py` does the setup every test used to import `_bootstrap` for:
+CG_ENV, tempdirs for logs and state, a config fixture, and - because pytest
+shares one process where the old runner gave each file its own - restoring
+whatever a test rebinds. Patch inside a test or a fixture, never at module
+scope: module scope runs during collection, before any fixture, and leaks into
+the whole session.
 
-Every test that touches the K15 modules begins with `import _bootstrap`
-(`test_ps_parse` is stdlib-only). The rules above are tests:
-`test_event_names` (the frozen vocabulary - a new event is added there, a
-rename is a deliberate edit there), `test_imports` (imports without config or
-hardware; every `module.attr` resolves - run it after any move), `test_lint`
-(pyflakes + the lane rule from the AST), `test_ps_parse` (every `.ps1` parses;
-the PC-side contract agrees with itself; every gaming-pc script is in
-`Deploy.ps1`'s set - one that is not deploys green and is simply absent).
-`test_turn.py` reads the SHIPPING `Dispatch.ps1`, so gaming-pc regex changes
-are drilled from here.
+Several rules here are tests: `test_event_names` (the frozen vocabulary - a new
+event is added there, a rename is a deliberate edit there), `test_imports`
+(imports without config or hardware; every `module.attr` resolves - run it
+after any move), `test_lint` (pyflakes, plus the frozen subpackage list),
+`test_ps_parse` (every `.ps1` parses; the PC-side contract agrees with itself;
+every gaming-pc script is in `Deploy.ps1`'s set - one that is not deploys green
+and is simply absent). `test_turn.py` reads the SHIPPING `Dispatch.ps1`, so
+gaming-pc regex changes are drilled from here.
 `test_library` needs a local Steam (the gaming PC); `test_session_pipeline`
-needs audio devices (the K15). The python in `ci.yml` and `mypy.ini` MIRRORS
-the K15's interpreter and is not a floor: `constraints.txt` is frozen from that
-venv, so a cp313 pin has no wheel for an older CI and the install fails.
+needs audio devices (the K15); both skip themselves. The python in `ci.yml` and
+`pyproject.toml` MIRRORS the K15's interpreter and is not a floor:
+`constraints.txt` is frozen from that venv, so a cp313 pin has no wheel for an
+older CI and the install fails.
 
 ## Deploying
 
-- K15: `git pull`, then `Start-K15.bat` (reloads both lanes on current code).
+- K15: `git pull`, then `Start-Slopstation.bat` (reloads both lanes on current
+  code).
 - Gaming PC: `gaming-pc\Deploy.ps1` from a checkout on the PC — never
   hand-copy; it ships the set atomically and stamps `build-id`, which
   `doctor.py` compares (`ssh gamepc version`) to catch skew.
-- After either: `python doctor.py` on the K15 should end `0 fail`.
+- After either: `.venv\Scripts\slopstation-doctor` on the K15 should end
+  `0 fail`.
 - CD (`.github/workflows/cd.yml`) does both of the above and both
   doctors on self-hosted runners after a green `ci` on `main`. It parks
   while a session is live and never rolls back. Hand-deploying stays
@@ -85,23 +89,17 @@ diagnosis - but nobody fixes it automatically.
 
 - **`constraints.txt`** is a `pip freeze` on the K15, committed by hand: it
   records the cp313 venv's transitives, and no other machine can produce it.
-  The voice supervisor's install gate compares `requirements.txt` ALONE
-  against `.venv\deps-ok`, so a requirements change installs itself on the
-  next CD deploy, while a constraints-only change that is meant to alter what
-  gets installed must ride a `requirements.txt` touch. Regenerating it to
-  match a venv that already resolved needs no touch. Use
-  `k15/agent/refreeze.py`, never a hand-rolled `pip freeze >`: that writes
-  pins only and eats the header, and PowerShell 5.1's `>` writes UTF-16.
-- **System-python packages** (`k15/system-requirements.txt`) sit outside
-  every venv. `doctor.py`'s import rows are what catch a missing one.
+  The supervisor's install gate hashes `pyproject.toml` AND `constraints.txt`
+  against a `deps-ok` sentinel in the venv, so a change to either installs
+  itself on the next deploy. Use `slopstation/agent/refreeze.py`, never a
+  hand-rolled `pip freeze >`: that writes pins only and eats the header, and
+  PowerShell 5.1's `>` writes UTF-16.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
-  the K15; the file is gitignored.
-- **A deploy that MOVES a lane's supervisor `.bat`.** cmd.exe re-reads the file
-  between lines, so the running supervisor dies the moment `deploy.py` kills its
-  agent, and nothing relaunches it; `deploy.py` then waits out its whole budget
-  and fails. Its death does release the fd-9 lock, so the fix is one
-  `Start-K15.bat` on the K15 - that creates the venv at the new path and
-  installs the pins itself. The old lane directory survives the pull (its venv
-  is gitignored) and is yours to delete.
+  the K15; the file is gitignored, and it sits at the repo root beside
+  `secrets.json`, `state/` and `logs/` (see `paths.py`).
+- **A deploy that MOVES the startup `.bat` or renames an entry point.** The
+  supervisor relaunches its lane by module path; a rename lands code that the
+  running supervisor is not launching, and `deploy.py` waits out its whole
+  budget and fails. The fix is one `Start-Slopstation.bat` on the K15.
 - **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`
   warns about but never touches (`vhui64.exe`, the DisplayMagician `.lnk`s).

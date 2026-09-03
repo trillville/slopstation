@@ -21,36 +21,40 @@ couch.log.*
 # `git pull` for updates without tuning/keys ever fighting the merge.
 secrets.json
 config.json
-k15/media/.env
+media/.env
 
-# Voice: per-machine python env and caches (listener stays on system python)
+# Per-machine python env, build metadata and caches. One venv for the whole
+# package now; the editable install writes the egg-info.
 .venv/
+*.egg-info/
 __pycache__/
+.pytest_cache/
+.mypy_cache/
 
 # Voice: wake-word model binaries. The PRETRAINED set is fetched on first run
 # into the venv and stays out of here; a hand-trained model has no upstream to
 # re-fetch from, so it is vendored and travels with the repo. Contents are
 # ignored rather than the directory itself - git cannot re-include a file whose
-# parent directory is excluded, so `k15/agent/models/` would beat the negation.
-k15/agent/models/*
-!k15/agent/models/*.onnx
+# parent directory is excluded, so the directory itself would beat the negation.
+src/slopstation/agent/models/*
+!src/slopstation/agent/models/*.onnx
 # The custom verifier (bench/train_verifier.py) travels for the same reason:
 # it is fitted against ONE .onnx from clips off this couch, so losing it means
 # re-labelling the clips, not re-downloading anything.
-!k15/agent/models/*.pkl
+!src/slopstation/agent/models/*.pkl
 
 # Voice: room recordings for wake-word training - tens of MB of the TV, and
 # the gaming PC is where they are consumed, not here (bench/record_room.py)
-k15/agent/room.wav
-k15/agent/room_*.wav
+room.wav
+room_*.wav
 
 # Voice: background-worker scratch - the briefing is committed, everything a
 # worker writes is runtime state. The guardrail is workers.py's
 # --disallowedTools and nothing else: a settings.json deny list used to sit here too, and it was
 # measured (2026-08-14) not to hold - Read(**/x) was ignored and the file read
 # anyway - while naming only tools the denylist already removes.
-k15/agent/worker_home/*
-!k15/agent/worker_home/AGENTS.md
+worker_home/*
+!worker_home/AGENTS.md
 
 # OS / editor cruft
 Thumbs.db
