@@ -69,11 +69,11 @@ def _args(text, start):
 
 
 def python_files():
-    """Every emitter in the package. bench/ and haptic_test.py are excluded:
-    they carry event names of their own ("collide", "x") and a lane literal
-    "lane", which the frozen sets would then have to hold."""
+    """Every emitter in the package. haptic_test.py is excluded: it carries
+    event names of its own and a lane literal "lane", which the frozen sets
+    would otherwise have to hold."""
     for p in helpers.package_modules():
-        if p.name != "haptic_test.py" and "bench" not in p.parts:
+        if p.name != "haptic_test.py":
             yield p
 
 

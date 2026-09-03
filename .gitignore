@@ -38,13 +38,13 @@ __pycache__/
 # parent directory is excluded, so the directory itself would beat the negation.
 src/slopstation/agent/models/*
 !src/slopstation/agent/models/*.onnx
-# The custom verifier (bench/train_verifier.py) travels for the same reason:
+# The custom verifier travels for the same reason:
 # it is fitted against ONE .onnx from clips off this couch, so losing it means
 # re-labelling the clips, not re-downloading anything.
 !src/slopstation/agent/models/*.pkl
 
 # Voice: room recordings for wake-word training - tens of MB of the TV, and
-# the gaming PC is where they are consumed, not here (bench/record_room.py)
+# the gaming PC is where they are consumed, not here
 room.wav
 room_*.wav
 

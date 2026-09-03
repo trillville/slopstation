@@ -116,7 +116,6 @@ See [the media runbook](media/README.md) for the Radarr/Sonarr pipeline.
 |---|---|---|---|
 | `slopstation/` | `K15` | Repository clone on the Desktop | The `cd` workflow, or `git pull` then `Start-Slopstation.bat` |
 | `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | The `cd` workflow, or `gaming-pc\Deploy.ps1` from a PC checkout |
-| `wake-training/` | Gaming PC | Checkout plus external training data | Run in place; GPU required |
 
 The gaming PC is deployed by copy because its runtime also contains
 machine-generated DisplayMagician shortcuts and the VirtualHere client.
@@ -145,7 +144,13 @@ correlation suffix; every other command returns `DENIED`.
 | `tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
 | `media/` | Docker Compose media services and their runbook |
 | `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
-| `wake-training/` | Wake-word training and evaluation |
+
+The wake model in `src/slopstation/agent/models` is vendored, not trained
+here. It is produced and measured in
+[slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab),
+which also holds the speech-to-text benchmarks: research code that runs on a
+GPU machine and a live microphone, so it is kept out of the lane that has to
+survive a reboot.
 
 ## Bootstrap
 
@@ -388,4 +393,4 @@ them; `agent/tools/tv_remote.py` is the working volume path.
 Runtime-only state is intentionally absent from Git: real config, secrets, the
 media `.env`, VirtualHere binaries and PINs, DisplayMagician shortcuts,
 scheduled-task registrations, SSH/firewall state, logs, operation state, the
-virtual environment, and wake-training data.
+and the virtual environment.
