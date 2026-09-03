@@ -4,7 +4,7 @@ configured device that is merely absent. Fake device table, no PortAudio.
 
 import sys
 
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.speech import audio
 
 VOICE = {"inputDeviceName": "ReSpeaker", "outputDeviceName": "ReSpeaker"}
@@ -30,14 +30,14 @@ class FakePA:
 
 
 def test_no_fragment_is_the_system_default():
-    log = cglib.CapturingLog()
+    log = logbook.CapturingLog()
     idx = audio.resolve_device(FakePA(["Whatever"]), "", True, log=log)
     assert idx is None, "an unset fragment must still mean system default"
     assert log.find("audio_device"), log.events()
 
 
 def test_present_device_resolves_to_its_index():
-    log = cglib.CapturingLog()
+    log = logbook.CapturingLog()
     pa = FakePA(["Realtek", "Echo Cancelling Speakerphone (reSpeaker Flex)"])
     idx = audio.resolve_device(pa, "ReSpeaker", True, log=log)
     assert idx == 1, idx
@@ -45,7 +45,7 @@ def test_present_device_resolves_to_its_index():
 
 
 def test_absent_device_raises_instead_of_defaulting():
-    log = cglib.CapturingLog()
+    log = logbook.CapturingLog()
     try:
         audio.resolve_device(FakePA(["Realtek"]), "ReSpeaker", True, log=log)
     except audio.DeviceMissing as e:
@@ -66,7 +66,7 @@ def test_open_audio_waits_rather_than_binding_the_wrong_endpoint():
     """Recovery that resolves onto the system default reports success and
     stays deaf (62 rounds, 5 min 10 s). open_audio must return the real
     device or keep waiting."""
-    log = cglib.CapturingLog()
+    log = logbook.CapturingLog()
     table = ["Realtek"]  # array not back yet
     calls = []
 

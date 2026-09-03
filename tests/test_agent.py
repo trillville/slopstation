@@ -10,7 +10,7 @@ import threading
 
 import helpers
 from helpers import fresh_state
-from slopstation import cglib, events
+from slopstation import config, events, logbook
 from slopstation.agent import voice_agent as va
 from slopstation.agent.speech import announce
 from slopstation.agent.telemetry import sentry
@@ -159,7 +159,7 @@ class FakeDucker:
         pass
 
 
-class CtxLog(cglib.CapturingLog):
+class CtxLog(logbook.CapturingLog):
     """CapturingLog plus the ambient session id at each call."""
 
     def _write(self, level, event, fields):
@@ -178,8 +178,8 @@ def stub_everything():
     va.GrammarMatcher = lambda voice: "MATCHER"
     va.TvDucker = FakeDucker
     events.start_heartbeat = lambda lane, **kw: None
-    cglib.rotate_log = lambda: None
-    cglib.load_secrets = lambda: dict(SECRETS)
+    logbook.rotate = lambda: None
+    config.secrets = lambda: dict(SECRETS)
     sentry.setup = lambda cfg, log: False
     announce.Announcer = FakeAnnouncer
     operations.OperationStore = FakeOperationStore
@@ -207,7 +207,7 @@ def stub_everything():
     FakeSteam.available_answer = False
 
 
-def config(**top):
+def make_config(**top):
     cfg = json.loads(json.dumps(helpers.CONFIG))
     cfg["tvIp"] = None
     cfg["voice"]["duckSteps"] = 0
@@ -222,7 +222,7 @@ def run(argv, cfg, session=None, setup=None):
     stub_everything()
     if setup:
         setup()
-    cglib.use_config(cfg)
+    config.use(cfg)
     log = CtxLog("voice")
     va.log = log
     calls = []
@@ -266,19 +266,19 @@ def run(argv, cfg, session=None, setup=None):
 
 def test_agent():
     # --- config invalid --------------------------------------------------------
-    cfg = config()
+    cfg = make_config()
     del cfg["voice"]["wakeThreshold"]
     rc, log, _ = run(["--once"], cfg)
     assert rc == 1 and log.find("config_invalid")[0]["missing"] == ["wakeThreshold"]
 
     # --- bench mode: --earcons ---------------------------------------------------
-    rc, log, calls = run(["--earcons"], config())
+    rc, log, calls = run(["--earcons"], make_config())
     assert rc == 0 and "earcon_audition" in log.events()
     assert len(log.find("earcon_play")) == 6 and not calls
 
     # --- full lanes, one dry-run session -----------------------------------------
     fresh_state()
-    cfg = config(tvIp="10.0.0.9")
+    cfg = make_config(tvIp="10.0.0.9")
     cfg["voice"]["duckSteps"] = 4
     rc, log, calls = run(
         ["--once", "--dry-run"],
@@ -314,9 +314,9 @@ def test_agent():
 
     def no_keys():
         FakeListener.wakes.append((0.7, cap))
-        cglib.load_secrets = lambda: {}
+        config.secrets = lambda: {}
 
-    rc, log, calls = run(["--once"], config(), setup=no_keys)
+    rc, log, calls = run(["--once"], make_config(), setup=no_keys)
     assert rc == "ended" and not calls
     assert any(r["what"] == "stt" for r in log.find("lane_disabled"))
     assert "session_open" not in log.events() and cap.stopped == 1
@@ -326,18 +326,18 @@ def test_agent():
         FakeSteam.available_answer = True
         FakeListener.wakes.append((0.7, FakeCapture()))
 
-    rc, log, calls = run(["--once"], config(), setup=steam_online)
+    rc, log, calls = run(["--once"], make_config(), setup=steam_online)
     assert FakeSteamMonitor.made and FakeSteamMonitor.made[0].started
     assert any(r["what"] == "operation_monitor" for r in log.find("lane_up"))
     assert calls[0]["steam"] is FakeSteamMonitor.made[0].steam
 
-    rc, log, calls = run(["--once", "--dry-run"], config(), setup=steam_online)
+    rc, log, calls = run(["--once", "--dry-run"], make_config(), setup=steam_online)
     assert not FakeSteamMonitor.made, "dry run must not observe live Steam operations"
     assert not FakeAnnouncer.made, "dry run must not deliver operation events"
     assert isinstance(calls[0]["steam"], FakeSteam)
 
     # --- media configured: independent monitor + tools reach the session -----
-    cfg = config()
+    cfg = make_config()
     cfg["media"]["enabled"] = True
     cfg["media"]["pollS"] = 17
     cfg["media"]["protonPortSync"] = True
@@ -362,7 +362,7 @@ def test_agent():
     assert not any(m.started for m in FakeMediaMonitor.made), "authority search"
 
     # --- ducking without tvIp -----------------------------------------------------
-    cfg = config()
+    cfg = make_config()
     cfg["voice"]["duckSteps"] = 6
     rc, log, calls = run(
         ["--once"], cfg, setup=lambda: FakeListener.wakes.append((0.7, FakeCapture()))
@@ -388,7 +388,7 @@ def test_agent():
 
         va.open_audio = counting_open
 
-    cfg = config()
+    cfg = make_config()
     cfg["media"] = {"enabled": True}
     rc, log, calls = run(["--once"], cfg, setup=audio_last)
     assert at_audio["monitors"] == 2, (
@@ -402,7 +402,7 @@ def test_agent():
 
     rc, log, calls = run(
         ["--once"],
-        config(),
+        make_config(),
         session=boom,
         setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())),
     )

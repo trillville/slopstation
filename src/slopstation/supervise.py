@@ -27,7 +27,7 @@ import time
 from ctypes import wintypes
 from pathlib import Path
 
-from slopstation import cglib, paths
+from slopstation import logbook, paths, sessionlock
 
 # What each lane runs. Module invocations, not paths: the package is installed.
 LANES = {
@@ -273,7 +273,7 @@ def _first_launch_this_boot() -> bool:
     """True once per boot. The marker holds the boot's epoch; a launch that
     reads the same boot back is the scheduler restarting a crashed lane, not a
     boot."""
-    marker = cglib.STATE / "listener.boot"
+    marker = sessionlock.STATE / "listener.boot"
     boot = round(time.time() - _uptime_s())
     try:
         if abs(int(marker.read_text()) - boot) < 30:
@@ -298,7 +298,7 @@ def lane(name: str, passthrough: list[str]) -> int:
         print(f"[lane] {REFUSAL}")
         return 1
     _die_together()
-    log = cglib.make_log("supervisor")
+    log = logbook.logger("supervisor")
     if name == "listener" and _first_launch_this_boot():
         # Once per boot, before the listener: re-running it after a mid-session
         # crash would spawn a second watch loop against the live session lock.
@@ -334,7 +334,7 @@ def start() -> int:
     if elevated():
         print(f"[start] {REFUSAL}")
         return 1
-    log = cglib.make_log("supervisor")
+    log = logbook.logger("supervisor")
     for name in LANES:
         info = query(name)
         if info is None:

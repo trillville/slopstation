@@ -30,11 +30,11 @@ import threading
 import time
 from pathlib import Path
 
-from slopstation import cglib
+from slopstation import config, logbook, sessionlock, statefile
 
-LIBRARY = cglib.STATE / "library.json"
+LIBRARY = sessionlock.STATE / "library.json"
 
-log = cglib.make_log("library")
+log = logbook.logger("library")
 
 
 # --- layer 1 sources ----------------------------------------------------------
@@ -94,7 +94,7 @@ def fetch_installed_local() -> list[dict]:
 
 
 def load() -> dict:
-    return cglib.load_json(LIBRARY, {})
+    return statefile.load(LIBRARY, {})
 
 
 def installed_name(appid: int) -> str | None:
@@ -121,7 +121,7 @@ class Catalog:
 
 
 def save(index: dict) -> None:
-    cglib.write_json(LIBRARY, index)
+    statefile.write(LIBRARY, index)
 
 
 def refresh(local: bool = False) -> int:
@@ -180,7 +180,7 @@ def show() -> int:
 
 # --- layers 2-3: owned/playtime + metadata ------------------------------------
 
-META_CACHE = cglib.STATE / "metadata-cache.json"
+META_CACHE = sessionlock.STATE / "metadata-cache.json"
 _CTRL = {28: "full", 18: "partial"}  # Steam category ids
 
 
@@ -250,11 +250,11 @@ def fetch_meta_one(appid: int) -> dict:
 
 
 def load_meta() -> dict:
-    return cglib.load_json(META_CACHE, {})
+    return statefile.load(META_CACHE, {})
 
 
 def _save_meta(cache: dict) -> None:
-    cglib.write_json(META_CACHE, cache)
+    statefile.write(META_CACHE, cache)
 
 
 def refresh_meta(appids: list[int], limit: int = 200) -> dict:
@@ -305,9 +305,9 @@ def fuzzy_key(name: str | None) -> str:
 def steam_creds() -> tuple[str, str] | None:
     """(steamApiKey, steamId64) when both are real, else None. Logs nothing:
     each caller decides whether a missing key is news."""
-    s = cglib.load_secrets()
+    s = config.secrets()
     key, sid = s.get("steamApiKey"), str(s.get("steamId64", ""))
-    return (key, sid) if cglib.real_key(key) and sid.isdigit() else None
+    return (key, sid) if config.real_key(key) and sid.isdigit() else None
 
 
 # --- the sync orchestrator (all layers, staleness- and key-gated) ------------

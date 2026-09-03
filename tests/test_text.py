@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 import helpers
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.brain import backends
 from slopstation.agent.interfaces import text
 from slopstation.agent.telemetry import traces
@@ -94,7 +94,7 @@ def test_text():
     cfg["textInterface"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
     token = "t" * 64
     secrets = {"textInterfaceToken": token, "anthropicApiKey": "a" * 64}
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
     original = backends.BACKENDS["anthropic"]
     backends.BACKENDS["anthropic"] = FakeBackend
     saved = []

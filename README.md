@@ -134,7 +134,7 @@ correlation suffix; every other command returns `DENIED`.
 |---|---|
 | `src/slopstation/couch.py`, `chord_listener.py` | Session orchestration and controller input |
 | `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
-| `src/slopstation/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
+| `src/slopstation/events.py`, `logbook.py`, `config.py`, `sessionlock.py`, `statefile.py`, `doctor.py` | Telemetry, the per-lane logger, configuration, the session lock, state files, and diagnostics |
 | `src/slopstation/supervise.py`, `deploy.py`, `paths.py` | Lane supervision, the CD deployer, and where runtime data lives |
 | `src/slopstation/agent/` | The voice/assistant half of the package |
 | `src/slopstation/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |

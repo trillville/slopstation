@@ -14,7 +14,7 @@ import serial
 
 import helpers
 from helpers import fresh_state
-from slopstation import cglib, doctor, gamepc, supervise
+from slopstation import config, doctor, gamepc, sessionlock, statefile, supervise
 
 
 class _Serial:
@@ -67,11 +67,11 @@ def test_doctor(monkeypatch):
     cfg = dict(helpers.CONFIG)
 
     # --- config --------------------------------------------------------------
-    cglib.load_config = lambda: cfg
+    config.load = lambda: cfg
     got = doctor.check_config()
     assert got is cfg and levels()["config.json"] == "PASS"
     rows.clear()
-    cglib.load_config = lambda: {k: v for k, v in cfg.items() if k != "sshHost"}
+    config.load = lambda: {k: v for k, v in cfg.items() if k != "sshHost"}
     assert doctor.check_config() is not None and levels()["config.json"] == "FAIL"
     rows.clear()
 
@@ -133,11 +133,11 @@ def test_doctor(monkeypatch):
     assert levels()["session lock"] == "PASS" and levels()["last_error"] == "PASS"
     rows.clear()
     fresh_state(lock_age_s=10)
-    cglib.LAST_ERROR.write_text("boom")
+    sessionlock.LAST_ERROR.write_text("boom")
     doctor.check_session_state()
     assert levels()["session lock"] == "PASS" and levels()["last_error"] == "WARN"
     rows.clear()
-    fresh_state(lock_age_s=cglib.LOCK_STALE_S + 1)
+    fresh_state(lock_age_s=sessionlock.LOCK_STALE_S + 1)
     doctor.check_session_state()
     assert levels()["session lock"] == "WARN"
     rows.clear()
@@ -149,7 +149,7 @@ def test_doctor(monkeypatch):
     rows.clear()
 
     # --- voice (filesystem + process checks only) ----------------------------------
-    cglib.load_secrets = lambda: {}
+    config.secrets = lambda: {}
     doctor.check_voice(cfg)
     names = {n for _, n, _ in rows}
     assert {
@@ -164,8 +164,8 @@ def test_doctor(monkeypatch):
     assert levels()["operations"] == "PASS"
     assert levels()["media"] == "PASS"
     rows.clear()
-    cglib.write_json(
-        cglib.STATE / "operations.json",
+    statefile.write(
+        sessionlock.STATE / "operations.json",
         [{"id": "op-test", "state": "UNKNOWN", "announcement_pending": False}],
     )
     doctor.check_operations()
@@ -177,7 +177,7 @@ def test_doctor(monkeypatch):
 
     media_cfg = json.loads(json.dumps(cfg))
     media_cfg["media"]["enabled"] = True
-    cglib.load_secrets = lambda: {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32}
+    config.secrets = lambda: {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32}
     doctor._tcp_reachable = lambda url, timeout=1: True
     doctor.check_media(media_cfg)
     assert levels()["media config"] == "PASS"
@@ -233,8 +233,8 @@ def test_doctor(monkeypatch):
         ]
     }
     doctor._arr_get = lambda url, key, path, params=None, timeout=4: wanted
-    cglib.write_json(
-        cglib.STATE / "operations.json",
+    statefile.write(
+        sessionlock.STATE / "operations.json",
         [
             {
                 "kind": "series_acquisition",
@@ -251,8 +251,8 @@ def test_doctor(monkeypatch):
     rows.clear()
     # A whole-series operation (seasons: null) accounts for every season of
     # it, so with both series owned nothing is left armed.
-    cglib.write_json(
-        cglib.STATE / "operations.json",
+    statefile.write(
+        sessionlock.STATE / "operations.json",
         [
             {
                 "kind": "series_acquisition",
@@ -271,7 +271,7 @@ def test_doctor(monkeypatch):
     doctor.check_media_monitoring(media_cfg)
     assert levels()["media monitoring"] == "PASS"
     rows.clear()
-    cglib.load_secrets = lambda: {}
+    config.secrets = lambda: {}
     doctor.check_media_monitoring(media_cfg)
     assert levels()["media monitoring"] == "WARN"
     rows.clear()

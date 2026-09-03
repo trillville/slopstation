@@ -8,7 +8,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import helpers
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.interfaces import remote
 
 INNER_TOKEN = "i" * 64
@@ -82,7 +82,7 @@ def test_remote():
     }
     cfg["remoteInterface"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
     secrets = {"textInterfaceToken": INNER_TOKEN, "remoteInterfaceToken": OUTER_TOKEN}
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
 
     disabled = remote.start(cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log)
     assert disabled is None, "started without a reachable text interface"

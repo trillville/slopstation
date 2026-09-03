@@ -24,17 +24,21 @@ _MISSING = object()
 
 
 def pytest_configure(config):
+    _configure()
+
+
+def _configure():
     os.environ.setdefault("SLOPSTATION_ENV", "test")
     import helpers
-    from slopstation import cglib
+    from slopstation import config, sessionlock
 
-    # Before any module that derives its state paths from cglib.STATE is
+    # Before any module that derives its state paths from sessionlock.STATE is
     # imported.
-    cglib.STATE = Path(tempfile.mkdtemp(prefix="slopstation-test-state-"))
-    cglib.LOCK = cglib.STATE / "session.lock"
-    cglib.LAST_ERROR = cglib.STATE / "last_error"
-    cglib.CANCEL = cglib.STATE / "cancel"
-    cglib.use_config(json.loads(json.dumps(helpers.CONFIG)))
+    sessionlock.STATE = Path(tempfile.mkdtemp(prefix="slopstation-test-state-"))
+    sessionlock.LOCK = sessionlock.STATE / "session.lock"
+    sessionlock.LAST_ERROR = sessionlock.STATE / "last_error"
+    sessionlock.CANCEL = sessionlock.STATE / "cancel"
+    config.use(json.loads(json.dumps(helpers.CONFIG)))
 
 
 # The suite predates pytest: tests rebind module attributes directly - state

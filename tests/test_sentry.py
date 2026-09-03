@@ -6,7 +6,7 @@ must never cost a voice session.
 import json
 
 import helpers
-from slopstation import cglib, events
+from slopstation import events, logbook
 from slopstation.agent.telemetry import sentry
 
 DSN = "https://abc123def456abc123def456abc12345@o4509876.ingest.us.sentry.io/1234567"
@@ -94,7 +94,7 @@ def test_sentry():
         assert attr.startswith("gen_ai.usage."), (key, attr)
 
     # -- fail-soft -------------------------------------------------------------
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
 
     # No DSN -> disabled quietly, NOT an error: the normal unconfigured state,
     # and the one that lets a deploy land before the K15 is touched.
@@ -109,7 +109,7 @@ def test_sentry():
     # escapes it is an agent that will not start. A DSN present and the SDK
     # exploding must be an error event and a False, never a raise.
     boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network"))  # noqa: E731
-    log2 = cglib.CapturingLog("voice")
+    log2 = logbook.CapturingLog("voice")
     real_init, sentry._init = sentry._init, boom
     try:
         assert sentry.setup({"sentryDsn": DSN}, log2) is False
@@ -120,7 +120,7 @@ def test_sentry():
 
     # The SDK merely declining (no sentry-sdk in the venv) stops there rather
     # than half-wiring tracing on top of it.
-    log3 = cglib.CapturingLog("voice")
+    log3 = logbook.CapturingLog("voice")
     sentry._init = lambda *a, **k: False
     try:
         assert sentry.setup({"sentryDsn": DSN}, log3) is False

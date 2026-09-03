@@ -7,7 +7,7 @@ import threading
 import time
 
 from helpers import fresh_state
-from slopstation import cglib, couch, gamepc, tv
+from slopstation import config, couch, gamepc, logbook, sessionlock, tv
 
 CFG = {
     "tvComPort": "COMX",
@@ -26,7 +26,7 @@ def wire(script, default=None):
     """Replace couch's seams. script = [(verb_prefix, reply-or-exception)],
     consumed in order and verb-checked. default handles unbounded polls (the
     READY wait is time-bound, not count-bound). Returns (log, exlink_calls)."""
-    log = cglib.CapturingLog("launch")
+    log = logbook.CapturingLog("launch")
     couch.log = log
     sent = []
 
@@ -58,20 +58,20 @@ def wire(script, default=None):
 def test_couch():
     real_sleep = time.sleep
     time.sleep = lambda s: None  # fast tests
-    cglib.use_config(CFG)
+    config.use(CFG)
     couch.ENTER_ATTEMPTS = 2
     couch.READY_WAIT_S = 0.3
     couch.WATCH_POLL_S = 0
 
     # --- atomic acquire: two racers, one winner, both paths -------------------
-    for seed_age in (None, cglib.LOCK_STALE_S + 60):  # empty, then stale
+    for seed_age in (None, sessionlock.LOCK_STALE_S + 60):  # empty, then stale
         for _ in range(25):
             fresh_state(seed_age)
             barrier, results = threading.Barrier(2), [None, None]
 
             def racer(i, barrier=barrier, results=results):
                 barrier.wait()
-                results[i] = cglib.acquire_lock(f"t{i} {i}")
+                results[i] = sessionlock.acquire(f"t{i} {i}")
 
             threads = [threading.Thread(target=racer, args=(i,)) for i in (0, 1)]
             for t in threads:
@@ -84,16 +84,16 @@ def test_couch():
 
     # --- ownership: release refuses a successor's lock ------------------------
     fresh_state()
-    assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
-    assert cglib.release_lock() and not cglib.LOCK.exists()
+    assert sessionlock.acquire(f"ab12cd {os.getpid()}")
+    assert sessionlock.release() and not sessionlock.LOCK.exists()
     fresh_state(10, lock_content=f"ffffff {os.getpid() + 1}")  # someone else's
-    assert not cglib.release_lock() and cglib.LOCK.exists()
+    assert not sessionlock.release() and sessionlock.LOCK.exists()
     fresh_state(10, lock_content="1723500000.0")  # pre-note legacy
-    assert cglib.release_lock() and not cglib.LOCK.exists()
+    assert sessionlock.release() and not sessionlock.LOCK.exists()
 
     # --- happy path: ordering, the one rule, appid queue, lock lifecycle ------
     fresh_state()
-    cglib.LAST_ERROR.write_text("old failure")  # success must supersede it
+    sessionlock.LAST_ERROR.write_text("old failure")  # success must supersede it
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -123,8 +123,8 @@ def test_couch():
     # A timestamp marker is the legacy shape (pre-turn-stamping PC): accepted,
     # but flagged unverified.
     assert log.find("host_ready")[0]["verified"] is False
-    assert not cglib.LOCK.exists(), "session end must release the lock"
-    assert not cglib.LAST_ERROR.exists(), "success must clear last_error"
+    assert not sessionlock.LOCK.exists(), "session end must release the lock"
+    assert not sessionlock.LAST_ERROR.exists(), "success must clear last_error"
 
     # --- ALREADY is a degraded launch, not a clean one -----------------------
     # ALREADY = the appid was already up from an earlier session: Big Picture
@@ -172,14 +172,14 @@ def test_couch():
     assert switches, "the launch must still complete once the marker is ours"
 
     fresh_state()
-    assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
+    assert sessionlock.acquire(f"ab12cd {os.getpid()}")
     log, sent = wire([("status", "eeeeee")])  # marker changed identity
     couch.watch(expected="ab12cd")
     ended = log.find("session_ended")
     assert ended and ended[0]["reason"] == "superseded", ended
     assert not sent, "a superseded watcher must not drive the TV"
-    assert cglib.LOCK.exists(), "the lock is the successor's to release"
-    cglib.LOCK.unlink()
+    assert sessionlock.LOCK.exists(), "the lock is the successor's to release"
+    sessionlock.LOCK.unlink()
 
     # --- busy: fresh lock refuses before any side effect -----------------------
     fresh_state(10)
@@ -188,7 +188,7 @@ def test_couch():
     assert "launch_busy" in log.events() and not sent
 
     # --- stale lock: recycled, then a failing Enter releases it ---------------
-    fresh_state(cglib.LOCK_STALE_S + 60)
+    fresh_state(sessionlock.LOCK_STALE_S + 60)
     log, sent = wire([("enter", "FAILED:1"), ("enter", "FAILED:1")])
     assert couch.start() == 1
     ev = log.events()
@@ -196,8 +196,8 @@ def test_couch():
     assert sent == ["power_on", "power_off"], (
         f"failure restores power, not input: {sent}"
     )
-    assert not cglib.LOCK.exists(), "failure must release the lock"
-    assert "Enter" in cglib.LAST_ERROR.read_text()
+    assert not sessionlock.LOCK.exists(), "failure must release the lock"
+    assert "Enter" in sessionlock.LAST_ERROR.read_text()
     # the refusal is logged once per distinct answer, not per retry
     assert [r["answer"] for r in log.find("enter_refused")] == ["FAILED:1"], log.records
 
@@ -207,7 +207,9 @@ def test_couch():
     assert couch.start() == 1
     assert "launch_failed" in log.events()
     assert sent == ["power_on", "power_off"], sent
-    assert not cglib.LOCK.exists() and "READY" in cglib.LAST_ERROR.read_text()
+    assert (
+        not sessionlock.LOCK.exists() and "READY" in sessionlock.LAST_ERROR.read_text()
+    )
 
     # --- the TV-asleep rescue: a second power_on, and only ever one -----------
     # Default retry threshold sits past the 0.3 s test READY wait; inside it
@@ -273,7 +275,9 @@ def test_couch():
     assert ev.count("enter_redispatched") == 1, ev
     assert "launch_failed" in ev
     assert sent == ["power_on", "power_on", "power_off"], f"input untouched: {sent}"
-    assert not cglib.LOCK.exists() and "READY" in cglib.LAST_ERROR.read_text()
+    assert (
+        not sessionlock.LOCK.exists() and "READY" in sessionlock.LAST_ERROR.read_text()
+    )
 
     # --- the write-then-exit race: one idle read is not death -----------------
     # Enter writes the marker and THEN exits, so a lone (NOTREADY, IDLE) pair
@@ -312,7 +316,7 @@ def test_couch():
         assert "enter_died" not in ev and "enter_redispatched" not in ev, (label, ev)
         assert "launch_failed" in ev, (label, ev)
         assert sent == ["power_on", "power_off"], (label, sent)
-        assert not cglib.LOCK.exists(), label
+        assert not sessionlock.LOCK.exists(), label
     couch.ENTER_SETTLE_S = 10  # leave no trap for the next case
     couch.READY_WAIT_S = 0.3
 
@@ -324,8 +328,10 @@ def test_couch():
     assert couch.start() == 1
     ev = log.events()
     assert "launch_aborted" in ev and "launch_failed" not in ev, ev
-    assert not cglib.LOCK.exists(), "an aborted launch still releases the lock"
-    assert not cglib.LAST_ERROR.exists(), "a deliberate abort must not buzz the Puck"
+    assert not sessionlock.LOCK.exists(), "an aborted launch still releases the lock"
+    assert not sessionlock.LAST_ERROR.exists(), (
+        "a deliberate abort must not buzz the Puck"
+    )
     assert sent == ["power_on", "power_off"], f"abort restores power, not input: {sent}"
 
     # --- voice cancel: end_session's marker aborts the launch ------------------
@@ -337,7 +343,7 @@ def test_couch():
     def cancel_on_first_poll(cmd):
         if cmd.startswith("exit"):
             return "OK"  # the abort's own teardown dispatch
-        cglib.CANCEL.write_text("aaaaaa")  # the cancelling utterance's turn
+        sessionlock.CANCEL.write_text("aaaaaa")  # the cancelling utterance's turn
         return "NOTREADY"
 
     log, sent = wire([("enter", "OK")], default=cancel_on_first_poll)
@@ -353,9 +359,9 @@ def test_couch():
     # trigger gap would otherwise run to completion with no watcher alive.
     exits = log.find("exit_dispatched")
     assert exits and exits[0]["reason"] == "cancel_after_enter", ev
-    assert not cglib.LOCK.exists(), "a cancelled launch still releases the lock"
-    assert not cglib.LAST_ERROR.exists(), "a cancel is deliberate - no fail buzz"
-    assert not cglib.CANCEL.exists(), "consumed, or it kills the NEXT launch too"
+    assert not sessionlock.LOCK.exists(), "a cancelled launch still releases the lock"
+    assert not sessionlock.LAST_ERROR.exists(), "a cancel is deliberate - no fail buzz"
+    assert not sessionlock.CANCEL.exists(), "consumed, or it kills the NEXT launch too"
     # The voice teardown that left the TV lit for the night (2026-08-23 b540b9).
     assert sent == ["power_on", "power_off"], f"cancel restores power: {sent}"
 
@@ -372,7 +378,7 @@ def test_couch():
         if cmd.startswith("enterstate"):
             reads["n"] += 1
             if reads["n"] == 2:  # written as the death is proven
-                cglib.CANCEL.write_text("bbbbbb")
+                sessionlock.CANCEL.write_text("bbbbbb")
             return "IDLE"
         return "NOTREADY"
 
@@ -383,13 +389,13 @@ def test_couch():
     assert "enter_redispatched" not in ev, ev
     assert "launch_aborted" in ev and "launch_failed" not in ev, ev
     assert sent == ["power_on", "power_off"], f"no re-poke while tearing down: {sent}"
-    assert not cglib.LOCK.exists() and not cglib.CANCEL.exists()
+    assert not sessionlock.LOCK.exists() and not sessionlock.CANCEL.exists()
     couch.ENTER_SETTLE_S = 10
 
     # --- a stale cancel is void: it predates this launch -----------------------
     fresh_state()
     couch.READY_WAIT_S = 0.3
-    cglib.CANCEL.write_text("ffffff")  # nobody consumed it; not our intent
+    sessionlock.CANCEL.write_text("ffffff")  # nobody consumed it; not our intent
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -403,7 +409,7 @@ def test_couch():
 
     # --- TV evidence: rides the READY wait, gates only the rescue --------------
     real_tv_state = tv.tv_power_state
-    cglib.use_config(dict(CFG, tvIp="tv"))
+    config.use(dict(CFG, tvIp="tv"))
     couch.TV_WAIT_S = 0.2
     couch.TV_POKE_S = 0.05
 
@@ -422,12 +428,12 @@ def test_couch():
     assert "enter_dispatched" in ev, "Enter is never gated - zero happy-path tax"
     assert "enter_died" in ev and "enter_redispatched" not in ev, ev
     assert "launch_failed" in ev and "tv_on" not in ev, ev
-    assert "TV never reported on" in cglib.LAST_ERROR.read_text()
+    assert "TV never reported on" in sessionlock.LAST_ERROR.read_text()
     assert log.find("launch_start")[0]["tv"] == "standby"
     assert set(sent) == {"power_on", "power_off"} and sent[-1] == "power_off", (
         f"the evidence re-pokes while not-on, and never switches input: {sent}"
     )
-    assert not cglib.LOCK.exists()
+    assert not sessionlock.LOCK.exists()
 
     # The healthy shape: Enter first, the set flips on mid-wait, launch lands.
     fresh_state()
@@ -483,7 +489,7 @@ def test_couch():
     assert couch.start() == 1
     assert "launch_failed" in log.events()
     assert sent == ["power_on"], f"a set found on stays on: {sent}"
-    assert not cglib.LOCK.exists()
+    assert not sessionlock.LOCK.exists()
     couch.READY_WAIT_S = 5  # leave no trap for the next case
 
     # A set that cannot be READ is not a refused one: stand down to the legacy
@@ -515,7 +521,7 @@ def test_couch():
         raise AssertionError("no tvIp - the launch must never read the TV")
 
     tv.tv_power_state = boom
-    cglib.use_config(CFG)
+    config.use(CFG)
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -529,7 +535,7 @@ def test_couch():
 
     # --- watch: blips forgiven, a run of failures dies honestly ---------------
     fresh_state()
-    assert cglib.acquire_lock(f"ab12cd {os.getpid()}")
+    assert sessionlock.acquire(f"ab12cd {os.getpid()}")
     log, sent = wire(
         [
             ("status", RuntimeError("blip")),
@@ -545,21 +551,21 @@ def test_couch():
     ended = log.find("session_ended")
     assert ended and ended[0]["reason"] == "ssh_fails", ended
     assert "exit_dispatched" in log.events()
-    assert sent == ["power_off"] and not cglib.LOCK.exists()
+    assert sent == ["power_off"] and not sessionlock.LOCK.exists()
 
     # --- reconcile: resume live, clear dead (TV untouched), ride out errors ---
     fresh_state(60, lock_content="ffffff 99999")  # dead owner's note
     log, sent = wire([("status", READY_TS), ("status", "NOTREADY")])
     assert couch.reconcile() == 0
     assert "reconcile_resumed" in log.events() and "session_idle" in log.events()
-    assert sent == ["power_off"] and not cglib.LOCK.exists()
+    assert sent == ["power_off"] and not sessionlock.LOCK.exists()
 
     fresh_state(60)
     log, sent = wire([("status", "NOTREADY")])
     assert couch.reconcile() == 0
     assert log.find("reconcile_cleared")[0]["reason"] == "dead_session"
     assert not sent, "a dead session's reconcile must not drive the TV"
-    assert not cglib.LOCK.exists()
+    assert not sessionlock.LOCK.exists()
 
     fresh_state(60)
     log, sent = wire(
@@ -572,7 +578,7 @@ def test_couch():
     assert couch.reconcile() == 0
     # never answered is not the same as answered NOTREADY
     assert log.find("reconcile_cleared")[0]["reason"] == "unreachable"
-    assert not cglib.LOCK.exists()
+    assert not sessionlock.LOCK.exists()
 
     fresh_state(None)
     log, sent = wire([])
@@ -582,12 +588,15 @@ def test_couch():
     # --- a config doctor would FAIL is refused before the lock and the TV ------
     fresh_state()
     log, sent = wire([])
-    cglib.use_config({k: v for k, v in CFG.items() if k != "gamingPcMac"})
+    config.use({k: v for k, v in CFG.items() if k != "gamingPcMac"})
     try:
         assert couch.start() == 2
     finally:
-        cglib.use_config(CFG)
+        config.use(CFG)
     inv = log.find("config_invalid")
     assert inv and inv[0]["missing"] == ["gamingPcMac"], inv
     assert not sent and "launch_start" not in log.events()
-    assert not cglib.LOCK.exists() and "gamingPcMac" in cglib.LAST_ERROR.read_text()
+    assert (
+        not sessionlock.LOCK.exists()
+        and "gamingPcMac" in sessionlock.LAST_ERROR.read_text()
+    )

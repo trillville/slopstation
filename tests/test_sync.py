@@ -7,7 +7,7 @@ mocked; no network.
 import threading
 import time
 
-from slopstation import cglib
+from slopstation import config, logbook
 from slopstation.agent.tools import library, steamstore
 
 
@@ -46,7 +46,7 @@ def test_sync():
     state["deals"] = {"refreshed": fresh}  # fresh by default -> deals skipped
 
     # --- no Steam key: layers 1+4 only (deals fresh here -> skipped) ----------
-    cglib.load_secrets = lambda: {"steamApiKey": "dg_...", "steamId64": ""}
+    config.secrets = lambda: {"steamApiKey": "dg_...", "steamId64": ""}
     reset(calls)
     state["index"] = {"installed": [{"appid": 1}]}
     library.sync()
@@ -73,7 +73,7 @@ def test_sync():
     state["deals"] = {"refreshed": fresh}
 
     # --- key present, owned stale (no timestamp) -> all three -----------------
-    cglib.load_secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
+    config.secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
     reset(calls)
     state["index"] = {"installed": [{"appid": 1}], "owned": {"2": {}}}
     state["meta_cache"] = {}  # nothing cached -> meta runs
@@ -131,7 +131,7 @@ def test_sync():
     reset(calls)
     state["index"] = {"installed": [{"appid": 1}]}
     state["meta_cache"] = {"1": {}}
-    cglib.load_secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
+    config.secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
     barrier = threading.Event()
 
     def slow_refresh(**k):
@@ -151,7 +151,7 @@ def test_sync():
     from helpers import fresh_state
 
     fresh_state()
-    library.log = cglib.CapturingLog("library")
+    library.log = logbook.CapturingLog("library")
     library.fetch_installed_ssh = lambda: [
         {"appid": 1, "name": "G", "state": 4, "size": 1, "lastPlayed": 0}
     ]

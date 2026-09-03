@@ -108,9 +108,9 @@ def _config_dsn() -> object:
     """config.json's sentryDsn, read at CALL time and never at import: the
     chord lane must import on a machine that has no config.json yet."""
     try:
-        from slopstation import cglib
+        from slopstation import config
 
-        return cglib.config().get("sentryDsn")
+        return config.current().get("sentryDsn")
     except Exception:
         return None
 

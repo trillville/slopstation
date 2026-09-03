@@ -21,9 +21,9 @@ import subprocess
 import sys
 import time
 
-from slopstation import cglib, paths, supervise
+from slopstation import config, logbook, paths, sessionlock, supervise
 
-log = cglib.make_log("deploy")
+log = logbook.logger("deploy")
 
 ROOT = paths.HOME
 
@@ -55,7 +55,7 @@ def media_enabled() -> bool:
     """config.json's media.enabled. deploy.py reads the file for nothing else,
     so an unreadable one means no stack here, not a failed deploy."""
     try:
-        media = cglib.config().get("media")
+        media = config.current().get("media")
     except (OSError, ValueError):
         return False
     return bool(isinstance(media, dict) and media.get("enabled"))
@@ -93,7 +93,7 @@ def wait_idle(budget_s: float) -> bool:
     deadline = time.time() + budget_s
     announced = False
     while True:
-        if not cglib.session_active():
+        if not sessionlock.active():
             return True
         if time.time() >= deadline:
             return False

@@ -3,8 +3,8 @@
 Every `log(...)` call lands twice - the human line in couch.log, and a record
 in logs/{service}-YYYYMMDD.jsonl that the OpenTelemetry Collector tails.
 
-No import of cglib: cglib imports THIS, so the emit boundary cannot fail on a
-cycle (hence secrets are re-loaded here). Nothing here may open a socket or
+No import of config or logbook: they import THIS, so the emit boundary
+cannot fail on a cycle (hence secrets are re-loaded here). Nothing here may open a socket or
 block. Fail-soft throughout: a lost event never costs the caller. Daily files
 are never renamed - the shipper holds a read handle open on Windows - so the
 date is in the name and expired files are deleted.
@@ -44,7 +44,7 @@ ARCHIVE_DAYS = 2  # out of the shipper's glob; see _prune
 
 # The whole level vocabulary. It becomes the log record's SEVERITY, which
 # alerts group on, so it stays small and every value has an emitter
-# (cglib._Log: no `debug`).
+# (logbook.Logger: no `debug`).
 INFO, WARN, ERROR = "info", "warn", "error"
 
 # Keys the EMITTER owns. A caller field of the same name would shadow a log
@@ -137,7 +137,7 @@ _redactions = None
 
 def load_secrets(path: str | pathlib.Path) -> dict:
     """secrets.json as a dict; {} when absent. Raises ValueError when present
-    but malformed (cglib's wrapper turns that into a console note). utf-8-sig
+    but malformed (config.secrets() turns that into a console note). utf-8-sig
     eats Notepad's BOM."""
     try:
         return json.loads(pathlib.Path(path).read_text(encoding="utf-8-sig"))
@@ -324,7 +324,7 @@ HEARTBEAT_S = 60
 def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> threading.Thread:
     """Emit `heartbeat` from a daemon thread for as long as this process runs.
     A dead process writes nothing, so silence and idle look identical. Writes
-    JSONL ONLY, not through cglib's logger: ~1440 lines/day would swamp
+    JSONL ONLY, not through the lane logger: ~1440 lines/day would swamp
     couch.log. Daemon thread, and the loop swallows everything.
 
     ALERTING: this proves the SHIPPER is alive, not the lane. A

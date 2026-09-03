@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from slopstation import cglib, haptics, paths, supervise
+from slopstation import config, haptics, paths, sessionlock, supervise
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 # An episode aired this long ago, still monitored and still missing, is not
@@ -34,7 +34,7 @@ def report(level, name, detail, hint=""):
 
 def check_config():
     try:
-        cfg = cglib.load_config()
+        cfg = config.load()
     except Exception as e:
         report(
             FAIL,
@@ -43,8 +43,8 @@ def check_config():
             "recreate from config.example.json",
         )
         return None
-    missing = cglib.missing_config(cfg)
-    n = len(cglib.REQUIRED_CONFIG)
+    missing = config.missing(cfg)
+    n = len(config.REQUIRED)
     if missing:
         report(
             FAIL,
@@ -199,7 +199,7 @@ def check_ssh():
     from slopstation import gamepc
 
     try:
-        cglib.config()["sshHost"]
+        config.current()["sshHost"]
     except Exception as e:
         report(
             FAIL,
@@ -436,10 +436,10 @@ def check_virtualhere():
 
 
 def check_session_state():
-    age = cglib.lock_age()
+    age = sessionlock.age()
     if age is None:
         report(PASS, "session lock", "none (idle)")
-    elif cglib.session_active(age):
+    elif sessionlock.active(age):
         report(PASS, "session lock", f"fresh ({age:.0f}s) - a session/launch is active")
     else:
         report(
@@ -448,7 +448,7 @@ def check_session_state():
             f"stale ({age:.0f}s)",
             "harmless - next launch or reconcile recycles it",
         )
-    err = cglib.LAST_ERROR
+    err = sessionlock.LAST_ERROR
     try:
         report(
             WARN,
@@ -520,7 +520,7 @@ def check_voice(cfg):
 
 def check_voice_keys():
     try:
-        secrets = cglib.load_secrets()
+        secrets = config.secrets()
     except Exception as e:
         report(
             WARN,
@@ -535,8 +535,10 @@ def check_voice_keys():
         "openaiApiKey": "assistant A/B",
         "steamApiKey": "library owned/meta",
     }
-    live = [what for key, what in lanes.items() if cglib.real_key(secrets.get(key))]
-    dead = [what for key, what in lanes.items() if not cglib.real_key(secrets.get(key))]
+    live = [what for key, what in lanes.items() if config.real_key(secrets.get(key))]
+    dead = [
+        what for key, what in lanes.items() if not config.real_key(secrets.get(key))
+    ]
     report(
         PASS if "STT+TTS" in live else WARN,
         "voice keys",
@@ -594,7 +596,7 @@ def check_venv(cfg):
 
 
 def check_voice_library():
-    lib = cglib.STATE / "library.json"
+    lib = sessionlock.STATE / "library.json"
     try:
         data = json.loads(lib.read_text(encoding="utf-8"))
         age_h = (time.time() - lib.stat().st_mtime) / 3600
@@ -621,7 +623,7 @@ def check_voice_library():
 
     # Deals precompute: the agent refreshes ~6h, so stale means the store sync
     # is failing. WARN past 24h; absent is silent (fills on first sync).
-    deals = cglib.STATE / "deals.json"
+    deals = sessionlock.STATE / "deals.json"
     if deals.exists():
         age_h = (time.time() - deals.stat().st_mtime) / 3600
         if age_h > 24:
@@ -665,9 +667,9 @@ def check_voice_config(cfg):
 def check_steam_session():
     # Account session (install-by-voice). Speaks up only when a token is
     # present but unusable or near expiry; absent is silent. Stdlib only.
-    secrets = cglib.load_secrets()
+    secrets = config.secrets()
     tok = secrets.get("steamRefreshToken")
-    if cglib.real_key(tok):
+    if config.real_key(tok):
         try:
             import base64
 
@@ -735,11 +737,11 @@ def check_media(cfg):
         )
     else:
         report(PASS, "media config", "topology, roots, and presets present")
-    secrets = cglib.load_secrets()
+    secrets = config.secrets()
     absent = [
         key
         for key in ("radarrApiKey", "sonarrApiKey")
-        if not cglib.real_key(secrets.get(key))
+        if not config.real_key(secrets.get(key))
     ]
     report(
         WARN if absent else PASS,
@@ -787,7 +789,9 @@ def _owned_seasons():
     reports, which is the safe direction."""
     owned: dict = {}
     try:
-        rows = json.loads((cglib.STATE / "operations.json").read_text(encoding="utf-8"))
+        rows = json.loads(
+            (sessionlock.STATE / "operations.json").read_text(encoding="utf-8")
+        )
         for row in rows if isinstance(rows, list) else ():
             if (
                 not isinstance(row, dict)
@@ -818,8 +822,8 @@ def check_media_monitoring(cfg):
     ):
         report(PASS, "media monitoring", "disabled")
         return
-    key = cglib.load_secrets().get("sonarrApiKey")
-    if not cglib.real_key(key):
+    key = config.secrets().get("sonarrApiKey")
+    if not config.real_key(key):
         report(
             WARN,
             "media monitoring",
@@ -892,14 +896,14 @@ def check_remote(cfg):
         report(PASS, "remote interface", "disabled")
         return
     text = cfg.get("textInterface") or {}
-    secrets = cglib.load_secrets()
+    secrets = config.secrets()
     missing = [
         name
         for name, value in (
             ("remoteInterfaceToken", secrets.get("remoteInterfaceToken")),
             ("textInterfaceToken", secrets.get("textInterfaceToken")),
         )
-        if not cglib.real_key(value)
+        if not config.real_key(value)
     ]
     if missing or not text.get("enabled"):
         report(
@@ -949,7 +953,7 @@ def check_remote(cfg):
 
 
 def check_operations():
-    operations_file = cglib.STATE / "operations.json"
+    operations_file = sessionlock.STATE / "operations.json"
     if not operations_file.exists():
         report(PASS, "operations", "no operations recorded")
         return
@@ -1035,7 +1039,7 @@ def check_sentry(today):
     from slopstation import checkin
 
     try:
-        dsn = cglib.load_config().get("sentryDsn")
+        dsn = config.load().get("sentryDsn")
     except Exception:
         dsn = None
     parsed = checkin.parse_dsn(dsn)

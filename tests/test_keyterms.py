@@ -94,9 +94,9 @@ def test_the_cap_is_announced_not_silent():
     real = session_runtime.MAX_KEYTERMS
     session_runtime.MAX_KEYTERMS = 3
     try:
-        from slopstation import cglib
+        from slopstation import logbook
 
-        log = cglib.CapturingLog()
+        log = logbook.CapturingLog()
         session_runtime.log, saved = log, session_runtime.log
         try:
             terms = session_runtime.stt_keyterms(VOICE, "hey jarvis")

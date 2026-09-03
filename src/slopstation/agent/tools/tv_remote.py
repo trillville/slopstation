@@ -23,7 +23,7 @@ CLI (lane=manual):
 import sys
 import time
 
-from slopstation import cglib, events, tv
+from slopstation import config, events, sessionlock, tv
 
 KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
 
@@ -39,7 +39,7 @@ class TvRemote:
         self.name = name
         self.key_delay = key_delay
         self.timeout = timeout
-        self.token = cglib.STATE / "tv-ws-token.txt"
+        self.token = sessionlock.STATE / "tv-ws-token.txt"
 
     def press(self, direction, n):
         """Send n volume keys. Raises on a dead/unpaired connection."""
@@ -237,7 +237,7 @@ class TvDucker:
 
 
 def main(argv):
-    ip = cglib.config().get("tvIp")
+    ip = config.current().get("tvIp")
     if not ip:
         print("config.json has no tvIp")
         return 2

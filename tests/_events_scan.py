@@ -9,7 +9,7 @@ REPO = helpers.REPO
 PC = REPO / "gaming-pc"
 
 # Names that match the call shapes but are not events.
-NOT_EVENTS = {"event"}  # cglib's docstring example
+NOT_EVENTS = {"event"}  # logbook's docstring example
 
 # Names built at runtime, listed by hand. Field keys come from the call site.
 DYNAMIC = {
@@ -119,11 +119,11 @@ def scan_bat():
 
 
 def scan_lanes():
-    """Lane literals: make_log("...") and the events.emit("...") callers."""
+    """Lane literals: logger("...") and the events.emit("...") callers."""
     lanes = set()
     for path in python_files():
         text = path.read_text(encoding="utf-8")
-        lanes.update(re.findall(r"make_log\(\"(\w+)\"\)", text))
+        lanes.update(re.findall(r"logger\(\"(\w+)\"\)", text))
         lanes.update(m.group("lane") for m in _PY[1].finditer(text) if m.group("lane"))
     return lanes
 

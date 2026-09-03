@@ -9,7 +9,7 @@ import json
 import time
 from typing import Any
 
-from slopstation import cglib
+from slopstation import sessionlock
 
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry
@@ -360,8 +360,8 @@ def tool_impls(
         # The PC reports RunningAppID 0 all through a launch, which read as
         # "nothing is playing" while start_session said "already starting"
         # (2026-08-21, turn 0b785e). session_active is the same predicate that
-        # refusal uses (cglib.session_active), so the two cannot disagree.
-        active = cglib.session_active()
+        # refusal uses (sessionlock.active), so the two cannot disagree.
+        active = sessionlock.active()
         r = dispatch.now_playing()
         if not r.ok:
             # Mid-launch the PC can be unreachable; the lock still answers.

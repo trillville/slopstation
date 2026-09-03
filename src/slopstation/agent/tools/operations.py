@@ -6,9 +6,9 @@ import time
 import uuid
 from typing import Any
 
-from slopstation import cglib
+from slopstation import config, logbook, sessionlock, statefile
 
-OPERATIONS_FILE = cglib.STATE / "operations.json"
+OPERATIONS_FILE = sessionlock.STATE / "operations.json"
 POLL_S = 30
 
 QUEUED = "QUEUED"
@@ -50,14 +50,14 @@ class OperationStore:
         self.path = path or OPERATIONS_FILE
 
     def _load(self):
-        rows = cglib.load_json(self.path, [])
+        rows = statefile.load(self.path, [])
         return rows if isinstance(rows, list) else []
 
     def _save(self, rows):
-        cglib.write_json(self.path, rows)
+        statefile.write(self.path, rows)
 
     def all(self):
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             return [dict(r) for r in self._load()]
 
     def recent(self, limit=10):
@@ -77,7 +77,7 @@ class OperationStore:
 
     def update_metadata(self, operation_id, updates=None, remove=()):
         now = int(time.time())
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -111,7 +111,7 @@ class OperationStore:
         created = None
         reused = None
         previous = None
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             rows = self._load()
             existing = next(
                 (
@@ -209,7 +209,7 @@ class OperationStore:
         changed = False
         previous = None
         out = None
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -265,7 +265,7 @@ class OperationStore:
     def notify(self, operation_id, key, summary):
         now = int(time.time())
         notification = None
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -304,7 +304,7 @@ class OperationStore:
 
     def mark_notification_delivered(self, operation_id, key):
         now = int(time.time())
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
@@ -321,7 +321,7 @@ class OperationStore:
 
     def mark_delivered(self, operation_id):
         now = int(time.time())
-        with cglib.guard(self.path):
+        with statefile.guard(self.path):
             rows = self._load()
             for row in rows:
                 if row.get("id") == operation_id:
@@ -490,7 +490,7 @@ def main(argv=None):
     abandon.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
 
-    log = cglib.make_log("voice")
+    log = logbook.logger("voice")
     store = OperationStore(log)
     # Lazy: operations_monitors imports this module, so a top-level import here
     # would be a cycle.
@@ -530,8 +530,8 @@ def main(argv=None):
         if not args.execute:
             print("nothing deleted; repeat with --execute")
             return 2
-        cfg = cglib.config()
-        secrets = cglib.load_secrets()
+        cfg = config.current()
+        secrets = config.secrets()
         from slopstation.agent.tools import media
 
         service = media.from_config(cfg, secrets, log)
@@ -558,8 +558,8 @@ def main(argv=None):
         print(result["detail"])
         return 0
 
-    cfg = cglib.config()
-    secrets = cglib.load_secrets()
+    cfg = config.current()
+    secrets = config.secrets()
     counts = []
     from slopstation.agent.tools import steam_session
 

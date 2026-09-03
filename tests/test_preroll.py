@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 import helpers
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.speech.preroll import (
     CHUNK_BYTES,
     CHUNK_SAMPLES,
@@ -192,7 +192,7 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
     lst.near_miss_factor = 0.2
 
     real_log = audio.log
-    audio.log = cglib.CapturingLog()
+    audio.log = logbook.CapturingLog()
     try:
         score, peak = lst._listen(LiveStream(), 0.5, None, None)
         misses = audio.log.find("wake_near_miss")
@@ -218,7 +218,7 @@ def test_clip_dump_writes_prunes_and_never_raises():
     tmp = Path(tempfile.mkdtemp())
     real_dir, real_log = audio.CLIPS_DIR, audio.log
     audio.CLIPS_DIR = tmp / "wake"
-    audio.log = cglib.CapturingLog()
+    audio.log = logbook.CapturingLog()
     try:
         for i in range(5):
             audio.dump_clip(ring, 0.20 + i / 100, keep=3)
@@ -336,7 +336,7 @@ def test_wake_ack_is_claimed_exactly_once():
 
 
 def test_feeder_chunking():
-    feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
+    feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
     feeder.pcm = b"\xaa" * (CHUNK_BYTES * 2 + 100)
     frames = feeder._frames()
     assert [len(f.audio) for f in frames] == [CHUNK_BYTES, CHUNK_BYTES, 100]
@@ -353,7 +353,7 @@ async def test_feeder_stops_capture_at_startframe():
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-    feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
+    feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
     marker = b"\xbb" * CHUNK_BYTES
     capture = WakeCapture(FakeStream(), [marker])
     feeder.capture = capture
@@ -425,7 +425,7 @@ async def test_pipeline_ordering():
             await self.push_frame(frame, direction)
 
     marker = b"".join(bytes([0xA0 + i]) * CHUNK_BYTES for i in range(4))
-    feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
+    feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
     pa = pyaudio.PyAudio()
     wake_stream = pa.open(
         format=pyaudio.paInt16,

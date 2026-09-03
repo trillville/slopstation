@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from slopstation import cglib
+from slopstation import config, logbook
 from slopstation.agent.tools import library, steamstore
 
 # appid -> (name, discount_pct, final_cents, formatted). The fake GetItems
@@ -124,7 +124,7 @@ def test_deals():
     steamstore._get = fake_get
     # Pin the secrets BEFORE anything runs: fetch_store_search -> _tag_map
     # reaches for a key, and a real secrets.json takes the keyed path.
-    cglib.load_secrets = lambda: {}
+    config.secrets = lambda: {}
 
     # --- specials: parsed, NOT_GAMES filtered, cents -> dollars --------------
     sp = steamstore.fetch_specials()
@@ -177,9 +177,9 @@ def test_deals():
     assert steamstore.fetch_news(1)[0]["title"] == "Patch 1"
 
     # --- tag map: keyed only; fail-soft to {} without a key ------------------
-    cglib.load_secrets = lambda: {}
+    config.secrets = lambda: {}
     assert steamstore._tag_map() == {}
-    cglib.load_secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
+    config.secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
     tmap = steamstore._tag_map()
     assert tmap.get("roguelike") == 1716 and tmap.get("co-op") == 3843, tmap
     assert steamstore.TAGMAP.exists()  # cached to disk
@@ -201,7 +201,7 @@ def test_deals():
     assert steamstore.fetch_hltb("hades") == {"main": 21}  # cache hit, no import
 
     # --- refresh_deals: writes the one file list_games reads -----------------
-    steamstore.log = cglib.CapturingLog("library")
+    steamstore.log = logbook.CapturingLog("library")
     steamstore.refresh_deals()
     deals = steamstore.load_deals()
     assert "deals_synced" in steamstore.log.events(), steamstore.log.events()

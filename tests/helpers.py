@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from slopstation import cglib
+from slopstation import sessionlock
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "src" / "slopstation"
 
 # config.example.json as a dict; a test that needs specific values calls
-# cglib.use_config(...) itself.
+# config.use(...) itself.
 CONFIG = json.loads((REPO / "config.example.json").read_text(encoding="utf-8-sig"))
 
 
@@ -68,10 +68,10 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     from slopstation.agent.tools import library, operations, steamstore
 
     tmp = Path(tempfile.mkdtemp(prefix="slopstation-test-state-"))
-    cglib.STATE = tmp
-    cglib.LOCK = tmp / "session.lock"
-    cglib.LAST_ERROR = tmp / "last_error"
-    cglib.CANCEL = tmp / "cancel"
+    sessionlock.STATE = tmp
+    sessionlock.LOCK = tmp / "session.lock"
+    sessionlock.LAST_ERROR = tmp / "last_error"
+    sessionlock.CANCEL = tmp / "cancel"
     library.LIBRARY = tmp / "library.json"
     library.META_CACHE = tmp / "metadata-cache.json"
     steamstore.DEALS = tmp / "deals.json"
@@ -80,7 +80,7 @@ def fresh_state(lock_age_s=None, lock_content="x"):
     operations.OPERATIONS_FILE = tmp / "operations.json"
     traces.DIR = tmp / "traces"
     if lock_age_s is not None:
-        cglib.LOCK.write_text(lock_content)
+        sessionlock.LOCK.write_text(lock_content)
         old = time.time() - lock_age_s
-        os.utime(cglib.LOCK, (old, old))
+        os.utime(sessionlock.LOCK, (old, old))
     return tmp

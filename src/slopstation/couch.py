@@ -11,7 +11,7 @@ import sys
 import time
 from collections.abc import Callable
 
-from slopstation import cglib, events, gamepc, tv
+from slopstation import config, events, gamepc, logbook, sessionlock, tv
 
 PORT_WAIT_S = 90  # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60  # ~1/s; also covers waiting out logon after a cold boot
@@ -47,14 +47,14 @@ TV_POKE_S = 6
 # "off" (Wi-Fi blip, IP drift, no tvIp). Reads ride existing loops, ~0.5 s each.
 TV_UNKNOWN_N = 3
 
-log = cglib.make_log("launch")
+log = logbook.logger("launch")
 
 
 class Cancelled(BaseException):
     """A requested stop of an in-flight launch. ssh `exit` alone stops only an
     Enter already RUNNING, so it can race this process's redispatch rescue and
     drop OFFICE topology plus a released Puck onto a live session; end_session
-    also writes cglib.CANCEL, consumed by every wait in start(). BaseException
+    also writes sessionlock.CANCEL, consumed by every wait in start(). BaseException
     on purpose, like KeyboardInterrupt: it must ride the abort handler
     (launch_aborted, lock released, no last_error), not launch_failed."""
 
@@ -67,11 +67,11 @@ def raise_if_cancelled() -> None:
     """Consume a pending cancel (the unlink is the ack - a marker left behind
     would kill the next launch too) and stop through the abort path."""
     try:
-        by = cglib.CANCEL.read_text().strip()
+        by = sessionlock.CANCEL.read_text().strip()
     except OSError:
         return  # no marker - the overwhelming case
     try:
-        cglib.CANCEL.unlink(missing_ok=True)
+        sessionlock.CANCEL.unlink(missing_ok=True)
     except OSError:
         # Sharing violation (the writer's handle still open - CPython opens
         # without FILE_SHARE_DELETE) must not turn a stop into launch_failed.
@@ -81,7 +81,7 @@ def raise_if_cancelled() -> None:
 
 def exlink(name: str, **fields) -> None:
     try:
-        ack = tv.exlink_send(name, cglib.config()["tvComPort"])
+        ack = tv.exlink_send(name, config.current()["tvComPort"])
         # ack = the receiver accepted the frame, not that the set acted on
         # it; Ex-Link is send-only and power_on can ack on a dark set.
         log("exlink_send", cmd=name, ack=ack or "no-ack", **fields)
@@ -92,7 +92,7 @@ def exlink(name: str, **fields) -> None:
 
 def restore_tv() -> None:
     """Put the TV back the way a finished session leaves it."""
-    cfg = cglib.config()
+    cfg = config.current()
     exlink("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
 
 
@@ -101,12 +101,14 @@ def abort_teardown(tv_woken: bool) -> None:
     spent; nothing was ever switched to the gaming input, so there is no input
     to put back. The restore is gated on release_lock(): a lock recycled while
     we stalled belongs to a successor whose live session owns the set."""
-    if cglib.release_lock() and tv_woken:
+    if sessionlock.release() and tv_woken:
         restore_tv()
 
 
 def wol() -> None:
-    mac = bytes.fromhex(cglib.config()["gamingPcMac"].replace(":", "").replace("-", ""))
+    mac = bytes.fromhex(
+        config.current()["gamingPcMac"].replace(":", "").replace("-", "")
+    )
     pkt = b"\xff" * 6 + mac * 16
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -120,7 +122,7 @@ def wait_port(timeout: float = PORT_WAIT_S) -> bool:
         # A cold boot can spend the whole 90 s here; a cancel must not wait it out.
         raise_if_cancelled()
         try:
-            with socket.create_connection((cglib.config()["gamingPcIp"], 22), 3):
+            with socket.create_connection((config.current()["gamingPcIp"], 22), 3):
                 return True
         except OSError:
             time.sleep(1)
@@ -203,7 +205,7 @@ def wait_ready(
     settle_at = time.time() + ENTER_SETTLE_S
     repoke_at: float | None = time.time() + WAKE_RETRY_S
     while time.time() < end:
-        cglib.touch_lock()
+        sessionlock.touch()
         raise_if_cancelled()
         evidence.poll()
         # Blind wake retry for a set that slept through the launch_start
@@ -271,7 +273,7 @@ def wait_ready(
                             "- the set is refusing the wake, not "
                             "missing the frame"
                         )
-                    cglib.touch_lock()
+                    sessionlock.touch()
                     raise_if_cancelled()
                     evidence.poll()
                     time.sleep(1)
@@ -298,24 +300,26 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     # must not die holding the lock.
     err: str | None = None
     try:
-        missing = cglib.missing_config(cglib.config())
+        missing = config.missing(config.current())
     except Exception as e:
         missing, err = [], str(e)
     if missing or err:
         log.error("config_invalid", missing=missing or None, err=err)
         try:
-            cglib.LAST_ERROR.write_text(f"config.json: {err or f'missing {missing}'}")
+            sessionlock.LAST_ERROR.write_text(
+                f"config.json: {err or f'missing {missing}'}"
+            )
         except OSError:
             pass
         return 2
     # The pre-read only shapes the log lines - acquire_lock is the arbiter.
-    age = cglib.lock_age()
-    if cglib.session_active(age):
+    age = sessionlock.age()
+    if sessionlock.active(age):
         log("launch_busy", lock_age_s=round(age or 0))
         return 1  # type: ignore[arg-type] # active implies aged
     if age is not None:
         log.warn("lock_recycled", lock_age_s=round(age))
-    if not cglib.acquire_lock(f"{turn} {os.getpid()}"):
+    if not sessionlock.acquire(f"{turn} {os.getpid()}"):
         log("launch_busy", reason="lost_acquire_race")
         return 1
     # The Cancelled handler keys on this: a cancel consumed after our enter
@@ -327,7 +331,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     # outside the try below and an unhandled OSError would die with the lock
     # held.
     try:
-        cglib.CANCEL.unlink(missing_ok=True)
+        sessionlock.CANCEL.unlink(missing_ok=True)
     except OSError as e:
         log.warn("cancel_void_failed", err=str(e))
     t0 = time.time()
@@ -337,7 +341,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         return round((time.time() - t0) * 1000)
 
     try:
-        tv_ip = cglib.config().get("tvIp")
+        tv_ip = config.current().get("tvIp")
         # Raw depth rung as the launch FOUND the set: "on", "standby", ""
         # (deep: hours off, IP server still answering with PowerState drained)
         # or the "unreachable" sentinel - events.emit drops None-valued fields,
@@ -373,7 +377,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             nonlocal enter_sent
             refused = set()
             for _ in range(attempts):
-                cglib.touch_lock()
+                sessionlock.touch()
                 raise_if_cancelled()
                 try:
                     answer = gamepc.enter()
@@ -392,8 +396,10 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         if not dispatch_enter("enter_dispatched"):
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
-        cglib.LAST_ERROR.unlink(missing_ok=True)  # success supersedes any old failure
-        exlink(cglib.config()["tvGamingCmd"])
+        sessionlock.LAST_ERROR.unlink(
+            missing_ok=True
+        )  # success supersedes any old failure
+        exlink(config.current()["tvGamingCmd"])
         if appid:
             # Voice "play <title>" from cold. Best-effort - Big Picture up is
             # a working outcome, except on ALREADY (appid already running from
@@ -411,7 +417,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         log.error("launch_failed", err=str(e), dur_ms=ms())
         try:
             # The listener polls this and signals the failure haptically (3 thuds).
-            cglib.LAST_ERROR.write_text(str(e))
+            sessionlock.LAST_ERROR.write_text(str(e))
         except OSError:
             pass
         abort_teardown(tv_woken)
@@ -448,7 +454,7 @@ def watch(expected: str | None = None) -> None:
     died_by_fails = False
     while True:
         time.sleep(WATCH_POLL_S)
-        cglib.touch_lock()
+        sessionlock.touch()
         try:
             st = gamepc.status()
             fails = 0
@@ -476,7 +482,7 @@ def watch(expected: str | None = None) -> None:
     restore_tv()
     # Ownership-checked: a lock recycled while we stalled belongs to the
     # successor, and unlinking it would free a live session.
-    if not cglib.release_lock():
+    if not sessionlock.release():
         log.warn("lock_kept", reason="owned_by_successor")
     log("session_idle")
 
@@ -487,8 +493,8 @@ def reconcile() -> int:
     A surviving session lock means the watch loop died with us: resume
     watching a live session so its end still restores the TV, or clear the
     lock so the chord isn't deaf. The TV is NOT touched on the dead path."""
-    cglib.rotate_log()
-    if cglib.lock_age() is None:
+    logbook.rotate()
+    if sessionlock.age() is None:
         return 0
     # A reconcile is its own intent: new id, not the dead session's.
     events.context(turn=events.new_turn())
@@ -502,7 +508,7 @@ def reconcile() -> int:
                 log("reconcile_resumed")
                 # Adopt, don't just touch: the owner note still names the dead
                 # process, and release_lock at session end checks the pid.
-                cglib.adopt_lock(f"{events.current().get('turn')} {os.getpid()}")
+                sessionlock.adopt(f"{events.current().get('turn')} {os.getpid()}")
                 # Whatever the marker says now IS this session's identity.
                 watch(expected=st if events.valid_turn(st) else None)
                 return 0
@@ -512,7 +518,7 @@ def reconcile() -> int:
     log.warn("reconcile_cleared", reason="dead_session" if answered else "unreachable")
     # Force-clear, not release_lock: the owner is known dead and its pid would
     # never match ours.
-    cglib.LOCK.unlink(missing_ok=True)
+    sessionlock.LOCK.unlink(missing_ok=True)
     return 0
 
 
