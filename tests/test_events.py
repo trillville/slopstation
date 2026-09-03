@@ -15,6 +15,11 @@ from slopstation import events, logbook, paths
 # test's own tree.
 WORKER_SRC = """import sys
 from slopstation import events
+# Wait for the lock as long as it takes: this proves the lock makes the
+# seek+write pair atomic. Production caps the wait at LOCK_WAIT_S and then
+# writes unlocked - a lost line beats a blocked lane - which on a loaded CI
+# runner is exactly what lost lines here.
+events.LOCK_WAIT_S = 30
 for _ in range(120):
     events.emit('supervisor', 'restart', what=sys.argv[1], code=-1)
 """
