@@ -5,6 +5,8 @@ must never cost a voice session.
 
 import json
 
+import pytest
+
 import helpers
 from slopstation import events, logbook
 from slopstation.agent.telemetry import sentry
@@ -12,16 +14,21 @@ from slopstation.agent.telemetry import sentry
 DSN = "https://abc123def456abc123def456abc12345@o4509876.ingest.us.sentry.io/1234567"
 
 
-def test_sentry():
+# -- the gate --------------------------------------------------------------
 
-    # -- the gate --------------------------------------------------------------
+
+def test_gate():
     assert sentry.enabled({"sentryDsn": DSN})
     assert not sentry.enabled({})
     assert not sentry.enabled({"sentryDsn": ""})
     # Template junk reads as absent, same as every other keyed lane.
     assert not sentry.enabled({"sentryDsn": "https://...@o1.ingest.sentry.io/1"})
 
-    # -- trace-level attributes ------------------------------------------------
+
+# -- trace-level attributes ------------------------------------------------
+
+
+def test_span_attributes_carry_the_ambient_ids():
     tok = events.context(session="3b7e", turn="9f2c1a")
     a = sentry.span_attributes()
     assert a["session.id"] == "3b7e"
@@ -37,6 +44,8 @@ def test_sentry():
     assert "session.id" not in sentry.span_attributes()
     assert sentry.span_attributes(session="zz")["session.id"] == "zz"
 
+
+def test_span_attribute_values_are_otel_legal():
     # OTel accepts str/bool/int/float and homogeneous sequences of those; a
     # dict or None is dropped at span creation, silently costing the field.
     for k, v in sentry.span_attributes(session="s", turn="t").items():
@@ -45,24 +54,27 @@ def test_sentry():
         )
         assert ok, f"{k}={v!r} is not an OTel-legal attribute value"
 
-    # -- the OTLP target -------------------------------------------------------
+
+# -- the OTLP target -------------------------------------------------------
+
+
+def test_otlp_target_comes_from_the_sdk_dsn_helper():
     # Built by the SDK's own DSN helper, so this is really asserting that the
     # helper still exists under those names - the one thing that would send
     # traces nowhere without any error.
-    try:
-        url, headers = sentry.otlp_target(DSN)
-    except ImportError:
-        print("  otlp: SKIPPED - sentry-sdk not installed in this venv")
-    else:
-        # Trailing slash included - Dsn.get_api_url always appends one.
-        assert url == (
-            "https://o4509876.ingest.us.sentry.io/api/1234567/"
-            "integration/otlp/v1/traces/"
-        ), url
-        assert headers["X-Sentry-Auth"].startswith("Sentry "), headers
-        assert "sentry_key=abc123def456abc123def456abc12345" in headers["X-Sentry-Auth"]
+    url, headers = sentry.otlp_target(DSN)
+    # Trailing slash included - Dsn.get_api_url always appends one.
+    assert url == (
+        "https://o4509876.ingest.us.sentry.io/api/1234567/integration/otlp/v1/traces/"
+    ), url
+    assert headers["X-Sentry-Auth"].startswith("Sentry "), headers
+    assert "sentry_key=abc123def456abc123def456abc12345" in headers["X-Sentry-Auth"]
 
-    # -- everything no-ops while tracing is off --------------------------------
+
+# -- everything no-ops while tracing is off --------------------------------
+
+
+def test_everything_no_ops_while_tracing_is_off():
     # This is also what keeps the --text REPL out of production Conversations:
     # voice_agent returns before setup() runs.
     assert sentry.is_on() is False
@@ -80,7 +92,11 @@ def test_sentry():
     assert decorated(1) == "ret" and called == [1]
     sentry.capture(RuntimeError("boom"))  # no SDK, no raise
 
-    # -- the usage map ---------------------------------------------------------
+
+# -- the usage map ---------------------------------------------------------
+
+
+def test_usage_map():
     # backends.py flattens its SDK's usage object onto these short keys; a
     # rename on either side silently drops token counts from the dashboard.
     assert set(sentry.USAGE_ATTR) == {
@@ -93,42 +109,54 @@ def test_sentry():
     for key, attr in sentry.USAGE_ATTR.items():
         assert attr.startswith("gen_ai.usage."), (key, attr)
 
-    # -- fail-soft -------------------------------------------------------------
-    log = logbook.CapturingLog("voice")
 
+# -- fail-soft -------------------------------------------------------------
+
+
+@pytest.fixture
+def _tracing_off(monkeypatch):
+    monkeypatch.setattr(sentry, "_on", False)
+
+
+def _boom(*a, **k):
+    raise RuntimeError("no network")
+
+
+def test_setup_without_a_dsn_is_disabled_quietly(_tracing_off):
     # No DSN -> disabled quietly, NOT an error: the normal unconfigured state,
     # and the one that lets a deploy land before the K15 is touched.
-    sentry._on = False
+    log = logbook.CapturingLog("voice")
     assert sentry.setup({}, log) is False
     assert sentry.is_on() is False
     assert log.find("lane_disabled"), log.events()
     assert not log.find("sentry_setup_failed")
     assert not log.find("tracing_setup_failed")
 
+
+def test_an_exploding_sdk_is_an_error_event_and_a_false(_tracing_off, monkeypatch):
     # voice_agent calls setup() BARE, before the wake loop, so anything that
     # escapes it is an agent that will not start. A DSN present and the SDK
     # exploding must be an error event and a False, never a raise.
-    boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network"))  # noqa: E731
-    log2 = logbook.CapturingLog("voice")
-    real_init, sentry._init = sentry._init, boom
-    try:
-        assert sentry.setup({"sentryDsn": DSN}, log2) is False
-    finally:
-        sentry._init = real_init
-    assert log2.find("sentry_setup_failed"), log2.events()
+    log = logbook.CapturingLog("voice")
+    monkeypatch.setattr(sentry, "_init", _boom)
+    assert sentry.setup({"sentryDsn": DSN}, log) is False
+    assert log.find("sentry_setup_failed"), log.events()
     assert sentry.is_on() is False
 
+
+def test_a_declining_sdk_stops_before_tracing(_tracing_off, monkeypatch):
     # The SDK merely declining (no sentry-sdk in the venv) stops there rather
     # than half-wiring tracing on top of it.
-    log3 = logbook.CapturingLog("voice")
-    sentry._init = lambda *a, **k: False
-    try:
-        assert sentry.setup({"sentryDsn": DSN}, log3) is False
-    finally:
-        sentry._init = real_init
-    assert not log3.find("tracing_setup_failed"), log3.events()
+    log = logbook.CapturingLog("voice")
+    monkeypatch.setattr(sentry, "_init", lambda *a, **k: False)
+    assert sentry.setup({"sentryDsn": DSN}, log) is False
+    assert not log.find("tracing_setup_failed"), log.events()
 
-    # -- the tool span shape ---------------------------------------------------
+
+# -- the tool span shape ---------------------------------------------------
+
+
+def test_tool_span_shape_is_sentrys_execute_tool_contract():
     # Sentry's execute_tool contract, asserted on the constant rather than on a
     # live span: op, operation name and the argument key are what the Tool
     # Errors and Tool Calls widgets read.
@@ -145,23 +173,27 @@ def test_sentry():
     ):
         assert required in src, required
 
-    # -- the response recorder -------------------------------------------------
-    class FakeSpan:
-        def __init__(self):
-            self.attrs = {}
 
-        def set_attribute(self, k, v):
-            self.attrs[k] = v
+# -- the response recorder -------------------------------------------------
 
-    fs = FakeSpan()
+
+class _FakeSpan(dict):
+    """The attributes set on it, as a dict."""
+
+    def set_attribute(self, k, v):
+        self[k] = v
+
+
+def test_response_recorder():
+    fs = _FakeSpan()
     sentry._Chat(fs).response(
         model="claude-haiku-4-5",
         output="hello",
         usage={"input": 900, "output": 20, "cache_read": 800, "bogus": 1},
     )
-    assert fs.attrs["gen_ai.response.model"] == "claude-haiku-4-5"
-    assert fs.attrs["gen_ai.usage.input_tokens"] == 900
-    assert fs.attrs["gen_ai.usage.cache_read.input_tokens"] == 800
-    assert "bogus" not in json.dumps(fs.attrs), fs.attrs
-    msgs = json.loads(fs.attrs["gen_ai.output.messages"])
+    assert fs["gen_ai.response.model"] == "claude-haiku-4-5"
+    assert fs["gen_ai.usage.input_tokens"] == 900
+    assert fs["gen_ai.usage.cache_read.input_tokens"] == 800
+    assert "bogus" not in json.dumps(fs), fs
+    msgs = json.loads(fs["gen_ai.output.messages"])
     assert msgs[0]["parts"][0]["content"] == "hello"
