@@ -54,7 +54,7 @@ class Cancelled(BaseException):
     """A requested stop of an in-flight launch. ssh `exit` alone stops only an
     Enter already RUNNING, so it can race this process's redispatch rescue and
     drop OFFICE topology plus a released Puck onto a live session; end_session
-    also writes sessionlock.CANCEL, consumed by every wait in start(). BaseException
+    also writes sessionlock.cancel_file(), consumed by every wait in start(). BaseException
     on purpose, like KeyboardInterrupt: it must ride the abort handler
     (launch_aborted, lock released, no last_error), not launch_failed."""
 
@@ -67,11 +67,11 @@ def raise_if_cancelled() -> None:
     """Consume a pending cancel (the unlink is the ack - a marker left behind
     would kill the next launch too) and stop through the abort path."""
     try:
-        by = sessionlock.CANCEL.read_text().strip()
+        by = sessionlock.cancel_file().read_text().strip()
     except OSError:
         return  # no marker - the overwhelming case
     try:
-        sessionlock.CANCEL.unlink(missing_ok=True)
+        sessionlock.cancel_file().unlink(missing_ok=True)
     except OSError:
         # Sharing violation (the writer's handle still open - CPython opens
         # without FILE_SHARE_DELETE) must not turn a stop into launch_failed.
@@ -306,7 +306,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     if missing or err:
         log.error("config_invalid", missing=missing or None, err=err)
         try:
-            sessionlock.LAST_ERROR.write_text(
+            sessionlock.last_error_file().write_text(
                 f"config.json: {err or f'missing {missing}'}"
             )
         except OSError:
@@ -331,7 +331,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     # outside the try below and an unhandled OSError would die with the lock
     # held.
     try:
-        sessionlock.CANCEL.unlink(missing_ok=True)
+        sessionlock.cancel_file().unlink(missing_ok=True)
     except OSError as e:
         log.warn("cancel_void_failed", err=str(e))
     t0 = time.time()
@@ -396,7 +396,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         if not dispatch_enter("enter_dispatched"):
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
-        sessionlock.LAST_ERROR.unlink(
+        sessionlock.last_error_file().unlink(
             missing_ok=True
         )  # success supersedes any old failure
         exlink(config.current()["tvGamingCmd"])
@@ -417,7 +417,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         log.error("launch_failed", err=str(e), dur_ms=ms())
         try:
             # The listener polls this and signals the failure haptically (3 thuds).
-            sessionlock.LAST_ERROR.write_text(str(e))
+            sessionlock.last_error_file().write_text(str(e))
         except OSError:
             pass
         abort_teardown(tv_woken)
@@ -518,7 +518,7 @@ def reconcile() -> int:
     log.warn("reconcile_cleared", reason="dead_session" if answered else "unreachable")
     # Force-clear, not release_lock: the owner is known dead and its pid would
     # never match ours.
-    sessionlock.LOCK.unlink(missing_ok=True)
+    sessionlock.lock_file().unlink(missing_ok=True)
     return 0
 
 

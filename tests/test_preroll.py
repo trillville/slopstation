@@ -216,17 +216,17 @@ def test_clip_dump_writes_prunes_and_never_raises():
 
     ring = [b"\x01\x00" * CHUNK_SAMPLES] * 3
     tmp = Path(tempfile.mkdtemp())
-    real_dir, real_log = audio.CLIPS_DIR, audio.log
-    audio.CLIPS_DIR = tmp / "wake"
+    real_dir, real_log = audio.clips_dir(), audio.log
+    audio.clips_dir = lambda: tmp / "wake"
     audio.log = logbook.CapturingLog()
     try:
         for i in range(5):
             audio.dump_clip(ring, 0.20 + i / 100, keep=3)
-        kept = sorted(audio.CLIPS_DIR.glob("wake-*.wav"))
+        kept = sorted(audio.clips_dir().glob("wake-*.wav"))
         written = audio.log.find("wake_clip")
 
         # keep=0 is the off switch: not even the directory.
-        audio.CLIPS_DIR = tmp / "off"
+        audio.clips_dir = lambda: tmp / "off"
         audio.dump_clip(ring, 0.5, keep=0)
         off_made = (tmp / "off").exists()
 
@@ -234,11 +234,11 @@ def test_clip_dump_writes_prunes_and_never_raises():
         # logs and returns, never raises into the wake path.
         blocker = tmp / "blocker"
         blocker.write_bytes(b"")
-        audio.CLIPS_DIR = blocker / "wake"
+        audio.clips_dir = lambda: blocker / "wake"
         audio.dump_clip(ring, 0.5, keep=3)
         failures = audio.log.find("wake_clip_failed")
     finally:
-        audio.CLIPS_DIR, audio.log = real_dir, real_log
+        audio.clips_dir, audio.log = (lambda: real_dir), real_log
 
     assert len(written) == 5, f"5 fires must log 5 clips, got {len(written)}"
     assert len(kept) == 3, f"keep=3 must prune to 3, got {len(kept)}"

@@ -118,9 +118,9 @@ def fake_get(url, params=None, timeout=20):
 
 def test_deals():
     tmp = Path(tempfile.mkdtemp())
-    steamstore.DEALS = tmp / "deals.json"
-    steamstore.FACET_CACHE = tmp / "facet-cache.json"
-    steamstore.TAGMAP = tmp / "store-tags.json"
+    steamstore.deals_file = lambda: tmp / "deals.json"
+    steamstore.facet_cache_file = lambda: tmp / "facet-cache.json"
+    steamstore.tagmap_file = lambda: tmp / "store-tags.json"
     steamstore._get = fake_get
     # Pin the secrets BEFORE anything runs: fetch_store_search -> _tag_map
     # reaches for a key, and a real secrets.json takes the keyed path.
@@ -182,7 +182,7 @@ def test_deals():
     config.secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
     tmap = steamstore._tag_map()
     assert tmap.get("roguelike") == 1716 and tmap.get("co-op") == 3843, tmap
-    assert steamstore.TAGMAP.exists()  # cached to disk
+    assert steamstore.tagmap_file().exists()  # cached to disk
 
     # Tag matching ignores punctuation and case both ways ("Rogue-like"/"Co op"
     # vs Steam's "Roguelike"/"Co-op"); an exact lookup dropped the tag and

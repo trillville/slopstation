@@ -8,11 +8,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from slopstation import events, logbook
+from slopstation import events, logbook, paths
 
 WORKER_SRC = """import pathlib, sys
-from slopstation import events
-events.LOG_DIR = pathlib.Path(sys.argv[1])
+from slopstation import events, paths
+paths.logs = lambda: pathlib.Path(sys.argv[1])
 events._last_day = None
 for _ in range(120):
     events.emit('supervisor', 'restart', what=sys.argv[2], code=-1)
@@ -29,7 +29,7 @@ def read(path):
 
 def test_events():
     tmp = Path(tempfile.mkdtemp())
-    events.LOG_DIR = tmp
+    paths.logs = lambda: tmp
 
     events._last_day = None
 
@@ -121,12 +121,12 @@ def test_events():
     # Unwritable dir (parent is a file) must not raise.
     blocker = tmp / "blocker"
     blocker.write_text("", encoding="utf-8")
-    events.LOG_DIR = blocker / "sub"
+    paths.logs = lambda: blocker / "sub"
 
     events._last_day = None
     assert events.emit("voice", "wake") is not None  # record built, write lost
     # An unserializable value costs the field's fidelity, never the event.
-    events.LOG_DIR = tmp
+    paths.logs = lambda: tmp
     events._last_day = None
     r = events.emit("voice", "wake", weird=object())
     assert r is not None and isinstance(read(tmp / files[0].name)[-1]["weird"], str)

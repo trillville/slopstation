@@ -20,8 +20,10 @@ log = logbook.logger("voice")
 RETRY_S = 5  # device-wait poll interval
 WAIT_QUIET_S = 30  # re-log an ongoing wait this often
 
+
 # Fired pre-roll, kept on disk. Under logs/ so .gitignore already covers it.
-CLIPS_DIR = paths.HOME / "logs" / "wake"
+def clips_dir():
+    return paths.logs() / "wake"
 
 
 class DeviceMissing(Exception):
@@ -213,7 +215,7 @@ def dump_clip(ring, score, keep):
     if keep <= 0 or not ring:
         return
     try:
-        CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+        clips_dir().mkdir(parents=True, exist_ok=True)
         # Milliseconds are load-bearing: the prune below trusts names to sort
         # chronologically, and two fires in one second would collide. Same
         # `now` as the seconds field so the tiebreaker cannot wrap.
@@ -222,13 +224,13 @@ def dump_clip(ring, score, keep):
             f"wake-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}"
             f"-{int(now * 1000) % 1000:03d}-{score:.3f}.wav"
         )
-        with wave.open(str(CLIPS_DIR / name), "wb") as w:
+        with wave.open(str(clips_dir() / name), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(16000)
             w.writeframes(b"".join(ring))
         # Sorted names are chronological, so the oldest are the head.
-        for old in sorted(CLIPS_DIR.glob("wake-*.wav"))[:-keep]:
+        for old in sorted(clips_dir().glob("wake-*.wav"))[:-keep]:
             old.unlink(missing_ok=True)
         log("wake_clip", clip=name, secs=round(len(ring) * 0.08, 1))
     except Exception as e:

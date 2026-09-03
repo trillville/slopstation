@@ -86,9 +86,9 @@ def drive(lock_age_s, stop_after, session_starts_at=None, error_age_s=None):
     report, so this is the Puck sitting untouched."""
     fresh_state(lock_age_s)
     if error_age_s is not None:
-        sessionlock.LAST_ERROR.write_text("Enter exited without READY")
+        sessionlock.last_error_file().write_text("Enter exited without READY")
         when = time.time() - error_age_s
-        os.utime(sessionlock.LAST_ERROR, (when, when))
+        os.utime(sessionlock.last_error_file(), (when, when))
     cap = logbook.CapturingLog("listener")
     fake = FakeHid()
     ticks = [0]
@@ -185,23 +185,25 @@ def test_standoff():
     # phone-started launch fails in.
     cap, _ = drive(lock_age_s=None, stop_after=6, error_age_s=cl.ERR_STALE_S + 60)
     assert "stale_error_discarded" in cap.events(), cap.events()
-    assert not sessionlock.LAST_ERROR.exists(), "the loop never aged the marker out"
+    assert not sessionlock.last_error_file().exists(), (
+        "the loop never aged the marker out"
+    )
     # A launch started by voice or from a phone leaves nobody holding the
     # Puck. The age-out must not be gated on the buzz, or the marker
     # strands until the next successful launch (2026-08-30, stranded 5 h).
     fresh_state()
     cap = logbook.CapturingLog("listener")
     cl.log = cap
-    sessionlock.LAST_ERROR.write_text("Enter exited without READY")
+    sessionlock.last_error_file().write_text("Enter exited without READY")
     stale = time.time() - cl.ERR_STALE_S - 60
-    os.utime(sessionlock.LAST_ERROR, (stale, stale))
+    os.utime(sessionlock.last_error_file(), (stale, stale))
     cl.signal_last_error(None)
     assert cap.find("stale_error_discarded"), cap.events()
-    assert not sessionlock.LAST_ERROR.exists(), "stale marker survived unheld"
+    assert not sessionlock.last_error_file().exists(), "stale marker survived unheld"
 
     # Fresh and unheld: kept, so the next hand on the Puck still feels it.
-    sessionlock.LAST_ERROR.write_text("Enter exited without READY")
+    sessionlock.last_error_file().write_text("Enter exited without READY")
     cap.records.clear()
     cl.signal_last_error(None)
     assert not cap.events(), cap.events()
-    assert sessionlock.LAST_ERROR.exists(), "fresh marker discarded unheld"
+    assert sessionlock.last_error_file().exists(), "fresh marker discarded unheld"

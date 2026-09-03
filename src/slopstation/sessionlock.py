@@ -15,20 +15,30 @@ import time
 
 from slopstation import paths
 
-STATE = paths.HOME / "state"
-LOCK = STATE / "session.lock"
+
+def lock_file():
+    return paths.state("session.lock")
+
+
 LOCK_STALE_S = 300  # a live session touches the lock every few seconds
-LAST_ERROR = STATE / "last_error"  # written by couch.py on launch failure
+
+
+# written by couch.py on launch failure
+def last_error_file():
+    return paths.state("last_error")
+
+
 # One line, the cancelling turn (may be empty). Written by voice end_session,
 # unlinked by couch.py at every launch wait; stale copies voided at the next
 # launch's start.
-CANCEL = STATE / "cancel"
+def cancel_file():
+    return paths.state("cancel")
 
 
 def age() -> float | None:
     """Seconds since the session lock was last touched, or None if no lock."""
     try:
-        return time.time() - LOCK.stat().st_mtime
+        return time.time() - lock_file().stat().st_mtime
     except OSError:
         return None
 
@@ -52,9 +62,9 @@ def _recycle_stale(content: str) -> bool:
     The guard's exclusive create (O_EXCL) serializes recyclers, the staleness
     re-check happens INSIDE it, and the guard doubles as the incoming lock the
     swap consumes. os.replace never empties the path, so no create slips inside
-    the swap, and a recycler arriving after it reads a fresh LOCK and stands
+    the swap, and a recycler arriving after it reads a fresh lock_file() and stands
     down. A guard orphaned mid-section is recycled at 10 s."""
-    guard = LOCK.with_name(LOCK.name + ".recycle")
+    guard = lock_file().with_name(lock_file().name + ".recycle")
     try:
         if time.time() - guard.stat().st_mtime > 10:
             guard.unlink(missing_ok=True)
@@ -76,7 +86,7 @@ def _recycle_stale(content: str) -> bool:
         # re-read, or a release landing in between puts a live lock under it.
         for _ in range(8):
             try:
-                os.replace(guard, LOCK)
+                os.replace(guard, lock_file())
                 guard = None  # type: ignore[assignment] # consumed by the swap; not ours to unlink
                 return True
             except OSError:
@@ -103,11 +113,11 @@ def acquire(content: str = "") -> bool:
     claim under the live session (controller goes input-dead). `content` is
     the owner note (couch.py writes "<turn> <pid>") read back by release();
     mtime stays the only datum active() keys on."""
-    LOCK.parent.mkdir(exist_ok=True)
+    lock_file().parent.mkdir(exist_ok=True)
     denied = None
     for attempt in (1, 2, 3):
         try:
-            with open(LOCK, "x", encoding="utf-8") as f:
+            with open(lock_file(), "x", encoding="utf-8") as f:
                 f.write(content)
             return True
         except FileExistsError:
@@ -121,7 +131,7 @@ def acquire(content: str = "") -> bool:
             break
         if _recycle_stale(content):
             return True
-    if denied is not None and not LOCK.exists():
+    if denied is not None and not lock_file().exists():
         raise denied
     return False
 
@@ -130,7 +140,7 @@ def touch() -> None:
     """Freshen mtime WITHOUT rewriting content: the owner note has to survive
     the session for release()'s ownership check."""
     try:
-        os.utime(LOCK)
+        os.utime(lock_file())
     except OSError:
         pass
 
@@ -139,7 +149,7 @@ def adopt(content: str) -> None:
     """Take over an existing lock (reconcile's resume): rewrite the owner note
     so release() recognizes us. Doubles as the first heartbeat."""
     try:
-        LOCK.write_text(content, encoding="utf-8")
+        lock_file().write_text(content, encoding="utf-8")
     except OSError:
         pass
 
@@ -151,10 +161,10 @@ def release() -> bool:
     the successor's, and unlinking it would free a live session. A note with
     no readable pid releases anyway."""
     try:
-        parts = LOCK.read_text(encoding="utf-8").split()
+        parts = lock_file().read_text(encoding="utf-8").split()
     except OSError:
         return False  # already gone: nothing to release
     if len(parts) >= 2 and parts[1] != str(os.getpid()):
         return False
-    LOCK.unlink(missing_ok=True)
+    lock_file().unlink(missing_ok=True)
     return True

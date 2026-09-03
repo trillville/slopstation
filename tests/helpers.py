@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from slopstation import sessionlock
+from slopstation import paths, sessionlock
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "src" / "slopstation"
@@ -62,25 +62,14 @@ def wants(*needs):
 
 
 def fresh_state(lock_age_s=None, lock_content="x"):
-    """Point every state-file constant into a new tempdir. lock_age_s seeds a
-    session lock of that age (None = absent). Returns the tempdir."""
-    from slopstation.agent.telemetry import traces
-    from slopstation.agent.tools import library, operations, steamstore
-
-    tmp = Path(tempfile.mkdtemp(prefix="slopstation-test-state-"))
-    sessionlock.STATE = tmp
-    sessionlock.LOCK = tmp / "session.lock"
-    sessionlock.LAST_ERROR = tmp / "last_error"
-    sessionlock.CANCEL = tmp / "cancel"
-    library.LIBRARY = tmp / "library.json"
-    library.META_CACHE = tmp / "metadata-cache.json"
-    steamstore.DEALS = tmp / "deals.json"
-    steamstore.FACET_CACHE = tmp / "facet-cache.json"
-    steamstore.TAGMAP = tmp / "store-tags.json"
-    operations.OPERATIONS_FILE = tmp / "operations.json"
-    traces.DIR = tmp / "traces"
+    """A fresh runtime home for this test: every state file, log and marker
+    moves with paths.HOME. lock_age_s seeds a session lock of that age (None =
+    absent). Returns the state directory."""
+    paths.HOME = Path(tempfile.mkdtemp(prefix="slopstation-test-home-"))
+    state = paths.state()
+    state.mkdir(parents=True)
     if lock_age_s is not None:
-        sessionlock.LOCK.write_text(lock_content)
+        sessionlock.lock_file().write_text(lock_content)
         old = time.time() - lock_age_s
-        os.utime(sessionlock.LOCK, (old, old))
-    return tmp
+        os.utime(sessionlock.lock_file(), (old, old))
+    return state

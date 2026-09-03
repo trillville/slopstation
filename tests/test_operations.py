@@ -7,7 +7,7 @@ import time
 
 import helpers
 from helpers import fresh_state
-from slopstation import logbook, sessionlock
+from slopstation import logbook, paths
 from slopstation.agent.speech import announce
 from slopstation.agent.tools import operations, operations_monitors
 
@@ -102,7 +102,7 @@ def test_operations():
 
     # Separate stores are what the agent and the CLIs actually hold, so the
     # load/mutate/write pair has to serialise on the file, not per instance.
-    shared = sessionlock.STATE / "concurrent.json"
+    shared = paths.state() / "concurrent.json"
     writers = [operations.OperationStore(log, path=shared) for _ in range(4)]
     failures, reading = [], threading.Event()
     threads = [

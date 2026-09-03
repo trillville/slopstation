@@ -18,7 +18,7 @@ import json
 import sys
 import time
 
-from slopstation import config, logbook, statefile
+from slopstation import config, logbook, paths, statefile
 
 API = "https://api.steampowered.com"
 LOGIN = "https://login.steampowered.com"  # the transfer-login host
@@ -433,7 +433,7 @@ class SteamSession:
     def _persist_refresh(self, refresh):
         """Write the token into secrets.json, preserving everything else. The
         value is a credential - never log it."""
-        path = config.SECRETS
+        path = paths.secrets_file()
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except OSError:  # no file yet - a fresh rig
