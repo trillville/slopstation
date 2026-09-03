@@ -48,7 +48,6 @@ class FakeCapture:
 class FakeListener:
     model_name = "hey_jarvis_v0.1"
     model_source = "pretrained"
-    PEAK_HOPS = 0
     wakes = []  # scripted (score, capture)
 
     def __init__(self, pa, voice, idx):

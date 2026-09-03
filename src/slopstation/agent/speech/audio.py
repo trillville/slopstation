@@ -214,8 +214,8 @@ def dump_clip(ring, score, keep):
 
     openWakeWord's custom verifier trains on real false activations, and a
     transcript cannot be re-scored. This is the PRE-detection window, so
-    replaying it reproduces the score up to the crossing and NOT the peak
-    (_scan_peak). Local only, never uploaded. Fail-soft."""
+    replaying it reproduces the score up to the crossing and not the peak
+    that follows it. Local only, never uploaded. Fail-soft."""
     if keep <= 0 or not ring:
         return
     try:
@@ -259,7 +259,6 @@ class WakeListener:
     CHUNK = 1280  # oWW's native 80 ms hop
     PREROLL_CHUNKS = 25  # 2 s ring kept ahead of detection
     SILENT_CHUNKS = 375  # 30 s of literal zeros = dead stream
-    PEAK_HOPS = 15  # 1.2 s of peak search, bench only
 
     # Hand-trained models live in the repo: no upstream to re-fetch them from.
     MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
@@ -379,15 +378,6 @@ class WakeListener:
         )
         return max(scores.values())
 
-    def _scan_peak(self, stream, score, hops):
-        """Score past the crossing to find the peak; costs hops x 80 ms, so
-        bench only."""
-        peak = score
-        for _ in range(hops):
-            data = stream.read(self.CHUNK, exception_on_overflow=False)
-            peak = max(peak, self.score_chunk(self.np.frombuffer(data, self.np.int16)))
-        return peak
-
     def _open_stream(self):
         import pyaudio
 
@@ -400,10 +390,9 @@ class WakeListener:
             input_device_index=self.device_index,
         )
 
-    def _listen(self, stream, threshold, ring, interrupt=None, peak_hops=0):
-        """Blocks until the score crosses `threshold`; returns (score, peak),
-        or (None, None) when `interrupt` asked to stop. peak == score unless
-        peak_hops bought a real one (_scan_peak)."""
+    def _listen(self, stream, threshold, ring, interrupt=None):
+        """Blocks until the score crosses `threshold` and returns it, or None
+        when `interrupt` asked to stop."""
         silent = 0
         # A near miss is one contiguous run above the floor that never crossed,
         # reported at the END with its high-water mark: one event, not a dozen.
@@ -414,7 +403,7 @@ class WakeListener:
             # Something other than a wake word wants the session (an
             # announcement's follow-up window). One 80 ms hop of latency.
             if interrupt is not None and interrupt():
-                return None, None
+                return None
             chunk = self.np.frombuffer(data, self.np.int16)
             # Zombie watchdog: a WASAPI stream can outlive its endpoint (BT
             # profile flap) and deliver exact zeros forever with no error to
@@ -429,9 +418,8 @@ class WakeListener:
                 ring.append(data)
             score = self.score_chunk(chunk)
             if score >= threshold:
-                peak = self._scan_peak(stream, score, peak_hops)
                 self.model.reset()
-                return score, peak
+                return score
             if floor and score >= floor:
                 episode = max(episode, score)
             elif episode:
@@ -443,15 +431,6 @@ class WakeListener:
                     shortfall=round(threshold - episode, 3),
                 )
                 episode = 0.0
-
-    def wait_for_wake(self, threshold: float, peak_hops: int = 0) -> tuple:
-        """Blocks until the wake word fires; returns (score, peak). Closes the
-        stream - trials/soak only, no session follows, hence peak_hops."""
-        stream = self._open_stream()
-        try:
-            return self._listen(stream, threshold, None, peak_hops=peak_hops)
-        finally:
-            close_stream_quietly(stream)
 
     def wait_for_wake_capture(
         self, threshold: float, on_quiet=None, interrupt=None
@@ -466,7 +445,7 @@ class WakeListener:
         stream = self._open_stream()
         ring: collections.deque[bytes] = collections.deque(maxlen=self.PREROLL_CHUNKS)
         try:
-            score, _peak = self._listen(stream, threshold, ring, interrupt)
+            score = self._listen(stream, threshold, ring, interrupt)
         except Exception:
             close_stream_quietly(stream)
             raise

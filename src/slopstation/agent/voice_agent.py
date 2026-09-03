@@ -13,8 +13,6 @@ Modes:
   --earcons             play the earcon vocabulary and exit (volume audition)
   --announce-test       speak a canned operation announcement and exit
   --dry-run             full pipeline; side effects logged, not executed
-  --wake-trials         log wake detections + confidences; never start sessions
-  --false-accept-soak   count spurious wakes over hours; never start sessions
   --once                exactly one session, then exit (bench)
   --text                the assistant REPL (brain/backends.py); --provider,
                         --model, --effort pick the A/B side
@@ -216,8 +214,6 @@ def main():
         "output device and exit (tune voice.earconGain by ear)",
     )
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--wake-trials", action="store_true")
-    ap.add_argument("--false-accept-soak", action="store_true")
     ap.add_argument("--once", action="store_true")
     ap.add_argument(
         "--announce-test",
@@ -423,47 +419,13 @@ def main():
         threshold=voice["wakeThreshold"],
         dry_run=args.dry_run or None,
     )
-    # Own thread: the wake loop blocks for minutes. Real runs only - a quiet
-    # bench mode would page.
-    if not (args.wake_trials or args.false_accept_soak or args.once):
+    # Own thread: the wake loop blocks for minutes. A one-shot --once run
+    # would page on its own quiet exit, so it stays out.
+    if not args.once:
         events.start_heartbeat("voice")
         # This lane's own cron monitor: its death pages on its own, and the
-        # listener's stays green. No-ops without a sentryDsn, and the bench
-        # modes above stay out of it for the same reason they skip the
-        # heartbeat - a quiet bench must not page.
+        # listener's stays green. No-ops without a sentryDsn.
         checkin.start("voice", cfg)
-
-    if args.wake_trials:
-        log("wake_trials_start")
-        n = 0
-        while True:
-            # Thresholds are set from the peak, not the crossing score.
-            score, peak = listener.wait_for_wake(
-                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS
-            )
-            n += 1
-            log("wake_trial", n=n, score=round(score, 2), peak=round(peak, 3))
-            play_pcm(pa, earcons.pcm("wake"), output_idx)
-            time.sleep(1.0)  # refractory: one hit per attempt
-
-    if args.false_accept_soak:
-        log("false_accept_soak_start")
-        t0, n = time.time(), 0
-        while True:
-            # Peak = the margin above threshold a real wake has to beat.
-            _score, peak = listener.wait_for_wake(
-                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS
-            )
-            n += 1
-            hrs = (time.time() - t0) / 3600
-            log.warn(
-                "wake_false",
-                n=n,
-                hours=round(hrs, 2),
-                peak=round(peak, 3),
-                per_hour=round(n / max(hrs, 0.01), 1),
-            )
-            time.sleep(1.0)
 
     duck = make_ducker(cfg, args.dry_run)
 

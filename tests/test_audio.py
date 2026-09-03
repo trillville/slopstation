@@ -235,10 +235,10 @@ def test_near_miss_reports_one_event_per_run_with_its_peak(monkeypatch):
     lst = bare_listener(np=np, model=ScriptedModel(), near_miss_factor=0.2)
     log = CapturingLog()
     monkeypatch.setattr(audio, "log", log)
-    score, peak = lst._listen(LiveStream(), 0.5, None, None)
+    score = lst._listen(LiveStream(), 0.5, None, None)
     misses = log.find("wake_near_miss")
 
-    assert (score, peak) == (0.55, 0.55), (score, peak)
+    assert score == 0.55, score
     assert len(misses) == 2, f"want one event per run, got {len(misses)}"
     assert [m["peak"] for m in misses] == [0.28, 0.41], misses
     assert misses[0]["shortfall"] == 0.22, misses[0]
