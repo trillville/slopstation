@@ -3,6 +3,7 @@ volume family) and the two pairing-free HTTP reads (power state, volume).
 Chord-safe: stdlib plus a lazy pyserial import. The venv-only write path over
 WebSocket is agent/tools/tv_remote.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,16 +15,16 @@ import time
 # in this family is power_off - frozen literals, cross-checked against
 # exlink_frame() by agent/tests/test_exlink.py.
 EXLINK_FRAMES = {
-    "power_on":  "082200000002d4",
+    "power_on": "082200000002d4",
     "power_off": "082200000001d5",
     "hdmi1": "08220a000500c7",
     "hdmi2": "08220a000501c6",
     "hdmi3": "08220a000502c5",
     "hdmi4": "08220a000503c4",
-    "vol_up":      "082201000100d4",
-    "vol_down":    "082201000200d3",
-    "mute_toggle": "082202000000d4",   # the only toggle here - power_on/off
-                                       # are discrete, so safe to re-send
+    "vol_up": "082201000100d4",
+    "vol_down": "082201000200d3",
+    "mute_toggle": "082202000000d4",  # the only toggle here - power_on/off
+    # are discrete, so safe to re-send
 }
 
 # Every frame the S90C accepts acks with exactly these three bytes.
@@ -49,6 +50,7 @@ def vol_set_frame(level: int) -> str:
 
 def _exlink_txn(frame_hex: str, port: str) -> str:
     import serial
+
     with serial.Serial(port, 9600, timeout=1) as s:
         s.write(bytes.fromhex(frame_hex))
         return s.read(3).hex()
@@ -60,14 +62,16 @@ def exlink_send_hex(frame_hex: str, port: str) -> str:
     so a box without pyserial can still import tv. The 1 s retry is for
     PORT CONTENTION only: couch.py and the voice agent share this port."""
     import serial
+
     try:
         ack = _exlink_txn(frame_hex, port)
     except serial.SerialException:
         time.sleep(1)
         ack = _exlink_txn(frame_hex, port)
     if ack != EXLINK_ACK:
-        raise ExlinkNak(f"TV answered {ack or 'nothing'} (want {EXLINK_ACK}) "
-                        f"for frame {frame_hex}")
+        raise ExlinkNak(
+            f"TV answered {ack or 'nothing'} (want {EXLINK_ACK}) for frame {frame_hex}"
+        )
     return ack
 
 
@@ -90,9 +94,9 @@ def tv_power_state(ip: str, timeout: float = 2.0, raw: bool = False) -> str | No
     collapsing to the safe pair. Callers pick their own safe side; the voice
     ducker treats anything but "on" as do-not-touch."""
     import urllib.request
+
     try:
-        with urllib.request.urlopen(f"http://{ip}:8001/api/v2/",
-                                    timeout=timeout) as r:
+        with urllib.request.urlopen(f"http://{ip}:8001/api/v2/", timeout=timeout) as r:
             state = json.load(r).get("device", {}).get("PowerState")
     except Exception:
         return None
@@ -114,22 +118,28 @@ def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
     zero: unreachable, or the TV's UPnP renderer asleep (it goes down with
     the panel, unlike /api/v2/ above)."""
     import urllib.request
-    body = ('<?xml version="1.0" encoding="utf-8"?>'
-            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
-            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-            '<s:Body>'
-            '<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
-            '<InstanceID>0</InstanceID><Channel>Master</Channel>'
-            '</u:GetVolume></s:Body></s:Envelope>').encode()
+
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+        b's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        b"<s:Body>"
+        b'<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+        b"<InstanceID>0</InstanceID><Channel>Master</Channel>"
+        b"</u:GetVolume></s:Body></s:Envelope>"
+    )
     req = urllib.request.Request(
-        f"http://{ip}:9197/upnp/control/RenderingControl1", data=body,
-        headers={"Content-Type": 'text/xml; charset="utf-8"',
-                 "SOAPACTION": '"urn:schemas-upnp-org:service:'
-                               'RenderingControl:1#GetVolume"'})
+        f"http://{ip}:9197/upnp/control/RenderingControl1",
+        data=body,
+        headers={
+            "Content-Type": 'text/xml; charset="utf-8"',
+            "SOAPACTION": '"urn:schemas-upnp-org:service:RenderingControl:1#GetVolume"',
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             out = r.read().decode(errors="replace")
         start = out.index("<CurrentVolume>") + len("<CurrentVolume>")
-        return int(out[start:out.index("</CurrentVolume>")])
+        return int(out[start : out.index("</CurrentVolume>")])
     except Exception:
         return None

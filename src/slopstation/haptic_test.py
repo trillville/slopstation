@@ -1,11 +1,11 @@
 """Haptic bench tool for the 2026 Steam Controller via the Puck.
 
 Never run while chord_listener.py is running - one process owns the Puck.
-Close the listener console first; restart it (Start-Listener.bat) when done.
+Close the listener console first; Start-Slopstation.bat brings it back.
 Wake the controller (tap any button) first - writes need it awake.
 
 Usage:
-    python haptic_test.py [chirp|sustained|pulse|rumble|probe|audition] [gain]
+    python -m slopstation.haptic_test [chirp|sustained|pulse|rumble|probe|audition] [gain]
 
 Subcommands (try them in this order if the controller stays silent):
   chirp      two short self-terminating 0x83 tones + stops [default]
@@ -22,14 +22,16 @@ loud value - firmware clamps; negative attenuates).
 After any controller firmware update, re-run calibrate.py AND `haptic_test.py
 chirp` - the protocol headers are a Valve snapshot, not a contract.
 """
-import sys, time
+
+import sys
+import time
 
 import hid
 
 from slopstation import haptics
-from slopstation.haptics import VID, PID
+from slopstation.haptics import PID, VID
 
-SUSTAIN_MS = 0x18FF            # bridge's PlayHapticTone duration (~6.4 s)
+SUSTAIN_MS = 0x18FF  # bridge's PlayHapticTone duration (~6.4 s)
 
 
 def log(msg):
@@ -49,10 +51,13 @@ def w(dev, data, label):
 
 
 def open_input_interface(timeout_s=2.0):
-    dev, path = haptics.open_streaming_interface(haptics.streams_input_reports,
-                                                 timeout_s)
+    dev, path = haptics.open_streaming_interface(
+        haptics.streams_input_reports, timeout_s
+    )
     if not dev:
-        raise RuntimeError("no live 0x42 interface - controller awake? listener stopped?")
+        raise RuntimeError(
+            "no live 0x42 interface - controller awake? listener stopped?"
+        )
     log(f"latched 0x42 interface: {path}")
     return dev
 
@@ -64,8 +69,8 @@ def chirp(dev, gain):
 # Production vocabulary, from haptics.py.
 PATTERNS = {
     "launch": haptics.PATTERN_LAUNCH,
-    "busy":   haptics.PATTERN_BUSY,
-    "fail":   haptics.PATTERN_FAIL,
+    "busy": haptics.PATTERN_BUSY,
+    "fail": haptics.PATTERN_FAIL,
 }
 
 
@@ -80,10 +85,18 @@ def audition(dev, gain):
 
 def sustained(dev, gain):
     for side in (0, 1):
-        w(dev, haptics.tone_report(side, 440, SUSTAIN_MS, gain), f"tone 440Hz sustained side{side}")
+        w(
+            dev,
+            haptics.tone_report(side, 440, SUSTAIN_MS, gain),
+            f"tone 440Hz sustained side{side}",
+        )
     time.sleep(0.055)
     for side in (0, 1):
-        w(dev, haptics.tone_report(side, 660, SUSTAIN_MS, gain), f"tone 660Hz sustained side{side}")
+        w(
+            dev,
+            haptics.tone_report(side, 660, SUSTAIN_MS, gain),
+            f"tone 660Hz sustained side{side}",
+        )
     time.sleep(0.09)
     for side in (0, 1):
         w(dev, haptics.stop_report(side), f"stop side{side}")
@@ -103,15 +116,22 @@ def probe():
     # Not in CMDS: main opens the device before dispatching one, and probe
     # enumerates for itself.
     for info in hid.enumerate(VID, PID):
-        log(f"path={info['path']} usage_page={info.get('usage_page', 0):#06x} "
-            f"usage={info.get('usage', 0):#04x}")
+        log(
+            f"path={info['path']} usage_page={info.get('usage_page', 0):#06x} "
+            f"usage={info.get('usage', 0):#04x}"
+        )
     log("opening for 0x42 latch check...")
     d = open_input_interface()
     d.close()
 
 
-CMDS = {"chirp": chirp, "sustained": sustained, "pulse": pulse,
-        "rumble": rumble, "audition": audition}
+CMDS = {
+    "chirp": chirp,
+    "sustained": sustained,
+    "pulse": pulse,
+    "rumble": rumble,
+    "audition": audition,
+}
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "chirp"

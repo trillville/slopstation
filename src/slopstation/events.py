@@ -9,10 +9,11 @@ block. Fail-soft throughout: a lost event never costs the caller. Daily files
 are never renamed - the shipper holds a read handle open on Windows - so the
 date is in the name and expired files are deleted.
 
-CLI, so a supervisor or a scheduled task can emit too:
+CLI, so smartd's alert script can emit too:
 
     python -m slopstation.events emit supervisor restart code=1 what=listener
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -25,25 +26,25 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from types import MappingProxyType
 
-from datetime import datetime, timezone
-
-try:                                 # Windows-only; the append lock needs it
+try:  # Windows-only; the append lock needs it
     import msvcrt
-except ImportError:                  # pragma: no cover - no such rig today
-    msvcrt = None                    # type: ignore[assignment] # _append falls back to a bare append
+except ImportError:  # pragma: no cover - no such rig today
+    msvcrt = None  # type: ignore[assignment] # _append falls back to a bare append
 from typing import Any, TypeGuard
 
 from slopstation import paths
 
-BASE = paths.HOME
-LOG_DIR = BASE / "logs"
+LOG_DIR = paths.HOME / "logs"
 TTL_DAYS = 14
-# Subdirectory NAME, not a path: the blind suite monkeypatches LOG_DIR, and a
+# Subdirectory NAME, not a path: the test suite monkeypatches LOG_DIR, and a
 # module-level LOG_DIR / "archive" would freeze the real path at import time
 # and let a test write into the live log directory.
 ARCHIVE_NAME = "archive"
-ARCHIVE_DAYS = 2        # out of the shipper's glob; see _prune
+ARCHIVE_DAYS = 2  # out of the shipper's glob; see _prune
 
 # The whole level vocabulary. It becomes the log record's SEVERITY, which
 # alerts group on, so it stays small and every value has an emitter
@@ -52,13 +53,20 @@ INFO, WARN, ERROR = "info", "warn", "error"
 
 # Keys the EMITTER owns. A caller field of the same name would shadow a log
 # attribute or make the record lie, so it is renamed rather than dropped.
-_EMITTER_OWNED = frozenset(("ts", "level", "env", "service", "lane", "event",
-                            "host"))
+_EMITTER_OWNED = frozenset(("ts", "level", "env", "service", "lane", "event", "host"))
 
 # Field names whose VALUE is always redacted. Belt to the secrets.json braces
 # below: a key that never reaches secrets.json is still caught by its name.
-_SECRET_NAME_HINTS = ("key", "token", "secret", "password", "passwd", "pin",
-                      "authorization", "auth")
+_SECRET_NAME_HINTS = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "pin",
+    "authorization",
+    "auth",
+)
 
 # Human-line values longer than this are elided; the JSONL keeps them whole.
 _HUMAN_MAX = 80
@@ -68,23 +76,14 @@ def _service() -> str:
     """The role this box plays; a log attribute alerts select on, so keep it
     low-cardinality.
     Overridable for the bench; the hostname is a field, not this."""
-    return os.environ.get("CG_SERVICE", "k15")
+    return os.environ.get("SLOPSTATION_SERVICE", "k15")
 
 
 def _env() -> str:
-    """prod unless we are demonstrably inside the blind suite. Auto-detected,
-    not opt-in: a test that forgot to say so writes couch.log lines
-    indistinguishable from a real outage. Keyed on argv[0], which is why the
-    suite runs as scripts and not under pytest."""
-    override = os.environ.get("CG_ENV")
-    if override:
-        return override
-    try:
-        if "tests" in pathlib.Path(sys.argv[0]).resolve().parts:
-            return "test"
-    except (OSError, ValueError, IndexError):
-        pass
-    return "prod"
+    """The `env` label on every record: prod unless told otherwise. The test
+    suite sets SLOPSTATION_ENV before anything imports this, so a test can
+    never write a record indistinguishable from an outage."""
+    return os.environ.get("SLOPSTATION_ENV", "prod")
 
 
 SERVICE = _service()
@@ -94,7 +93,11 @@ HOST = platform.node()
 # Correlation, set once per user intent and inherited downstream. A ContextVar
 # rather than a global so the voice agent's concurrent sessions cannot bleed
 # into each other; explicit kwargs win over the ambient value.
-_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar("cg_event_ctx", default={})
+# A read-only default: every writer builds a fresh dict, so nothing can
+# mutate the shared one.
+_ctx: contextvars.ContextVar[Mapping[str, Any]] = contextvars.ContextVar(
+    "event_ctx", default=MappingProxyType({})
+)
 
 
 # One intent = one id, minted at the chord or the wake word and carried across
@@ -124,7 +127,7 @@ def reset(token: contextvars.Token) -> None:
     try:
         _ctx.reset(token)
     except ValueError:
-        pass                        # set in another context; nothing to undo
+        pass  # set in another context; nothing to undo
 
 
 def current() -> dict:
@@ -149,9 +152,12 @@ def load_secrets(path: str | pathlib.Path) -> dict:
 def real_key(value: object) -> TypeGuard[str]:
     """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent. Redacting
     "..." would black out prose."""
-    return (isinstance(value, str) and "..." not in value
-            and not value.upper().startswith("PLACEHOLDER")
-            and len(value.strip()) >= 15)
+    return (
+        isinstance(value, str)
+        and "..." not in value
+        and not value.upper().startswith("PLACEHOLDER")
+        and len(value.strip()) >= 15
+    )
 
 
 def _secret_values() -> set[str]:
@@ -161,11 +167,11 @@ def _secret_values() -> set[str]:
     if _redactions is None:
         vals = set()
         try:
-            for k, v in load_secrets(BASE / "secrets.json").items():
+            for k, v in load_secrets(paths.HOME / "secrets.json").items():
                 if not k.startswith("_") and real_key(v):
                     vals.add(v.strip())
         except (OSError, ValueError, AttributeError):
-            pass                    # no secrets file on this box: nothing to hide
+            pass  # no secrets file on this box: nothing to hide
         _redactions = vals
     return _redactions
 
@@ -216,7 +222,7 @@ def _prune() -> None:
                 if f.stat().st_mtime < now - ARCHIVE_DAYS * 86400:
                     f.replace(archive / f.name)
             except OSError:
-                pass                # locked or vanished: next rollover
+                pass  # locked or vanished: next rollover
         for f in list(LOG_DIR.glob("*.jsonl")) + list(archive.glob("*.jsonl")):
             try:
                 if f.stat().st_mtime < now - TTL_DAYS * 86400:
@@ -237,12 +243,12 @@ LOCK_WAIT_S = 0.2
 
 
 def _append(path: pathlib.Path, line: str) -> None:
-    data = (line + chr(10)).encode('utf-8')
+    data = (line + chr(10)).encode("utf-8")
     if msvcrt is None:
-        with path.open('ab') as f:
+        with path.open("ab") as f:
             f.write(data)
         return
-    fd = os.open(str(path.parent / '.emit.lock'), os.O_CREAT | os.O_RDWR)
+    fd = os.open(str(path.parent / ".emit.lock"), os.O_CREAT | os.O_RDWR)
     held = False
     try:
         deadline = time.monotonic() + LOCK_WAIT_S
@@ -255,7 +261,7 @@ def _append(path: pathlib.Path, line: str) -> None:
                 if time.monotonic() > deadline:
                     break
                 time.sleep(0.002)
-        with path.open('ab') as f:
+        with path.open("ab") as f:
             f.write(data)
     finally:
         if held:
@@ -264,8 +270,6 @@ def _append(path: pathlib.Path, line: str) -> None:
             except OSError:
                 pass
         os.close(fd)
-
-
 
 
 def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | None:
@@ -278,7 +282,7 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
     in here can run."""
     global _last_day
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # Filename uses the LOCAL date; every ts inside stays UTC. Mixed on
         # purpose: timestamps must be unambiguous, but a filename dated
         # tomorrow from 5pm onwards (UTC-7) confuses a human. Retention prunes
@@ -286,7 +290,8 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
         day = time.strftime("%Y%m%d")
         ctx = _ctx.get()
         rec = {
-            "ts": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
+            "ts": now.strftime("%Y-%m-%dT%H:%M:%S.")
+            + f"{now.microsecond // 1000:03d}Z",
             "level": level,
             "env": ENV,
             "service": SERVICE,
@@ -315,7 +320,7 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
             _last_day = day
         _append(_path(day), json.dumps(rec, default=str, ensure_ascii=False))
     except (OSError, ValueError, TypeError):
-        pass                        # the event is lost; the caller is not
+        pass  # the event is lost; the caller is not
     return rec
 
 
@@ -338,6 +343,7 @@ def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> threading.Thr
     alert by construction. The two read together: heartbeats missing while
     check-ins arrive is a dead collector; check-ins missing is a dead lane.
     """
+
     def tick():
         while True:
             try:
@@ -360,14 +366,14 @@ def human(event: str, level: str = INFO, /, **fields: Any) -> str:
     parts = [event]
     for k, v in fields.items():
         if v is None or k in ("turn", "session", "job"):
-            continue              # correlation ids are for the machine
+            continue  # correlation ids are for the machine
         v = scrub(k, v)
         s = v if isinstance(v, str) else json.dumps(v, default=str)
         if len(s) > _HUMAN_MAX:
             # ASCII on purpose: printed to a cmd.exe console, where a cp1252
             # codepage turns a real ellipsis into mojibake or a
             # UnicodeEncodeError.
-            s = s[:_HUMAN_MAX - 3] + "..."
+            s = s[: _HUMAN_MAX - 3] + "..."
         if isinstance(v, str) and (" " in s or not s):
             s = f'"{s}"'
         parts.append(f"{k}={s}")
@@ -375,13 +381,13 @@ def human(event: str, level: str = INFO, /, **fields: Any) -> str:
     return prefix + " ".join(parts)
 
 
-# --- CLI (for the cmd.exe supervisors) ----------------------------------------
+# --- CLI ----------------------------------------------------------------------
 
 
 def _cli(argv: list[str]) -> int:
     """events.py emit <lane> <event> [--level warn] [k=v ...]
 
-    So Start-Listener.bat and friends can report a crash-restart."""
+    So smart-alert.bat can report a SMART warning."""
     if not argv or argv[0] != "emit" or len(argv) < 3:
         print(__doc__.strip().splitlines()[-1].strip())
         return 2
@@ -403,9 +409,12 @@ def _cli(argv: list[str]) -> int:
                 fields[k] = v
         # anything else is ignored: a supervisor must never die on its own
         # telemetry, and cmd.exe quoting is hostile.
-    rec = emit(lane, event, level, **fields)        # positional: see emit()
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{lane}] "
-          + human(event, level, **fields), flush=True)
+    rec = emit(lane, event, level, **fields)  # positional: see emit()
+    print(
+        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{lane}] "
+        + human(event, level, **fields),
+        flush=True,
+    )
     return 0 if rec else 1
 
 

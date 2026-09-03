@@ -1,4 +1,4 @@
-"""Rediscover the controller's HID button bytes: python calibrate.py
+"""Rediscover the controller's HID button bytes: python -m slopstation.calibrate
 
 Valve does not document the 2026 Steam Controller's report format, so
 chord_listener.py's RID_INPUT / BTN_BYTE / CHORD are measured, not a contract.
@@ -8,10 +8,12 @@ listener that prints `armed` and never fires.
 Controller awake and flat for the 3 s noise window, then press ONE input at a
 time. Not while chord_listener.py is running - one process owns the Puck.
 """
+
 import time
 from collections import Counter
 
 from slopstation import haptics
+
 
 def pick_interface():
     # Report type unknown here - that is what this tool measures - so accept on
@@ -21,17 +23,20 @@ def pick_interface():
         print(f"using interface: {path}")
     return dev
 
+
 def main():
     dev = pick_interface()
     if not dev:
-        print("no streaming interface found"); raise SystemExit(1)
+        print("no streaming interface found")
+        raise SystemExit(1)
 
     print("learning noise for 3s - hands OFF, controller flat...")
     reports = []
     t0 = time.time()
     while time.time() - t0 < 3.0:
         r = dev.read(64)
-        if r: reports.append(bytes(r))
+        if r:
+            reports.append(bytes(r))
         time.sleep(0.002)
 
     # group by report type (byte 0), keep the most common type only
@@ -53,7 +58,11 @@ def main():
         if r:
             r = bytes(r)
             if len(r) >= n and r[0] == rid and r != last:
-                diffs = [f"byte[{i}]: {base[i]:02x}->{r[i]:02x}" for i in stable if r[i] != base[i]]
+                diffs = [
+                    f"byte[{i}]: {base[i]:02x}->{r[i]:02x}"
+                    for i in stable
+                    if r[i] != base[i]
+                ]
                 if diffs:
                     print("  ".join(diffs))
                 last = r

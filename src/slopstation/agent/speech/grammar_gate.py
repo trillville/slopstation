@@ -8,6 +8,7 @@ end here by pushing EndWorkerFrame downstream: an exit phrase matched here
 ends it on the spot, and stop_listening arms request_stop() so it ends once
 the goodbye has been spoken.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,21 +17,25 @@ from pathlib import Path
 
 import yaml
 from hassil import Intents, SlotList, TextSlotList, recognize
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    EndWorkerFrame,
+    ErrorFrame,
+    Frame,
+    OutputAudioRawFrame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from rapidfuzz import fuzz
 
-from pipecat.frames.frames import (BotStartedSpeakingFrame,
-                                   BotStoppedSpeakingFrame, EndWorkerFrame,
-                                   ErrorFrame, Frame, OutputAudioRawFrame,
-                                   TranscriptionFrame,
-                                   UserStartedSpeakingFrame,
-                                   UserStoppedSpeakingFrame)
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-
-from slopstation.agent.speech import earcons
 from slopstation import events
+from slopstation.agent.brain.dispatch import Result
+from slopstation.agent.speech import earcons
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import titles
-from slopstation.agent.brain.dispatch import Result
 
 GRAMMAR = Path(__file__).resolve().parents[1] / "grammar.yaml"
 
@@ -62,15 +67,17 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
         toks = text.split()
         i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
         if i < len(toks) and fuzz.ratio(toks[i].strip(_PUNCT).lower(), anchor) >= 80:
-            text = " ".join(toks[i + 1:])
+            text = " ".join(toks[i + 1 :])
             continue
-        if (i + 1 < len(toks)
-                and fuzz.ratio(toks[i + 1].strip(_PUNCT).lower(),
-                               anchor) < _WHOLE_ANCHOR
-                and fuzz.ratio(
-                    (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(),
-                    anchor) >= 80):
-            text = " ".join(toks[i + 2:])
+        if (
+            i + 1 < len(toks)
+            and fuzz.ratio(toks[i + 1].strip(_PUNCT).lower(), anchor) < _WHOLE_ANCHOR
+            and fuzz.ratio(
+                (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(), anchor
+            )
+            >= 80
+        ):
+            text = " ".join(toks[i + 2 :])
             continue
         return text
 
@@ -81,8 +88,11 @@ def stt_confidence(frame) -> float | None:
     a shape change upstream costs the field, never the turn."""
     try:
         words = (frame.result or {}).get("words") or []
-        scores = [w["confidence"] for w in words
-                  if isinstance(w, dict) and w.get("confidence") is not None]
+        scores = [
+            w["confidence"]
+            for w in words
+            if isinstance(w, dict) and w.get("confidence") is not None
+        ]
         return round(sum(scores) / len(scores), 2) if scores else None
     except Exception:
         return None
@@ -103,17 +113,20 @@ class GrammarMatcher:
         self.intents = load_intents()
         self.slot_lists: dict[str, SlotList] = {
             "input": TextSlotList.from_tuples(
-                (spoken, spoken) for spoken in voice_cfg["inputs"]),
+                (spoken, spoken) for spoken in voice_cfg["inputs"]
+            ),
             "target": TextSlotList.from_tuples(
-                (spoken, kind) for spoken, kind
-                in voice_cfg.get("navTargets", {}).items()),
+                (spoken, kind)
+                for spoken, kind in voice_cfg.get("navTargets", {}).items()
+            ),
         }
 
     def match(self, text: str) -> tuple | None:
         """(intent_name, slots dict) or None. Input goes through spoken_form
         so 'armored core six' meets the slot variant 'armored core 6'."""
-        r = recognize(titles.spoken_form(text), self.intents,
-                      slot_lists=self.slot_lists)
+        r = recognize(
+            titles.spoken_form(text), self.intents, slot_lists=self.slot_lists
+        )
         if r is None:
             return None
         return r.intent.name, {k: v.value for k, v in r.entities.items()}
@@ -136,22 +149,30 @@ class GrammarGate(FrameProcessor):
     # launch) clears the window and acks normally.
     ACK_COALESCE_S = 0.8
 
-    def __init__(self, matcher, dispatch, log, resolve_game=None,
-                 assistant_enabled=False, wake_word=None, ack=None,
-                 resolve_collection=None):
+    def __init__(
+        self,
+        matcher,
+        dispatch,
+        log,
+        resolve_game=None,
+        assistant_enabled=False,
+        wake_word=None,
+        ack=None,
+        resolve_collection=None,
+    ):
         super().__init__()
         self.matcher = matcher
         self.dispatch = dispatch
         self.log = log
-        self.resolve_game = resolve_game        # fuzzy title -> appid (titles.py)
+        self.resolve_game = resolve_game  # fuzzy title -> appid (titles.py)
         self.resolve_collection = resolve_collection  # fuzzy name -> collection id
         self.assistant_enabled = assistant_enabled
-        self.wake_word = wake_word              # strip anchor ("jarvis"); None = off
-        self.ack = ack                          # preroll.WakeAck; None = no chime
-        self._speaking = 0.0                    # ts of the open user turn; 0 = closed
-        self._dispatching = 0                   # blocking calls in flight
-        self._assistant_pending = 0.0           # ts of a transcript handed to the LLM
-        self._stop_after_reply = False          # stop_listening tool armed one
+        self.wake_word = wake_word  # strip anchor ("jarvis"); None = off
+        self.ack = ack  # preroll.WakeAck; None = no chime
+        self._speaking = 0.0  # ts of the open user turn; 0 = closed
+        self._dispatching = 0  # blocking calls in flight
+        self._assistant_pending = 0.0  # ts of a transcript handed to the LLM
+        self._stop_after_reply = False  # stop_listening tool armed one
 
     def request_stop(self) -> None:
         """stop_listening asking for the mic back. ARMS the ending; the frame
@@ -176,16 +197,21 @@ class GrammarGate(FrameProcessor):
         Without the in-flight check a model slower than holdWindowS is killed
         mid-answer. Both time flags expire, so a lost frame cannot defer the
         idle handler forever."""
-        pending = (self._assistant_pending
-                   and time.time() - self._assistant_pending < self.ASSISTANT_WAIT_S)
-        speaking = (self._speaking
-                    and time.time() - self._speaking < self.SPEAKING_WAIT_S)
+        pending = (
+            self._assistant_pending
+            and time.time() - self._assistant_pending < self.ASSISTANT_WAIT_S
+        )
+        speaking = (
+            self._speaking and time.time() - self._speaking < self.SPEAKING_WAIT_S
+        )
         return bool(speaking) or self._dispatching > 0 or bool(pending)
 
     async def _earcon(self, name):
-        await self.push_frame(OutputAudioRawFrame(
-            audio=earcons.pcm(name), sample_rate=earcons.SAMPLE_RATE,
-            num_channels=1))
+        await self.push_frame(
+            OutputAudioRawFrame(
+                audio=earcons.pcm(name), sample_rate=earcons.SAMPLE_RATE, num_channels=1
+            )
+        )
 
     async def _ack_wake(self):
         """The wake chime, unless the capture watcher already played it (it
@@ -197,8 +223,11 @@ class GrammarGate(FrameProcessor):
     async def _result_earcon(self, name):
         """Ack a dispatch result - unless it is a plain success still landing
         on the wake chime (see ACK_COALESCE_S). busy and fail always play."""
-        if (name == "ok" and self.ack is not None
-                and self.ack.age() < self.ACK_COALESCE_S):
+        if (
+            name == "ok"
+            and self.ack is not None
+            and self.ack.age() < self.ACK_COALESCE_S
+        ):
             self.log("earcon_folded", earcon=name)
             return
         await self._earcon(name)
@@ -228,11 +257,11 @@ class GrammarGate(FrameProcessor):
         try:
             if intent == "PlayGame":
                 r = await self._play_game(str(slots["game"]))
-                if r is None:            # title unresolved -> the assistant
+                if r is None:  # title unresolved -> the assistant
                     return False
             elif intent == "ShowCollection":
                 r = await self._show_collection(str(slots["collection"]))
-                if r is None:       # collection unresolved -> the assistant
+                if r is None:  # collection unresolved -> the assistant
                     return False
             elif intent in actions:
                 r = await asyncio.to_thread(actions[intent])
@@ -248,14 +277,17 @@ class GrammarGate(FrameProcessor):
     async def _play_game(self, spoken):
         """Resolve via titles.py; a miss goes to the assistant (it can reason
         about 'that mech game') or, without one, an honest fail earcon."""
-        appid, title = (self.resolve_game(spoken) if self.resolve_game
-                        else (None, None))
+        appid, title = self.resolve_game(spoken) if self.resolve_game else (None, None)
         if appid is None:
             if self.assistant_enabled:
                 self.log("title_miss", spoken=spoken, fallback="assistant")
                 return None
-            self.log.warn("title_miss", spoken=spoken, fallback="fail_earcon",
-                          reason=None if self.resolve_game else "no_index")
+            self.log.warn(
+                "title_miss",
+                spoken=spoken,
+                fallback="fail_earcon",
+                reason=None if self.resolve_game else "no_index",
+            )
             return Result(False, "fail", f"no match for '{spoken}'")
         self.log("title_resolved", spoken=spoken, title=title, appid=appid)
         return await asyncio.to_thread(self.dispatch.play_game, appid)
@@ -263,15 +295,19 @@ class GrammarGate(FrameProcessor):
     async def _show_collection(self, spoken):
         """Resolve a collection name -> id via titles; a miss goes to the
         assistant (or a fail earcon without one), like a title miss."""
-        cid, name = (self.resolve_collection(spoken) if self.resolve_collection
-                     else (None, None))
+        cid, name = (
+            self.resolve_collection(spoken) if self.resolve_collection else (None, None)
+        )
         if cid is None:
             if self.assistant_enabled:
                 self.log("collection_miss", spoken=spoken, fallback="assistant")
                 return None
-            self.log.warn("collection_miss", spoken=spoken,
-                          fallback="fail_earcon",
-                          reason=None if self.resolve_collection else "no_collections")
+            self.log.warn(
+                "collection_miss",
+                spoken=spoken,
+                fallback="fail_earcon",
+                reason=None if self.resolve_collection else "no_collections",
+            )
             return Result(False, "fail", f"no collection matching '{spoken}'")
         self.log("collection_resolved", spoken=spoken, name=name, id=cid)
         return await asyncio.to_thread(self.dispatch.nav, "collection", cid)
@@ -285,9 +321,9 @@ class GrammarGate(FrameProcessor):
             self._speaking = time.time()
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._speaking = 0.0
-            await self._ack_wake()              # you stopped - chime now
+            await self._ack_wake()  # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):
-            self._assistant_pending = 0.0       # answer arrived; idle clock owns it now
+            self._assistant_pending = 0.0  # answer arrived; idle clock owns it now
         elif isinstance(frame, BotStoppedSpeakingFrame):
             # The goodbye is out of the speaker (pipecat emits this once per
             # LLM response), so an armed stop can end the session without
@@ -305,7 +341,10 @@ class GrammarGate(FrameProcessor):
             # Honour a pending stop rather than holding the mic to the idle
             # timeout for a goodbye that is not coming.
             await self._stop_if_armed("stop listening (answer failed)")
-        if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
+        if (
+            isinstance(frame, TranscriptionFrame)
+            and direction == FrameDirection.DOWNSTREAM
+        ):
             text = frame.text.strip()
             conf = stt_confidence(frame)
             if text:
@@ -325,12 +364,13 @@ class GrammarGate(FrameProcessor):
                 if not stripped:
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": swallow it, no earcon, no LLM turn.
-                    self.log("stt_final", text=text, outcome="wake_only",
-                             confidence=conf)
+                    self.log(
+                        "stt_final", text=text, outcome="wake_only", confidence=conf
+                    )
                     return
                 if stripped != text:
                     self.log("wake_prefix_stripped", text=text, stripped=stripped)
-                    frame.text = stripped       # both lanes see the command only
+                    frame.text = stripped  # both lanes see the command only
                     text = stripped
             if text:
                 # The utterance snapshot (see dispatch.Utterance). `asked` is
@@ -341,16 +381,26 @@ class GrammarGate(FrameProcessor):
                 if m is not None:
                     self.log("gate_match", text=text, intent=m[0], confidence=conf)
                     if await self._run_intent(*m):
-                        return              # swallowed: the gate handled it
+                        return  # swallowed: the gate handled it
                 if not self.assistant_enabled:
-                    self.log.warn("gate_miss", text=text, fallback="none",
-                                  reason="assistant_disabled", confidence=conf)
+                    self.log.warn(
+                        "gate_miss",
+                        text=text,
+                        fallback="none",
+                        reason="assistant_disabled",
+                        confidence=conf,
+                    )
                     await self._earcon("fail")
                     return
                 # reason on BOTH gate_miss paths, so the field is total: one
                 # that appears on only one path makes `reason:assistant_disabled`
                 # look like the whole story.
-                self.log("gate_miss", text=text, fallback="assistant",
-                         reason="no_grammar_match", confidence=conf)
+                self.log(
+                    "gate_miss",
+                    text=text,
+                    fallback="assistant",
+                    reason="no_grammar_match",
+                    confidence=conf,
+                )
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

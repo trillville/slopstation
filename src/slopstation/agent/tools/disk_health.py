@@ -13,7 +13,7 @@ from slopstation.agent.tools.media_clients import _clean_text
 DISK_POLL_S = 300
 # One 2160p remux is ~70 GB, so a threshold below that reports a volume that
 # is already too full to take the next grab.
-FREE_WARN_BYTES = 250 * 1024 ** 3
+FREE_WARN_BYTES = 250 * 1024**3
 
 
 class DiskHealthMonitor:
@@ -23,8 +23,9 @@ class DiskHealthMonitor:
     would bury the crossing that is the news.
     """
 
-    def __init__(self, mounts, log, poll_s=DISK_POLL_S,
-                 free_warn_bytes=FREE_WARN_BYTES):
+    def __init__(
+        self, mounts, log, poll_s=DISK_POLL_S, free_warn_bytes=FREE_WARN_BYTES
+    ):
         self.mounts = tuple(mounts)
         self.log = log
         self.poll_s = poll_s
@@ -34,8 +35,9 @@ class DiskHealthMonitor:
         self._last_failure = {}
 
     def start(self):
-        threading.Thread(target=self._run, daemon=True,
-                         name="disk-health-monitor").start()
+        threading.Thread(
+            target=self._run, daemon=True, name="disk-health-monitor"
+        ).start()
 
     def stop(self):
         self._stop.set()
@@ -58,17 +60,22 @@ class DiskHealthMonitor:
                     self._last_failure[mount] = detail
 
     def _check(self, mount, usage):
-        free_gb = round(usage.free / 1024 ** 3, 1)
+        free_gb = round(usage.free / 1024**3, 1)
         pct_free = round(100.0 * usage.free / usage.total, 1) if usage.total else 0.0
         if usage.free < self.free_warn_bytes:
             # No first-pass suppression: a volume already low at startup is
             # current state, not backlog.
             if mount not in self._low:
-                self.log.warn("disk_space_low", mount=mount, free_gb=free_gb,
-                              total_gb=round(usage.total / 1024 ** 3, 1),
-                              pct_free=pct_free)
+                self.log.warn(
+                    "disk_space_low",
+                    mount=mount,
+                    free_gb=free_gb,
+                    total_gb=round(usage.total / 1024**3, 1),
+                    pct_free=pct_free,
+                )
                 self._low.add(mount)
         elif mount in self._low:
-            self.log.info("disk_space_cleared", mount=mount, free_gb=free_gb,
-                          pct_free=pct_free)
+            self.log.info(
+                "disk_space_cleared", mount=mount, free_gb=free_gb, pct_free=pct_free
+            )
             self._low.discard(mount)

@@ -1,19 +1,24 @@
-"""Blind test: the wake pre-roll path. Part 1 (pure): WakeCapture pump/stop
+"""The wake pre-roll path. Part 1 (pure): WakeCapture pump/stop
 against a fake stream, the wake chime's end-of-speech timing, the single-winner
 ack. Part 2 (real devices): a live PipelineWorker proves StartFrame first, then
-the ENTIRE pre-roll, only then live mic audio. Run:
-    pytest tests/test_preroll.py
+the ENTIRE pre-roll, only then live mic audio.
 """
+
 import asyncio
 import threading
 import time
 from pathlib import Path
 
 import helpers
-
 from slopstation import cglib
-from slopstation.agent.speech.preroll import (CHUNK_BYTES, CHUNK_SAMPLES, SAMPLE_RATE, PrerollFeeder,
-                                  WakeAck, WakeCapture)
+from slopstation.agent.speech.preroll import (
+    CHUNK_BYTES,
+    CHUNK_SAMPLES,
+    SAMPLE_RATE,
+    PrerollFeeder,
+    WakeAck,
+    WakeCapture,
+)
 
 
 class FakeStream:
@@ -42,36 +47,32 @@ def test_capture_orders_and_stops():
     seed = [b"S" * CHUNK_BYTES, b"E" * CHUNK_BYTES]
     stream = FakeStream()
     cap = WakeCapture(stream, seed)
-    time.sleep(0.08)                    # let the pump add a few chunks
+    time.sleep(0.08)  # let the pump add a few chunks
     pcm = cap.stop()
     assert pcm.startswith(seed[0] + seed[1]), "seed ring must lead the pcm"
     assert len(pcm) > 2 * CHUNK_BYTES, "pump added nothing"
-    assert pcm[2 * CHUNK_BYTES:3 * CHUNK_BYTES] == bytes([1]) * CHUNK_BYTES
-    assert pcm[3 * CHUNK_BYTES:4 * CHUNK_BYTES] == bytes([2]) * CHUNK_BYTES
+    assert pcm[2 * CHUNK_BYTES : 3 * CHUNK_BYTES] == bytes([1]) * CHUNK_BYTES
+    assert pcm[3 * CHUNK_BYTES : 4 * CHUNK_BYTES] == bytes([2]) * CHUNK_BYTES
     assert stream.closed, "stop() must close the wake stream"
     assert cap.stop() is pcm, "stop() must be idempotent"
-    print(f"OK - capture: seed+{len(pcm) // CHUNK_BYTES - 2} pumped chunks "
-          f"in order, idempotent stop, stream closed")
 
 
 def test_capture_survives_device_death():
     stream = FakeStream(fail_after=3)
     cap = WakeCapture(stream, [b"S" * CHUNK_BYTES])
-    time.sleep(0.08)                    # pump hits the OSError and exits
+    time.sleep(0.08)  # pump hits the OSError and exits
     pcm = cap.stop()
     assert len(pcm) == 4 * CHUNK_BYTES, f"want seed+3 chunks, got {len(pcm)}"
-    print("OK - capture: device death mid-pump keeps captured audio")
 
 
 def test_capture_runaway_cap():
     class Capped(WakeCapture):
-        MAX_S = 1                       # 12 chunks at 80 ms
+        MAX_S = 1  # 12 chunks at 80 ms
 
     cap = Capped(FakeStream(), [b"S" * CHUNK_BYTES] * 2)
-    time.sleep(0.25)                    # far longer than the cap needs
+    time.sleep(0.25)  # far longer than the cap needs
     pcm = cap.stop()
     assert len(pcm) == 12 * CHUNK_BYTES, f"cap leaked: {len(pcm) // CHUNK_BYTES} chunks"
-    print("OK - capture: runaway cap stops the pump at MAX_S")
 
 
 def test_dead_wake_stream_surfaces_original_error():
@@ -98,12 +99,11 @@ def test_dead_wake_stream_surfaces_original_error():
     lst.device_index = None
     try:
         lst.wait_for_wake_capture(0.5)
-        assert False, "dead stream must raise"
+        raise AssertionError("dead stream must raise")
     except OSError as e:
         assert "Unanticipated" in str(e), f"original error was replaced: {e}"
 
-    audio.close_stream_quietly(DeadStream())   # must not raise
-    print("OK - dead wake stream: original error surfaces, quiet close swallows")
+    audio.close_stream_quietly(DeadStream())  # must not raise
 
 
 def test_zombie_stream_trips_silence_watchdog():
@@ -111,9 +111,10 @@ def test_zombie_stream_trips_silence_watchdog():
     error, no wake. A solid run of zeros must raise into the OSError recovery
     path; real audio resets the count (a live mic has a noise floor)."""
     import numpy as np
+
     from slopstation.agent.speech import audio
 
-    NOISY_AT = 10                       # one real chunk mid-run resets the count
+    NOISY_AT = 10  # one real chunk mid-run resets the count
 
     class ZombieStream:
         def __init__(self):
@@ -143,13 +144,11 @@ def test_zombie_stream_trips_silence_watchdog():
     stream = ZombieStream()
     try:
         lst._listen(stream, 0.5, None, None)
-        assert False, "zombie stream must raise"
+        raise AssertionError("zombie stream must raise")
     except OSError as e:
         assert "zeros" in str(e), f"wrong error: {e}"
     want = NOISY_AT + audio.WakeListener.SILENT_CHUNKS
     assert stream.n == want, f"tripped after {stream.n} chunks, want {want}"
-    print(f"OK - zombie stream: watchdog trips after {want} chunks, "
-          f"real audio resets the count")
 
 
 def test_near_miss_reports_one_event_per_run_with_its_peak():
@@ -160,9 +159,16 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
     from slopstation.agent.speech import audio
 
     # floor = threshold 0.5 * factor 0.2 = 0.10. Two runs, then a crossing.
-    scores = [0.02, 0.12, 0.28, 0.19, 0.03,     # run A, peak 0.28
-              0.41, 0.07,                       # run B, peak 0.41
-              0.55]                             # crosses
+    scores = [
+        0.02,
+        0.12,
+        0.28,
+        0.19,
+        0.03,  # run A, peak 0.28
+        0.41,
+        0.07,  # run B, peak 0.41
+        0.55,
+    ]  # crosses
 
     class ScriptedModel:
         def __init__(self):
@@ -178,7 +184,7 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
 
     class LiveStream:
         def read(self, n, exception_on_overflow=True):
-            return b"\x01\x00" * n              # non-zero: watchdog stays quiet
+            return b"\x01\x00" * n  # non-zero: watchdog stays quiet
 
     lst = audio.WakeListener.__new__(audio.WakeListener)
     lst.np = np
@@ -198,7 +204,6 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
     assert [m["peak"] for m in misses] == [0.28, 0.41], misses
     assert misses[0]["shortfall"] == 0.22, misses[0]
     assert lst.model.reset_calls == 1, lst.model.reset_calls
-    print("  OK  near miss: one event per run, carrying that run's peak")
 
 
 def test_clip_dump_writes_prunes_and_never_raises():
@@ -238,14 +243,16 @@ def test_clip_dump_writes_prunes_and_never_raises():
     assert len(written) == 5, f"5 fires must log 5 clips, got {len(written)}"
     assert len(kept) == 3, f"keep=3 must prune to 3, got {len(kept)}"
     # Pruning keeps the newest, and names sort chronologically.
-    assert [p.name.split("-")[-1] for p in kept] == ["0.220.wav", "0.230.wav",
-                                                     "0.240.wav"], kept
+    assert [p.name.split("-")[-1] for p in kept] == [
+        "0.220.wav",
+        "0.230.wav",
+        "0.240.wav",
+    ], kept
     with wave.open(str(kept[0]), "rb") as w:
         assert w.getframerate() == 16000 and w.getnchannels() == 1
         assert w.getnframes() == 3 * CHUNK_SAMPLES, w.getnframes()
     assert not off_made, "keep=0 must not create the directory"
     assert len(failures) == 1 and failures[0]["level"] == "warn", failures
-    print("  OK  wake clips: written, pruned to the cap, fail-soft on a bad dir")
 
 
 def test_wake_chime_waits_for_the_end_of_speech():
@@ -266,12 +273,12 @@ def test_wake_chime_waits_for_the_end_of_speech():
     fired = []
     cap = watcher()
     cap._on_quiet = lambda: fired.append(time.monotonic())
-    for _ in range(12):                 # ~1 s of talking
+    for _ in range(12):  # ~1 s of talking
         cap._watch(chunk(8000))
-    time.sleep(0.05)                    # the callback runs on its own thread
+    time.sleep(0.05)  # the callback runs on its own thread
     assert not fired, "chimed while the user was still talking"
 
-    for _ in range(6):                  # ~480 ms gap: past QUIET_MS
+    for _ in range(6):  # ~480 ms gap: past QUIET_MS
         cap._watch(chunk(60))
     time.sleep(0.05)
     assert len(fired) == 1, f"want one chime at the gap, got {len(fired)}"
@@ -295,16 +302,14 @@ def test_wake_chime_waits_for_the_end_of_speech():
     held._on_quiet = lambda: fired.append(time.monotonic())
     held._t0 -= WakeCapture.CHIME_BY_S
     held.disarm_deadline()
-    for _ in range(12):                 # still talking, past the deadline
+    for _ in range(12):  # still talking, past the deadline
         held._watch(chunk(8000))
     time.sleep(0.05)
     assert len(fired) == 2, "disarmed deadline still beeped over speech"
-    for _ in range(6):                  # the real gap still earns the chime
+    for _ in range(6):  # the real gap still earns the chime
         held._watch(chunk(60))
     time.sleep(0.05)
     assert len(fired) == 3, "quiet detection must survive the disarm"
-    print("OK - wake chime: held through speech, fired once at the gap, "
-          "forced after CHIME_BY_S only while armed (disarmed at handoff)")
 
 
 def test_wake_ack_is_claimed_exactly_once():
@@ -328,7 +333,6 @@ def test_wake_ack_is_claimed_exactly_once():
     # age() is what the gate folds a fast success against.
     assert 0 <= ack.age() < 1, f"age {ack.age()} after an immediate claim"
     assert WakeAck().age() == float("inf"), "unclaimed must not read as 'just chimed'"
-    print("OK - wake ack: exactly one of 8 racing claimants wins, age tracks it")
 
 
 def test_feeder_chunking():
@@ -340,7 +344,6 @@ def test_feeder_chunking():
     assert b"".join(f.audio for f in frames) == feeder.pcm
     feeder.pcm = b""
     assert feeder._frames() == []
-    print("OK - feeder: chunking preserves bytes, empty pcm feeds nothing")
 
 
 async def test_feeder_stops_capture_at_startframe():
@@ -348,8 +351,7 @@ async def test_feeder_stops_capture_at_startframe():
     connect during setup, and words spoken there exist only if the wake
     stream is still pumping when setup runs."""
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
-    from pipecat.processors.frame_processor import (FrameDirection,
-                                                    FrameProcessor)
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
     marker = b"\xbb" * CHUNK_BYTES
@@ -361,28 +363,32 @@ async def test_feeder_stops_capture_at_startframe():
         pushed.append(frame)
 
     async def base_noop(self, frame, direction):
-        pass                # StartFrame bookkeeping needs a live pipeline
+        pass  # StartFrame bookkeeping needs a live pipeline
 
     feeder.push_frame = fake_push
     orig = FrameProcessor.process_frame
     FrameProcessor.process_frame = base_noop
     try:
         await feeder.process_frame(
-            InputAudioRawFrame(audio=b"\x00" * CHUNK_BYTES,
-                               sample_rate=SAMPLE_RATE, num_channels=1),
-            FrameDirection.DOWNSTREAM)
-        assert feeder.capture is capture and capture._pcm is None, \
+            InputAudioRawFrame(
+                audio=b"\x00" * CHUNK_BYTES, sample_rate=SAMPLE_RATE, num_channels=1
+            ),
+            FrameDirection.DOWNSTREAM,
+        )
+        assert feeder.capture is capture and capture._pcm is None, (
             "the capture must keep pumping until StartFrame"
+        )
         await feeder.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
     finally:
         FrameProcessor.process_frame = orig
     assert capture._pcm is not None, "StartFrame must stop the capture"
-    fed = [f for f in pushed if isinstance(f, InputAudioRawFrame)
-           and f.audio[:1] == b"\xbb"]
+    fed = [
+        f
+        for f in pushed
+        if isinstance(f, InputAudioRawFrame) and f.audio[:1] == b"\xbb"
+    ]
     assert len(fed) == 1, "the captured PCM must be fed as pre-roll"
     assert feeder.capture is None and feeder.pcm == b""
-    print("OK - feeder: capture pumps through the build, stopped and fed at "
-          "StartFrame")
 
 
 async def test_pipeline_ordering():
@@ -399,8 +405,10 @@ async def test_pipeline_ordering():
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
     from pipecat.processors.frame_processor import FrameProcessor
-    from pipecat.transports.local.audio import (LocalAudioTransport,
-                                                LocalAudioTransportParams)
+    from pipecat.transports.local.audio import (
+        LocalAudioTransport,
+        LocalAudioTransportParams,
+    )
     from pipecat.workers.runner import WorkerRunner
 
     class Collector(FrameProcessor):
@@ -419,22 +427,30 @@ async def test_pipeline_ordering():
     marker = b"".join(bytes([0xA0 + i]) * CHUNK_BYTES for i in range(4))
     feeder = PrerollFeeder(cglib.CapturingLog("preroll"))
     pa = pyaudio.PyAudio()
-    wake_stream = pa.open(format=pyaudio.paInt16, channels=1,
-                          rate=SAMPLE_RATE, input=True,
-                          frames_per_buffer=CHUNK_SAMPLES)
+    wake_stream = pa.open(
+        format=pyaudio.paInt16,
+        channels=1,
+        rate=SAMPLE_RATE,
+        input=True,
+        frames_per_buffer=CHUNK_SAMPLES,
+    )
     feeder.capture = WakeCapture(
-        wake_stream, [marker[i:i + CHUNK_BYTES]
-                      for i in range(0, len(marker), CHUNK_BYTES)])
+        wake_stream,
+        [marker[i : i + CHUNK_BYTES] for i in range(0, len(marker), CHUNK_BYTES)],
+    )
     collector = Collector()
 
-    transport = LocalAudioTransport(LocalAudioTransportParams(
-        audio_in_enabled=True, audio_in_sample_rate=16000,
-        audio_out_enabled=True, audio_out_sample_rate=16000,
-    ))
+    transport = LocalAudioTransport(
+        LocalAudioTransportParams(
+            audio_in_enabled=True,
+            audio_in_sample_rate=16000,
+            audio_out_enabled=True,
+            audio_out_sample_rate=16000,
+        )
+    )
     worker = PipelineWorker(
         Pipeline([transport.input(), feeder, collector, transport.output()]),
-        params=PipelineParams(audio_in_sample_rate=16000,
-                              audio_out_sample_rate=16000),
+        params=PipelineParams(audio_in_sample_rate=16000, audio_out_sample_rate=16000),
         enable_rtvi=False,
         idle_timeout_secs=20,
     )
@@ -443,7 +459,7 @@ async def test_pipeline_ordering():
     run_task = asyncio.create_task(runner.run())
 
     try:
-        await asyncio.sleep(1.5)        # pipeline up + live mic flowing
+        await asyncio.sleep(1.5)  # pipeline up + live mic flowing
         await worker.cancel(reason="test done")
         await asyncio.wait_for(run_task, timeout=10)
     finally:
@@ -453,9 +469,7 @@ async def test_pipeline_ordering():
     assert kinds and kinds[0] == "start", f"first event was {kinds[:3]}"
     audio = [a for k, a in collector.events if k == "audio"]
     assert len(audio) > 4, "no mic frames followed the pre-roll seed"
-    assert b"".join(audio[:4]) == marker, \
+    assert b"".join(audio[:4]) == marker, (
         "pre-roll must arrive complete and first, before any live mic frame"
+    )
     assert audio[4][:1] != b"\xa0", "live frames must not repeat the pre-roll"
-    print(f"OK - pipeline: StartFrame -> 4 seeded pre-roll chunks -> "
-          f"{len(audio) - 4} captured+live mic frames, strictly ordered, "
-          f"wake stream open through transport setup")

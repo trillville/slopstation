@@ -29,22 +29,33 @@ class QbittorrentAuthError(MediaError):
 
 
 def _clean_text(value, limit=160):
-    return "".join(c for c in str(value or "").strip()
-                   if c.isprintable())[:limit]
+    return "".join(c for c in str(value or "").strip() if c.isprintable())[:limit]
 
 
 """`authority` is the lowercase name the operation ledger and the
 download-client category use; ArrClient.name is the capitalized one the API
 errors carry."""
 KINDS = {
-    "movie": {"client": "radarr", "authority": "radarr", "resource": "movie",
-              "id_key": "tmdbId", "public_key": "tmdb_id",
-              "root_key": "movieRoot", "presets_key": "moviePresets",
-              "category_field": "movieCategory"},
-    "series": {"client": "sonarr", "authority": "sonarr", "resource": "series",
-               "id_key": "tvdbId", "public_key": "tvdb_id",
-               "root_key": "seriesRoot", "presets_key": "seriesPresets",
-               "category_field": "tvCategory"},
+    "movie": {
+        "client": "radarr",
+        "authority": "radarr",
+        "resource": "movie",
+        "id_key": "tmdbId",
+        "public_key": "tmdb_id",
+        "root_key": "movieRoot",
+        "presets_key": "moviePresets",
+        "category_field": "movieCategory",
+    },
+    "series": {
+        "client": "sonarr",
+        "authority": "sonarr",
+        "resource": "series",
+        "id_key": "tvdbId",
+        "public_key": "tvdb_id",
+        "root_key": "seriesRoot",
+        "presets_key": "seriesPresets",
+        "category_field": "tvCategory",
+    },
 }
 
 
@@ -61,17 +72,18 @@ def _root_and_profile_gaps(root_paths, profile_names, wanted_root, wanted_profil
     behaviour on missing config. Roots compare case-folded and without a
     trailing separator - Servarr echoes the path back in either form."""
     normalized = {str(path).rstrip("/\\").casefold() for path in root_paths}
-    root_exists = (bool(wanted_root)
-                   and str(wanted_root).rstrip("/\\").casefold() in normalized)
+    root_exists = (
+        bool(wanted_root) and str(wanted_root).rstrip("/\\").casefold() in normalized
+    )
     available = {str(name).casefold() for name in profile_names}
-    missing = [name for name in wanted_profiles
-               if str(name).casefold() not in available]
+    missing = [
+        name for name in wanted_profiles if str(name).casefold() not in available
+    ]
     return root_exists, missing
 
 
 def _http_transport(method, url, headers, body, timeout):
-    request = urllib.request.Request(url, data=body, headers=headers,
-                                     method=method)
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
@@ -91,8 +103,7 @@ def _http_transport(method, url, headers, body, timeout):
 class ArrClient:
     """Small authenticated JSON client for one local Servarr API."""
 
-    def __init__(self, name, base_url, api_key, api_version="v3",
-                 transport=None):
+    def __init__(self, name, base_url, api_key, api_version="v3", transport=None):
         parsed = urllib.parse.urlsplit(str(base_url).rstrip("/"))
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise MediaConfigurationError(f"{name} URL is invalid")
@@ -128,8 +139,7 @@ class ArrClient:
 
 
 def _qbit_http_transport(method, url, headers, body, timeout):
-    request = urllib.request.Request(url, data=body, headers=headers,
-                                     method=method)
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return dict(response.headers.items()), response.read()
@@ -178,8 +188,12 @@ class QbittorrentClient:
             if self.sid is not None and self.sid_cookie is not None:
                 headers["Cookie"] = f"{self.sid_cookie}={self.sid}"
             return self.transport(
-                method, f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
-                headers, body, self.timeout)
+                method,
+                f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
+                headers,
+                body,
+                self.timeout,
+            )
 
         try:
             return send()
@@ -192,10 +206,15 @@ class QbittorrentClient:
             return send()
 
     def login(self):
-        headers, raw = self._call("POST", "auth/login", {
-            "username": self.username,
-            "password": self.password,
-        }, authenticate=False)
+        headers, raw = self._call(
+            "POST",
+            "auth/login",
+            {
+                "username": self.username,
+                "password": self.password,
+            },
+            authenticate=False,
+        )
         if raw.decode("utf-8", "replace").strip() not in ("", "Ok."):
             raise MediaError("qBittorrent rejected the configured credentials")
         cookie = http.cookies.SimpleCookie()
@@ -238,9 +257,13 @@ class QbittorrentClient:
         return value
 
     def set_preferences(self, changes):
-        self._call("POST", "app/setPreferences", {
-            "json": json.dumps(changes, separators=(",", ":")),
-        })
+        self._call(
+            "POST",
+            "app/setPreferences",
+            {
+                "json": json.dumps(changes, separators=(",", ":")),
+            },
+        )
 
     def set_listen_port(self, port):
         try:
@@ -256,16 +279,22 @@ class QbittorrentClient:
         after = self.preferences()
         confirmed = int(after.get("listen_port", 0) or 0)
         if confirmed != port:
-            raise MediaError(
-                f"qBittorrent did not retain listening port {port}")
-        return {"ok": True, "previous_port": previous,
-                "listen_port": confirmed, "changed": previous != confirmed}
+            raise MediaError(f"qBittorrent did not retain listening port {port}")
+        return {
+            "ok": True,
+            "previous_port": previous,
+            "listen_port": confirmed,
+            "changed": previous != confirmed,
+        }
 
 
 def _configured_password(value):
-    return (isinstance(value, str) and "..." not in value
-            and not value.upper().startswith("PLACEHOLDER")
-            and len(value.strip()) >= 6)
+    return (
+        isinstance(value, str)
+        and "..." not in value
+        and not value.upper().startswith("PLACEHOLDER")
+        and len(value.strip()) >= 6
+    )
 
 
 def _qbit_from_config(media_cfg, secrets, transport=None):
@@ -274,5 +303,7 @@ def _qbit_from_config(media_cfg, secrets, transport=None):
         raise MediaConfigurationError("qbittorrentPassword is missing")
     return QbittorrentClient(
         media_cfg.get("qbittorrentUrl", ""),
-        media_cfg.get("qbittorrentUsername", ""), password,
-        transport=transport)
+        media_cfg.get("qbittorrentUsername", ""),
+        password,
+        transport=transport,
+    )

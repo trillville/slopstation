@@ -7,6 +7,7 @@ both the log line and the only thing the assistant lane reports to the model
 
 dry_run=True logs intent instead of acting; the lock check stays live.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -14,11 +15,9 @@ import sys
 import time
 from collections import namedtuple
 
-from slopstation import cglib
-from slopstation import events
-from slopstation import gamepc
+from slopstation import cglib, events, gamepc, tv
 from slopstation.agent.tools import library
-from slopstation import tv
+
 # gamepc is reached through the MODULE, never `from gamepc import ...`: a
 # second binding is one the tests' patches would miss.
 
@@ -52,9 +51,11 @@ def _fail(detail: str) -> Result:
 
 def _no_task(out: str) -> Result:
     """NOTASK:<name> - a scheduled task the PC never had registered."""
-    return _fail(f"the {out.split(':', 1)[1]} task isn't registered on the "
-                 "gaming PC - it needs the one-time Register-ScheduledTask "
-                 "from the setup guide")
+    return _fail(
+        f"the {out.split(':', 1)[1]} task isn't registered on the "
+        "gaming PC - it needs the one-time Register-ScheduledTask "
+        "from the setup guide"
+    )
 
 
 def _name(appid: int | str) -> str:
@@ -68,8 +69,9 @@ def _name(appid: int | str) -> str:
 
 
 class Dispatch:
-    def __init__(self, cfg: dict, log, dry_run: bool = False,
-                 on_end_session=None) -> None:
+    def __init__(
+        self, cfg: dict, log, dry_run: bool = False, on_end_session=None
+    ) -> None:
         self.cfg = cfg
         self.voice = cfg["voice"]
         self.log = log
@@ -128,7 +130,7 @@ class Dispatch:
     def end_session(self) -> Result:
         """Works mid-game and mid-launch alike (teardown wins - Exit stops a
         running Enter on the host)."""
-        turn = self.utterance.turn            # snapshot at operation start
+        turn = self.utterance.turn  # snapshot at operation start
         # Before the exit, not after the voice session closes: the session
         # stays open for the idle timeout, by which time couch has powered the
         # TV off and remote keys relay nothing (2026-08-22, session fe8302 -
@@ -151,7 +153,7 @@ class Dispatch:
                 cglib.CANCEL.write_text(turn or "")
                 cancelled = True
             except OSError:
-                pass                          # the host-side exit still runs
+                pass  # the host-side exit still runs
         try:
             out = gamepc.exit(turn)
         except Exception as e:
@@ -200,14 +202,17 @@ class Dispatch:
             return _ok(f"{_name(appid)} is already running")
         if out.startswith("BUSY:"):
             # Name the blocker: the assistant lane sees only `detail`.
-            return _busy(f"{_name(out.split(':', 1)[1])} is already running - "
-                         f"it has to be quit first, which I can do if you ask ({out})")
+            return _busy(
+                f"{_name(out.split(':', 1)[1])} is already running - "
+                f"it has to be quit first, which I can do if you ask ({out})"
+            )
         if out == "NOTREADY":
             # Lock fresh but host pre-READY: a launch is in flight.
             return _busy("the session is still starting")
         if out == "NOTINSTALLED":
-            return _fail(f"{_name(appid)} is not installed - "
-                         "installing it needs the controller")
+            return _fail(
+                f"{_name(appid)} is not installed - installing it needs the controller"
+            )
         if out.startswith("NOTASK:"):
             return _no_task(out)
         return _fail(f"the launch failed (ssh launch: {out})")
@@ -230,8 +235,10 @@ class Dispatch:
             return _ok("nothing is running to quit")
         if out.startswith("BUSY:"):
             # A different game is up: name it, don't touch it.
-            return _busy(f"{_name(out.split(':', 1)[1])} is what's running, not "
-                         f"{_name(appid)} - nothing was quit ({out})")
+            return _busy(
+                f"{_name(out.split(':', 1)[1])} is what's running, not "
+                f"{_name(appid)} - nothing was quit ({out})"
+            )
         if out.startswith("NOTASK:"):
             return _no_task(out)
         return _fail(f"the quit failed (ssh stop: {out})")
@@ -263,8 +270,7 @@ class Dispatch:
             # and open X" chains into nav while couch.py is still coming up:
             # a fresh lock means starting, not absent.
             if cglib.session_active():
-                return _busy("the session is still starting - "
-                             "try again in a moment")
+                return _busy("the session is still starting - try again in a moment")
             return _busy("there's no session to navigate - start one first")
         if out.startswith("NOTASK:"):
             return _no_task(out)
@@ -276,8 +282,12 @@ class Dispatch:
             return _name(arg)
         if kind == "store" and arg:
             return f"{_name(arg)} in the store"
-        return {"downloads": "downloads", "library": "your library",
-                "store": "the store", "collection": "that collection"}.get(kind, kind)
+        return {
+            "downloads": "downloads",
+            "library": "your library",
+            "store": "the store",
+            "collection": "that collection",
+        }.get(kind, kind)
 
     # -- TV --------------------------------------------------------------------
 
@@ -335,13 +345,17 @@ class Dispatch:
             try:
                 if gamepc.status() == "NOTREADY":
                     self.log("input_deferred", input=cmd, reason="not_ready")
-                    return _busy("the session is still starting - the TV will "
-                                 "switch over on its own when it's ready")
+                    return _busy(
+                        "the session is still starting - the TV will "
+                        "switch over on its own when it's ready"
+                    )
             except Exception as e:
                 self.log.error("input_refused", input=cmd, err=str(e))
                 return _fail(f"couldn't reach the PC (status check: {e})")
         frame_hex = tv.EXLINK_FRAMES.get(cmd)
         if frame_hex is None:
-            return _fail(f"that input isn't configured correctly - config maps "
-                         f"'{spoken_name}' to unknown command '{cmd}'")
+            return _fail(
+                f"that input isn't configured correctly - config maps "
+                f"'{spoken_name}' to unknown command '{cmd}'"
+            )
         return self._exlink(f"input {cmd}", frame_hex)

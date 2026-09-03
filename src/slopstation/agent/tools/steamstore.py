@@ -10,13 +10,13 @@ CLI:
     python steamstore.py <deals|search ...|reviews <appid>|news <appid>
                           |hltb <name>|trending|recent>
 """
+
 from __future__ import annotations
 
 import json
 import re
 import sys
 import time
-
 
 from slopstation import cglib
 from slopstation.agent.tools import library
@@ -28,22 +28,27 @@ log = cglib.make_log("library")
 STORE = "https://store.steampowered.com"
 API = "https://api.steampowered.com"
 
-DEALS = cglib.STATE / "deals.json"                # wishlist-on-sale + specials snapshot
-DEALS_MAX_AGE_S = 6 * 3600                  # prices move at sale boundaries
-FACET_CACHE = cglib.STATE / "facet-cache.json"    # per-game how-long-to-beat (stable)
-TAGMAP = cglib.STATE / "store-tags.json"          # {tag_name_lower: tagid}, weekly
+DEALS = cglib.STATE / "deals.json"  # wishlist-on-sale + specials snapshot
+DEALS_MAX_AGE_S = 6 * 3600  # prices move at sale boundaries
+FACET_CACHE = cglib.STATE / "facet-cache.json"  # per-game how-long-to-beat (stable)
+TAGMAP = cglib.STATE / "store-tags.json"  # {tag_name_lower: tagid}, weekly
 TAGMAP_MAX_AGE_S = 7 * 24 * 3600
 
 
 def _get(url: str, params: dict | None = None, timeout: float = 20):
     """One HTTP seam for layer 4 - tests swap it. JSON or None, never raises."""
     import requests
+
     try:
-        r = requests.get(url, params=params or {}, timeout=timeout,
-                         headers={"Accept": "application/json"})
+        r = requests.get(
+            url,
+            params=params or {},
+            timeout=timeout,
+            headers={"Accept": "application/json"},
+        )
         r.raise_for_status()
         return r.json()
-    except Exception as e:                  # network, non-2xx, or non-JSON body
+    except Exception as e:  # network, non-2xx, or non-JSON body
         log.warn("store_fetch_failed", url=url.rsplit("/", 1)[-1] or url, err=str(e))
         return None
 
@@ -51,8 +56,9 @@ def _get(url: str, params: dict | None = None, timeout: float = 20):
 def _cc() -> str:
     """Country code for prices, from voice.location.country (defaults US)."""
     try:
-        return (cglib.config().get("voice", {})
-                .get("location", {}).get("country") or "US").upper()
+        return (
+            cglib.config().get("voice", {}).get("location", {}).get("country") or "US"
+        ).upper()
     except Exception:
         return "US"
 
@@ -69,13 +75,13 @@ def store_items(appids: list[int], cc: str | None = None) -> dict:
     # GetItems caps a batch at 100 - chunk, or a 100+ wishlist loses deals.
     for i in range(0, len(appids), 100):
         body = {
-            "ids": [{"appid": a} for a in appids[i:i + 100]],
-            "context": {"language": "english", "country_code": cc,
-                        "steam_realm": 1},
+            "ids": [{"appid": a} for a in appids[i : i + 100]],
+            "context": {"language": "english", "country_code": cc, "steam_realm": 1},
             "data_request": {"include_all_purchase_options": True},
         }
-        d = _get(f"{API}/IStoreBrowseService/GetItems/v1/",
-                 {"input_json": json.dumps(body)})
+        d = _get(
+            f"{API}/IStoreBrowseService/GetItems/v1/", {"input_json": json.dumps(body)}
+        )
         for it in ((d or {}).get("response", {}) or {}).get("store_items", []) or []:
             appid = it.get("appid") or it.get("id")
             if not appid:
@@ -97,24 +103,31 @@ def fetch_wishlist_on_sale(steamid: str, cc: str | None = None) -> list[dict]:
     # GetItems keys by int; a string appid would silently drop the game.
     appids = [int(it["appid"]) for it in items if it.get("appid")]
     priced = store_items(appids, cc)
-    on_sale = [{"appid": a, **priced[a]} for a in appids
-               if a in priced and priced[a]["discount"] > 0]
+    on_sale = [
+        {"appid": a, **priced[a]}
+        for a in appids
+        if a in priced and priced[a]["discount"] > 0
+    ]
     on_sale.sort(key=lambda g: -g["discount"])
     return on_sale
 
 
 def fetch_specials(cc: str | None = None) -> list[dict]:
     """Front-page specials feed. Curated, ~a couple dozen, not exhaustive."""
-    d = _get(f"{STORE}/api/featuredcategories",
-             {"cc": cc or _cc(), "l": "english"})
+    d = _get(f"{STORE}/api/featuredcategories", {"cc": cc or _cc(), "l": "english"})
     items = ((d or {}).get("specials", {}) or {}).get("items", []) or []
     out = []
     for it in items:
         if it.get("id") in library.NOT_GAMES:
             continue
-        out.append({"appid": it.get("id"), "name": library.ascii_only(it.get("name", "")),
-                    "discount": int(it.get("discount_percent", 0) or 0),
-                    "final": (it.get("final_price", 0) or 0) / 100 or None})
+        out.append(
+            {
+                "appid": it.get("id"),
+                "name": library.ascii_only(it.get("name", "")),
+                "discount": int(it.get("discount_percent", 0) or 0),
+                "final": (it.get("final_price", 0) or 0) / 100 or None,
+            }
+        )
     return out
 
 
@@ -122,11 +135,14 @@ def fetch_trending(cc: str | None = None) -> list[dict]:
     """GetMostPlayedGames -> names via GetItems. Keyless, by concurrents."""
     d = _get(f"{API}/ISteamChartsService/GetMostPlayedGames/v1/")
     ranks = ((d or {}).get("response", {}) or {}).get("ranks", []) or []
-    appids = [int(r["appid"]) for r in ranks[:20] if r.get("appid")]   # int keys, see wishlist
+    appids = [
+        int(r["appid"]) for r in ranks[:20] if r.get("appid")
+    ]  # int keys, see wishlist
     named = store_items(appids, cc)
-    return [{"appid": a, "rank": i + 1,
-             "name": named.get(a, {}).get("name") or f"app {a}"}
-            for i, a in enumerate(appids)]
+    return [
+        {"appid": a, "rank": i + 1, "name": named.get(a, {}).get("name") or f"app {a}"}
+        for i, a in enumerate(appids)
+    ]
 
 
 def fetch_recently_played() -> list[dict]:
@@ -134,12 +150,20 @@ def fetch_recently_played() -> list[dict]:
     creds = library.steam_creds()
     if not creds:
         return []
-    d = _get(f"{API}/IPlayerService/GetRecentlyPlayedGames/v1/",
-             {"key": creds[0], "steamid": creds[1]})
+    d = _get(
+        f"{API}/IPlayerService/GetRecentlyPlayedGames/v1/",
+        {"key": creds[0], "steamid": creds[1]},
+    )
     games = ((d or {}).get("response", {}) or {}).get("games", []) or []
-    return [{"appid": g.get("appid"), "name": library.ascii_only(g.get("name", "")),
-             "hours2w": round(g.get("playtime_2weeks", 0) / 60, 1)}
-            for g in games if g.get("appid")]
+    return [
+        {
+            "appid": g.get("appid"),
+            "name": library.ascii_only(g.get("name", "")),
+            "hours2w": round(g.get("playtime_2weeks", 0) / 60, 1),
+        }
+        for g in games
+        if g.get("appid")
+    ]
 
 
 def _tag_map():
@@ -147,7 +171,7 @@ def _tag_map():
     Cached weekly; GetTagList needs the key, else {} and search goes term-only."""
     try:
         fresh = time.time() - TAGMAP.stat().st_mtime < TAGMAP_MAX_AGE_S
-    except OSError:                             # missing or a stat race -> refetch
+    except OSError:  # missing or a stat race -> refetch
         fresh = False
     if fresh:
         cached = cglib.load_json(TAGMAP, None)
@@ -156,11 +180,16 @@ def _tag_map():
     s = cglib.load_secrets()
     if not cglib.real_key(s.get("steamApiKey")):
         return {}
-    d = _get(f"{API}/IStoreService/GetTagList/v1/", {"key": s["steamApiKey"],
-                                                     "language": "english"})
+    d = _get(
+        f"{API}/IStoreService/GetTagList/v1/",
+        {"key": s["steamApiKey"], "language": "english"},
+    )
     tags = ((d or {}).get("response", {}) or {}).get("tags", []) or []
-    out = {library.ascii_only(t.get("name", "")).lower(): t.get("tagid")
-           for t in tags if t.get("name") and t.get("tagid")}
+    out = {
+        library.ascii_only(t.get("name", "")).lower(): t.get("tagid")
+        for t in tags
+        if t.get("name") and t.get("tagid")
+    }
     if out:
         cglib.write_json(TAGMAP, out, indent=1)
     return out
@@ -171,9 +200,19 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
     prices. Tag names -> tagids via the cached map; unknown tags are dropped."""
     # An exact tag lookup dropped "Rogue-like" silently (2026-08-14).
     tmap = {library.fuzzy_key(k): v for k, v in _tag_map().items()}
-    tagids = [str(tmap[library.fuzzy_key(t)]) for t in (tags or []) if library.fuzzy_key(t) in tmap]
-    params = {"term": term or "", "cc": cc or _cc(), "l": "english",
-              "count": 50, "infinite": 1, "json": 1}
+    tagids = [
+        str(tmap[library.fuzzy_key(t)])
+        for t in (tags or [])
+        if library.fuzzy_key(t) in tmap
+    ]
+    params = {
+        "term": term or "",
+        "cc": cc or _cc(),
+        "l": "english",
+        "count": 50,
+        "infinite": 1,
+        "json": 1,
+    }
     if tagids:
         params["tags"] = ",".join(tagids)
     if max_price:
@@ -183,15 +222,16 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
     d = _get(f"{STORE}/search/results/", params)
     html = (d or {}).get("results_html", "") or ""
     seen, appids = set(), []
-    for m in re.finditer(r'data-ds-appid="(\d+)"', html):   # capsule attr only
+    for m in re.finditer(r'data-ds-appid="(\d+)"', html):  # capsule attr only
         a = int(m.group(1))
         if a not in seen and a not in library.NOT_GAMES:
-            seen.add(a); appids.append(a)
+            seen.add(a)
+            appids.append(a)
         if len(appids) >= 20:
             break
     named = store_items(appids, cc)
     rows = [{"appid": a, **named[a]} for a in appids if a in named]
-    if max_price:                           # GetItems is truth on price; re-clip
+    if max_price:  # GetItems is truth on price; re-clip
         cap = int(max_price) * 100
         rows = [r for r in rows if not r.get("price") or r["price"] <= cap]
     return rows[:12]
@@ -199,34 +239,57 @@ def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=Non
 
 def fetch_reviews(appid: int) -> dict | None:
     """/appreviews summary + recent snippets. For DLC, pass the DLC's appid."""
-    d = _get(f"{STORE}/appreviews/{int(appid)}",
-             {"json": 1, "language": "english", "filter": "recent",
-              "num_per_page": 5, "purchase_type": "all"})
+    d = _get(
+        f"{STORE}/appreviews/{int(appid)}",
+        {
+            "json": 1,
+            "language": "english",
+            "filter": "recent",
+            "num_per_page": 5,
+            "purchase_type": "all",
+        },
+    )
     if not d or not d.get("query_summary"):
         return None
     q = d["query_summary"]
-    snippets = [library.ascii_only(r.get("review", ""))[:280]
-                for r in (d.get("reviews") or [])[:3] if r.get("review")]
-    return {"desc": q.get("review_score_desc"),
-            "positive_pct": (round(100 * q.get("total_positive", 0)
-                                   / q["total_reviews"])
-                             if q.get("total_reviews") else None),
-            "total": q.get("total_reviews"), "snippets": snippets}
+    snippets = [
+        library.ascii_only(r.get("review", ""))[:280]
+        for r in (d.get("reviews") or [])[:3]
+        if r.get("review")
+    ]
+    return {
+        "desc": q.get("review_score_desc"),
+        "positive_pct": (
+            round(100 * q.get("total_positive", 0) / q["total_reviews"])
+            if q.get("total_reviews")
+            else None
+        ),
+        "total": q.get("total_reviews"),
+        "snippets": snippets,
+    }
 
 
 def fetch_news(appid: int, count: int = 3) -> list[dict]:
     """GetNewsForApp, patch notes preferred. Keyless, titles only."""
-    d = _get(f"{API}/ISteamNews/GetNewsForApp/v2/",
-             {"appid": int(appid), "count": count, "maxlength": 1,
-              "tags": "patchnotes"})
+    d = _get(
+        f"{API}/ISteamNews/GetNewsForApp/v2/",
+        {"appid": int(appid), "count": count, "maxlength": 1, "tags": "patchnotes"},
+    )
     items = ((d or {}).get("appnews", {}) or {}).get("newsitems", []) or []
-    if not items:                           # no patch notes -> any announcement
-        d = _get(f"{API}/ISteamNews/GetNewsForApp/v2/",
-                 {"appid": int(appid), "count": count, "maxlength": 1})
+    if not items:  # no patch notes -> any announcement
+        d = _get(
+            f"{API}/ISteamNews/GetNewsForApp/v2/",
+            {"appid": int(appid), "count": count, "maxlength": 1},
+        )
         items = ((d or {}).get("appnews", {}) or {}).get("newsitems", []) or []
-    return [{"title": library.ascii_only(n.get("title", "")),
-             "date": time.strftime("%Y-%m-%d", time.localtime(n.get("date", 0)))}
-            for n in items[:count] if n.get("title")]
+    return [
+        {
+            "title": library.ascii_only(n.get("title", "")),
+            "date": time.strftime("%Y-%m-%d", time.localtime(n.get("date", 0))),
+        }
+        for n in items[:count]
+        if n.get("title")
+    ]
 
 
 def fetch_hltb(name: str) -> dict | None:
@@ -241,14 +304,18 @@ def fetch_hltb(name: str) -> dict | None:
     hltb = None
     try:
         from howlongtobeatpy import HowLongToBeat
+
         best = None
-        for e in (HowLongToBeat().search(name) or []):
+        for e in HowLongToBeat().search(name) or []:
             if best is None or (e.similarity or 0) > (best.similarity or 0):
                 best = e
         if best:
-            hltb = {"main": best.main_story, "extra": best.main_extra,
-                    "complete": best.completionist}
-    except Exception as e:                  # missing pin, or endpoint churn
+            hltb = {
+                "main": best.main_story,
+                "extra": best.main_extra,
+                "complete": best.completionist,
+            }
+    except Exception as e:  # missing pin, or endpoint churn
         log.warn("hltb_failed", name=name[:80], err=str(e))
         return None
     cache.setdefault(key, {})["hltb"] = hltb
@@ -294,7 +361,8 @@ def probe(args: list[str]) -> int:
     what = args[0] if args else "deals"
     out: object
     if what == "deals":
-        refresh_deals(); out = load_deals()
+        refresh_deals()
+        out = load_deals()
     elif what == "search":
         out = fetch_store_search(term=" ".join(args[1:]))
     elif what == "reviews":
@@ -314,8 +382,10 @@ def probe(args: list[str]) -> int:
 
 
 def usage() -> int:
-    print("usage: steamstore.py <deals|search ...|reviews <appid>|news <appid>"
-          "|hltb <name>|trending|recent>")
+    print(
+        "usage: steamstore.py <deals|search ...|reviews <appid>|news <appid>"
+        "|hltb <name>|trending|recent>"
+    )
     return 2
 
 

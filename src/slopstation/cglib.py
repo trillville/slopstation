@@ -3,24 +3,29 @@
 config.json, secrets.json, couch.log and state/ all hang off paths.HOME - the
 checkout, not this directory. See paths.py.
 """
+
 from __future__ import annotations
 
-import contextlib, json, msvcrt, os, pathlib, time
+import contextlib
+import json
+import msvcrt
+import os
+import pathlib
+import time
 from typing import Any
 
 from slopstation import events, paths
 
-BASE = paths.HOME
-STATE = BASE / "state"
+STATE = paths.HOME / "state"
 
 # --- Session state (shared by couch.py and the chord listener) ----------------
 LOCK = STATE / "session.lock"
-LOCK_STALE_S = 300          # a live session touches the lock every few seconds
-LAST_ERROR = STATE / "last_error"   # written by couch.py on launch failure
-CANCEL = STATE / "cancel"   # one line: the cancelling turn (may be empty).
-                            # Written by voice end_session, unlinked by
-                            # couch.py at every launch wait; stale copies
-                            # voided at the next launch's start.
+LOCK_STALE_S = 300  # a live session touches the lock every few seconds
+LAST_ERROR = STATE / "last_error"  # written by couch.py on launch failure
+CANCEL = STATE / "cancel"  # one line: the cancelling turn (may be empty).
+# Written by voice end_session, unlinked by
+# couch.py at every launch wait; stale copies
+# voided at the next launch's start.
 
 
 def lock_age() -> float | None:
@@ -61,13 +66,13 @@ def _recycle_stale_lock(content: str) -> bool:
     try:
         fd = os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except OSError:
-        return False                # someone else is recycling right now
+        return False  # someone else is recycling right now
     try:
         if session_active():
-            return False            # a racer took it while we opened the guard
+            return False  # a racer took it while we opened the guard
         os.write(fd, content.encode("utf-8"))
         os.close(fd)
-        fd = None                   # type: ignore[assignment] # Windows will not rename an open file
+        fd = None  # type: ignore[assignment] # Windows will not rename an open file
         # Windows needs the rename destination unopened, and a losing racer's
         # session_active() stat denies it - ~27% of swaps against a stat spin,
         # so retry. A denied swap changes nothing; only staleness must be
@@ -75,14 +80,14 @@ def _recycle_stale_lock(content: str) -> bool:
         for _ in range(8):
             try:
                 os.replace(guard, LOCK)
-                guard = None        # type: ignore[assignment] # consumed by the swap; not ours to unlink
+                guard = None  # type: ignore[assignment] # consumed by the swap; not ours to unlink
                 return True
             except OSError:
                 if session_active():
-                    return False    # now someone's live lock; leave it alone
+                    return False  # now someone's live lock; leave it alone
         return False
     except OSError:
-        return False                # guard write failed; nothing was touched
+        return False  # guard write failed; nothing was touched
     finally:
         if fd is not None:
             os.close(fd)
@@ -151,7 +156,7 @@ def release_lock() -> bool:
     try:
         parts = LOCK.read_text(encoding="utf-8").split()
     except OSError:
-        return False                # already gone: nothing to release
+        return False  # already gone: nothing to release
     if len(parts) >= 2 and parts[1] != str(os.getpid()):
         return False
     LOCK.unlink(missing_ok=True)
@@ -160,7 +165,7 @@ def release_lock() -> bool:
 
 def load_config() -> dict:
     """The raw file read; config() is what runtime code calls."""
-    return json.loads((BASE / "config.json").read_text(encoding="utf-8-sig"))
+    return json.loads((paths.HOME / "config.json").read_text(encoding="utf-8-sig"))
 
 
 _config = None
@@ -180,18 +185,40 @@ def use_config(cfg: dict | None) -> None:
     _config = cfg
 
 
-REQUIRED_CONFIG = ("gamingPcMac", "gamingPcIp", "sshHost", "tvComPort",
-                   "tvGamingCmd", "tvIdleCmd", "tvOffWhenDone")
+REQUIRED_CONFIG = (
+    "gamingPcMac",
+    "gamingPcIp",
+    "sshHost",
+    "tvComPort",
+    "tvGamingCmd",
+    "tvIdleCmd",
+    "tvOffWhenDone",
+)
 # Missing any of these fails the voice agent at startup, not per-wake; every
 # other voice key has an inert default (config.json is per-machine: a key made
 # mandatory in code is an agent that will not start after a git pull).
-REQUIRED_VOICE = ("wakeModel", "wakeThreshold", "holdWindowS", "followupCarryS",
-                  "eotThreshold", "eagerEotThreshold", "keytermCount",
-                  "fuzzyTitleThreshold", "volumeStep", "volumeMax", "ttsVoice",
-                  "assistantProvider", "assistantModelAnthropic",
-                  "assistantModelOpenai", "assistantReasoningEffort", "inputs",
-                  "assistantWebSearch", "assistantSearchMaxUses", "location",
-                  "followUpAfterAnnounce")
+REQUIRED_VOICE = (
+    "wakeModel",
+    "wakeThreshold",
+    "holdWindowS",
+    "followupCarryS",
+    "eotThreshold",
+    "eagerEotThreshold",
+    "keytermCount",
+    "fuzzyTitleThreshold",
+    "volumeStep",
+    "volumeMax",
+    "ttsVoice",
+    "assistantProvider",
+    "assistantModelAnthropic",
+    "assistantModelOpenai",
+    "assistantReasoningEffort",
+    "inputs",
+    "assistantWebSearch",
+    "assistantSearchMaxUses",
+    "location",
+    "followUpAfterAnnounce",
+)
 
 
 def missing_config(cfg: dict, voice: bool = False) -> list[str]:
@@ -256,7 +283,7 @@ def write_json(path: pathlib.Path, obj: Any, indent: int = 1) -> None:
 
 
 # --- secrets (voice lanes; chord path never needs these) ----------------------
-SECRETS = BASE / "secrets.json"
+SECRETS = paths.HOME / "secrets.json"
 
 
 def load_secrets() -> dict:
@@ -276,10 +303,10 @@ def rotate_log(max_bytes: int = 5_000_000) -> None:
     """Two-generation rotation: couch.log -> couch.log.1 past the cap. Called
     at K15 boot (reconcile) and listener startup. Writers open-append-close
     per line, so a lost rename just rotates on the next call."""
-    logf = BASE / "couch.log"
+    logf = paths.HOME / "couch.log"
     try:
         if logf.stat().st_size > max_bytes:
-            os.replace(logf, BASE / "couch.log.1")
+            os.replace(logf, paths.HOME / "couch.log.1")
     except OSError:
         pass
 
@@ -289,12 +316,12 @@ class _Log:
     as JSON for the log shipper. Called as `log("event", field=value, ...)`.
     Event names are a closed vocabulary that dashboards group by and alerts
     fire on, so variable data goes in fields, never in the name. warn/error
-    means the user lost something they would notice. Under the blind suite
+    means the user lost something they would notice. Under the test suite
     (env=test) the console still gets everything but couch.log does not."""
 
     def __init__(self, lane: str) -> None:
         self.lane = lane
-        self._logf = BASE / "couch.log"
+        self._logf = paths.HOME / "couch.log"
 
     def _write(self, level: str, event: str, fields: dict) -> None:
         # The whole body is guarded, not just the I/O: every log call funnels
@@ -302,12 +329,14 @@ class _Log:
         try:
             # level POSITIONAL on both calls - by keyword it would collide
             # with a caller field named `level` (see events.emit).
-            line = (f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{self.lane}] "
-                    + events.human(event, level, **fields))
+            line = (
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{self.lane}] "
+                + events.human(event, level, **fields)
+            )
             try:
                 print(line, flush=True)
             except (OSError, ValueError, AttributeError, UnicodeError):
-                pass        # windowless task: stdout is None or a dead pipe
+                pass  # windowless task: stdout is None or a dead pipe
             if events.ENV != "test":
                 try:
                     with self._logf.open("a", encoding="utf-8") as f:
@@ -352,8 +381,10 @@ class CapturingLog(_Log):
         self.echo = echo
 
     def _write(self, level: str, event: str, fields: dict) -> None:
-        rec = {("f_" + k if k in events._EMITTER_OWNED else k): v
-               for k, v in fields.items()}
+        rec = {
+            ("f_" + k if k in events._EMITTER_OWNED else k): v
+            for k, v in fields.items()
+        }
         self.records.append(dict(rec, level=level, event=event))
         if self.echo:
             print(f"[{self.lane}] " + events.human(event, level, **fields))

@@ -1,9 +1,9 @@
 """Guard: the event vocabulary is frozen. Dashboards group by event name and
 alerts fire on it, so a name or a field key that disappears is a telemetry
 regression; a new one is fine (add it here). Scans the emitters from source
-(_events_scan), so it runs on any checkout. Run:
-    pytest tests/test_event_names.py
+(_events_scan), so it runs on any checkout.
 """
+
 import re
 
 import _events_scan as scan
@@ -90,7 +90,25 @@ PYTHON = {
     "lane_disabled": {"err", "reason", "what"},
     "lane_reloaded": {"killed", "what"},
     "lane_started": {"what"},
-    "lane_up": {"active", "backend", "dry_run", "effort", "endpoint", "host", "kind", "lane", "model", "poll_s", "port", "provider", "steamid", "token_expires", "tools", "websearch", "what"},
+    "lane_up": {
+        "active",
+        "backend",
+        "dry_run",
+        "effort",
+        "endpoint",
+        "host",
+        "kind",
+        "lane",
+        "model",
+        "poll_s",
+        "port",
+        "provider",
+        "steamid",
+        "token_expires",
+        "tools",
+        "websearch",
+        "what",
+    },
     "launch_aborted": {"dur_ms", "err"},
     "launch_busy": {"lock_age_s", "reason"},
     "launch_dispatched": {"answer", "appid"},
@@ -102,10 +120,8 @@ PYTHON = {
     "media_grab_unattributed": {"app", "indexer", "records", "title"},
     "media_health_cleared": {"app", "source"},
     "media_health_issue": {"app", "detail", "kind", "source"},
-    "media_import_failed": {"app", "err", "kind", "records",
-                             "title"},
-    "media_queue_stalled": {"app", "download", "err", "status",
-                            "title"},
+    "media_import_failed": {"app", "err", "kind", "records", "title"},
+    "media_queue_stalled": {"app", "download", "err", "status", "title"},
     "media_watch_failed": {"app", "err"},
     "meta_failed": {"appid", "err"},
     "meta_fetched": {"appid", "n", "of"},
@@ -114,10 +130,24 @@ PYTHON = {
     "operation_announce_hook_failed": {"err", "operation"},
     "operation_announced": {"operation"},
     "operation_cancel_refused": {"authority", "operation"},
-    "operation_created": {"authority", "external_ref", "kind", "operation", "state", "turn"},
+    "operation_created": {
+        "authority",
+        "external_ref",
+        "kind",
+        "operation",
+        "state",
+        "turn",
+    },
     "operation_monitor_failed": {"err"},
     "operation_notification": {"key", "operation"},
-    "operation_observed": {"changed", "detail", "operation", "previous", "progress", "state"},
+    "operation_observed": {
+        "changed",
+        "detail",
+        "operation",
+        "previous",
+        "progress",
+        "state",
+    },
     "operation_track_failed": {"appid", "err"},
     "proton_port_synced": {"port", "previous_port", "source_age_s"},
     "proton_port_sync_failed": {"err"},
@@ -237,14 +267,24 @@ BAT = {
     "smart_warning": set(),
 }
 
-LANES = {'manual', 'launch', 'library', 'steam', 'traces', 'listener', 'voice',
-         'supervisor',
-         'deploy'}
+LANES = {
+    "manual",
+    "launch",
+    "library",
+    "steam",
+    "traces",
+    "listener",
+    "voice",
+    "supervisor",
+    "deploy",
+}
 
 
 def check(kind, frozen, now):
     gone = sorted(set(frozen) - set(now))
-    assert not gone, f"{kind}: events no longer emitted: {gone} - a rename is a telemetry change; edit this file on purpose"
+    assert not gone, (
+        f"{kind}: events no longer emitted: {gone} - a rename is a telemetry change; edit this file on purpose"
+    )
     for name, keys in frozen.items():
         lost = sorted(set(keys) - now[name])
         assert not lost, f"{kind} {name}: field keys gone: {lost}"
@@ -259,7 +299,9 @@ def owned_key_lists():
     Dispatch's local copy) must equal events._EMITTER_OWNED."""
     out = {}
     for f in sorted(scan.PC.glob("*.ps1")):
-        for m in re.finditer(r"\$owned\s*=\s*@\(([^)]*)\)", f.read_text(encoding="utf-8")):
+        for m in re.finditer(
+            r"\$owned\s*=\s*@\(([^)]*)\)", f.read_text(encoding="utf-8")
+        ):
             out[f.name] = set(re.findall(r"'(\w+)'", m.group(1)))
     return out
 
@@ -269,10 +311,12 @@ def test_event_names():
     n = check("python", PYTHON, s["python"])
     n += check("powershell", POWERSHELL, s["powershell"])
     n += check("bat", BAT, s["bat"])
-    assert s["lanes"] == LANES, f"make_log lanes changed: {sorted(s['lanes'])} vs {sorted(LANES)}"
+    assert s["lanes"] == LANES, (
+        f"make_log lanes changed: {sorted(s['lanes'])} vs {sorted(LANES)}"
+    )
     owned = owned_key_lists()
     assert owned, "no $owned list found in gaming-pc/*.ps1"
     for name, keys in owned.items():
-        assert keys == set(events._EMITTER_OWNED), f"{name} $owned {sorted(keys)} != events._EMITTER_OWNED"
-    print(f"OK - event vocabulary: {n} names across python/powershell/bat, "
-          f"{len(LANES)} lanes, owned keys agree in {len(owned)} PowerShell emitter(s)")
+        assert keys == set(events._EMITTER_OWNED), (
+            f"{name} $owned {sorted(keys)} != events._EMITTER_OWNED"
+        )

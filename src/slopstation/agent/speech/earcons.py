@@ -7,18 +7,19 @@ The counts are the contract, mirroring the haptic thuds: 1 = accepted,
 2 = busy, 3 = failed. A grammar-gate ack must be instant - never
 synthesize speech for it; pcm() is a dict lookup after first use.
 """
+
 import numpy as np
 
 SAMPLE_RATE = 16000
-GAP_MS = 70          # silence between the bursts of a counted earcon
-ATTACK_MS = 5        # per-note fade-in (click prevention)
-RELEASE_MS = 10      # per-note fade-out to true zero - a decaying note still
-                     # clicks if it is simply truncated
+GAP_MS = 70  # silence between the bursts of a counted earcon
+ATTACK_MS = 5  # per-note fade-in (click prevention)
+RELEASE_MS = 10  # per-note fade-out to true zero - a decaying note still
+# clicks if it is simply truncated
 
 # Bell timbre: partials decaying faster the higher they are.
 PARTIALS = ((1, 1.00), (2, 0.22), (3, 0.07))
 
-GAIN = 1.0           # global volume knob, config voice.earconGain
+GAIN = 1.0  # global volume knob, config voice.earconGain
 
 
 def _seq(bursts, gap_ms=GAP_MS):
@@ -36,13 +37,13 @@ def _seq(bursts, gap_ms=GAP_MS):
 #          [(freq_hz, start_ms, dur_ms), ...])
 SPECS = {
     # Bookends: ascending fifth to open, the same fifth descending to close.
-    "wake":  (3800, 0.32, [(784.0, 0, 200), (1174.7, 70, 310)]),
+    "wake": (3800, 0.32, [(784.0, 0, 200), (1174.7, 70, 310)]),
     "close": (2400, 0.32, [(1174.7, 0, 200), (784.0, 70, 340)]),
     # The count vocabulary: ok = one bell on the wake chime's note, busy = the
     # same note twice, fail = three falling.
-    "ok":    (5200, 0.30, _seq([(1174.7, 260)])),
-    "busy":  (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
-    "fail":  (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
+    "ok": (5200, 0.30, _seq([(1174.7, 260)])),
+    "busy": (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
+    "fail": (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
     # Loudest: it arrives unasked, across the room.
     "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
@@ -67,7 +68,7 @@ def _note(freq, dur_ms, decay):
     tau = decay * dur_ms / 1000
     wave = np.zeros(n)
     for k, amp in PARTIALS:
-        if freq * k < SAMPLE_RATE / 2:          # above Nyquist it aliases down
+        if freq * k < SAMPLE_RATE / 2:  # above Nyquist it aliases down
             wave += amp * np.sin(2 * np.pi * freq * k * t) * np.exp(-t * k / tau)
     a = min(int(SAMPLE_RATE * ATTACK_MS / 1000), n // 2)
     r = min(int(SAMPLE_RATE * RELEASE_MS / 1000), n // 2)
@@ -84,9 +85,9 @@ def samples(name):
         amp, decay, notes = SPECS[name]
         starts = [int(SAMPLE_RATE * start / 1000) for _, start, _ in notes]
         waves = [_note(freq, dur, decay) for freq, _, dur in notes]
-        mix = np.zeros(max(i + len(w) for i, w in zip(starts, waves)))
-        for i, w in zip(starts, waves):
-            mix[i:i + len(w)] += w
+        mix = np.zeros(max(i + len(w) for i, w in zip(starts, waves, strict=True)))
+        for i, w in zip(starts, waves, strict=True):
+            mix[i : i + len(w)] += w
         # Normalize to the spec'd peak: an amplitude means the same thing
         # across earcons regardless of partial/note count.
         mix *= amp * GAIN / max(float(np.max(np.abs(mix))), 1e-9)

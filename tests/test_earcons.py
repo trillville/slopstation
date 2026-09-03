@@ -1,7 +1,6 @@
-"""Blind test: earcon synthesis invariants - segmentation recovers the spec'd
+"""Earcon synthesis invariants - segmentation recovers the spec'd
 burst count however the tones are retuned, fades kill clicks, amplitudes and
-level order hold, and the gain knob scales without wrapping int16. Run:
-    pytest tests/test_earcons.py
+level order hold, and the gain knob scales without wrapping int16.
 """
 
 import numpy as np
@@ -24,17 +23,25 @@ def rms(x):
 
 
 def test_specs():
-    expected_counts = {"wake": 1, "ok": 1, "busy": 2, "fail": 3, "close": 1,
-                       "announce": 2}
+    expected_counts = {
+        "wake": 1,
+        "ok": 1,
+        "busy": 2,
+        "fail": 3,
+        "close": 1,
+        "announce": 2,
+    }
     assert set(expected_counts) == set(earcons.SPECS)
 
     for name, want in expected_counts.items():
         x = earcons.samples(name)
         amp, _, notes = earcons.SPECS[name]
         # Length = the last note's end; bells overlap, counted earcons don't.
-        n_expected = max(int(earcons.SAMPLE_RATE * start / 1000)
-                         + int(earcons.SAMPLE_RATE * dur / 1000)
-                         for _, start, dur in notes)
+        n_expected = max(
+            int(earcons.SAMPLE_RATE * start / 1000)
+            + int(earcons.SAMPLE_RATE * dur / 1000)
+            for _, start, dur in notes
+        )
         assert len(x) == n_expected, f"{name}: {len(x)} != {n_expected}"
         # The count is the message: a decay tail must not bridge a gap.
         got = burst_count(x)
@@ -43,7 +50,6 @@ def test_specs():
         peak = int(np.max(np.abs(x.astype(np.int32))))
         assert amp * 0.9 <= peak <= amp * 1.01, f"{name}: peak {peak} vs amp {amp}"
         assert earcons.pcm(name) == x.tobytes()
-    print(f"OK - {len(expected_counts)} earcons: counts, lengths, fades, amplitudes")
 
 
 def test_nothing_shouts():
@@ -52,12 +58,15 @@ def test_nothing_shouts():
     punishing level."""
     r = {n: rms(earcons.samples(n)) for n in earcons.SPECS}
     acks = min(r["ok"], r["busy"], r["fail"])
-    assert r["close"] < r["wake"] < acks < r["announce"], \
-        f"level order broken: {({k: round(v) for k, v in r.items()})}"
+    assert r["close"] < r["wake"] < acks < r["announce"], (
+        f"level order broken: { ({k: round(v) for k, v in r.items()}) }"
+    )
     loudest = max(r.values())
     assert loudest < 2000, f"something shouts: {loudest:.0f} rms"
-    print("OK - levels: close {close:.0f} < wake {wake:.0f}"
-          " < acks < announce {announce:.0f} rms, none above 2000".format(**r))
+    print(
+        "OK - levels: close {close:.0f} < wake {wake:.0f}"
+        " < acks < announce {announce:.0f} rms, none above 2000".format(**r)
+    )
 
 
 def test_gain_knob():
@@ -67,8 +76,13 @@ def test_gain_knob():
     try:
         earcons.set_gain(0.5)
         half = earcons.samples("wake")
-        assert abs(np.max(np.abs(half.astype(np.int32)))
-                   - np.max(np.abs(base.astype(np.int32))) / 2) <= 2, "gain did not halve"
+        assert (
+            abs(
+                np.max(np.abs(half.astype(np.int32)))
+                - np.max(np.abs(base.astype(np.int32))) / 2
+            )
+            <= 2
+        ), "gain did not halve"
         earcons.set_gain(100.0)
         loud = earcons.samples("ok").astype(np.int32)
         assert np.max(np.abs(loud)) <= 32767, "gain wrapped int16"
@@ -76,4 +90,3 @@ def test_gain_knob():
     finally:
         earcons.set_gain(1.0)
     assert np.array_equal(earcons.samples("wake"), base), "gain reset must restore"
-    print("OK - gain: scales, clips at full scale, cache follows the knob")

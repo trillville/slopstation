@@ -2,12 +2,12 @@
 turn tag on the mutating ones, and the answer words. Dispatch.ps1 is the
 server; agent/tests/test_turn.py holds the two in step.
 """
+
 from __future__ import annotations
 
 import subprocess
 
-from slopstation import cglib
-from slopstation import events
+from slopstation import cglib, events
 
 
 def ssh(cmd: str, timeout: float = 15) -> str:
@@ -18,8 +18,13 @@ def ssh(cmd: str, timeout: float = 15) -> str:
     unreachable host RAISES instead of returning ssh's error text as session
     state - otherwise the READY poll reads 'ssh: connect ... timed out' as
     READY, and watch() never detects sleep."""
-    r = subprocess.run(["ssh", cglib.config()["sshHost"], cmd],
-                       capture_output=True, text=True, timeout=timeout, check=True)
+    r = subprocess.run(
+        ["ssh", cglib.config()["sshHost"], cmd],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=True,
+    )
     return r.stdout.strip()
 
 
@@ -53,6 +58,7 @@ def enter_running() -> bool | None:
 # --- the verbs ---------------------------------------------------------------
 # Read-only polls use ssh(); the five mutating verbs ride ssh_intent() with the
 # turn. Each returns Dispatch's answer as printed.
+
 
 def enter(turn: str | None = None) -> str:
     return ssh_intent("enter", turn)
@@ -103,8 +109,19 @@ def nav_cmd(kind: str, arg: object = None) -> str:
 
 
 # The verb surface, one name per Dispatch.ps1 switch arm (test_turn compares).
-VERBS = ("enter", "exit", "status", "enterstate", "version", "playing", "games",
-         "collections", "launch", "stop", "nav")
+VERBS = (
+    "enter",
+    "exit",
+    "status",
+    "enterstate",
+    "version",
+    "playing",
+    "games",
+    "collections",
+    "launch",
+    "stop",
+    "nav",
+)
 
 # Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE DENIED, and
 # BUSY:<appid> NOTASK:<name> FAILED:<code> with an argument after the colon.

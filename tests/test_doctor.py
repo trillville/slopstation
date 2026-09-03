@@ -1,25 +1,25 @@
-"""Blind test: doctor.py's checks with every probe stubbed (serial, hid,
+"""Doctor.py's checks with every probe stubbed (serial, hid,
 process list, ssh, sc). Asserts the row names and the levels that matter;
-the hints are prose. Run:
-    pytest tests/test_doctor.py
+the hints are prose.
 """
+
 import json
 import subprocess
-import sys
 import time
 import types
 
+import hid
+import pytest
+import serial
+
 import helpers
 from helpers import fresh_state
-
-from slopstation import cglib
-from slopstation import gamepc
-
-# serial / hid are imported inside the checks; stub both before doctor loads.
-serial = types.ModuleType("serial")
+from slopstation import cglib, doctor, gamepc, supervise
 
 
 class _Serial:
+    """serial.Serial that opens every port but COMNONE."""
+
     def __init__(self, port, baud, timeout=1):
         if port == "COMNONE":
             raise OSError("no such port")
@@ -31,13 +31,15 @@ class _Serial:
         return False
 
 
-serial.Serial = _Serial
-hid = types.ModuleType("hid")
-hid.enumerate = lambda vid, pid: [{"path": b"a"}, {"path": b"b"}]
-sys.modules["serial"] = serial
-sys.modules["hid"] = hid
+@pytest.fixture(autouse=True)
+def _devices(monkeypatch):
+    """The checks open the Ex-Link port and enumerate the Puck; neither is on
+    a dev box."""
+    monkeypatch.setattr(serial, "Serial", _Serial)
+    monkeypatch.setattr(
+        hid, "enumerate", lambda vid, pid: [{"path": b"a"}, {"path": b"b"}]
+    )
 
-from slopstation import doctor
 
 rows = []
 
@@ -58,7 +60,7 @@ def fake_run(argv, **kw):
     return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
 
 
-def test_doctor():
+def test_doctor(monkeypatch):
     doctor.report = capture
     doctor.subprocess.run = fake_run
     doctor._local_rev = lambda: "abc1234"
@@ -72,26 +74,24 @@ def test_doctor():
     cglib.load_config = lambda: {k: v for k, v in cfg.items() if k != "sshHost"}
     assert doctor.check_config() is not None and levels()["config.json"] == "FAIL"
     rows.clear()
-    print("  config: the one REQUIRED_CONFIG list decides PASS/FAIL")
 
     # --- imports, serial, puck ---------------------------------------------------
     doctor.check_imports()
     doctor.check_com({"tvComPort": "COM3"})
     doctor.check_com({"tvComPort": "COMNONE"})
     assert levels()["import serial"] == "PASS" and levels()["import hid"] == "PASS"
-    com = [l for l, n, _ in rows if n == "ex-link port"]
+    com = [level for level, n, _ in rows if n == "ex-link port"]
     assert com == ["PASS", "FAIL"], com
     assert doctor.check_puck() is True and levels()["puck"] == "PASS"
-    hid.enumerate = lambda vid, pid: []
+    monkeypatch.setattr(hid, "enumerate", lambda vid, pid: [])
     assert doctor.check_puck() is False
-    hid.enumerate = lambda vid, pid: [{"path": b"a"}]
+    monkeypatch.setattr(hid, "enumerate", lambda vid, pid: [{"path": b"a"}])
     rows.clear()
-    print("  hardware: serial open, puck enumeration")
 
     # --- listener ------------------------------------------------------------
-    doctor._python_cmdlines = lambda: "python chord_listener.py"
+    monkeypatch.setattr(supervise, "pids", lambda: {"listener": {1}, "voice": set()})
     assert doctor.check_listener() is True and levels()["listener"] == "PASS"
-    doctor._python_cmdlines = lambda: ""
+    monkeypatch.setattr(supervise, "pids", lambda: {"listener": set(), "voice": set()})
     assert doctor.check_listener() is False and levels()["listener"] == "WARN"
     rows.clear()
 
@@ -104,19 +104,26 @@ def test_doctor():
         if cmd == "version":
             return "abc1234 2026-08-22"
         raise AssertionError(cmd)
+
     gamepc.ssh = fake_ssh
     doctor.check_ssh()
     lv = levels()
-    assert lv["ssh status"] == "PASS" and lv["ssh dispatch"] == "PASS" and lv["deploy skew"] == "PASS", lv
+    assert (
+        lv["ssh status"] == "PASS"
+        and lv["ssh dispatch"] == "PASS"
+        and lv["deploy skew"] == "PASS"
+    ), lv
     rows.clear()
 
     def dirty_version(cmd, timeout=15):
-        return "abc1234-dirty 2026-08-22" if cmd == "version" else fake_ssh(cmd, timeout)
+        return (
+            "abc1234-dirty 2026-08-22" if cmd == "version" else fake_ssh(cmd, timeout)
+        )
+
     gamepc.ssh = dirty_version
     doctor.check_ssh()
     assert levels()["deploy skew"] == "WARN"
     rows.clear()
-    print("  ssh: status, bogus -> DENIED, build-id vs HEAD (dirty warns)")
 
     # --- session state ---------------------------------------------------------
     fresh_state()
@@ -132,11 +139,10 @@ def test_doctor():
     doctor.check_session_state()
     assert levels()["session lock"] == "WARN"
     rows.clear()
-    print("  session: idle / fresh+last_error / stale")
 
     # --- telemetry -------------------------------------------------------------
     doctor.check_telemetry()
-    assert levels()["event stream"] == "WARN"          # nothing written in the tmp LOG_DIR
+    assert levels()["event stream"] == "WARN"  # nothing written in the tmp LOG_DIR
     assert levels()["log shipper"] == "PASS"
     rows.clear()
 
@@ -144,14 +150,22 @@ def test_doctor():
     cglib.load_secrets = lambda: {}
     doctor.check_voice(cfg)
     names = {n for _, n, _ in rows}
-    assert {"voice keys", "voice venv", "voice library", "voice agent",
-            "operations", "media"} <= names, names
+    assert {
+        "voice keys",
+        "venv",
+        "voice library",
+        "voice agent",
+        "operations",
+        "media",
+    } <= names, names
     assert levels()["voice keys"] == "WARN" and levels()["voice agent"] == "WARN"
     assert levels()["operations"] == "PASS"
     assert levels()["media"] == "PASS"
     rows.clear()
-    cglib.write_json(cglib.STATE / "operations.json", [{
-        "id": "op-test", "state": "UNKNOWN", "announcement_pending": False}])
+    cglib.write_json(
+        cglib.STATE / "operations.json",
+        [{"id": "op-test", "state": "UNKNOWN", "announcement_pending": False}],
+    )
     doctor.check_operations()
     assert levels()["operations"] == "WARN"
     rows.clear()
@@ -161,8 +175,7 @@ def test_doctor():
 
     media_cfg = json.loads(json.dumps(cfg))
     media_cfg["media"]["enabled"] = True
-    cglib.load_secrets = lambda: {"radarrApiKey": "r" * 32,
-                                  "sonarrApiKey": "s" * 32}
+    cglib.load_secrets = lambda: {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32}
     doctor._tcp_reachable = lambda url, timeout=1: True
     doctor.check_media(media_cfg)
     assert levels()["media config"] == "PASS"
@@ -173,33 +186,62 @@ def test_doctor():
     doctor.check_media(media_cfg)
     assert levels()["media config"] == "WARN"
     assert levels()["media services"] == "WARN"
-    service_detail = next(detail for _, name, detail in rows
-                          if name == "media services")
+    service_detail = next(
+        detail for _, name, detail in rows if name == "media services"
+    )
     assert "unconfigured: Prowlarr" in service_detail
     rows.clear()
 
     # --- monitored-and-missing outside active work ---------------------------
     media_cfg = json.loads(json.dumps(cfg))
     media_cfg["media"]["enabled"] = True
-    old_aired = time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                              time.gmtime(time.time() - 30 * 86400))
+    old_aired = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30 * 86400)
+    )
     fresh_aired = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    wanted = {"records": [
-        # Owned by the active operation below: not drift.
-        {"seriesId": 7, "seasonNumber": 1, "airDateUtc": old_aired,
-         "series": {"title": "Andor"}},
-        # Aired tonight: still in flight, not drift.
-        {"seriesId": 3, "seasonNumber": 18, "airDateUtc": fresh_aired,
-         "series": {"title": "Sunny"}},
-        # Aired years ago, nothing chasing it: the surprise-download hole.
-        {"seriesId": 3, "seasonNumber": 1, "airDateUtc": old_aired,
-         "series": {"title": "Sunny"}},
-        {"seriesId": 3, "seasonNumber": 2, "airDateUtc": old_aired,
-         "series": {"title": "Sunny"}}]}
+    wanted = {
+        "records": [
+            # Owned by the active operation below: not drift.
+            {
+                "seriesId": 7,
+                "seasonNumber": 1,
+                "airDateUtc": old_aired,
+                "series": {"title": "Andor"},
+            },
+            # Aired tonight: still in flight, not drift.
+            {
+                "seriesId": 3,
+                "seasonNumber": 18,
+                "airDateUtc": fresh_aired,
+                "series": {"title": "Sunny"},
+            },
+            # Aired years ago, nothing chasing it: the surprise-download hole.
+            {
+                "seriesId": 3,
+                "seasonNumber": 1,
+                "airDateUtc": old_aired,
+                "series": {"title": "Sunny"},
+            },
+            {
+                "seriesId": 3,
+                "seasonNumber": 2,
+                "airDateUtc": old_aired,
+                "series": {"title": "Sunny"},
+            },
+        ]
+    }
     doctor._arr_get = lambda url, key, path, params=None, timeout=4: wanted
-    cglib.write_json(cglib.STATE / "operations.json", [{
-        "kind": "series_acquisition", "state": "RUNNING", "external_ref": "7",
-        "metadata": {"seasons": [1]}}])
+    cglib.write_json(
+        cglib.STATE / "operations.json",
+        [
+            {
+                "kind": "series_acquisition",
+                "state": "RUNNING",
+                "external_ref": "7",
+                "metadata": {"seasons": [1]},
+            }
+        ],
+    )
     doctor.check_media_monitoring(media_cfg)
     assert levels()["media monitoring"] == "WARN"
     detail = next(d for _, n, d in rows if n == "media monitoring")
@@ -207,11 +249,23 @@ def test_doctor():
     rows.clear()
     # A whole-series operation (seasons: null) accounts for every season of
     # it, so with both series owned nothing is left armed.
-    cglib.write_json(cglib.STATE / "operations.json", [
-        {"kind": "series_acquisition", "state": "RUNNING", "external_ref": "7",
-         "metadata": {"seasons": [1]}},
-        {"kind": "series_acquisition", "state": "RUNNING", "external_ref": "3",
-         "metadata": {"seasons": None}}])
+    cglib.write_json(
+        cglib.STATE / "operations.json",
+        [
+            {
+                "kind": "series_acquisition",
+                "state": "RUNNING",
+                "external_ref": "7",
+                "metadata": {"seasons": [1]},
+            },
+            {
+                "kind": "series_acquisition",
+                "state": "RUNNING",
+                "external_ref": "3",
+                "metadata": {"seasons": None},
+            },
+        ],
+    )
     doctor.check_media_monitoring(media_cfg)
     assert levels()["media monitoring"] == "PASS"
     rows.clear()
@@ -219,8 +273,3 @@ def test_doctor():
     doctor.check_media_monitoring(media_cfg)
     assert levels()["media monitoring"] == "WARN"
     rows.clear()
-    print("  voice: keys, venv, library, operations, agent rows; no voice section warns")
-    print("  media: armed episodes no active operation owns are a WARN row")
-
-    print("OK - doctor: config, hardware, listener, ssh contract + deploy skew, "
-          "session state, telemetry, voice rows")

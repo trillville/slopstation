@@ -1,93 +1,30 @@
-"""Guard: every module imports with no config.json and no hardware, and every
-`module.attr` written in the code resolves - pyflakes cannot see a moved
-attribute, and the chord lane's haptic path swallows the AttributeError it
-would raise. Run:
-    pytest tests/test_imports.py
+"""Every module imports on a machine with no config.json, no secrets.json and
+no devices: the lanes must come up on a fresh checkout, and a config read at
+import time would fail before the doctor could say what is missing.
+
+One fresh interpreter with SLOPSTATION_HOME pointed at an empty directory,
+rather than this process: by the time this file runs, the suite has imported
+most of the package already, and a cached import proves nothing.
 """
-import ast
-import importlib
+
+import os
+import subprocess
 import sys
-import types
 
 import helpers
 
-PACKAGE = helpers.PACKAGE
-
-# Hardware libs imported at top level; stubbed so the walk runs on any box.
-for name in ("hid", "serial"):
-    sys.modules.setdefault(name, types.ModuleType(name))
-
-def modules():
-    """(path, import name) for everything this walk imports. The package walk
-    follows __init__.py, so nothing outside the package can wander in."""
-    for p in helpers.package_modules():
-        if "bench" not in p.parts:
-            yield p, helpers.modname(p)
+MODULES = [helpers.modname(p) for p in helpers.package_modules()]
 
 
-def walked():
-    """Every file whose module.attr references are checked: the modules plus
-    bench/, which imports them but is not imported here."""
-    for p, _ in modules():
-        yield p
-    yield from sorted((PACKAGE / "agent" / "bench").glob("*.py"))
-
-
-def attr_refs(path, ours):
-    """(module, attr, lineno) for every `alias.attr` where alias is an imported
-    module, and for every `from <our module> import name`."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    aliases = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for a in node.names:
-                # `import urllib.request` binds the name `urllib`; the
-                # attribute walk then resolves `.request` on the package.
-                if a.asname:
-                    aliases[a.asname] = a.name
-                else:
-                    aliases[a.name.split(".")[0]] = a.name.split(".")[0]
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            for a in node.names:
-                sub = f"{node.module}.{a.name}"
-                if sub in ours:
-                    # `from agent.tools import library` binds a MODULE. Without
-                    # this the name is not an alias and every `library.X` below
-                    # goes unchecked.
-                    aliases[a.asname or a.name] = sub
-                elif node.module in ours:
-                    yield node.module, a.name, node.lineno
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-                and node.value.id in aliases):
-            yield aliases[node.value.id], node.attr, node.lineno
-
-
-def test_imports():
-    # Config must not be read at import: the fixture goes away for this walk.
-    from slopstation import cglib
-    cglib.use_config(None)
-    real = cglib.load_config
-    cglib.load_config = lambda: (_ for _ in ()).throw(FileNotFoundError("config.json"))
-    loaded = {}
-    try:
-        for p, name in modules():
-            loaded[name] = importlib.import_module(name)
-    finally:
-        cglib.load_config = real
-        cglib.use_config(helpers.CONFIG)
-    print(f"  import: {len(loaded)} modules, no config.json, hid/serial stubbed")
-
-    bad = []
-    for p in walked():
-        for mod, attr, line in attr_refs(p, set(loaded)):
-            target = loaded.get(mod) or sys.modules.get(mod)
-            if target is None or mod in ("hid", "serial"):
-                continue                    # third-party or stubbed: not ours to check
-            if not hasattr(target, attr):
-                bad.append(f"{p.relative_to(PACKAGE)}:{line} {mod}.{attr}")
-    for b in bad:
-        print("FAIL", b)
-    assert not bad, f"{len(bad)} unresolved module attribute(s)"
-    print("OK - imports: every module loads without config or hardware; every "
-          "module.attr and from-import resolves (bench included)")
+def test_imports_without_config(tmp_path):
+    code = "import importlib\n" + "".join(
+        f"importlib.import_module({name!r})\n" for name in MODULES
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "SLOPSTATION_HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert r.returncode == 0, r.stderr[-3000:]

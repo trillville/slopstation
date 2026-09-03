@@ -6,8 +6,13 @@ import os
 import re
 import threading
 from pathlib import Path
+from typing import Any
 
-from slopstation.agent.tools.media_clients import (MediaConfigurationError, MediaError, _clean_text)
+from slopstation.agent.tools.media_clients import (
+    MediaConfigurationError,
+    MediaError,
+    _clean_text,
+)
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
 PROTON_INACTIVE_STATUSES = {"DestroyPortMappingCommunication", "Stopped", "Error"}
@@ -15,7 +20,8 @@ PROTON_LOG_MAX_AGE_S = 45
 PROTON_STATUS_RE = re.compile(
     r"(?ms)^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)"
     r"[^\r\n]*Received PortForwarding Status '(?P<status>[^']+)'"
-    r"(?P<detail>.*?)(?=^\d{4}-\d{2}-\d{2}T|\Z)")
+    r"(?P<detail>.*?)(?=^\d{4}-\d{2}-\d{2}T|\Z)"
+)
 PROTON_PORT_RE = re.compile(r"Port pair\s+\d+->(?P<port>\d+)")
 
 
@@ -32,10 +38,16 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
     backup = source.with_name(f"{source.stem}.1{source.suffix}")
     sources = [candidate for candidate in (backup, source) if candidate.is_file()]
     if not sources:
-        return {"state": "missing", "status": None, "port": None,
-                "observed_at": None, "age_s": None, "path": str(source)}
+        return {
+            "state": "missing",
+            "status": None,
+            "port": None,
+            "observed_at": None,
+            "age_s": None,
+            "path": str(source),
+        }
 
-    latest = None
+    latest: dict[str, Any] | None = None
     for candidate in sources:
         try:
             text = candidate.read_text(encoding="utf-8-sig", errors="replace")
@@ -44,7 +56,8 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
         for match in PROTON_STATUS_RE.finditer(text):
             try:
                 observed = datetime.datetime.fromisoformat(
-                    match.group("timestamp").replace("Z", "+00:00"))
+                    match.group("timestamp").replace("Z", "+00:00")
+                )
             except ValueError:
                 continue
             if latest is not None and observed < latest["observed"]:
@@ -57,12 +70,18 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
                 "path": candidate,
             }
     if latest is None:
-        return {"state": "unknown", "status": None, "port": None,
-                "observed_at": None, "age_s": None, "path": str(source)}
+        return {
+            "state": "unknown",
+            "status": None,
+            "port": None,
+            "observed_at": None,
+            "age_s": None,
+            "path": str(source),
+        }
 
-    current = now or datetime.datetime.now(datetime.timezone.utc)
+    current = now or datetime.datetime.now(datetime.UTC)
     if current.tzinfo is None:
-        current = current.replace(tzinfo=datetime.timezone.utc)
+        current = current.replace(tzinfo=datetime.UTC)
     age_s = (current - latest["observed"]).total_seconds()
     status = latest["status"]
     port = latest["port"]
@@ -87,8 +106,7 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
 class ProtonPortMonitor:
     """Synchronize a fresh Proton Windows mapping into qBittorrent."""
 
-    def __init__(self, client, log, path=None, poll_s=30,
-                 now=None):
+    def __init__(self, client, log, path=None, poll_s=30, now=None):
         self.client = client
         self.log = log
         self.path = Path(path) if path is not None else default_proton_log_path()
@@ -98,8 +116,7 @@ class ProtonPortMonitor:
         self._last_failure = None
 
     def inspect(self):
-        return read_proton_port_state(
-            self.path, now=self.now)
+        return read_proton_port_state(self.path, now=self.now)
 
     def reconcile_once(self):
         source = self.inspect()
@@ -118,14 +135,17 @@ class ProtonPortMonitor:
         self._last_failure = None
         if updated["changed"]:
             self.log.info(
-                "proton_port_synced", port=updated["listen_port"],
+                "proton_port_synced",
+                port=updated["listen_port"],
                 previous_port=updated["previous_port"],
-                source_age_s=source["age_s"])
+                source_age_s=source["age_s"],
+            )
         return result
 
     def start(self):
-        threading.Thread(target=self._run, daemon=True,
-                         name="proton-port-monitor").start()
+        threading.Thread(
+            target=self._run, daemon=True, name="proton-port-monitor"
+        ).start()
 
     def stop(self):
         self._stop.set()

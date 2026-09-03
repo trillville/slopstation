@@ -14,6 +14,7 @@ augmenter's 2 s clip_duration.
 
 Stdlib only: the training box has no slopstation venv.
 """
+
 import sys
 import wave
 from pathlib import Path
@@ -33,7 +34,7 @@ def main():
         while True:
             frames = r.readframes(n)
             if len(frames) < n * width:
-                break               # drop the short tail rather than pad it
+                break  # drop the short tail rather than pad it
             with wave.open(str(dest / f"room_{i:05d}.wav"), "wb") as o:
                 o.setnchannels(chans)
                 o.setsampwidth(width)

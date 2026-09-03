@@ -4,16 +4,18 @@ Shared by the Pipecat pipeline (voice) and brain/backends.py (text and MCP);
 every tool routes through the same dispatch.py as the grammar gate.
 An appid that isn't in the index is refused at the tool boundary.
 """
+
 import json
 import time
+from typing import Any
 
 from slopstation import cglib
-from slopstation.agent.tools import library
-from slopstation.agent.tools import steamstore
+
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry
+from slopstation.agent.tools import library, steamstore
 
-ASK_TTL_S = 120                 # a delete confirmation goes stale
+ASK_TTL_S = 120  # a delete confirmation goes stale
 
 WEB_SEARCH_RULE = """\
 You can search the web for current facts the catalog can't answer (release
@@ -126,27 +128,33 @@ def system_instruction(cfg, interface="voice"):
     # A day with no zone resolves toward UTC: from 5pm Pacific on, briefs went
     # out dated tomorrow (2026-08-13). Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
-    tail = [f"Today is {time.strftime('%Y-%m-%d')}"
-            + (f" in {tz}." if tz else " local time.")]
+    tail = [
+        f"Today is {time.strftime('%Y-%m-%d')}"
+        + (f" in {tz}." if tz else " local time.")
+    ]
     if inputs:
-        gaming = next((k for k, v in inputs.items()
-                       if v == cfg.get("tvGamingCmd")), None)
-        tail.append(f"TV inputs: {', '.join(inputs)}"
-                    + (f"; '{gaming}' starts a session if none is running."
-                       if gaming else "."))
+        gaming = next(
+            (k for k, v in inputs.items() if v == cfg.get("tvGamingCmd")), None
+        )
+        tail.append(
+            f"TV inputs: {', '.join(inputs)}"
+            + (f"; '{gaming}' starts a session if none is running." if gaming else ".")
+        )
     tail.append(
         f"Volume runs 0-{voice['volumeMax']}, higher requests are clamped - "
         "confirm the level the tool actually returns. Mute is a blind toggle "
-        "with no readable state - say you toggled it, never claim on or off.")
+        "with no readable state - say you toggled it, never claim on or off."
+    )
     if voice["assistantWebSearch"]:
-        tail.append(
-WEB_SEARCH_RULE)
+        tail.append(WEB_SEARCH_RULE)
     style = TEXT_STYLE if interface == "text" else VOICE_STYLE
     input_rule = "" if interface == "text" else "\n\n" + VOICE_INPUT_RULE
-    return (style + input_rule + "\n\n" + RULES + " " + " ".join(tail) + "\n\n"
-            "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
-            "never|inst/notinst|controller full/partial/none/?):\n"
-            + "\n".join(library.catalog_lines()))
+    return (
+        style + input_rule + "\n\n" + RULES + " " + " ".join(tail) + "\n\n"
+        "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
+        "never|inst/notinst|controller full/partial/none/?):\n"
+        + "\n".join(library.catalog_lines())
+    )
 
 
 def known_appids():
@@ -159,12 +167,18 @@ def known_appids():
 def _season_scope(seasons):
     if len(seasons) == 1:
         return f"season {seasons[0]}"
-    return "seasons " + ", ".join(str(n) for n in seasons[:-1]) \
-        + f" and {seasons[-1]}"
+    return "seasons " + ", ".join(str(n) for n in seasons[:-1]) + f" and {seasons[-1]}"
 
 
-def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
-               voice=None, steam=None, media=None):
+def tool_impls(
+    dispatch,
+    log,
+    operations=None,
+    on_stop_listening=None,
+    voice=None,
+    steam=None,
+    media=None,
+):
     """name -> fn(args: dict) -> dict. Shared by pipeline and REPL.
 
     operations is the durable external-work ledger and on_stop_listening is
@@ -175,6 +189,7 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
     can call; None (REPL/bench) keeps every tool. steam is a SteamSession,
     used by install_game and the download-status source. media is the
     Radarr/Sonarr request boundary; None removes every media tool."""
+
     def _unknown(tool, appid):
         """The refusal for an appid outside the catalog, else None."""
         if appid in known_appids():
@@ -187,8 +202,11 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         if refused := _unknown("launch_game", appid):
             return refused
         if library.installed_name(appid) is None:
-            return {"ok": False, "error": "that game is owned but not "
-                    "installed - installing needs the controller"}
+            return {
+                "ok": False,
+                "error": "that game is owned but not "
+                "installed - installing needs the controller",
+            }
         r = dispatch.play_game(appid)
         return {"ok": r.ok, "detail": r.detail}
 
@@ -222,14 +240,16 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
                         title = owned.get("name") or f"app {appid}"
                         try:
                             operation = operations.track_steam_install(
-                                appid, title, turn=dispatch.utterance.turn,
-                                verified=bool(r.get("verified")))
+                                appid,
+                                title,
+                                turn=dispatch.utterance.turn,
+                                verified=bool(r.get("verified")),
+                            )
                             return {**r, "operation_id": operation["id"]}
                         except Exception as e:
                             # Submission already happened; tracking must not
                             # turn a successful external action into a refusal.
-                            log.error("operation_track_failed", appid=appid,
-                                      err=str(e))
+                            log.error("operation_track_failed", appid=appid, err=str(e))
                     return r
                 log.warn("install_fallback", appid=appid, why=r.get("error"))
             except Exception as e:
@@ -239,8 +259,10 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
                 log.error("install_error", appid=appid, err=str(e))
         r = dispatch.nav("details", appid)
         if r.ok:
-            return {"ok": True, "detail": "it's on the TV now - press Install "
-                    "and the download starts"}
+            return {
+                "ok": True,
+                "detail": "it's on the TV now - press Install and the download starts",
+            }
         return {"ok": False, "error": r.detail}
 
     def nav(args):
@@ -266,20 +288,28 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             # a miss hand back the real names for the model to act on.
             rows = library.load().get("collections", [])
             if not rows:
-                return {"ok": False, "error": "no collections are synced yet - "
-                        "the PC has to be awake for that"}
+                return {
+                    "ok": False,
+                    "error": "no collections are synced yet - "
+                    "the PC has to be awake for that",
+                }
             cid = None
             want = str(args.get("collection") or "").strip()
             if want:
                 from slopstation.agent.tools import titles
+
                 resolve = titles.build_collection_resolver(
-                    (voice or {}).get("fuzzyTitleThreshold", 87))
+                    (voice or {}).get("fuzzyTitleThreshold", 87)
+                )
                 cid, _ = resolve(want) if resolve else (None, None)
             if cid is None:
-                return {"ok": False,
-                        "error": f"no collection matches {want!r}" if want
-                                 else "which collection?",
-                        "collections": [r["name"] for r in rows]}
+                return {
+                    "ok": False,
+                    "error": f"no collection matches {want!r}"
+                    if want
+                    else "which collection?",
+                    "collections": [r["name"] for r in rows],
+                }
             r = dispatch.nav("collection", cid)
         elif target in ("downloads", "library", "store"):
             r = dispatch.nav(target)
@@ -287,11 +317,13 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             return {"ok": False, "error": f"unknown nav target {target}"}
         return {"ok": r.ok, "detail": r.detail}
 
-    plain = {"end_session": dispatch.end_session,
-             "start_session": dispatch.start_session,
-             "volume_up": dispatch.volume_up,
-             "volume_down": dispatch.volume_down,
-             "mute": dispatch.mute_toggle}
+    plain = {
+        "end_session": dispatch.end_session,
+        "start_session": dispatch.start_session,
+        "volume_up": dispatch.volume_up,
+        "volume_down": dispatch.volume_down,
+        "mute": dispatch.mute_toggle,
+    }
 
     def control(args):
         action = args.get("action")
@@ -312,11 +344,17 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         unlike everything in dispatch.py: closing our own mic changes nothing
         on the TV or the PC."""
         if on_stop_listening is None:
-            return {"ok": False, "error": "there is no open voice session to "
-                    "close - nothing is listening in the first place"}
+            return {
+                "ok": False,
+                "error": "there is no open voice session to "
+                "close - nothing is listening in the first place",
+            }
         on_stop_listening()
-        return {"ok": True, "detail": "going quiet once you've said your "
-                "goodbye - the wake word is what reopens the mic"}
+        return {
+            "ok": True,
+            "detail": "going quiet once you've said your "
+            "goodbye - the wake word is what reopens the mic",
+        }
 
     def get_now_playing(args):
         # The PC reports RunningAppID 0 all through a launch, which read as
@@ -329,9 +367,12 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             # Mid-launch the PC can be unreachable; the lock still answers.
             return {"ok": False, "error": r.detail, "session_active": active}
         appid = int(r.detail) if str(r.detail).isdigit() else 0
-        return {"ok": True, "appid": appid,
-                "name": library.installed_name(appid) if appid else None,
-                "session_active": active}
+        return {
+            "ok": True,
+            "appid": appid,
+            "name": library.installed_name(appid) if appid else None,
+            "session_active": active,
+        }
 
     def get_game_details(args):
         appid = int(args.get("appid", 0))
@@ -358,6 +399,7 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         facets = {}
         if tasks:
             import concurrent.futures as _cf
+
             with _cf.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
                 futs = {k: ex.submit(fn) for k, fn in tasks.items()}
                 for k, f in futs.items():
@@ -376,8 +418,13 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             facets["hltb"] = steamstore.fetch_hltb(name)
         if not (meta or name or any(facets.values())):
             return {"ok": False, "error": "unknown appid"}
-        return {"ok": True, "name": name, "installed": installed,
-                **(meta or {}), **{k: v for k, v in facets.items() if v}}
+        return {
+            "ok": True,
+            "name": name,
+            "installed": installed,
+            **(meta or {}),
+            **{k: v for k, v in facets.items() if v},
+        }
 
     def list_games(args):
         """Sale/trending/recent lists. wishlist_on_sale and specials come from
@@ -390,28 +437,43 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             if rows is None:
                 # Two causes, indistinguishable here: no steamId64
                 # (refresh_deals never writes the key), or no sync yet.
-                return {"ok": False, "error": "no wishlist data - either the "
-                        "steamId64 isn't set, or the store sync hasn't run yet"}
+                return {
+                    "ok": False,
+                    "error": "no wishlist data - either the "
+                    "steamId64 isn't set, or the store sync hasn't run yet",
+                }
             return {"ok": True, "source": source, "games": rows[:10]}
         if source == "specials":
-            return {"ok": True, "source": source,
-                    "games": steamstore.load_deals().get("specials", [])[:10]}
+            return {
+                "ok": True,
+                "source": source,
+                "games": steamstore.load_deals().get("specials", [])[:10],
+            }
         if source == "trending":
-            return {"ok": True, "source": source, "games": steamstore.fetch_trending()[:10]}
+            return {
+                "ok": True,
+                "source": source,
+                "games": steamstore.fetch_trending()[:10],
+            }
         if source == "recently_played":
             rows = steamstore.fetch_recently_played()
             return {"ok": True, "source": source, "games": rows[:10]}
         if source == "downloading":
             if steam is None or not steam.available():
-                return {"ok": False, "error": "download status isn't set up - the "
-                        "account session hasn't been enrolled"}
+                return {
+                    "ok": False,
+                    "error": "download status isn't set up - the "
+                    "account session hasn't been enrolled",
+                }
             try:
-                return {"ok": True, "source": source,
-                        "games": steam.download_status()}
+                return {"ok": True, "source": source, "games": steam.download_status()}
             except Exception as e:
                 log.error("download_status_error", err=str(e))
-                return {"ok": False, "error": "couldn't reach Steam for the "
-                        "download status - the session may need re-enrolling"}
+                return {
+                    "ok": False,
+                    "error": "couldn't reach Steam for the "
+                    "download status - the session may need re-enrolling",
+                }
         return {"ok": False, "error": f"unknown source {source}"}
 
     def search_store(args):
@@ -422,18 +484,24 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         if not term and not tags:
             return {"ok": False, "error": "search needs a term or a genre tag"}
         rows = steamstore.fetch_store_search(
-            term=term, tags=tags, max_price=args.get("max_price"),
-            on_sale=bool(args.get("on_sale")))
+            term=term,
+            tags=tags,
+            max_price=args.get("max_price"),
+            on_sale=bool(args.get("on_sale")),
+        )
         return {"ok": True, "count": len(rows), "games": rows}
 
     def list_operations(args):
         scope = args.get("scope", "active")
         if scope not in ("active", "recent"):
             return {"ok": False, "error": f"unknown operation scope {scope}"}
-        return {"ok": True, "scope": scope,
-                "operations": operations.for_assistant(
-                    scope, acknowledge=(scope == "recent"
-                                        and not dispatch.dry_run))}
+        return {
+            "ok": True,
+            "scope": scope,
+            "operations": operations.for_assistant(
+                scope, acknowledge=(scope == "recent" and not dispatch.dry_run)
+            ),
+        }
 
     def find_media(args):
         kind = str(args.get("kind", ""))
@@ -454,8 +522,8 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
 
     def _track_media(submission):
         from slopstation.agent.tools import operations as operations_mod
-        return operations_mod.track(operations, submission,
-                                    dispatch.utterance.turn)
+
+        return operations_mod.track(operations, submission, dispatch.utterance.turn)
 
     def request_movie(args):
         try:
@@ -483,49 +551,59 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             if not isinstance(all_seasons, bool):
                 return {"ok": False, "error": "all_seasons must be boolean"}
             if seasons is not None and all_seasons:
-                return {"ok": False, "error":
-                        "choose explicit seasons or all_seasons, not both"}
+                return {
+                    "ok": False,
+                    "error": "choose explicit seasons or all_seasons, not both",
+                }
             if seasons is None and not all_seasons:
-                return {"ok": False,
-                        "error": "series request needs explicit scope",
-                        "clarification": "Which season would you like, or "
-                                         "should I download all seasons?"}
+                return {
+                    "ok": False,
+                    "error": "series request needs explicit scope",
+                    "clarification": "Which season would you like, or "
+                    "should I download all seasons?",
+                }
             if seasons is not None:
                 if not isinstance(seasons, list) or not seasons:
-                    return {"ok": False, "error":
-                            "seasons must be a non-empty list"}
-                if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0
-                       for n in seasons):
-                    return {"ok": False, "error":
-                            "season numbers must be positive integers"}
+                    return {"ok": False, "error": "seasons must be a non-empty list"}
+                if any(
+                    isinstance(n, bool) or not isinstance(n, int) or n <= 0
+                    for n in seasons
+                ):
+                    return {
+                        "ok": False,
+                        "error": "season numbers must be positive integers",
+                    }
                 seasons = sorted(set(seasons))
             if dispatch.dry_run:
-                scope = "all normal seasons" if all_seasons else \
-                        _season_scope(seasons)
-                detail = (f"would request TVDB {tvdb_id}, {scope}, "
-                          f"with preset {preset}")
+                scope = "all normal seasons" if all_seasons else _season_scope(seasons)
+                detail = f"would request TVDB {tvdb_id}, {scope}, with preset {preset}"
                 log("dry_run_would", action=detail)
                 return {"ok": True, "dry_run": True, "detail": detail}
             submission = media.request_series(tvdb_id, preset, seasons)
             submission["all_seasons"] = all_seasons
             result = _track_media(submission)
             scope = "all normal seasons" if all_seasons else _season_scope(seasons)
-            quality = ("using the default quality profile"
-                       if result.get("preset") == "default"
-                       else f"in {result.get('preset')}")
+            quality = (
+                "using the default quality profile"
+                if result.get("preset") == "default"
+                else f"in {result.get('preset')}"
+            )
             if result.get("already_available"):
-                acknowledgment = (f"{result['title']}, {scope}, {quality} is "
-                                  "already available.")
+                acknowledgment = (
+                    f"{result['title']}, {scope}, {quality} is already available."
+                )
             else:
-                acknowledgment = (f"Requested {result['title']}, {scope}, "
-                                  f"{quality}. Sonarr is searching in the "
-                                  "background.")
+                acknowledgment = (
+                    f"Requested {result['title']}, {scope}, "
+                    f"{quality}. Sonarr is searching in the "
+                    "background."
+                )
             return {**result, "acknowledgment": acknowledgment}
         except Exception as e:
             log.error("tool_error", tool="request_series", err=str(e))
             return {"ok": False, "error": str(e)}
 
-    pending_delete = {}          # delete scope -> (turn that asked, when)
+    pending_delete: dict[tuple, tuple] = {}  # delete scope -> (turn that asked, when)
 
     def delete_media(args):
         try:
@@ -540,13 +618,23 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
         if catalog_id <= 0:
             return {"ok": False, "error": "catalog_id must be positive"}
         if kind == "series" and seasons is None and not all_seasons:
-            return {"ok": False, "error": "name seasons or explicitly request all seasons"}
+            return {
+                "ok": False,
+                "error": "name seasons or explicitly request all seasons",
+            }
         if seasons is not None:
-            if (not isinstance(seasons, list) or not seasons
-                    or any(isinstance(n, bool) or not isinstance(n, int) or n <= 0
-                           for n in seasons)):
-                return {"ok": False,
-                        "error": "season numbers must be positive integers"}
+            if (
+                not isinstance(seasons, list)
+                or not seasons
+                or any(
+                    isinstance(n, bool) or not isinstance(n, int) or n <= 0
+                    for n in seasons
+                )
+            ):
+                return {
+                    "ok": False,
+                    "error": "season numbers must be positive integers",
+                }
             seasons = sorted(set(seasons))
         if dispatch.dry_run:
             scope = "all seasons" if all_seasons else seasons
@@ -558,48 +646,72 @@ def tool_impls(dispatch, log, operations=None, on_stop_listening=None,
             scope = (kind, catalog_id, tuple(seasons or ()), all_seasons)
             asked_turn, asked_at = pending_delete.get(scope, (None, 0.0))
             if entry["in_library"] and (
-                    asked_turn in (None, dispatch.utterance.turn)
-                    or time.time() - asked_at > ASK_TTL_S):
+                asked_turn in (None, dispatch.utterance.turn)
+                or time.time() - asked_at > ASK_TTL_S
+            ):
                 pending_delete[scope] = (dispatch.utterance.turn, time.time())
-                named = " ".join(str(part) for part in
-                                 (entry["title"], entry["year"]) if part) \
+                named = (
+                    " ".join(
+                        str(part) for part in (entry["title"], entry["year"]) if part
+                    )
                     or f"{kind} {catalog_id}"
+                )
                 if all_seasons:
                     named += ", every season"
                 elif seasons:
                     named += ", " + _season_scope(seasons)
-                log.warn("tool_refused", tool="delete_media",
-                         reason="unconfirmed", catalog_id=catalog_id)
-                return {"ok": False, "acknowledgment":
-                        f"Delete {named}? That erases the files."}
+                log.warn(
+                    "tool_refused",
+                    tool="delete_media",
+                    reason="unconfirmed",
+                    catalog_id=catalog_id,
+                )
+                return {
+                    "ok": False,
+                    "acknowledgment": f"Delete {named}? That erases the files.",
+                }
             pending_delete.pop(scope, None)
             from slopstation.agent.tools import operations as operations_mod
+
             covered, command_ids = operations_mod.covered_by_delete(
-                operations, kind, catalog_id, seasons, all_seasons)
+                operations, kind, catalog_id, seasons, all_seasons
+            )
             if kind == "movie":
                 result = media.delete_movie(catalog_id, command_ids)
             else:
                 result = media.delete_series(
-                    catalog_id, seasons=seasons, all_seasons=all_seasons,
-                    command_ids=command_ids)
+                    catalog_id,
+                    seasons=seasons,
+                    all_seasons=all_seasons,
+                    command_ids=command_ids,
+                )
             return operations_mod.record_deleted(operations, covered, result)
         except Exception as e:
             log.error("tool_error", tool="delete_media", err=str(e))
             return {"ok": False, "error": str(e)}
 
-    impls = {"launch_game": launch_game, "control": control,
-             "stop_listening": stop_listening,
-             "get_now_playing": get_now_playing,
-             "get_game_details": get_game_details,
-             "list_games": list_games, "search_store": search_store,
-             "quit_game": quit_game, "nav": nav,
-             "install_game": install_game}
+    impls = {
+        "launch_game": launch_game,
+        "control": control,
+        "stop_listening": stop_listening,
+        "get_now_playing": get_now_playing,
+        "get_game_details": get_game_details,
+        "list_games": list_games,
+        "search_store": search_store,
+        "quit_game": quit_game,
+        "nav": nav,
+        "install_game": install_game,
+    }
     if operations is not None:
         impls["list_operations"] = list_operations
     if media is not None:
-        impls.update(find_media=find_media, media_library=media_library,
-                     request_movie=request_movie,
-                     request_series=request_series, delete_media=delete_media)
+        impls.update(
+            find_media=find_media,
+            media_library=media_library,
+            request_movie=request_movie,
+            request_series=request_series,
+            delete_media=delete_media,
+        )
     if voice is not None and not voice.get("steamDataTools", True):
         for gated in ("list_games", "search_store"):
             impls.pop(gated, None)
@@ -736,97 +848,219 @@ verbatim and call again unchanged only once they have answered yes. A repeat
 inside the same turn is always refused, and so is an ask older than two minutes,
 but nothing else checks their answer - a no is yours to honour."""
 
-TOOL_DEFS = [
-    ("launch_game", _LAUNCH_GAME,
-     {"appid": {"type": "integer", "description": "appid from the catalog"}},
-     ["appid"]),
-    ("control", _CONTROL,
-     {"action": {"type": "string",
-                 "enum": ["end_session", "start_session", "volume_up",
-                          "volume_down", "mute", "set_volume", "switch_input"]},
-      "level": {"type": "integer",
-                "description": "volume level for set_volume"},
-      "input": {"type": "string",
+TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
+    (
+        "launch_game",
+        _LAUNCH_GAME,
+        {"appid": {"type": "integer", "description": "appid from the catalog"}},
+        ["appid"],
+    ),
+    (
+        "control",
+        _CONTROL,
+        {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "end_session",
+                    "start_session",
+                    "volume_up",
+                    "volume_down",
+                    "mute",
+                    "set_volume",
+                    "switch_input",
+                ],
+            },
+            "level": {"type": "integer", "description": "volume level for set_volume"},
+            "input": {
+                "type": "string",
                 "description": "spoken input name for switch_input; valid "
-                "names are in the system prompt"}},
-     ["action"]),
+                "names are in the system prompt",
+            },
+        },
+        ["action"],
+    ),
     ("stop_listening", _STOP_LISTENING, {}, []),
     ("get_now_playing", _GET_NOW_PLAYING, {}, []),
-    ("get_game_details", _GET_GAME_DETAILS,
-     {"appid": {"type": "integer", "description": "appid (catalog, or a store "
-                "appid for a game the user doesn't own)"},
-      "facets": {"type": "array", "items": {"type": "string",
-                 "enum": ["price", "reviews", "news", "hltb"]},
-                 "description": "which live facets to fetch; omit for catalog "
-                 "details only"}},
-     ["appid"]),
-    ("list_games", _LIST_GAMES,
-     {"source": {"type": "string",
-                 "enum": ["wishlist_on_sale", "specials", "trending",
-                          "recently_played", "downloading"]}},
-     ["source"]),
-    ("search_store", _SEARCH_STORE,
-     {"term": {"type": "string", "description": "title words, or empty when "
-               "searching purely by genre tags"},
-      "tags": {"type": "array", "items": {"type": "string"},
-               "description": "genre/feature tag names, e.g. ['Roguelike','Co-op']"},
-      "max_price": {"type": "integer", "description": "dollar price ceiling"},
-      "on_sale": {"type": "boolean", "description": "restrict to discounted"}},
-     []),
-    ("quit_game", _QUIT_GAME,
-     {"appid": {"type": "integer", "description": "appid of the running game"}},
-     ["appid"]),
-    ("nav", _NAV,
-     {"target": {"type": "string",
-                 "enum": ["downloads", "library", "store", "game_page",
-                          "store_page", "collection"]},
-      "appid": {"type": "integer", "description": "required for game_page (must "
-                "be owned) and store_page (any Steam appid)"},
-      "collection": {"type": "string", "description": "collection name, for "
-                     "target=collection"}},
-     ["target"]),
-    ("install_game", _INSTALL_GAME,
-     {"appid": {"type": "integer", "description": "appid of an owned, not-yet-"
-                 "installed game"}},
-     ["appid"]),
-    ("list_operations", _LIST_OPERATIONS,
-     {"scope": {"type": "string", "enum": ["active", "recent"]}},
-     []),
-    ("find_media", _FIND_MEDIA,
-     {"kind": {"type": "string", "enum": ["movie", "series"]},
-      "query": {"type": "string",
-                "description": "spoken title and optional year"}},
-     ["kind", "query"]),
-    ("media_library", _MEDIA_LIBRARY,
-     {"kind": {"type": "string", "enum": ["movie", "series"]},
-      "catalog_id": {"type": "integer",
-                     "description": "TMDB movie id or TVDB series id returned by find_media"}},
-     ["kind", "catalog_id"]),
-    ("request_movie", _REQUEST_MOVIE,
-     {"tmdb_id": {"type": "integer",
-                  "description": "id returned by find_media"},
-      "preset": {"type": "string",
-                 "enum": ["default", "1080p", "2160p"]}},
-     ["tmdb_id"]),
-    ("request_series", _REQUEST_SERIES,
-     {"tvdb_id": {"type": "integer",
-                  "description": "id returned by find_media"},
-      "preset": {"type": "string",
-                 "enum": ["default", "1080p", "2160p"]},
-      "seasons": {"type": "array", "items": {"type": "integer"},
-                  "description": "positive season numbers explicitly requested"},
-      "all_seasons": {"type": "boolean",
-                      "description": "true only for an explicit whole-series request"}},
-     ["tvdb_id"]),
-    ("delete_media", _DELETE_MEDIA,
-     {"kind": {"type": "string", "enum": ["movie", "series"]},
-      "catalog_id": {"type": "integer",
-                     "description": "TMDB movie id or TVDB series id returned by find_media"},
-      "seasons": {"type": "array", "items": {"type": "integer"},
-                  "description": "series seasons to delete; preserve every other season"},
-      "all_seasons": {"type": "boolean",
-                      "description": "true only for an explicit whole-series deletion"}},
-     ["kind", "catalog_id"]),
+    (
+        "get_game_details",
+        _GET_GAME_DETAILS,
+        {
+            "appid": {
+                "type": "integer",
+                "description": "appid (catalog, or a store "
+                "appid for a game the user doesn't own)",
+            },
+            "facets": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["price", "reviews", "news", "hltb"],
+                },
+                "description": "which live facets to fetch; omit for catalog "
+                "details only",
+            },
+        },
+        ["appid"],
+    ),
+    (
+        "list_games",
+        _LIST_GAMES,
+        {
+            "source": {
+                "type": "string",
+                "enum": [
+                    "wishlist_on_sale",
+                    "specials",
+                    "trending",
+                    "recently_played",
+                    "downloading",
+                ],
+            }
+        },
+        ["source"],
+    ),
+    (
+        "search_store",
+        _SEARCH_STORE,
+        {
+            "term": {
+                "type": "string",
+                "description": "title words, or empty when "
+                "searching purely by genre tags",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "genre/feature tag names, e.g. ['Roguelike','Co-op']",
+            },
+            "max_price": {"type": "integer", "description": "dollar price ceiling"},
+            "on_sale": {"type": "boolean", "description": "restrict to discounted"},
+        },
+        [],
+    ),
+    (
+        "quit_game",
+        _QUIT_GAME,
+        {"appid": {"type": "integer", "description": "appid of the running game"}},
+        ["appid"],
+    ),
+    (
+        "nav",
+        _NAV,
+        {
+            "target": {
+                "type": "string",
+                "enum": [
+                    "downloads",
+                    "library",
+                    "store",
+                    "game_page",
+                    "store_page",
+                    "collection",
+                ],
+            },
+            "appid": {
+                "type": "integer",
+                "description": "required for game_page (must "
+                "be owned) and store_page (any Steam appid)",
+            },
+            "collection": {
+                "type": "string",
+                "description": "collection name, for target=collection",
+            },
+        },
+        ["target"],
+    ),
+    (
+        "install_game",
+        _INSTALL_GAME,
+        {
+            "appid": {
+                "type": "integer",
+                "description": "appid of an owned, not-yet-installed game",
+            }
+        },
+        ["appid"],
+    ),
+    (
+        "list_operations",
+        _LIST_OPERATIONS,
+        {"scope": {"type": "string", "enum": ["active", "recent"]}},
+        [],
+    ),
+    (
+        "find_media",
+        _FIND_MEDIA,
+        {
+            "kind": {"type": "string", "enum": ["movie", "series"]},
+            "query": {
+                "type": "string",
+                "description": "spoken title and optional year",
+            },
+        },
+        ["kind", "query"],
+    ),
+    (
+        "media_library",
+        _MEDIA_LIBRARY,
+        {
+            "kind": {"type": "string", "enum": ["movie", "series"]},
+            "catalog_id": {
+                "type": "integer",
+                "description": "TMDB movie id or TVDB series id returned by find_media",
+            },
+        },
+        ["kind", "catalog_id"],
+    ),
+    (
+        "request_movie",
+        _REQUEST_MOVIE,
+        {
+            "tmdb_id": {"type": "integer", "description": "id returned by find_media"},
+            "preset": {"type": "string", "enum": ["default", "1080p", "2160p"]},
+        },
+        ["tmdb_id"],
+    ),
+    (
+        "request_series",
+        _REQUEST_SERIES,
+        {
+            "tvdb_id": {"type": "integer", "description": "id returned by find_media"},
+            "preset": {"type": "string", "enum": ["default", "1080p", "2160p"]},
+            "seasons": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "positive season numbers explicitly requested",
+            },
+            "all_seasons": {
+                "type": "boolean",
+                "description": "true only for an explicit whole-series request",
+            },
+        },
+        ["tvdb_id"],
+    ),
+    (
+        "delete_media",
+        _DELETE_MEDIA,
+        {
+            "kind": {"type": "string", "enum": ["movie", "series"]},
+            "catalog_id": {
+                "type": "integer",
+                "description": "TMDB movie id or TVDB series id returned by find_media",
+            },
+            "seasons": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "series seasons to delete; preserve every other season",
+            },
+            "all_seasons": {
+                "type": "boolean",
+                "description": "true only for an explicit whole-series deletion",
+            },
+        },
+        ["kind", "catalog_id"],
+    ),
 ]
 
 
@@ -854,8 +1088,7 @@ def function_schemas(impls, log=None):
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
-    from pipecat.frames.frames import (FunctionCallResultProperties,
-                                       TTSSpeakFrame)
+    from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
 
     def wrap(name, fn):
         async def handler(params):
@@ -869,46 +1102,71 @@ def function_schemas(impls, log=None):
                 print(f"  [tool-error] {name}: {e!r}")
                 if log:
                     log.error("tool_error", tool=name, err=repr(e))
-                out = {"ok": False, "error": "that didn't go through - "
-                       "something upstream failed"}
+                out = {
+                    "ok": False,
+                    "error": "that didn't go through - something upstream failed",
+                }
             # After the call, so the span carries the RESULT. The await above
             # does not lose the OTel context (contextvars are per-task), so
             # this still parents onto Pipecat's llm span.
             record_tool_call(name, args, out, log)
-            acknowledgment = (out.get("acknowledgment")
-                              if isinstance(out, dict) else None)
+            acknowledgment = (
+                out.get("acknowledgment") if isinstance(out, dict) else None
+            )
             if acknowledgment:
+
                 async def speak():
                     await params.pipeline_worker.queue_frame(
-                        TTSSpeakFrame(str(acknowledgment)))
+                        TTSSpeakFrame(str(acknowledgment))
+                    )
+
                 properties = FunctionCallResultProperties(
-                    run_llm=False, on_context_updated=speak)
+                    run_llm=False, on_context_updated=speak
+                )
                 await params.result_callback(out, properties=properties)
             else:
                 await params.result_callback(out)
+
         return handler
 
     # Render only tools present in `impls` - the schema half of tool_impls'
     # gating.
-    return [FunctionSchema(name=n, description=d, properties=p, required=r,
-                           handler=wrap(n, impls[n]))
-            for n, d, p, r in TOOL_DEFS if n in impls]
+    return [
+        FunctionSchema(
+            name=n, description=d, properties=p, required=r, handler=wrap(n, impls[n])
+        )
+        for n, d, p, r in TOOL_DEFS
+        if n in impls
+    ]
 
 
 # `names` filters to the tools present in a given impls set, so a renderer
 # can't offer a tool that isn't callable; None renders every TOOL_DEF.
 def anthropic_tools(names=None):
-    return [{"name": n, "description": d,
-             "input_schema": {"type": "object", "properties": p, "required": r}}
-            for n, d, p, r in TOOL_DEFS if names is None or n in names]
+    return [
+        {
+            "name": n,
+            "description": d,
+            "input_schema": {"type": "object", "properties": p, "required": r},
+        }
+        for n, d, p, r in TOOL_DEFS
+        if names is None or n in names
+    ]
 
 
 def openai_tools(names=None):
     # Responses API tool shape is FLAT (name/parameters at top level) - the
     # nested {"function": {...}} form is chat-completions only.
-    return [{"type": "function", "name": n, "description": d,
-             "parameters": {"type": "object", "properties": p, "required": r}}
-            for n, d, p, r in TOOL_DEFS if names is None or n in names]
+    return [
+        {
+            "type": "function",
+            "name": n,
+            "description": d,
+            "parameters": {"type": "object", "properties": p, "required": r},
+        }
+        for n, d, p, r in TOOL_DEFS
+        if names is None or n in names
+    ]
 
 
 def _user_location(voice):
@@ -928,8 +1186,11 @@ def server_tools(voice, provider):
     if provider == "openai":
         tool = {"type": "web_search", "search_context_size": "low"}
     else:
-        tool = {"type": "web_search_20250305", "name": "web_search",
-                "max_uses": voice["assistantSearchMaxUses"]}
+        tool = {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": voice["assistantSearchMaxUses"],
+        }
     loc = _user_location(voice)
     if loc:
         tool["user_location"] = loc
@@ -938,8 +1199,7 @@ def server_tools(voice, provider):
 
 # Both keys stay populated in config so flipping assistantProvider is the
 # whole A/B, and neither lane hides behind a default.
-MODEL_KEY = {"anthropic": "assistantModelAnthropic",
-             "openai": "assistantModelOpenai"}
+MODEL_KEY = {"anthropic": "assistantModelAnthropic", "openai": "assistantModelOpenai"}
 PROVIDER_KEY = {"anthropic": "anthropicApiKey", "openai": "openaiApiKey"}
 
 

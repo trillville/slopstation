@@ -30,14 +30,14 @@ apply - pipecat builds those attributes - so no secret may become a span
 attribute. send_default_pii is what turns that capture on; without it Sentry
 drops every prompt and reply.
 """
+
 import contextlib
 import functools
 import json
 import logging
 import random
 
-from slopstation import cglib
-from slopstation import events
+from slopstation import cglib, events
 from slopstation.agent.telemetry import genai
 
 # One Sentry project takes both machines and every lane, so this is what
@@ -65,16 +65,19 @@ def otlp_target(dsn):
     change upstream is picked up rather than re-derived here."""
     from sentry_sdk.consts import VERSION, EndpointType
     from sentry_sdk.utils import Dsn
+
     auth = Dsn(dsn).to_auth(f"sentry.python/{VERSION}")
-    return (auth.get_api_url(EndpointType.OTLP_TRACES),
-            {"X-Sentry-Auth": auth.to_header()})
+    return (
+        auth.get_api_url(EndpointType.OTLP_TRACES),
+        {"X-Sentry-Auth": auth.to_header()},
+    )
 
 
 def _exporter(url, headers):
     """The OTLP exporter OTLPIntegration would have built, wrapped so genai
     can reshape spans on the way out."""
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-        OTLPSpanExporter)
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
     return genai.SentryShape(OTLPSpanExporter(endpoint=url, headers=headers))
 
 
@@ -84,6 +87,7 @@ def _init(dsn, log):
     try:
         import sentry_sdk
         from sentry_sdk.integrations.otlp import OTLPIntegration
+
         sentry_sdk.init(
             dsn=dsn,
             environment=events.ENV,
@@ -101,9 +105,12 @@ def _init(dsn, log):
         log("lane_up", what="sentry", kind="errors")
         return True
     except ImportError as e:
-        log.warn("lane_disabled", what="sentry",
-                 reason="sentry-sdk not installed - rebuild the venv",
-                 err=str(e))
+        log.warn(
+            "lane_disabled",
+            what="sentry",
+            reason="sentry-sdk not installed - rebuild the venv",
+            err=str(e),
+        )
         return False
     except Exception as e:
         log.error("sentry_setup_failed", err=repr(e))
@@ -115,6 +122,7 @@ def _trace(dsn, log):
     global _on
     try:
         from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
         from pipecat.utils.tracing.setup import setup_tracing
 
@@ -123,19 +131,28 @@ def _trace(dsn, log):
         logging.getLogger("opentelemetry").setLevel(logging.WARNING)
 
         if not setup_tracing(service_name=SERVICE_NAME, console_export=False):
-            log.warn("lane_disabled", what="tracing",
-                     reason="pipecat setup_tracing returned false")
+            log.warn(
+                "lane_disabled",
+                what="tracing",
+                reason="pipecat setup_tracing returned false",
+            )
             return False
         url, headers = otlp_target(dsn)
         provider = trace.get_tracer_provider()
+        if not isinstance(provider, TracerProvider):
+            log.warn("lane_disabled", what="tracing", reason="no SDK tracer provider")
+            return False
         provider.add_span_processor(BatchSpanProcessor(_exporter(url, headers)))
         _on = True
         log("lane_up", what="tracing", backend="sentry", endpoint=url)
         return True
     except ImportError as e:
-        log.warn("lane_disabled", what="tracing",
-                 reason="opentelemetry not installed - rebuild the venv",
-                 err=str(e))
+        log.warn(
+            "lane_disabled",
+            what="tracing",
+            reason="opentelemetry not installed - rebuild the venv",
+            err=str(e),
+        )
         return False
     except Exception as e:
         log.error("tracing_setup_failed", err=repr(e))
@@ -154,8 +171,11 @@ def setup(cfg, log):
     _on = False
     try:
         if not enabled(cfg):
-            log("lane_disabled", what="sentry",
-                reason="sentryDsn not set in config.json")
+            log(
+                "lane_disabled",
+                what="sentry",
+                reason="sentryDsn not set in config.json",
+            )
             return False
         dsn = cfg["sentryDsn"]
         return _trace(dsn, log) if _init(dsn, log) else False
@@ -169,6 +189,7 @@ def capture(exc):
     still reaches Issues with its stack. No-ops when the SDK is absent."""
     try:
         import sentry_sdk
+
         sentry_sdk.capture_exception(exc)
     except Exception:
         pass
@@ -218,13 +239,19 @@ def session_trace():
         yield None
         return
     try:
-        from opentelemetry import context as otel_context, trace as _otel
+        from opentelemetry import context as otel_context
+        from opentelemetry import trace as _otel
+
         trace_id = random.getrandbits(128)
-        parent = _otel.NonRecordingSpan(_otel.SpanContext(
-            trace_id=trace_id, span_id=random.getrandbits(64), is_remote=True,
-            trace_flags=_otel.TraceFlags(_otel.TraceFlags.SAMPLED)))
-        otel_token = otel_context.attach(
-            _otel.set_span_in_context(parent))
+        parent = _otel.NonRecordingSpan(
+            _otel.SpanContext(
+                trace_id=trace_id,
+                span_id=random.getrandbits(64),
+                is_remote=True,
+                trace_flags=_otel.TraceFlags(_otel.TraceFlags.SAMPLED),
+            )
+        )
+        otel_token = otel_context.attach(_otel.set_span_in_context(parent))
         hex_id = _otel.format_trace_id(trace_id)
     except Exception:
         yield None
@@ -293,9 +320,17 @@ class _Chat:
             if model:
                 self.span.set_attribute("gen_ai.response.model", str(model))
             if output:
-                self.span.set_attribute("gen_ai.output.messages", json.dumps(
-                    [{"role": "assistant",
-                      "parts": [{"type": "text", "content": str(output)}]}]))
+                self.span.set_attribute(
+                    "gen_ai.output.messages",
+                    json.dumps(
+                        [
+                            {
+                                "role": "assistant",
+                                "parts": [{"type": "text", "content": str(output)}],
+                            }
+                        ]
+                    ),
+                )
             for key, value in (usage or {}).items():
                 if value is not None and key in USAGE_ATTR:
                     self.span.set_attribute(USAGE_ATTR[key], int(value))
@@ -305,6 +340,7 @@ class _Chat:
 
 def _tracer():
     from opentelemetry import trace as _otel
+
     return _otel.get_tracer("slopstation.llm")
 
 
@@ -312,6 +348,7 @@ def agent(name):
     """Decorator: wrap a call in the gen_ai.invoke_agent span Sentry's Agents
     dashboard hangs chat and tool spans under. A decorator rather than a with
     block so one turn's whole tool loop is covered without re-indenting it."""
+
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*a, **kw):
@@ -320,14 +357,19 @@ def agent(name):
             try:
                 span = _tracer().start_as_current_span(
                     f"invoke_agent {name}",
-                    attributes={"sentry.op": "gen_ai.invoke_agent",
-                                "gen_ai.operation.name": "invoke_agent",
-                                "gen_ai.agent.name": name})
+                    attributes={
+                        "sentry.op": "gen_ai.invoke_agent",
+                        "gen_ai.operation.name": "invoke_agent",
+                        "gen_ai.agent.name": name,
+                    },
+                )
             except Exception:
                 return fn(*a, **kw)
             with span:
                 return fn(*a, **kw)
+
         return wrapper
+
     return deco
 
 
@@ -342,18 +384,18 @@ def chat_span(provider, model, messages=None, tools=None, system=None):
     span = None
     if _on:
         try:
-            attrs = {"sentry.op": "gen_ai.chat",
-                     "gen_ai.operation.name": "chat",
-                     "gen_ai.provider.name": provider,
-                     "gen_ai.request.model": model}
+            attrs = {
+                "sentry.op": "gen_ai.chat",
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": provider,
+                "gen_ai.request.model": model,
+            }
             if system:
                 attrs["gen_ai.system_instructions"] = str(system)
             if messages:
-                attrs["gen_ai.input.messages"] = json.dumps(messages,
-                                                            default=str)
+                attrs["gen_ai.input.messages"] = json.dumps(messages, default=str)
             if tools:
-                attrs["gen_ai.tool.definitions"] = json.dumps(tools,
-                                                              default=str)
+                attrs["gen_ai.tool.definitions"] = json.dumps(tools, default=str)
             span = _tracer().start_span(f"chat {model}", attributes=attrs)
         except Exception:
             span = None
@@ -378,16 +420,18 @@ def tool_span(kind, query, result=None):
         return
     try:
         from opentelemetry import trace as _otel
+
         tracer = _otel.get_tracer("slopstation.llm")
         with tracer.start_as_current_span(
-                f"execute_tool {kind}",
-                attributes={
-                    "sentry.op": "gen_ai.execute_tool",
-                    "gen_ai.operation.name": "execute_tool",
-                    "gen_ai.tool.name": str(kind),
-                    "gen_ai.tool.type": "function",
-                    "gen_ai.tool.call.arguments": str(query)[:2000],
-                }) as s:
+            f"execute_tool {kind}",
+            attributes={
+                "sentry.op": "gen_ai.execute_tool",
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": str(kind),
+                "gen_ai.tool.type": "function",
+                "gen_ai.tool.call.arguments": str(query)[:2000],
+            },
+        ) as s:
             if result:
                 s.set_attribute("gen_ai.tool.call.result", str(result))
     except Exception:

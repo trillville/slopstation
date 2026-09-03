@@ -5,6 +5,7 @@ the protocol is three methods over JSON-RPC. Ignores Mcp-Session-Id - the
 client does not reliably echo it, and conversation identity rides in the tool
 arguments instead (see `session`).
 """
+
 import hmac
 import json
 import sys
@@ -45,18 +46,21 @@ TOOL_DESCRIPTION = (
     'request just made, only season 3", never "just season 3".\n\n'
     "Each reply ends with a session id. Pass that exact value back as "
     "`session` on later calls in this conversation so Slopstation keeps its "
-    "context; omit it to start fresh.")
+    "context; omit it to start fresh."
+)
 
 TOOL_SCHEMA = {
     "type": "object",
     "properties": {
         "message": {
             "type": "string",
-            "description": "The self-contained request, in plain English."},
+            "description": "The self-contained request, in plain English.",
+        },
         "session": {
             "type": "string",
             "description": "The session id from an earlier reply in this "
-                           "conversation. Omit it on the first call."},
+            "conversation. Omit it on the first call.",
+        },
     },
     "required": ["message"],
 }
@@ -67,8 +71,7 @@ def _result(rid, value):
 
 
 def _error(rid, code, message):
-    return {"jsonrpc": "2.0", "id": rid,
-            "error": {"code": code, "message": message}}
+    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
 class RemoteApplication:
@@ -99,8 +102,7 @@ class RemoteApplication:
                 return
             self.failures = 0
             self.locked_until = time.monotonic() + LOCKOUT_S
-        self.log.error("remote_lockout", failures=LOCKOUT_AFTER,
-                       lock_s=LOCKOUT_S)
+        self.log.error("remote_lockout", failures=LOCKOUT_AFTER, lock_s=LOCKOUT_S)
 
     def throttled(self):
         with self.lock:
@@ -116,13 +118,17 @@ class RemoteApplication:
         if session:
             payload["session"] = session
         request = urllib.request.Request(
-            self.url, data=json.dumps(payload).encode("utf-8"), method="POST",
-            headers={"Authorization": "Bearer " + self.token,
-                     "Content-Type": "application/json"})
+            self.url,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + self.token,
+                "Content-Type": "application/json",
+            },
+        )
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(request,
-                                        timeout=INNER_TIMEOUT_S) as response:
+            with urllib.request.urlopen(request, timeout=INNER_TIMEOUT_S) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             try:
@@ -135,12 +141,18 @@ class RemoteApplication:
         if not isinstance(result, dict) or not result.get("ok"):
             raise RuntimeError("assistant request failed")
         session_id = str(result.get("session", ""))
-        self.log("remote_request", turn=result.get("turn"), session=session_id,
-                 dur_ms=int((time.monotonic() - started) * 1000))
+        self.log(
+            "remote_request",
+            turn=result.get("turn"),
+            session=session_id,
+            dur_ms=int((time.monotonic() - started) * 1000),
+        )
         reply = str(result.get("reply", ""))
         if session_id:
-            reply += (f"\n\n[session: {session_id} - pass this exact value as "
-                      "`session` on follow-up calls in this conversation]")
+            reply += (
+                f"\n\n[session: {session_id} - pass this exact value as "
+                "`session` on follow-up calls in this conversation]"
+            )
         return reply
 
     def rpc(self, message):
@@ -156,18 +168,31 @@ class RemoteApplication:
             params = {}
         if method == "initialize":
             asked = str(params.get("protocolVersion", ""))
-            return _result(rid, {
-                "protocolVersion": (asked if asked in PROTOCOL_VERSIONS
-                                    else PROTOCOL_VERSIONS[0]),
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "slopstation", "version": "1"}})
+            return _result(
+                rid,
+                {
+                    "protocolVersion": (
+                        asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
+                    ),
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "slopstation", "version": "1"},
+                },
+            )
         if method == "ping":
             return _result(rid, {})
         if method == "tools/list":
-            return _result(rid, {"tools": [{
-                "name": TOOL_NAME,
-                "description": TOOL_DESCRIPTION,
-                "inputSchema": TOOL_SCHEMA}]})
+            return _result(
+                rid,
+                {
+                    "tools": [
+                        {
+                            "name": TOOL_NAME,
+                            "description": TOOL_DESCRIPTION,
+                            "inputSchema": TOOL_SCHEMA,
+                        }
+                    ]
+                },
+            )
         if method == "tools/call":
             return self.call_tool(rid, params)
         return _error(rid, -32601, f"unknown method {method!r}")
@@ -188,13 +213,20 @@ class RemoteApplication:
             # A forwarding failure is a tool RESULT, not a protocol error: the
             # model should see it and be able to retry.
             self.log.error("remote_request_failed", err=str(e))
-            return _result(rid, {"isError": True, "content": [
-                {"type": "text",
-                 "text": f"Slopstation could not answer: {e}"}]})
+            return _result(
+                rid,
+                {
+                    "isError": True,
+                    "content": [
+                        {"type": "text", "text": f"Slopstation could not answer: {e}"}
+                    ],
+                },
+            )
         return _result(rid, {"content": [{"type": "text", "text": reply}]})
 
 
 class RemoteHandler(BaseHTTPRequestHandler):
+    server: "RemoteServer"
     server_version = "SlopstationRemote/1"
     protocol_version = "HTTP/1.1"
 
@@ -218,7 +250,8 @@ class RemoteHandler(BaseHTTPRequestHandler):
         # unanswered request would also skip the lockout count below.
         return hmac.compare_digest(
             self.headers.get("Authorization", "").encode("utf-8", "replace"),
-            ("Bearer " + self.server.token).encode("utf-8"))
+            ("Bearer " + self.server.token).encode("utf-8"),
+        )
 
     def _declared_length(self):
         """Content-Length as sent, or None when absent or unparseable."""
@@ -300,6 +333,9 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
 
 class RemoteServer(ThreadingHTTPServer):
+    app: RemoteApplication
+    token: str
+
     def handle_error(self, request, client_address):
         # Refusing a body closes the socket mid-write, which the client sees
         # as an abort. That is the design; only real faults deserve a console.
@@ -313,14 +349,20 @@ def start(cfg, secrets, log):
         return None
     token = secrets.get("remoteInterfaceToken")
     if not cglib.real_key(token):
-        log.warn("lane_disabled", what="remote_interface",
-                 reason="remoteInterfaceToken is missing or a placeholder")
+        log.warn(
+            "lane_disabled",
+            what="remote_interface",
+            reason="remoteInterfaceToken is missing or a placeholder",
+        )
         return None
     text_cfg = cfg.get("textInterface") or {}
     inner_token = secrets.get("textInterfaceToken")
     if not (text_cfg.get("enabled") and cglib.real_key(inner_token)):
-        log.warn("lane_disabled", what="remote_interface",
-                 reason="the text interface it forwards to is not enabled")
+        log.warn(
+            "lane_disabled",
+            what="remote_interface",
+            reason="the text interface it forwards to is not enabled",
+        )
         return None
     inner_host = str(text_cfg.get("host", "127.0.0.1"))
     if inner_host in ("0.0.0.0", "::"):
@@ -336,7 +378,8 @@ def start(cfg, secrets, log):
         return None
     server.app = app
     server.token = str(token)
-    threading.Thread(target=server.serve_forever, daemon=True,
-                     name="remote-interface").start()
+    threading.Thread(
+        target=server.serve_forever, daemon=True, name="remote-interface"
+    ).start()
     log("lane_up", what="remote_interface", host=host, port=port)
     return server

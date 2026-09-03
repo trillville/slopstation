@@ -1,15 +1,25 @@
-"""Blind test: the grammar gate, offline - utterance -> intent+slots,
-negatives that must fall through to the assistant lane. Run:
-    pytest tests/test_grammar.py
+"""The grammar gate, offline - utterance -> intent+slots,
+negatives that must fall through to the assistant lane.
 """
 
 from slopstation.agent.speech.grammar_gate import GrammarMatcher, strip_wake
 
-VOICE_CFG = {"inputs": {"apple tv": "hdmi1", "playstation": "hdmi2",
-                        "ps5": "hdmi2", "the pc": "hdmi4"},
-             "navTargets": {"downloads": "downloads", "the downloads": "downloads",
-                            "library": "library", "my library": "library",
-                            "store": "store", "the store": "store"}}
+VOICE_CFG = {
+    "inputs": {
+        "apple tv": "hdmi1",
+        "playstation": "hdmi2",
+        "ps5": "hdmi2",
+        "the pc": "hdmi4",
+    },
+    "navTargets": {
+        "downloads": "downloads",
+        "the downloads": "downloads",
+        "library": "library",
+        "my library": "library",
+        "store": "store",
+        "the store": "store",
+    },
+}
 
 # (utterance, expected intent or None, expected slots subset)
 TABLE = [
@@ -80,7 +90,7 @@ TABLE = [
     ("thanks", "ExitSession", {}),
     ("that's all", "ExitSession", {}),
     ("never mind", "ExitSession", {}),
-    ("cancel", "ExitSession", {}),          # bare cancel stays conversation-close
+    ("cancel", "ExitSession", {}),  # bare cancel stays conversation-close
     # Safe to widen where EndSession is not: touches nothing in the room.
     ("go away", "ExitSession", {}),
     ("leave me alone", "ExitSession", {}),
@@ -90,17 +100,17 @@ TABLE = [
     ("hello there", None, {}),
     ("start", None, {}),
     ("play", None, {}),
-    ("switch to the garage", None, {}),          # unknown input name
-    ("show me deadlock", None, {}),              # a game name: no nav/collection
-                                                 # marker -> assistant (game page)
-    ("show me the pictures", None, {}),          # not a nav target -> assistant
+    ("switch to the garage", None, {}),  # unknown input name
+    ("show me deadlock", None, {}),  # a game name: no nav/collection
+    # marker -> assistant (game page)
+    ("show me the pictures", None, {}),  # not a nav target -> assistant
     # Risky-command narrowness: casual variants must NOT end a session.
     ("end it", None, {}),
     ("stop", None, {}),
     ("kill the session please maybe", None, {}),
-    ("exit", None, {}),                     # bare verb must not tear down the TV
-    ("exit the game", None, {}),            # quitting a GAME is not ending the session
-    ("end of session", None, {}),           # an STT mishear, deliberately not encoded
+    ("exit", None, {}),  # bare verb must not tear down the TV
+    ("exit the game", None, {}),  # quitting a GAME is not ending the session
+    ("end of session", None, {}),  # an STT mishear, deliberately not encoded
     ("go", None, {}),
     # Conversational phrasings stay in the assistant lane.
     ("tell me more", None, {}),
@@ -113,16 +123,16 @@ STRIP = [
     ("hey jarvis volume up", "volume up"),
     ("Hey, Jarvis, volume up.", "volume up."),
     ("jarvis volume up", "volume up"),
-    ("hey jervis play hades", "play hades"),            # fuzzy mishear >= 80
+    ("hey jervis play hades", "play hades"),  # fuzzy mishear >= 80
     ("okay jarvis louder", "louder"),
-    ("hey jarvis hey jarvis volume up", "volume up"),   # stutter/double wake
+    ("hey jarvis hey jarvis volume up", "volume up"),  # stutter/double wake
     ("hey jarvis", ""),
     ("Jarvis!", ""),
     ("volume up", "volume up"),
-    ("travis strikes again", "travis strikes again"),   # real word ~67, kept
-    ("hey volume up", "hey volume up"),                 # no anchor, untouched
-    ("play jarvis game", "play jarvis game"),           # mid-text is content
-    ("hey jar vis volume up", "volume up"),             # split anchor, joined
+    ("travis strikes again", "travis strikes again"),  # real word ~67, kept
+    ("hey volume up", "hey volume up"),  # no anchor, untouched
+    ("play jarvis game", "play jarvis game"),  # mid-text is content
+    ("hey jar vis volume up", "volume up"),  # split anchor, joined
 ]
 
 # Same stripper, "alfred" anchor: split mishears (2026-08-15), and the join
@@ -131,7 +141,7 @@ STRIP_ALFRED = [
     ("hey alfred volume up", "volume up"),
     ("Hey, all. Fred, take me home.", "take me home."),  # joined "allfred" ~92
     ("alfred play hades", "play hades"),
-    ("all for one", "all for one"),                      # joined "allfor" ~67
+    ("all for one", "all for one"),  # joined "allfor" ~67
 ]
 
 # The two-token join, both directions: (text, anchor, want). The second group
@@ -140,8 +150,8 @@ STRIP_ALFRED = [
 STRIP_JOIN = [
     ("hey al fred play hades", "alfred", "play hades"),
     ("al fred volume up", "alfred", "volume up"),
-    ("hey al fred hey al fred stop", "alfred", "stop"),   # stutter, both split
-    ("all frenzy games", "alfred", "all frenzy games"),   # joined ~67
+    ("hey al fred hey al fred stop", "alfred", "stop"),  # stutter, both split
+    ("all frenzy games", "alfred", "all frenzy games"),  # joined ~67
     ("a jarvis skin for my avatar", "jarvis", "a jarvis skin for my avatar"),
     ("my jarvis mug broke", "jarvis", "my jarvis mug broke"),
     ("the jarvis file is missing", "jarvis", "the jarvis file is missing"),
@@ -197,6 +207,7 @@ def test_grammar():
     import time as _t
 
     from slopstation.agent.speech.grammar_gate import GrammarGate
+
     g = GrammarGate(m, None, lambda s: None)
     if g.is_busy():
         failures.append("fresh gate must not be busy")
@@ -211,11 +222,16 @@ def test_grammar():
     # goodbye is spoken, since the tool runs before the model has said a word.
     import asyncio
 
-    from slopstation import cglib
-    from pipecat.frames.frames import (BotStoppedSpeakingFrame, EndWorkerFrame,
-                                       ErrorFrame, UserStartedSpeakingFrame,
-                                       UserStoppedSpeakingFrame)
+    from pipecat.frames.frames import (
+        BotStoppedSpeakingFrame,
+        EndWorkerFrame,
+        ErrorFrame,
+        UserStartedSpeakingFrame,
+        UserStoppedSpeakingFrame,
+    )
     from pipecat.processors.frame_processor import FrameDirection
+
+    from slopstation import cglib
     from slopstation.agent.speech.preroll import WakeAck
 
     def drive(frames, arm, ack=None):
@@ -241,8 +257,9 @@ def test_grammar():
 
     ended, glog, _ = drive([BotStoppedSpeakingFrame()], arm=True)
     if len(ended) != 1:
-        failures.append(f"an armed stop must end the session exactly once, "
-                        f"got {len(ended)}")
+        failures.append(
+            f"an armed stop must end the session exactly once, got {len(ended)}"
+        )
     if "session_stop_requested" not in glog.events():
         failures.append("arming the stop must log session_stop_requested")
     ended, _, _ = drive([BotStoppedSpeakingFrame()], arm=False)
@@ -264,8 +281,9 @@ def test_grammar():
     gate._speaking = _t.time() - (GrammarGate.SPEAKING_WAIT_S + 1)
     if gate.is_busy():
         failures.append("a lost stop edge must not pin the session open")
-    _, _, gate = drive([UserStartedSpeakingFrame(), UserStoppedSpeakingFrame()],
-                       arm=False, ack=ack)
+    _, _, gate = drive(
+        [UserStartedSpeakingFrame(), UserStoppedSpeakingFrame()], arm=False, ack=ack
+    )
     if gate.is_busy():
         failures.append("a closed user turn must not read as mid-turn")
     if ack.claim():
@@ -274,16 +292,10 @@ def test_grammar():
     # An assistant turn is silent while it works: the only sounds are the
     # answer itself and, on error, the fail earcon.
     from slopstation.agent.speech import earcons
+
     if "think" in earcons.SPECS:
         failures.append("the think earcon is back - it was removed on purpose")
 
     for f in failures:
         print("FAIL", f)
     assert not failures, f"{len(failures)} grammar failures"
-    print(f"OK - {len(TABLE)} utterances: intents, slots, fall-throughs, "
-          f"risky-command narrowness; "
-          f"{len(STRIP) + len(STRIP_ALFRED) + len(STRIP_JOIN)} wake-strip "
-          f"cases ({len(STRIP_JOIN)} two-token join); "
-          f"is_busy defers for in-flight assistant turns and open user turns, "
-          f"both bounded; the turn stop claims the chime; an armed stop ends "
-          f"the session after the goodbye, never before")

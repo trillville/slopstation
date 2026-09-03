@@ -1,21 +1,24 @@
-"""Blind test: dispatch.py logic with every side effect mocked - lock arbiter,
+"""Dispatch.py logic with every side effect mocked - lock arbiter,
 dry-run, volume stepping + clamp, mute, input map + the READY-gate on the
-gaming input, serial retry, ssh outcomes. Run:
-    pytest tests/test_dispatch.py
+gaming input, serial retry, ssh outcomes.
 """
+
 import time
 
 from helpers import fresh_state
-
-from slopstation import cglib
-from slopstation import tv
-from slopstation import gamepc                 # the ssh seam - dispatch reaches it via the module
+from slopstation import (
+    cglib,
+    gamepc,  # the ssh seam - dispatch reaches it via the module
+    tv,
+)
 from slopstation.agent.brain import dispatch as dp
 
 CFG = {
-    "tvComPort": "COMX", "tvGamingCmd": "hdmi4",
+    "tvComPort": "COMX",
+    "tvGamingCmd": "hdmi4",
     "voice": {
-        "volumeStep": 3, "volumeMax": 40,
+        "volumeStep": 3,
+        "volumeMax": 40,
         "inputs": {"apple tv": "hdmi1", "the pc": "hdmi4"},
     },
 }
@@ -30,11 +33,11 @@ class Harness:
 def test_dispatch():
     sent = []
     real_sleep = time.sleep
-    time.sleep = lambda s: None                       # fast tests
+    time.sleep = lambda s: None  # fast tests
     tv.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
 
     # --- lock arbiter --------------------------------------------------------
-    fresh_state(10)                                # fresh lock
+    fresh_state(10)  # fresh lock
     h = Harness(dry_run=True)
     r = h.d.start_session()
     assert not r.ok and r.earcon == "busy", r
@@ -46,7 +49,7 @@ def test_dispatch():
     # Assert on the EVENT, not its prose: dashboards group by event name.
     assert "dry_run_would" in h.log.events(), h.log.records
 
-    fresh_state(999)                               # stale lock = launchable
+    fresh_state(999)  # stale lock = launchable
     h = Harness(dry_run=True)
     assert h.d.start_session().ok
 
@@ -58,15 +61,16 @@ def test_dispatch():
     r = h.d.start_session(appid=777)
     # Positional, not tail-anchored: a turn id may follow the appid.
     i = spawned[0].index("start")
-    assert r.ok and spawned[0][i:i + 2] == ["start", "777"], spawned
+    assert r.ok and spawned[0][i : i + 2] == ["start", "777"], spawned
 
     # --- volume: stepping, clamp, mute ---------------------------------------
-    h = Harness(); sent.clear()
+    h = Harness()
+    sent.clear()
     assert h.d.volume_up().ok
-    assert sent == [tv.EXLINK_FRAMES["vol_up"]] * 3, sent   # volumeStep=3
+    assert sent == [tv.EXLINK_FRAMES["vol_up"]] * 3, sent  # volumeStep=3
 
     sent.clear()
-    r = h.d.volume_set(80)                            # clamps to volumeMax 40
+    r = h.d.volume_set(80)  # clamps to volumeMax 40
     assert r.ok and sent == [tv.vol_set_frame(40)], sent
     sent.clear()
     assert h.d.volume_set(25).ok and sent == [tv.vol_set_frame(25)]
@@ -78,25 +82,32 @@ def test_dispatch():
     # Ex-Link volume writes, so ducking is remote-key relay + readback.
 
     # --- serial send raises -> fail earcon (COM retry lives in tv.exlink_send_hex) --
-    def always_down(frame, port): raise OSError("dead")
+    def always_down(frame, port):
+        raise OSError("dead")
+
     tv.exlink_send_hex = always_down
     r = h.d.mute_toggle()
     assert not r.ok and r.earcon == "fail"
 
     # --- input map + gaming-input semantics ----------------------------------
     tv.exlink_send_hex = lambda frame, port: sent.append(frame) or "030cf1"
-    h = Harness(); sent.clear()
-    assert not h.d.switch_input("garage").ok          # unknown name
+    h = Harness()
+    sent.clear()
+    assert not h.d.switch_input("garage").ok  # unknown name
     assert h.d.switch_input("Apple TV ").ok
     assert sent == [tv.EXLINK_FRAMES["hdmi1"]]
 
     # No session: "switch to the pc" means "start a session" - spawns the full
     # couch launch and never touches the TV (couch.py flips at READY).
     fresh_state(None)
-    sent.clear(); spawned.clear()
+    sent.clear()
+    spawned.clear()
     r = h.d.switch_input("the pc")
-    assert r.ok and spawned and spawned[0][-1] == "start" and not sent, \
-        (r, spawned, sent)
+    assert r.ok and spawned and spawned[0][-1] == "start" and not sent, (
+        r,
+        spawned,
+        sent,
+    )
     # Mid-launch (fresh lock, host pre-READY): truthful busy, no switch.
     fresh_state(10)
     gamepc.ssh = lambda cmd, **kw: "NOTREADY"
@@ -105,8 +116,11 @@ def test_dispatch():
     assert not r.ok and r.earcon == "busy" and not sent, r
     gamepc.ssh = lambda cmd, **kw: "2026-08-10T20:00:00"  # READY timestamp
     assert h.d.switch_input("the pc").ok and sent == [tv.EXLINK_FRAMES["hdmi4"]]
+
     # Fresh lock but host unreachable: honest fail, no switch.
-    def ssh_down(cmd, **kw): raise RuntimeError("unreachable")
+    def ssh_down(cmd, **kw):
+        raise RuntimeError("unreachable")
+
     gamepc.ssh = ssh_down
     sent.clear()
     assert not h.d.switch_input("the pc").ok and not sent
@@ -123,7 +137,7 @@ def test_dispatch():
     fresh_state(10)
     gamepc.ssh = lambda cmd, **kw: "FAILED:1"
     assert not Harness().d.end_session().ok
-    fresh_state(10)                    # mid-launch, PC mid-wake: still an end
+    fresh_state(10)  # mid-launch, PC mid-wake: still an end
     gamepc.ssh = ssh_down
     h = Harness()
     r = h.d.end_session()
@@ -157,7 +171,7 @@ def test_dispatch():
     assert h.d.end_session().ok and hooked == [1]
 
     # --- play_game: session-live ssh outcomes + cold-start delegation --------
-    fresh_state(10)                                # fresh lock = session up
+    fresh_state(10)  # fresh lock = session up
     h = Harness()
     gamepc.ssh = lambda cmd, **kw: "OK"
     assert h.d.play_game(1888160).ok
@@ -171,23 +185,23 @@ def test_dispatch():
     dp.library.installed_name = lambda a: {42: "Baldur's Gate 3"}.get(a)
     r = h.d.play_game(1)
     assert "Baldur's Gate 3 is already running" in r.detail, r
-    assert "quit" in r.detail, r                 # the BUSY message now OFFERS the quit
+    assert "quit" in r.detail, r  # the BUSY message now OFFERS the quit
     dp.library.installed_name = lambda a: None
     assert "app 42 is already running" in h.d.play_game(1).detail
-    gamepc.ssh = lambda cmd, **kw: "NOTREADY"             # launch still in flight
+    gamepc.ssh = lambda cmd, **kw: "NOTREADY"  # launch still in flight
     r = h.d.play_game(1)
     assert not r.ok and r.earcon == "busy"
-    gamepc.ssh = lambda cmd, **kw: "NOTINSTALLED"         # PC-side install guard
+    gamepc.ssh = lambda cmd, **kw: "NOTINSTALLED"  # PC-side install guard
     r = h.d.play_game(1)
     assert not r.ok and r.earcon == "fail" and "not installed" in r.detail
     assert "controller" in r.detail, r
     gamepc.ssh = ssh_down
     assert Harness().d.play_game(1).earcon == "fail"
-    fresh_state(None)                              # cold: full couch launch
+    fresh_state(None)  # cold: full couch launch
     spawned.clear()
     r = Harness().d.play_game(777)
     i = spawned[0].index("start")
-    assert r.ok and spawned[0][i:i + 2] == ["start", "777"], spawned
+    assert r.ok and spawned[0][i : i + 2] == ["start", "777"], spawned
 
     # --- quit_game: correlated wire command, ssh outcomes, wrong-game refusal -
     h = Harness()
@@ -202,7 +216,7 @@ def test_dispatch():
     gamepc.ssh = lambda cmd, **kw: "NOTRUNNING"
     r = h.d.quit_game(1)
     assert r.ok and "nothing is running" in r.detail, r
-    gamepc.ssh = lambda cmd, **kw: "BUSY:42"          # a DIFFERENT game is up
+    gamepc.ssh = lambda cmd, **kw: "BUSY:42"  # a DIFFERENT game is up
     dp.library.installed_name = lambda a: {42: "Baldur's Gate 3"}.get(a)
     r = h.d.quit_game(1)
     assert not r.ok and r.earcon == "busy" and "Baldur's Gate 3" in r.detail, r
@@ -217,10 +231,14 @@ def test_dispatch():
     h.d.begin_utterance("4c1d0e", "show downloads")
     assert h.d.nav("downloads").ok and wire[-1] == "nav downloads --turn 4c1d0e", wire
     assert "nav_dispatched" in h.log.events()
-    assert h.d.nav("details", 400).ok and wire[-1] == "nav details 400 --turn 4c1d0e", wire
+    assert h.d.nav("details", 400).ok and wire[-1] == "nav details 400 --turn 4c1d0e", (
+        wire
+    )
     assert h.d.nav("store", 400).ok and wire[-1] == "nav store 400 --turn 4c1d0e", wire
-    assert h.d.nav("collection", "uc-abc").ok \
-        and wire[-1] == "nav collection uc-abc --turn 4c1d0e", wire
+    assert (
+        h.d.nav("collection", "uc-abc").ok
+        and wire[-1] == "nav collection uc-abc --turn 4c1d0e"
+    ), wire
     gamepc.ssh = lambda cmd, **kw: "NOTREADY"
     r = h.d.nav("downloads")
     assert not r.ok and r.earcon == "busy", r
@@ -244,15 +262,14 @@ def test_dispatch():
     # as a broken verb (2026-08-14).
     h = Harness()
     dp.library.installed_name = lambda a: None
-    fresh_state(5)          # a live session, so play_game takes the ssh path
-    for verb, task, call in (("nav", "Nav", lambda: h.d.nav("downloads")),
-                             ("stop", "StopGame", lambda: h.d.quit_game(1)),
-                             ("launch", "LaunchGame", lambda: h.d.play_game(1))):
+    fresh_state(5)  # a live session, so play_game takes the ssh path
+    for verb, task, call in (
+        ("nav", "Nav", lambda: h.d.nav("downloads")),
+        ("stop", "StopGame", lambda: h.d.quit_game(1)),
+        ("launch", "LaunchGame", lambda: h.d.play_game(1)),
+    ):
         gamepc.ssh = lambda cmd, _t=task, **kw: f"NOTASK:{_t}"
         r = call()
         assert not r.ok and task in r.detail and "registered" in r.detail, (verb, r)
 
     time.sleep = real_sleep
-    print("OK - dispatch: lock arbiter, dry-run, spawn args, volume step/clamp, "
-          "mute, retry, input map, gaming-input autostart/busy/READY, "
-          "ssh outcomes, play_game paths, quit_game, nav")

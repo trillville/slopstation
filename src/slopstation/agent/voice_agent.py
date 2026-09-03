@@ -23,27 +23,31 @@ Composition root and wake loop only; audio.py owns PortAudio,
 session_runtime.py owns one session. Never load-bearing: the chord listener is
 a separate process and must survive anything that happens here.
 """
+
 import argparse
 import asyncio
 import sys
 import threading
 import time
 
-
-from slopstation import checkin
-from slopstation import cglib
+from slopstation import cglib, checkin, events
 from slopstation.agent.speech import earcons
-from slopstation import events
-from slopstation.agent.tools import library
-from slopstation.agent.telemetry import sentry
-from slopstation.agent.speech.audio import (WakeListener, list_devices, open_audio,
-                                play_pcm, rebuild_audio)
+from slopstation.agent.speech.audio import (
+    WakeListener,
+    list_devices,
+    open_audio,
+    play_pcm,
+    rebuild_audio,
+)
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.speech.preroll import WakeAck
 from slopstation.agent.speech.session_runtime import run_session
+from slopstation.agent.telemetry import sentry
+from slopstation.agent.tools import library
 from slopstation.agent.tools.tv_remote import TvDucker
 
 log = cglib.make_log("voice")
+
 
 def refresh_library_bg():
     """Catalog sync off the wake loop: a slow/asleep PC (30 s ssh timeout)
@@ -55,19 +59,21 @@ def prewarm_imports_bg(provider):
     """Import pipecat's services + the provider SDK at boot: several seconds
     on the K15's U-class CPU, once ~6.5 s of dead air on the first wake.
     Safe off-thread - imports are idempotent and lock-protected."""
+
     def warm():
-        import pipecat.pipeline.pipeline            # noqa: F401
-        import pipecat.pipeline.worker              # noqa: F401
+        import pipecat.pipeline.pipeline  # noqa: F401
+        import pipecat.pipeline.worker  # noqa: F401
         import pipecat.processors.aggregators.llm_response_universal  # noqa: F401
-        import pipecat.services.deepgram.flux.stt   # noqa: F401
-        import pipecat.services.deepgram.tts        # noqa: F401
-        import pipecat.transports.local.audio       # noqa: F401
-        import pipecat.turns.user_turn_processor    # noqa: F401
-        import pipecat.workers.runner               # noqa: F401
+        import pipecat.services.deepgram.flux.stt  # noqa: F401
+        import pipecat.services.deepgram.tts  # noqa: F401
+        import pipecat.transports.local.audio  # noqa: F401
+        import pipecat.turns.user_turn_processor  # noqa: F401
+        import pipecat.workers.runner  # noqa: F401
+
         if provider == "openai":
             import pipecat.services.openai.responses.llm  # noqa: F401
         else:
-            import pipecat.services.anthropic.llm   # noqa: F401
+            import pipecat.services.anthropic.llm  # noqa: F401
         # Last and guarded: pipecat 1.8 defers nltk (+sklearn) to a warm that
         # otherwise runs INSIDE the first worker's setup - StartFrame waits on
         # it (~0.9 s dev box), and a missing punkt_tab even runs nltk.download
@@ -75,9 +81,11 @@ def prewarm_imports_bg(provider):
         # rename must not cost the imports above.
         try:
             from pipecat.utils.prewarm import warm_deferred_imports
+
             warm_deferred_imports()
         except Exception:
             pass
+
     threading.Thread(target=warm, daemon=True).start()
 
 
@@ -96,11 +104,13 @@ def bench_mode(args, cfg, secrets):
 
     if args.announce_test:
         from slopstation.agent.speech import announce
+
         ann = announce.Announcer(voice, secrets, log)
         log("announce_test_start")
         try:
-            done = ann.speak("Test announcement. This is how a finished "
-                             "operation will reach you.")
+            done = ann.speak(
+                "Test announcement. This is how a finished operation will reach you."
+            )
         except Exception as e:
             log.error("announce_test_failed", err=str(e))
             return 1
@@ -109,8 +119,16 @@ def bench_mode(args, cfg, secrets):
 
     if args.text:
         from slopstation.agent.brain.backends import repl
-        return repl(cfg, secrets, log, dry_run=True, provider=args.provider,
-                    model=args.model, effort=args.effort)
+
+        return repl(
+            cfg,
+            secrets,
+            log,
+            dry_run=True,
+            provider=args.provider,
+            model=args.model,
+            effort=args.effort,
+        )
     return None
 
 
@@ -119,14 +137,19 @@ def warn_config(voice):
     refuse: the INACTIVE provider must not block startup."""
     # The Messages API accepts full model ids, not CLI aliases.
     if not voice["assistantModelAnthropic"].startswith("claude-"):
-        log.warn("config_suspect", setting="assistantModelAnthropic",
-                 value=voice["assistantModelAnthropic"],
-                 reason="not a full API model id (the assistant lane has no aliases)")
-    if (voice["assistantWebSearch"]
-            and voice["assistantProvider"] != "openai"):
-        log.warn("config_suspect", setting="assistantWebSearch",
-                 value=voice["assistantProvider"],
-                 reason="production search runs on the openai lane only")
+        log.warn(
+            "config_suspect",
+            setting="assistantModelAnthropic",
+            value=voice["assistantModelAnthropic"],
+            reason="not a full API model id (the assistant lane has no aliases)",
+        )
+    if voice["assistantWebSearch"] and voice["assistantProvider"] != "openai":
+        log.warn(
+            "config_suspect",
+            setting="assistantWebSearch",
+            value=voice["assistantProvider"],
+            reason="production search runs on the openai lane only",
+        )
 
 
 def make_ducker(cfg, dry_run):
@@ -141,18 +164,28 @@ def make_ducker(cfg, dry_run):
     duck_steps = int(voice.get("duckSteps", 0) or 0)
     duck_to_pct = int(voice.get("duckToPct", 0) or 0)
     if duck_to_pct and not 0 < duck_to_pct < 100:
-        log.warn("config_suspect", setting="duckToPct", value=duck_to_pct,
-                 reason="duckToPct means duck TO that percent of the pre-duck "
-                        "level, so only 1-99 makes sense - ignoring it")
+        log.warn(
+            "config_suspect",
+            setting="duckToPct",
+            value=duck_to_pct,
+            reason="duckToPct means duck TO that percent of the pre-duck "
+            "level, so only 1-99 makes sense - ignoring it",
+        )
         duck_to_pct = 0
     tv_ip = cfg.get("tvIp")
     if (duck_steps or duck_to_pct) and not tv_ip:
-        log.warn("config_suspect", setting="duckSteps", value=duck_steps,
-                 reason="ducking is configured but tvIp is not - it stays off "
-                        "(gate, keys and readback all need the TV's address)")
-    ducker = (TvDucker(duck_steps, tv_ip, log, dry_run=dry_run,
-                       to_pct=duck_to_pct or None)
-              if (duck_steps or duck_to_pct) and tv_ip else None)
+        log.warn(
+            "config_suspect",
+            setting="duckSteps",
+            value=duck_steps,
+            reason="ducking is configured but tvIp is not - it stays off "
+            "(gate, keys and readback all need the TV's address)",
+        )
+    ducker = (
+        TvDucker(duck_steps, tv_ip, log, dry_run=dry_run, to_pct=duck_to_pct or None)
+        if (duck_steps or duck_to_pct) and tv_ip
+        else None
+    )
     duck_lock = threading.Lock()
 
     def duck(restore):
@@ -183,24 +216,35 @@ def make_ducker(cfg, dry_run):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--devices", action="store_true")
-    ap.add_argument("--earcons", action="store_true",
-                    help="play the earcon vocabulary through the configured "
-                         "output device and exit (tune voice.earconGain by ear)")
+    ap.add_argument(
+        "--earcons",
+        action="store_true",
+        help="play the earcon vocabulary through the configured "
+        "output device and exit (tune voice.earconGain by ear)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--wake-trials", action="store_true")
     ap.add_argument("--false-accept-soak", action="store_true")
     ap.add_argument("--once", action="store_true")
-    ap.add_argument("--announce-test", action="store_true",
-                    help="speak a canned operation announcement and "
-                         "exit: the out-of-session audio path (earcon, Aura "
-                         "synth, chunked playback) with no operation")
-    ap.add_argument("--text", action="store_true",
-                    help="assistant REPL: typed transcripts, no audio; "
-                         "always dry-run (actions log, never execute)")
+    ap.add_argument(
+        "--announce-test",
+        action="store_true",
+        help="speak a canned operation announcement and "
+        "exit: the out-of-session audio path (earcon, Aura "
+        "synth, chunked playback) with no operation",
+    )
+    ap.add_argument(
+        "--text",
+        action="store_true",
+        help="assistant REPL: typed transcripts, no audio; "
+        "always dry-run (actions log, never execute)",
+    )
     ap.add_argument("--provider", help="--text A/B: anthropic|openai")
     ap.add_argument("--model", help="--text A/B: model id override")
-    ap.add_argument("--effort", help="--text A/B: openai reasoning effort "
-                                     "(none|minimal|low|medium|high)")
+    ap.add_argument(
+        "--effort",
+        help="--text A/B: openai reasoning effort (none|minimal|low|medium|high)",
+    )
     args = ap.parse_args()
 
     if args.devices:
@@ -225,6 +269,7 @@ def main():
     if not stt_live:
         log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
     from slopstation.agent.brain.assistant import PROVIDER_KEY
+
     brain_key = PROVIDER_KEY.get(voice["assistantProvider"])
     brain_live = bool(brain_key and cglib.real_key(secrets.get(brain_key)))
     warn_config(voice)
@@ -235,17 +280,23 @@ def main():
     prewarm_imports_bg(voice["assistantProvider"])
     if brain_live:
         from slopstation.agent.brain.assistant import default_model
+
         provider = voice["assistantProvider"]
-        log("lane_up", what="assistant", provider=provider,
+        log(
+            "lane_up",
+            what="assistant",
+            provider=provider,
             model=default_model(voice, provider),
             # anthropic has no effort knob
             effort=voice["assistantReasoningEffort"] if provider == "openai" else None,
-            websearch=voice["assistantWebSearch"] or None)
+            websearch=voice["assistantWebSearch"] or None,
+        )
 
     # Durable external operations and their out-of-session delivery.
     from slopstation.agent.speech import announce
     from slopstation.agent.tools import operations as operations_mod
     from slopstation.agent.tools import operations_monitors
+
     operation_store = operations_mod.OperationStore(log)
     announcer = None
     if stt_live and not args.dry_run:
@@ -261,69 +312,100 @@ def main():
     # Remote install + download status over ClientComm. Without a refresh token,
     # install_game keeps its controller-driven fallback. Never fatal.
     from slopstation.agent.tools import steam_session
-    steam = steam_session.SteamSession(secrets, log,
-                                       machine_name=cfg.get("steamMachineName"))
-    if steam.available():
-        exp = steam.token_expiry()
-        log("lane_up", what="steam_session", steamid=steam.steamid,
-            token_expires=(time.strftime("%Y-%m-%d", time.localtime(exp))
-                           if exp else None))
+
+    account = steam_session.SteamSession(
+        secrets, log, machine_name=cfg.get("steamMachineName")
+    )
+    steam: steam_session.SteamSession | None = None
+    if account.available():
+        steam = account
+        exp = account.token_expiry()
+        log(
+            "lane_up",
+            what="steam_session",
+            steamid=account.steamid,
+            token_expires=(
+                time.strftime("%Y-%m-%d", time.localtime(exp)) if exp else None
+            ),
+        )
     else:
-        steam = None
-        log("lane_disabled", what="steam_session",
-            reason="no refresh token - run steam_session.py enroll")
+        log(
+            "lane_disabled",
+            what="steam_session",
+            reason="no refresh token - run steam_session.py enroll",
+        )
 
     if steam is not None and not args.dry_run:
         monitor = operations_monitors.SteamMonitor(operation_store, steam, log)
         monitor.start()
-        log("lane_up", what="operation_monitor",
+        log(
+            "lane_up",
+            what="operation_monitor",
             active=len(operation_store.active(kind="steam_install")),
-            poll_s=monitor.poll_s)
+            poll_s=monitor.poll_s,
+        )
 
     from slopstation.agent.tools import media as media_mod
+
     media_service = media_mod.from_config(cfg, secrets, log)
     # Its reconcile dispatches deferred Sonarr searches and indexer-recovery
     # retries, both of which POST to the authority.
     if media_service is not None and not args.dry_run:
         poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
         media_monitor = operations_monitors.MediaMonitor(
-            operation_store, media_service, log, poll_s=poll_s)
+            operation_store, media_service, log, poll_s=poll_s
+        )
         media_monitor.start()
-        active_media = sum(len(operation_store.active(kind=kind)) for kind in
-                           media_monitor.KINDS)
-        log("lane_up", what="media_operation_monitor", active=active_media,
-            poll_s=media_monitor.poll_s)
+        active_media = sum(
+            len(operation_store.active(kind=kind)) for kind in media_monitor.KINDS
+        )
+        log(
+            "lane_up",
+            what="media_operation_monitor",
+            active=active_media,
+            poll_s=media_monitor.poll_s,
+        )
 
-    proton_port_monitor = media_mod.proton_port_monitor_from_config(
-        cfg, secrets, log)
+    proton_port_monitor = media_mod.proton_port_monitor_from_config(cfg, secrets, log)
     # It writes the listening port into a live qBittorrent, so a dry run must
     # not start it.
     if proton_port_monitor is not None and not args.dry_run:
         proton_port_monitor.start()
-        log("lane_up", what="proton_port_sync",
-            poll_s=proton_port_monitor.poll_s)
+        log("lane_up", what="proton_port_sync", poll_s=proton_port_monitor.poll_s)
 
     media_health_monitor = media_mod.media_health_monitor_from_config(
-        cfg, secrets, log, operations=operation_store)
+        cfg, secrets, log, operations=operation_store
+    )
     if media_health_monitor is not None:
         media_health_monitor.start()
-        log("lane_up", what="media_health_sync",
-            poll_s=media_health_monitor.poll_s)
+        log("lane_up", what="media_health_sync", poll_s=media_health_monitor.poll_s)
 
     disk_health_monitor = media_mod.disk_health_monitor_from_config(cfg, log)
     if disk_health_monitor is not None:
         disk_health_monitor.start()
-        log("lane_up", what="disk_watch", poll_s=disk_health_monitor.poll_s,
-            mounts=" ".join(disk_health_monitor.mounts))
+        log(
+            "lane_up",
+            what="disk_watch",
+            poll_s=disk_health_monitor.poll_s,
+            mounts=" ".join(disk_health_monitor.mounts),
+        )
 
     from slopstation.agent.interfaces import text
-    text.start(cfg, secrets, log, operations=operation_store,
-                         steam=steam, media=media_service,
-                         dry_run=args.dry_run)
+
+    text.start(
+        cfg,
+        secrets,
+        log,
+        operations=operation_store,
+        steam=steam,
+        media=media_service,
+        dry_run=args.dry_run,
+    )
 
     # Forwards to the text interface over localhost, so it takes no tools and
     # no dry_run of its own - both ride along inside that hop.
     from slopstation.agent.interfaces import remote
+
     remote.start(cfg, secrets, log)
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
@@ -341,9 +423,13 @@ def main():
         print(f"[voice] {e}")
         return 1
     # model_source: a vendored and a pretrained model can share a name.
-    log("agent_up", wake_model=listener.model_name,
+    log(
+        "agent_up",
+        wake_model=listener.model_name,
         model_source=listener.model_source,
-        threshold=voice["wakeThreshold"], dry_run=args.dry_run or None)
+        threshold=voice["wakeThreshold"],
+        dry_run=args.dry_run or None,
+    )
     # Own thread: the wake loop blocks for minutes. Real runs only - a quiet
     # bench mode would page.
     if not (args.wake_trials or args.false_accept_soak or args.once):
@@ -360,11 +446,12 @@ def main():
         while True:
             # Thresholds are set from the peak, not the crossing score.
             score, peak = listener.wait_for_wake(
-                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
+                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS
+            )
             n += 1
             log("wake_trial", n=n, score=round(score, 2), peak=round(peak, 3))
             play_pcm(pa, earcons.pcm("wake"), output_idx)
-            time.sleep(1.0)                     # refractory: one hit per attempt
+            time.sleep(1.0)  # refractory: one hit per attempt
 
     if args.false_accept_soak:
         log("false_accept_soak_start")
@@ -372,12 +459,17 @@ def main():
         while True:
             # Peak = the margin above threshold a real wake has to beat.
             _score, peak = listener.wait_for_wake(
-                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS)
+                voice["wakeThreshold"], peak_hops=WakeListener.PEAK_HOPS
+            )
             n += 1
             hrs = (time.time() - t0) / 3600
-            log.warn("wake_false", n=n, hours=round(hrs, 2),
-                     peak=round(peak, 3),
-                     per_hour=round(n / max(hrs, 0.01), 1))
+            log.warn(
+                "wake_false",
+                n=n,
+                hours=round(hrs, 2),
+                peak=round(peak, 3),
+                per_hour=round(n / max(hrs, 0.01), 1),
+            )
             time.sleep(1.0)
 
     duck = make_ducker(cfg, args.dry_run)
@@ -388,14 +480,16 @@ def main():
         # so it never lands over the command.
         ack = WakeAck()
 
-        def chime_when_quiet(_ack=ack):
+        def chime_when_quiet(_ack=ack, _pa=pa, _out=output_idx):
             if _ack.claim():
-                play_pcm(pa, earcons.pcm("wake"), output_idx)
+                play_pcm(_pa, earcons.pcm("wake"), _out)
 
         try:
             score, capture = listener.wait_for_wake_capture(
-                voice["wakeThreshold"], on_quiet=chime_when_quiet,
-                interrupt=(announcer.follow_up.is_set if announcer else None))
+                voice["wakeThreshold"],
+                on_quiet=chime_when_quiet,
+                interrupt=(announcer.follow_up.is_set if announcer else None),
+            )
         except OSError as e:
             # Mic stream death mid-listen (BT profile flap, device yanked)
             # must never kill the agent. Rebuild the whole PortAudio world.
@@ -412,13 +506,14 @@ def main():
         if score is None:
             # A bulletin just finished: the mic opens for a follow-up with no
             # wake word, and no chime - the announcement was the cue.
-            announcer.follow_up.clear()
+            if announcer:
+                announcer.follow_up.clear()
             ack.claim()
             log("wake", trigger="follow_up")
         else:
             log("wake", trigger="wake_word", score=round(score, 2))
             if announcer:
-                announcer.abort_current()       # user intent beats a bulletin
+                announcer.abort_current()  # user intent beats a bulletin
         if not stt_live:
             if capture:
                 capture.stop()
@@ -436,11 +531,22 @@ def main():
             with sentry.session_trace():
                 # Inside the try so the finally's unduck is always paired with it.
                 duck(restore=False)
-                asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
-                                        input_idx, output_idx, capture,
-                                        operations=operation_store, ack=ack,
-                                        steam=steam, media=media_service,
-                                        on_end_session=lambda: duck(restore=True)))
+                asyncio.run(
+                    run_session(
+                        cfg,
+                        secrets,
+                        matcher,
+                        args.dry_run,
+                        input_idx,
+                        output_idx,
+                        capture,
+                        operations=operation_store,
+                        ack=ack,
+                        steam=steam,
+                        media=media_service,
+                        on_end_session=lambda: duck(restore=True),
+                    )
+                )
         except Exception as e:
             log.error("session_crashed", err=repr(e))
             # The event is the alertable half; this is the stack trace, which
@@ -448,12 +554,12 @@ def main():
             sentry.capture(e)
             ending = "fail"
         finally:
-            if capture:                         # None on a follow-up open
-                capture.stop()                  # idempotent; frees the mic if the build crashed
+            if capture:  # None on a follow-up open
+                capture.stop()  # idempotent; frees the mic if the build crashed
             if announcer:
                 announcer.session_active.clear()
-            duck(restore=True)                  # a crash must not leave the room quiet
-        refresh_library_bg()                    # pick up installs between sessions
+            duck(restore=True)  # a crash must not leave the room quiet
+        refresh_library_bg()  # pick up installs between sessions
         # Sleep chime after teardown: it marks the mic actually going dormant.
         play_pcm(pa, earcons.pcm(ending), output_idx)
         log("session_close", ending=ending)

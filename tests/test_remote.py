@@ -1,4 +1,5 @@
-"""Blind test: the MCP wrapper's protocol, forwarding, auth, and lockout."""
+"""The MCP wrapper's protocol, forwarding, auth, and lockout."""
+
 import http.client
 import json
 import threading
@@ -7,7 +8,6 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import helpers
-
 from slopstation import cglib
 from slopstation.agent.interfaces import remote
 
@@ -23,12 +23,15 @@ class FakeChat(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        self.server.seen.append(
-            dict(body, auth=self.headers.get("Authorization")))
-        payload = json.dumps({
-            "ok": True, "session": body.get("session") or "minted1",
-            "turn": "abc123", "reply": "queued " + body["message"],
-        }).encode("utf-8")
+        self.server.seen.append(dict(body, auth=self.headers.get("Authorization")))
+        payload = json.dumps(
+            {
+                "ok": True,
+                "session": body.get("session") or "minted1",
+                "turn": "abc123",
+                "reply": "queued " + body["message"],
+            }
+        ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -41,8 +44,11 @@ def rpc(base, payload, token=OUTER_TOKEN):
     if token:
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(
-        base + "/mcp", data=json.dumps(payload).encode("utf-8"),
-        headers=headers, method="POST")
+        base + "/mcp",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
             raw = response.read().decode("utf-8")
@@ -52,9 +58,15 @@ def rpc(base, payload, token=OUTER_TOKEN):
 
 
 def call(base, arguments, rid=9):
-    return rpc(base, {"jsonrpc": "2.0", "id": rid, "method": "tools/call",
-                      "params": {"name": "ask_slopstation",
-                                 "arguments": arguments}})
+    return rpc(
+        base,
+        {
+            "jsonrpc": "2.0",
+            "id": rid,
+            "method": "tools/call",
+            "params": {"name": "ask_slopstation", "arguments": arguments},
+        },
+    )
 
 
 def test_remote():
@@ -63,15 +75,16 @@ def test_remote():
     threading.Thread(target=inner.serve_forever, daemon=True).start()
 
     cfg = json.loads(json.dumps(helpers.CONFIG))
-    cfg["textInterface"] = {"enabled": True, "host": "127.0.0.1",
-                            "port": inner.server_address[1]}
+    cfg["textInterface"] = {
+        "enabled": True,
+        "host": "127.0.0.1",
+        "port": inner.server_address[1],
+    }
     cfg["remoteInterface"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
-    secrets = {"textInterfaceToken": INNER_TOKEN,
-               "remoteInterfaceToken": OUTER_TOKEN}
+    secrets = {"textInterfaceToken": INNER_TOKEN, "remoteInterfaceToken": OUTER_TOKEN}
     log = cglib.CapturingLog("voice")
 
-    disabled = remote.start(
-        cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log)
+    disabled = remote.start(cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log)
     assert disabled is None, "started without a reachable text interface"
     assert log.find("lane_disabled")[0]["what"] == "remote_interface"
 
@@ -82,25 +95,39 @@ def test_remote():
         base = f"http://{host}:{port}"
         assert log.find("lane_up")[0]["what"] == "remote_interface"
 
-        status, hello = rpc(base, {
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2025-06-18"}})
+        status, hello = rpc(
+            base,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            },
+        )
         assert status == 200
         assert hello["result"]["protocolVersion"] == "2025-06-18"
         assert hello["result"]["serverInfo"]["name"] == "slopstation"
         assert "tools" in hello["result"]["capabilities"]
 
-        unknown = rpc(base, {"jsonrpc": "2.0", "id": 2, "method": "initialize",
-                             "params": {"protocolVersion": "1999-01-01"}})[1]
-        assert unknown["result"]["protocolVersion"] == \
-            remote.PROTOCOL_VERSIONS[0]
+        unknown = rpc(
+            base,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {"protocolVersion": "1999-01-01"},
+            },
+        )[1]
+        assert unknown["result"]["protocolVersion"] == remote.PROTOCOL_VERSIONS[0]
 
-        status, body = rpc(base, {"jsonrpc": "2.0",
-                                  "method": "notifications/initialized"})
+        status, body = rpc(
+            base, {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        )
         assert status == 202 and body is None, "notification got a response"
 
-        listed = rpc(base, {"jsonrpc": "2.0", "id": 3,
-                            "method": "tools/list"})[1]["result"]["tools"]
+        listed = rpc(base, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})[1][
+            "result"
+        ]["tools"]
         assert len(listed) == 1 and listed[0]["name"] == "ask_slopstation"
         schema = listed[0]["inputSchema"]
         assert set(schema["properties"]) == {"message", "session"}
@@ -135,14 +162,17 @@ def test_remote():
         # One connection, three exchanges: a body, an empty 202, a body.
         # Wrong Content-Length would desync the stream rather than fail loudly.
         keep = http.client.HTTPConnection(host, port, timeout=5)
-        headers = {"Authorization": "Bearer " + OUTER_TOKEN,
-                   "Content-Type": "application/json",
-                   "Accept": "application/json, text/event-stream",
-                   "MCP-Protocol-Version": "2025-11-25"}
+        headers = {
+            "Authorization": "Bearer " + OUTER_TOKEN,
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-11-25",
+        }
         for payload, expect in (
-                ({"jsonrpc": "2.0", "id": 1, "method": "ping"}, 200),
-                ({"jsonrpc": "2.0", "method": "notifications/initialized"}, 202),
-                ({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, 200)):
+            ({"jsonrpc": "2.0", "id": 1, "method": "ping"}, 200),
+            ({"jsonrpc": "2.0", "method": "notifications/initialized"}, 202),
+            ({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, 200),
+        ):
             keep.request("POST", "/mcp", json.dumps(payload), headers)
             response = keep.getresponse()
             body = response.read()
@@ -155,8 +185,12 @@ def test_remote():
         # A refused body is drained, answered, then closed. Without the drain
         # the close RSTs mid-send and the client reads an abort, not the 413.
         big = http.client.HTTPConnection(host, port, timeout=5)
-        big.request("POST", "/mcp", "x" * (remote.MAX_BODY + 1),
-                    dict(headers, **{"Content-Type": "application/json"}))
+        big.request(
+            "POST",
+            "/mcp",
+            "x" * (remote.MAX_BODY + 1),
+            dict(headers, **{"Content-Type": "application/json"}),
+        )
         oversized = big.getresponse()
         oversized.read()
         assert oversized.status == 413
@@ -168,7 +202,7 @@ def test_remote():
         # The rate cap, driven at a small limit so the real one stays unspent.
         real_limit = remote.RATE_LIMIT
         remote.RATE_LIMIT = 3
-        server.app.hits.clear()          # the window already holds this test
+        server.app.hits.clear()  # the window already holds this test
         try:
             codes = [rpc(base, ping)[0] for _ in range(4)]
         finally:
@@ -183,9 +217,12 @@ def test_remote():
         # A non-ASCII header must not escape the auth check: compare_digest
         # raises on str, and an unanswered request skips the lockout count.
         odd = http.client.HTTPConnection(host, port, timeout=5)
-        odd.request("POST", "/mcp", json.dumps(ping),
-                    {"Authorization": "Bearer ü",
-                     "Content-Type": "application/json"})
+        odd.request(
+            "POST",
+            "/mcp",
+            json.dumps(ping),
+            {"Authorization": "Bearer ü", "Content-Type": "application/json"},
+        )
         refused = odd.getresponse()
         refused.read()
         assert refused.status == 401, "non-ASCII header was not answered"
@@ -195,9 +232,15 @@ def test_remote():
         # A refusal leaves the connection reusable: the body is read first.
         reused = http.client.HTTPConnection(host, port, timeout=5)
         for token, expect in (("wrong", 401), (OUTER_TOKEN, 200)):
-            reused.request("POST", "/mcp", json.dumps(ping),
-                           {"Authorization": "Bearer " + token,
-                            "Content-Type": "application/json"})
+            reused.request(
+                "POST",
+                "/mcp",
+                json.dumps(ping),
+                {
+                    "Authorization": "Bearer " + token,
+                    "Content-Type": "application/json",
+                },
+            )
             response = reused.getresponse()
             response.read()
             assert response.status == expect, (token, response.status)
@@ -213,4 +256,3 @@ def test_remote():
     finally:
         server.shutdown()
         server.server_close()
-    print("OK - remote interface: MCP handshake, forwarding, auth lockout")

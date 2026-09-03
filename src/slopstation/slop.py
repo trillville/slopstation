@@ -1,4 +1,5 @@
 """Interactive client for Slopstation's authenticated K15 text interface."""
+
 import argparse
 import json
 import os
@@ -35,9 +36,14 @@ def _local_settings():
 def ask(url, token, session, message):
     body = json.dumps({"session": session, "message": message}).encode("utf-8")
     request = urllib.request.Request(
-        url.rstrip("/") + "/v1/chat", data=body, method="POST",
-        headers={"Authorization": "Bearer " + token,
-                 "Content-Type": "application/json"})
+        url.rstrip("/") + "/v1/chat",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+        },
+    )
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
             result = json.loads(response.read().decode("utf-8"))
@@ -58,10 +64,10 @@ def main(argv=None):
     local_url, local_token = _local_settings()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("message", nargs="*")
-    parser.add_argument("--url", default=os.environ.get(
-        "SLOPSTATION_URL", local_url))
-    parser.add_argument("--token", default=os.environ.get(
-        "SLOPSTATION_TOKEN", local_token))
+    parser.add_argument("--url", default=os.environ.get("SLOPSTATION_URL", local_url))
+    parser.add_argument(
+        "--token", default=os.environ.get("SLOPSTATION_TOKEN", local_token)
+    )
     parser.add_argument("--session", default=uuid.uuid4().hex)
     args = parser.parse_args(argv)
     if not (args.url and args.token):

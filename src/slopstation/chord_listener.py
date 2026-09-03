@@ -1,27 +1,29 @@
-import subprocess, sys, time
+import subprocess
+import sys
+import time
+
 import hid
 
-from slopstation import checkin
-from slopstation import cglib
-from slopstation import events
-from slopstation import haptics
-from slopstation.haptics import RID_INPUT, VID, PID
+from slopstation import cglib, checkin, events, haptics
+from slopstation.haptics import PID, RID_INPUT, VID
 
 BTN_BYTE = 4
-CHORD    = 0x01 | 0x80            # Steam + right-trigger click
-HOLD_S   = 2.0
+CHORD = 0x01 | 0x80  # Steam + right-trigger click
+HOLD_S = 2.0
 # An argv prefix, not a path: the package is installed, so there is no script
 # on disk to point at.
-COUCH    = [sys.executable, "-m", "slopstation.couch"]
+COUCH = [sys.executable, "-m", "slopstation.couch"]
 
 # Re-bench after controller firmware updates.
-HAPTIC_GAIN     = 0     # s8 dB-ish; 0 = natural level, 120 = clamped max
-BUSY_COOLDOWN_S = 5.0   # a held chord re-validates every ~2s; don't machine-gun the busy buzz
-FAIL_CHECK_S    = 2.0   # how often to look for couch.py's last_error marker
+HAPTIC_GAIN = 0  # s8 dB-ish; 0 = natural level, 120 = clamped max
+BUSY_COOLDOWN_S = (
+    5.0  # a held chord re-validates every ~2s; don't machine-gun the busy buzz
+)
+FAIL_CHECK_S = 2.0  # how often to look for couch.py's last_error marker
 PARTIAL_COOLDOWN_S = 10.0  # rate limit for chord_partial; an idle hand on the
-                        # controller must not flood the lane
-ERR_STALE_S     = 600   # failures older than this are history, not news
-STANDOFF_POLL_S = 0.5   # how often to ask the lock whether the Puck is spoken for
+# controller must not flood the lane
+ERR_STALE_S = 600  # failures older than this are history, not news
+STANDOFF_POLL_S = 0.5  # how often to ask the lock whether the Puck is spoken for
 
 log = cglib.make_log("listener")
 
@@ -55,7 +57,7 @@ def signal_last_error(dev):
         log("stale_error_discarded", age_s=round(age))
         return
     if dev is None:
-        return                          # nobody is holding it; keep for retry
+        return  # nobody is holding it; keep for retry
     if buzz(dev, haptics.PATTERN_FAIL, "fail"):
         try:
             reason = cglib.LAST_ERROR.read_text().strip()
@@ -66,20 +68,29 @@ def signal_last_error(dev):
 
 
 class Puck:
-    def __init__(self): self.handles, self.active = [], None
+    def __init__(self):
+        self.handles, self.active = [], None
+
     def open_all(self):
         self.close()
         for d in hid.enumerate(VID, PID):
             try:
-                h = hid.device(); h.open_path(d["path"]); h.set_nonblocking(True)
+                h = hid.device()
+                h.open_path(d["path"])
+                h.set_nonblocking(True)
                 self.handles.append(h)
-            except (OSError, ValueError): pass
+            except (OSError, ValueError):
+                pass
         return bool(self.handles)
+
     def close(self):
         for h in self.handles:
-            try: h.close()
-            except Exception: pass
+            try:
+                h.close()
+            except Exception:
+                pass
         self.handles, self.active = [], None
+
     def stand_off(self):
         """Let go of the device if we hold it. True only on the TRANSITION, so
         the caller logs once rather than every poll of a session."""
@@ -87,24 +98,29 @@ class Puck:
             return False
         self.close()
         return True
+
     def read_input(self):
         """Return the next report of type RID_INPUT, or None. Latch onto the
         interface that produces them; ignore all other report streams."""
         if self.active is not None:
             while True:
-                r = self.active.read(64)         # raises if claimed/unplugged
-                if not r: return None
-                if r[0] == RID_INPUT: return r   # drain non-input types silently
+                r = self.active.read(64)  # raises if claimed/unplugged
+                if not r:
+                    return None
+                if r[0] == RID_INPUT:
+                    return r  # drain non-input types silently
         for h in list(self.handles):
             try:
                 r = h.read(64)
             except (OSError, ValueError):
                 self.handles.remove(h)
-                try: h.close()
-                except Exception: pass
+                try:
+                    h.close()
+                except Exception:
+                    pass
                 continue
             if r and r[0] == RID_INPUT:
-                self.active = h                  # THE input interface, by content
+                self.active = h  # THE input interface, by content
                 return r
         if not self.handles:
             raise OSError("all interfaces gone")
@@ -149,7 +165,7 @@ def main():
             continue
         if not puck.handles:
             if not puck.open_all():
-                time.sleep(1)                    # Puck truly absent (session active)
+                time.sleep(1)  # Puck truly absent (session active)
                 continue
             log("puck_present", interfaces=len(puck.handles))
             held, armed = None, False
@@ -157,7 +173,9 @@ def main():
             r = puck.read_input()
         except (OSError, ValueError):
             log("puck_vanished", reason="claimed")
-            puck.close(); time.sleep(3); continue
+            puck.close()
+            time.sleep(3)
+            continue
         if r:
             if not armed:
                 log("armed", report_type=f"{RID_INPUT:02x}")
@@ -171,7 +189,7 @@ def main():
                     # started inside that window, which couch.py would refuse.
                     if cglib.session_active(age):
                         if time.time() - last_busy >= BUSY_COOLDOWN_S:
-                            log("chord_busy", lock_age_s=round(age))
+                            log("chord_busy", lock_age_s=round(age or 0))
                             buzz(puck.active, haptics.PATTERN_BUSY, "busy")
                             last_busy = time.time()
                         held = None
@@ -185,9 +203,12 @@ def main():
                         # The only silence guaranteed BEFORE couch.py has
                         # started python and taken the lock.
                         puck.close()
-                        subprocess.Popen(COUCH + ["start", "--turn", turn],
-                                         creationflags=subprocess.CREATE_NEW_CONSOLE)
-                        time.sleep(20); held, armed = None, False
+                        subprocess.Popen(
+                            COUCH + ["start", "--turn", turn],
+                            creationflags=subprocess.CREATE_NEW_CONSOLE,
+                        )
+                        time.sleep(20)
+                        held, armed = None, False
             else:
                 held = None
                 # Separates a Puck nobody touched from one that enumerates,

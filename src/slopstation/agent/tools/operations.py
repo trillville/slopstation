@@ -1,9 +1,10 @@
 """Durable correlation and observation for externally-owned work."""
+
 import argparse
 import json
 import time
 import uuid
-
+from typing import Any
 
 from slopstation import cglib
 
@@ -65,9 +66,11 @@ class OperationStore:
         return rows[:limit]
 
     def active(self, kind=None):
-        return [r for r in self.all()
-                if r.get("state") in ACTIVE
-                and (kind is None or r.get("kind") == kind)]
+        return [
+            r
+            for r in self.all()
+            if r.get("state") in ACTIVE and (kind is None or r.get("kind") == kind)
+        ]
 
     def get(self, operation_id):
         return next((r for r in self.all() if r.get("id") == operation_id), None)
@@ -88,9 +91,18 @@ class OperationStore:
                 self._save(rows)
             return dict(row)
 
-    def track_external(self, kind, authority, external_ref, title, turn=None,
-                       state=RUNNING, detail="external authority accepted the request",
-                       metadata=None, observed=True):
+    def track_external(
+        self,
+        kind,
+        authority,
+        external_ref,
+        title,
+        turn=None,
+        state=RUNNING,
+        detail="external authority accepted the request",
+        metadata=None,
+        observed=True,
+    ):
         """Create one active tracker per concrete authority resource."""
         if state not in ACTIVE:
             raise ValueError(f"new operation state must be active, got {state}")
@@ -101,12 +113,18 @@ class OperationStore:
         previous = None
         with cglib.guard(self.path):
             rows = self._load()
-            existing = next((r for r in rows
-                             if r.get("kind") == kind
-                             and r.get("external_ref") == external_ref
-                             and r.get("state") in ACTIVE), None)
+            existing = next(
+                (
+                    r
+                    for r in rows
+                    if r.get("kind") == kind
+                    and r.get("external_ref") == external_ref
+                    and r.get("state") in ACTIVE
+                ),
+                None,
+            )
             if existing is not None:
-                updates = {}
+                updates: dict[str, Any] = {}
                 if existing.get("state") != state:
                     previous = existing["state"]
                     updates.update(state=state, detail=detail)
@@ -142,26 +160,47 @@ class OperationStore:
                 self._save(rows)
         if reused is not None:
             if previous is not None:
-                self.log("operation_observed", operation=reused["id"],
-                         previous=previous, state=state,
-                         progress=reused.get("progress", {}),
-                         detail=reused["detail"], changed=True)
+                self.log(
+                    "operation_observed",
+                    operation=reused["id"],
+                    previous=previous,
+                    state=state,
+                    progress=reused.get("progress", {}),
+                    detail=reused["detail"],
+                    changed=True,
+                )
             return reused
-        self.log("operation_created", operation=created["id"], turn=turn,
-                 kind=created["kind"], authority=created["authority"],
-                 external_ref=external_ref, state=created["state"])
+        assert created is not None
+        self.log(
+            "operation_created",
+            operation=created["id"],
+            turn=turn,
+            kind=created["kind"],
+            authority=created["authority"],
+            external_ref=external_ref,
+            state=created["state"],
+        )
         return dict(created)
 
     def track_steam_install(self, appid, title, turn=None, verified=False):
         return self.track_external(
-            "steam_install", "steam", str(int(appid)), title, turn=turn,
+            "steam_install",
+            "steam",
+            str(int(appid)),
+            title,
+            turn=turn,
             state=RUNNING if verified else QUEUED,
-            detail=("Steam verified the install queue" if verified else
-                    "Steam accepted the install; verification is pending"),
-            observed=verified)
+            detail=(
+                "Steam verified the install queue"
+                if verified
+                else "Steam accepted the install; verification is pending"
+            ),
+            observed=verified,
+        )
 
-    def observe(self, operation_id, state, progress=None, detail="",
-                summary=None, announce=True):
+    def observe(
+        self, operation_id, state, progress=None, detail="", summary=None, announce=True
+    ):
         """Persist one authority observation and fire on the first terminal edge."""
         if state not in STATES:
             raise ValueError(f"unknown operation state {state}")
@@ -179,35 +218,49 @@ class OperationStore:
                 return dict(row)
             previous = row.get("state")
             progress = progress or {}
-            changed = (previous != state or row.get("progress", {}) != progress
-                       or row.get("detail", "") != detail)
+            changed = (
+                previous != state
+                or row.get("progress", {}) != progress
+                or row.get("detail", "") != detail
+            )
             row["last_observed"] = now
             if changed:
-                row.update(state=state, progress=progress, detail=detail,
-                           updated=now)
+                row.update(state=state, progress=progress, detail=detail, updated=now)
             if state in TERMINAL and previous != state:
-                row.update(finished=now, announcement_pending=announce,
-                           summary=summary or _summary(row, state))
+                row.update(
+                    finished=now,
+                    announcement_pending=announce,
+                    summary=summary or _summary(row, state),
+                )
                 if announce:
                     terminal = dict(row)
             self._save(rows)
             out = dict(row)
         if changed:
-            self.log("operation_observed", operation=operation_id,
-                     previous=previous, state=state, progress=progress,
-                     detail=detail, changed=True)
+            self.log(
+                "operation_observed",
+                operation=operation_id,
+                previous=previous,
+                state=state,
+                progress=progress,
+                detail=detail,
+                changed=True,
+            )
         if terminal is not None and self.on_terminal is not None:
             try:
                 self.on_terminal(terminal)
             except Exception as e:
-                self.log.error("operation_announce_hook_failed",
-                               operation=operation_id, err=str(e))
+                self.log.error(
+                    "operation_announce_hook_failed", operation=operation_id, err=str(e)
+                )
         return out
 
     def pending_announcements(self):
-        return [r for r in self.all()
-                if r.get("state") in TERMINAL
-                and r.get("announcement_pending")]
+        return [
+            r
+            for r in self.all()
+            if r.get("state") in TERMINAL and r.get("announcement_pending")
+        ]
 
     def notify(self, operation_id, key, summary):
         now = int(time.time())
@@ -220,9 +273,14 @@ class OperationStore:
             notifications = list(row.get("notifications") or [])
             if any(item.get("key") == key for item in notifications):
                 return None
-            notification = {"operation_id": operation_id, "key": key,
-                            "summary": summary, "pending": True,
-                            "created": now, "delivered": None}
+            notification = {
+                "operation_id": operation_id,
+                "key": key,
+                "summary": summary,
+                "pending": True,
+                "created": now,
+                "delivered": None,
+            }
             notifications.append(notification)
             row.update(notifications=notifications, updated=now)
             self._save(rows)
@@ -231,14 +289,18 @@ class OperationStore:
             try:
                 self.on_notification(dict(notification))
             except Exception as e:
-                self.log.error("operation_announce_hook_failed",
-                               operation=operation_id, err=str(e))
+                self.log.error(
+                    "operation_announce_hook_failed", operation=operation_id, err=str(e)
+                )
         return dict(notification)
 
     def pending_notifications(self):
-        return [dict(item) for row in self.all()
-                for item in row.get("notifications") or []
-                if item.get("pending")]
+        return [
+            dict(item)
+            for row in self.all()
+            for item in row.get("notifications") or []
+            if item.get("pending")
+        ]
 
     def mark_notification_delivered(self, operation_id, key):
         now = int(time.time())
@@ -263,8 +325,7 @@ class OperationStore:
             rows = self._load()
             for row in rows:
                 if row.get("id") == operation_id:
-                    row.update(announcement_pending=False, delivered=now,
-                               updated=now)
+                    row.update(announcement_pending=False, delivered=now, updated=now)
                     self._save(rows)
                     return True
         return False
@@ -275,23 +336,40 @@ class OperationStore:
             return False, f"no operation named {operation_id}"
         if operation.get("state") in TERMINAL:
             return False, f"{operation_id} is already {operation['state'].lower()}"
-        self.log("operation_cancel_refused", operation=operation_id,
-                  authority=operation.get("authority"))
+        self.log(
+            "operation_cancel_refused",
+            operation=operation_id,
+            authority=operation.get("authority"),
+        )
         authority = str(operation.get("authority", "external authority")).title()
-        return False, (f"{authority} cancellation is not supported; "
-                       "the operation was left unchanged")
+        return False, (
+            f"{authority} cancellation is not supported; "
+            "the operation was left unchanged"
+        )
 
     def for_assistant(self, scope="active", limit=10, acknowledge=False):
         rows = self.active() if scope == "active" else self.recent(limit)
         if acknowledge:
             for row in rows:
-                if (row.get("state") in TERMINAL
-                        and row.get("announcement_pending")):
+                if row.get("state") in TERMINAL and row.get("announcement_pending"):
                     self.mark_delivered(row["id"])
-        return [{k: r.get(k) for k in (
-                    "id", "kind", "title", "state", "progress", "detail",
-                    "created", "updated", "finished")}
-                for r in rows[:limit]]
+        return [
+            {
+                k: r.get(k)
+                for k in (
+                    "id",
+                    "kind",
+                    "title",
+                    "state",
+                    "progress",
+                    "detail",
+                    "created",
+                    "updated",
+                    "finished",
+                )
+            }
+            for r in rows[:limit]
+        ]
 
 
 def track(store, submission, turn=None):
@@ -299,21 +377,39 @@ def track(store, submission, turn=None):
     so a failed local write reports itself and never invites a second one."""
     if store is None or submission.get("already_available"):
         return submission
-    metadata = {k: submission[k] for k in
-                ("catalog_id", "preset", "profile", "seasons", "all_seasons",
-                 "baseline_file_id", "baseline_episode_files",
-                 "search_pending", "command_ids") if k in submission}
+    metadata = {
+        k: submission[k]
+        for k in (
+            "catalog_id",
+            "preset",
+            "profile",
+            "seasons",
+            "all_seasons",
+            "baseline_file_id",
+            "baseline_episode_files",
+            "search_pending",
+            "command_ids",
+        )
+        if k in submission
+    }
     authority = str(submission["authority"]).title()
     try:
         operation = store.track_external(
-            submission["kind"], submission["authority"],
-            submission["external_ref"], submission["title"], turn=turn,
-            detail=f"{authority} accepted the request", metadata=metadata)
+            submission["kind"],
+            submission["authority"],
+            submission["external_ref"],
+            submission["title"],
+            turn=turn,
+            detail=f"{authority} accepted the request",
+            metadata=metadata,
+        )
         operation = store.observe(
-            operation["id"], RUNNING, {"phase": "searching"},
-            f"{authority} accepted the request and is searching")
-        return {**submission, "operation_id": operation["id"],
-                "phase": "searching"}
+            operation["id"],
+            RUNNING,
+            {"phase": "searching"},
+            f"{authority} accepted the request and is searching",
+        )
+        return {**submission, "operation_id": operation["id"], "phase": "searching"}
     except Exception as e:
         store.log.error("tool_error", tool="track_media", err=str(e))
         return {**submission, "tracking": "failed"}
@@ -325,16 +421,20 @@ def covered_by_delete(store, kind, catalog_id, seasons=None, all_seasons=False):
     A movie is covered outright; a series only when the delete's scope holds
     every season its request asked for, so a partial delete leaves the
     request tracking the seasons it still owns."""
-    rows, command_ids = [], []
-    for operation in (store.active(kind=f"{kind}_acquisition")
-                      if store is not None else []):
+    rows: list[dict] = []
+    command_ids: list = []
+    for operation in (
+        store.active(kind=f"{kind}_acquisition") if store is not None else []
+    ):
         metadata = operation.get("metadata") or {}
         if int(metadata.get("catalog_id", 0) or 0) != int(catalog_id):
             continue
         requested = metadata.get("seasons")
-        if not (kind == "movie" or all_seasons
-                or (requested is not None
-                    and set(requested) <= set(seasons or []))):
+        if not (
+            kind == "movie"
+            or all_seasons
+            or (requested is not None and set(requested) <= set(seasons or []))
+        ):
             continue
         rows.append(operation)
         command_ids.extend(metadata.get("command_ids") or [])
@@ -346,8 +446,12 @@ def record_deleted(store, rows, result=None):
     announcing work whose files are gone. Called after the delete returns:
     the mutation already happened, and these rows describe it."""
     for operation in rows:
-        store.observe(operation["id"], CANCELED, operation.get("progress", {}),
-                      "the media request was deleted cleanly")
+        store.observe(
+            operation["id"],
+            CANCELED,
+            operation.get("progress", {}),
+            "the media request was deleted cleanly",
+        )
         store.mark_delivered(operation["id"])
     if rows and result is not None:
         result["operations_canceled"] = [row["id"] for row in rows]
@@ -357,13 +461,18 @@ def record_deleted(store, rows, result=None):
 def _line(operation):
     progress = operation.get("progress") or {}
     phase = progress.get("phase")
-    pct = (progress.get("download_percent")
-           if phase == "downloading" else progress.get("percent"))
+    pct = (
+        progress.get("download_percent")
+        if phase == "downloading"
+        else progress.get("percent")
+    )
     suffix = f" ({pct}%)" if pct is not None else ""
     if phase:
         suffix = f" [{phase}]" + suffix
-    return (f"{operation['id']} {operation['state']} {operation['kind']} "
-            f"{operation['title']}{suffix}")
+    return (
+        f"{operation['id']} {operation['state']} {operation['kind']} "
+        f"{operation['title']}{suffix}"
+    )
 
 
 def main(argv=None):
@@ -386,6 +495,7 @@ def main(argv=None):
     # Lazy: operations_monitors imports this module, so a top-level import here
     # would be a cycle.
     from slopstation.agent.tools import operations_monitors
+
     if args.command == "list":
         rows = store.active() if args.active else store.recent(50)
         if not rows:
@@ -423,6 +533,7 @@ def main(argv=None):
         cfg = cglib.config()
         secrets = cglib.load_secrets()
         from slopstation.agent.tools import media
+
         service = media.from_config(cfg, secrets, log)
         if service is None:
             print("media is disabled or its configuration/API keys are incomplete")
@@ -435,8 +546,11 @@ def main(argv=None):
             else:
                 seasons = metadata.get("seasons")
                 result = service.delete_series(
-                    metadata["catalog_id"], seasons=seasons,
-                    all_seasons=seasons is None, command_ids=command_ids)
+                    metadata["catalog_id"],
+                    seasons=seasons,
+                    all_seasons=seasons is None,
+                    command_ids=command_ids,
+                )
             record_deleted(store, [operation])
         except Exception as e:
             print(f"abandon failed; operation left active: {e}")
@@ -448,12 +562,17 @@ def main(argv=None):
     secrets = cglib.load_secrets()
     counts = []
     from slopstation.agent.tools import steam_session
+
     steam = steam_session.SteamSession(
-        secrets, log, machine_name=cfg.get("steamMachineName"))
+        secrets, log, machine_name=cfg.get("steamMachineName")
+    )
     if steam.available():
-        monitor = operations_monitors.SteamMonitor(store, steam, log)
+        monitor: operations_monitors.Monitor = operations_monitors.SteamMonitor(
+            store, steam, log
+        )
         counts.append(("Steam", monitor.reconcile_once()))
     from slopstation.agent.tools import media
+
     service = media.from_config(cfg, secrets, log)
     if service is not None:
         monitor = operations_monitors.MediaMonitor(store, service, log)
@@ -461,8 +580,11 @@ def main(argv=None):
     if not counts:
         print("no external operation authorities are configured")
         return 1
-    print("; ".join(f"reconciled {count} active {name} operation(s)"
-                    for name, count in counts))
+    print(
+        "; ".join(
+            f"reconciled {count} active {name} operation(s)" for name, count in counts
+        )
+    )
     return 0
 
 

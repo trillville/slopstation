@@ -1,13 +1,12 @@
-"""Blind test: the pipecat -> Sentry span adapter.
+"""The pipecat -> Sentry span adapter.
 
 This is the only thing that will notice a pipecat upgrade quietly emptying the
 Agents dashboard, so it pins the attribute names on BOTH sides: the ones
 pipecat writes (service_attributes.add_llm_span_attributes) and the ones
-Sentry indexes. A failure here means one of the two moved. Run:
-    pytest tests/test_genai.py
+Sentry indexes. A failure here means one of the two moved.
 """
-import json
 
+import json
 
 from slopstation import events
 from slopstation.agent.telemetry import genai
@@ -46,7 +45,6 @@ def test_genai():
     out = json.loads(add["gen_ai.output.messages"])
     assert out[0]["role"] == "assistant"
     assert out[0]["parts"][0]["content"] == "launching Hades"
-    print(f"  chat: {len(add)} attributes added, op={add['sentry.op']}")
 
     # Token usage is pipecat's already and must NOT be rewritten - Sentry reads
     # the same names.
@@ -57,19 +55,23 @@ def test_genai():
     # spans: they are not model calls Sentry can cost, and a bogus sentry.op
     # would put them in the dashboard as chats.
     for op in ("stt", "tts", "setup", None):
-        assert genai.sentry_attributes(
-            dict(PIPECAT_LLM, **{"gen_ai.operation.name": op})) == {}, op
+        assert (
+            genai.sentry_attributes(dict(PIPECAT_LLM, **{"gen_ai.operation.name": op}))
+            == {}
+        ), op
     assert genai.sentry_attributes({}) == {}
-    print("  gate: stt/tts/setup spans are left alone")
 
     # -- never clobbers --------------------------------------------------------
-    already = dict(PIPECAT_LLM, **{
-        "gen_ai.response.model": "claude-haiku-4-5-20251001",
-        "gen_ai.input.messages": '[{"role":"user","content":"real"}]'})
+    already = dict(
+        PIPECAT_LLM,
+        **{
+            "gen_ai.response.model": "claude-haiku-4-5-20251001",
+            "gen_ai.input.messages": '[{"role":"user","content":"real"}]',
+        },
+    )
     add2 = genai.sentry_attributes(already)
     assert "gen_ai.response.model" not in add2
     assert "gen_ai.input.messages" not in add2
-    print("  merge: an attribute already present is never overwritten")
 
     # -- the span name ---------------------------------------------------------
     # Pipecat names every LLM span "llm", which collapses every model into one
@@ -77,7 +79,6 @@ def test_genai():
     assert genai.span_name(PIPECAT_LLM) == "chat claude-haiku-4-5"
     assert genai.span_name({"gen_ai.operation.name": "stt"}) is None
     assert genai.span_name({"gen_ai.operation.name": "chat"}) is None
-    print("  name: 'chat <model>'")
 
     # -- the conversation stamp ------------------------------------------------
     # Pinned rather than read from events.current(): the reader is a batch
@@ -106,9 +107,9 @@ def test_genai():
     # A span that already carries one keeps it - the text lane sets its own.
     genai.set_session("3b7e")
     assert "gen_ai.conversation.id" not in genai.sentry_attributes(
-        dict(PIPECAT_LLM, **{"gen_ai.conversation.id": "own"}))
+        dict(PIPECAT_LLM, **{"gen_ai.conversation.id": "own"})
+    )
     genai.set_session()
-    print("  stamp: session and turn pinned independently, cleared together")
 
     # -- reshape, against a real ReadableSpan ---------------------------------
     try:
@@ -125,20 +126,17 @@ def test_genai():
         for k, v in PIPECAT_LLM.items():
             assert new.attributes[k] == v, k
         # A span with nothing to add comes back untouched, by identity.
-        plain = ReadableSpan(name="tts", attributes={
-            "gen_ai.operation.name": "tts"})
+        plain = ReadableSpan(name="tts", attributes={"gen_ai.operation.name": "tts"})
         assert genai.reshape(plain) is plain
-        print(f"  reshape: llm -> '{new.name}', "
-              f"{len(new.attributes)} attributes out")
 
     # A span whose attributes explode is exported unchanged rather than lost.
     class Broken:
         @property
         def attributes(self):
             raise RuntimeError("gone")
+
     b = Broken()
     assert genai.reshape(b) is b
-    print("  reshape: fail-soft - an unreshapeable span still ships")
 
     # -- the exporter wrapper --------------------------------------------------
     class Inner:
@@ -163,7 +161,6 @@ def test_genai():
     assert inner.got == [b]
     assert wrap.shutdown() == "down"
     assert wrap.force_flush() is True and inner.flushed
-    print("  exporter: reshapes, then delegates export/shutdown/flush")
 
     # -- end to end, through a real provider ----------------------------------
     # The seam that actually broke once: opentelemetry-sdk 1.44 calls private
@@ -174,11 +171,13 @@ def test_genai():
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-            InMemorySpanExporter)
+            InMemorySpanExporter,
+        )
     except ImportError:
         print("  wiring: SKIPPED - opentelemetry not installed in this venv")
     else:
         from slopstation.agent.telemetry import sentry
+
         mem = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(genai.SentryShape(mem)))
@@ -218,7 +217,3 @@ def test_genai():
         # the other.
         ids = {f"{s.context.trace_id:032x}" for s in mem.get_finished_spans()}
         assert ids == {trace_id}, (ids, trace_id)
-        print(f"  wiring: {len(out)} spans exported, one trace id ({trace_id[:8]}...)")
-
-    print("OK - genai: pipecat attributes -> Sentry's gen_ai shape, "
-          "conversation stamp, real provider end to end")

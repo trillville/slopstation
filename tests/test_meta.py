@@ -1,7 +1,7 @@
-"""Blind test: refresh_meta saves incrementally so a killed crawl (daemon
-thread dies on Ctrl+C) keeps progress instead of re-crawling from zero. Run:
-    pytest tests/test_meta.py
+"""Refresh_meta saves incrementally so a killed crawl (daemon
+thread dies on Ctrl+C) keeps progress instead of re-crawling from zero.
 """
+
 import time
 
 from helpers import fresh_state
@@ -12,7 +12,9 @@ def test_meta():
     fresh_state()
 
     fetched = []
-    library.fetch_meta_one = lambda appid: fetched.append(appid) or {"tags": [f"t{appid}"]}
+    library.fetch_meta_one = lambda appid: (
+        fetched.append(appid) or {"tags": [f"t{appid}"]}
+    )
     real_sleep = time.sleep
     time.sleep = lambda s: None
 
@@ -27,7 +29,9 @@ def test_meta():
 
     library._save_meta = counting_save
     library.refresh_meta([1, 2, 3])
-    assert sizes == [1, 2, 3], f"saved at {sizes} - not incremental (batched saves once)"
+    assert sizes == [1, 2, 3], (
+        f"saved at {sizes} - not incremental (batched saves once)"
+    )
     assert len(library.load_meta()) == 3
 
     # Resume after a kill: only the missing appids are fetched.
@@ -38,16 +42,16 @@ def test_meta():
     assert len(library.load_meta()) == 5
 
     # query_terms: the ask-about-games vocabulary, frequency-ranked.
-    library._save_meta({
-        "1": {"tags": ["Mechs", "Action"], "genres": []},
-        "2": {"tags": ["Mechs"], "genres": ["RPG"]},
-        "3": {"tags": ["Roguelike", "Mechs"], "genres": []},
-    })
+    library._save_meta(
+        {
+            "1": {"tags": ["Mechs", "Action"], "genres": []},
+            "2": {"tags": ["Mechs"], "genres": ["RPG"]},
+            "3": {"tags": ["Roguelike", "Mechs"], "genres": []},
+        }
+    )
     terms = library.query_terms()
-    assert terms[0] == "mechs", terms                 # 3 games carry it
+    assert terms[0] == "mechs", terms  # 3 games carry it
     assert {"action", "rpg", "roguelike"} <= set(terms), terms
     assert library.query_terms(limit=1) == ["mechs"]
 
     time.sleep = real_sleep
-    print("OK - refresh_meta: saves after each fetch, resume does top-up only; "
-          "query_terms ranks the tag/genre vocabulary")

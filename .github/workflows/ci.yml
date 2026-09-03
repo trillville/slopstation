@@ -6,13 +6,10 @@ on:
   pull_request:
 
 jobs:
-  # The blind suite, exactly as the README documents it. windows-latest is
-  # required: the tests assume Windows paths and test_ps_parse shells to the
-  # real PowerShell parser. test_library and test_session_pipeline self-skip
-  # (no Steam, no audio devices on a runner).
-  # 3.13 because that is what the K15 runs. constraints.txt is frozen from
-  # that venv, so an older CI cannot resolve it - scipy 1.18.0 ships no
-  # cp311 wheel, which is how the mismatch surfaced.
+  # windows-latest is required: the tests assume Windows paths and
+  # test_ps_parse shells to the real PowerShell parser. The Steam and audio
+  # tests self-skip. 3.13 because that is what the K15 runs: constraints.txt
+  # is frozen from that venv, so an older interpreter cannot resolve it.
   tests:
     runs-on: windows-latest
     steps:
@@ -26,6 +23,17 @@ jobs:
             constraints.txt
       - run: pip install -e ".[dev]" -c constraints.txt
       - run: pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install "ruff>=0.16"
+      - run: ruff check .
+      - run: ruff format --check .
 
   types:
     runs-on: windows-latest

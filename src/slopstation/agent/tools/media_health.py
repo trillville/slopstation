@@ -2,11 +2,10 @@
 
 import threading
 
-from slopstation.agent.tools.media_clients import (MediaError, _clean_text)
+from slopstation.agent.tools.media_clients import MediaError, _clean_text
 
 # Servarr history eventTypes that mean a grab did not become a file.
-FAILURE_EVENTS = frozenset(("downloadFailed", "importFailed",
-                            "importBlocked"))
+FAILURE_EVENTS = frozenset(("downloadFailed", "importFailed", "importBlocked"))
 GRAB_EVENT = "grabbed"
 # The history field naming the library row a grab belongs to, per app.
 GRAB_REF = {"Sonarr": "seriesId", "Radarr": "movieId"}
@@ -55,8 +54,9 @@ class MediaHealthMonitor:
         self._last_failure = {}
 
     def start(self):
-        threading.Thread(target=self._run, daemon=True,
-                         name="media-health-monitor").start()
+        threading.Thread(
+            target=self._run, daemon=True, name="media-health-monitor"
+        ).start()
 
     def stop(self):
         self._stop.set()
@@ -78,8 +78,7 @@ class MediaHealthMonitor:
                 # Unchanged failures stay silent; an unreachable app would
                 # otherwise be one line per poll until someone noticed.
                 if detail != self._last_failure.get(client.name):
-                    self.log.error("media_watch_failed", app=client.name,
-                                   err=detail)
+                    self.log.error("media_watch_failed", app=client.name, err=detail)
                     self._last_failure[client.name] = detail
 
     def _health(self, client):
@@ -92,8 +91,10 @@ class MediaHealthMonitor:
                 continue
             source = _clean_text(row.get("source"), 60)
             if source and source not in current:
-                current[source] = (_clean_text(row.get("type"), 20).lower(),
-                                   _clean_text(row.get("message")))
+                current[source] = (
+                    _clean_text(row.get("type"), 20).lower(),
+                    _clean_text(row.get("message")),
+                )
         seen = self._issues.get(client.name)
         for source, (kind, detail) in sorted(current.items()):
             # seen is None on the first pass: a health issue is current state,
@@ -103,25 +104,34 @@ class MediaHealthMonitor:
             # Bound as `log`, not `report`: _events_scan reads emitters from
             # source, and only the log call shapes are visible to it.
             log = self.log.error if kind == "error" else self.log.warn
-            log("media_health_issue", app=client.name, source=source,
-                kind=kind, detail=detail)
+            log(
+                "media_health_issue",
+                app=client.name,
+                source=source,
+                kind=kind,
+                detail=detail,
+            )
         for source in sorted(seen or ()):
             if source not in current:
-                self.log.info("media_health_cleared", app=client.name,
-                              source=source)
+                self.log.info("media_health_cleared", app=client.name, source=source)
         self._issues[client.name] = set(current)
 
     def _history(self, client):
-        page = client.get("history", {"pageSize": self.PAGE_SIZE,
-                                      "sortKey": "date",
-                                      "sortDirection": "descending"})
+        page = client.get(
+            "history",
+            {
+                "pageSize": self.PAGE_SIZE,
+                "sortKey": "date",
+                "sortDirection": "descending",
+            },
+        )
         records = page.get("records") if isinstance(page, dict) else None
         if not isinstance(records, list):
             raise MediaError(f"{client.name} returned an invalid history page")
         watermark = self._history_id.get(client.name)
         newest = watermark
-        failures = {}
-        grabs = {}
+        failures: dict = {}
+        grabs: dict = {}
         for row in sorted(records, key=_history_id):
             row_id = _history_id(row)
             if row_id < 0:
@@ -140,12 +150,14 @@ class MediaHealthMonitor:
                 entry = grabs.get(key)
                 if entry is None:
                     grabs[key] = {
-                        "ref": _clean_text(
-                            row.get(GRAB_REF.get(client.name, "")), 20),
+                        "ref": _clean_text(row.get(GRAB_REF.get(client.name, "")), 20),
                         "title": _clean_text(row.get("sourceTitle"), 120),
                         "indexer": _clean_text(
                             (row.get("data") or {}).get("indexer")
-                            if isinstance(row.get("data"), dict) else None, 60),
+                            if isinstance(row.get("data"), dict)
+                            else None,
+                            60,
+                        ),
                         "records": 1,
                     }
                 else:
@@ -162,24 +174,34 @@ class MediaHealthMonitor:
                 failures[key] = {
                     "kind": kind,
                     "title": _clean_text(row.get("sourceTitle"), 120),
-                    "err": _clean_text((data or {}).get("message")
-                                       if isinstance(data, dict) else None),
+                    "err": _clean_text(
+                        (data or {}).get("message") if isinstance(data, dict) else None
+                    ),
                     "records": 1,
                 }
             else:
                 entry["records"] += 1
         for entry in failures.values():
-            self.log.error("media_import_failed", app=client.name,
-                           kind=entry["kind"], title=entry["title"],
-                           err=entry["err"], records=entry["records"])
+            self.log.error(
+                "media_import_failed",
+                app=client.name,
+                kind=entry["kind"],
+                title=entry["title"],
+                err=entry["err"],
+                records=entry["records"],
+            )
         for entry in self._unattributed(client, grabs).values():
             # INFO, not warn: a monitored season legitimately keeps grabbing
             # new episodes long after the operation that requested it closed.
             # This is the audit trail for a grab the ledger cannot explain -
             # the only record that a release nobody asked for arrived.
-            self.log.info("media_grab_unattributed", app=client.name,
-                          title=entry["title"], indexer=entry["indexer"],
-                          records=entry["records"])
+            self.log.info(
+                "media_grab_unattributed",
+                app=client.name,
+                title=entry["title"],
+                indexer=entry["indexer"],
+                records=entry["records"],
+            )
         # An empty history still has to leave a watermark, or the first
         # failure to ever land would be skipped as backlog.
         self._history_id[client.name] = 0 if newest is None else newest
@@ -200,8 +222,11 @@ class MediaHealthMonitor:
             ref = _clean_text(operation.get("external_ref"), 20)
             if ref:
                 owned.add(ref)
-        return {key: entry for key, entry in grabs.items()
-                if entry["ref"] and entry["ref"] not in owned}
+        return {
+            key: entry
+            for key, entry in grabs.items()
+            if entry["ref"] and entry["ref"] not in owned
+        }
 
     def _queue(self, client):
         page = client.get("queue", {"pageSize": self.PAGE_SIZE})
@@ -219,13 +244,21 @@ class MediaHealthMonitor:
             # download collapses it to the one line a human would act on.
             key = _clean_text(row.get("downloadId") or row.get("id"), 60)
             if key and key not in current:
-                current[key] = (status, _clean_text(row.get("title"), 120),
-                                _queue_detail(row))
+                current[key] = (
+                    status,
+                    _clean_text(row.get("title"), 120),
+                    _queue_detail(row),
+                )
         seen = self._stalled.get(client.name) or {}
         for key, (status, title, detail) in sorted(current.items()):
             if seen.get(key) == status:
                 continue
-            self.log.warn("media_queue_stalled", app=client.name, download=key,
-                          status=status, title=title, err=detail)
-        self._stalled[client.name] = {key: value[0]
-                                      for key, value in current.items()}
+            self.log.warn(
+                "media_queue_stalled",
+                app=client.name,
+                download=key,
+                status=status,
+                title=title,
+                err=detail,
+            )
+        self._stalled[client.name] = {key: value[0] for key, value in current.items()}

@@ -13,6 +13,7 @@ otherwise covered by neither the capture nor the live mic.
 The transcript therefore starts with the wake phrase; grammar_gate.strip_wake
 removes it text-side.
 """
+
 from __future__ import annotations
 
 import threading
@@ -20,13 +21,12 @@ import time
 from collections.abc import Iterable
 
 import numpy as np
-
 from pipecat.frames.frames import Frame, InputAudioRawFrame, StartFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 SAMPLE_RATE = 16000
-BYTES_PER_S = SAMPLE_RATE * 2                   # mono s16
-CHUNK_SAMPLES = 1280                            # the wake loop's 80 ms hop
+BYTES_PER_S = SAMPLE_RATE * 2  # mono s16
+CHUNK_SAMPLES = 1280  # the wake loop's 80 ms hop
 CHUNK_BYTES = CHUNK_SAMPLES * 2
 CHUNK_MS = CHUNK_SAMPLES * 1000 // SAMPLE_RATE  # 80
 
@@ -64,10 +64,10 @@ class WakeCapture:
     """Owns the wake stream from detection until stop(). stop() is idempotent
     and returns all PCM captured (pre-detection ring included)."""
 
-    MAX_S = 30              # runaway guard: stop growing if a session build stalls
-    QUIET_MS = 350          # end-of-speech gap that earns the wake chime
-    QUIET_RATIO = 0.18      # of the loudest speech heard since the wake word
-    CHIME_BY_S = 1.5        # too noisy to tell -> chime anyway, never not at all
+    MAX_S = 30  # runaway guard: stop growing if a session build stalls
+    QUIET_MS = 350  # end-of-speech gap that earns the wake chime
+    QUIET_RATIO = 0.18  # of the loudest speech heard since the wake word
+    CHIME_BY_S = 1.5  # too noisy to tell -> chime anyway, never not at all
 
     def __init__(self, stream, seed_chunks: Iterable[bytes], on_quiet=None) -> None:
         self._stream = stream
@@ -76,7 +76,7 @@ class WakeCapture:
         self._on_quiet = on_quiet
         self._t0 = time.monotonic()
         self._quiet = 0
-        self._chime_deadline = True     # CHIME_BY_S armed; see disarm_deadline
+        self._chime_deadline = True  # CHIME_BY_S armed; see disarm_deadline
         # The wake phrase in the ring sets the speech scale.
         self._peak = max([_rms(c) for c in self._chunks] or [0.0]) if on_quiet else 0.0
         self._stopping = threading.Event()
@@ -93,9 +93,9 @@ class WakeCapture:
         level = _rms(chunk)
         self._peak = max(self._peak, level)
         self._quiet = 0 if level >= self._peak * self.QUIET_RATIO else self._quiet + 1
-        if (self._quiet * CHUNK_MS >= self.QUIET_MS
-                or (self._chime_deadline
-                    and time.monotonic() - self._t0 >= self.CHIME_BY_S)):
+        if self._quiet * CHUNK_MS >= self.QUIET_MS or (
+            self._chime_deadline and time.monotonic() - self._t0 >= self.CHIME_BY_S
+        ):
             fn, self._on_quiet = self._on_quiet, None
             threading.Thread(target=fn, daemon=True).start()
 
@@ -112,10 +112,9 @@ class WakeCapture:
         limit = self.MAX_S * BYTES_PER_S // CHUNK_BYTES
         while not self._stopping.is_set() and len(self._chunks) < limit:
             try:
-                chunk = self._stream.read(
-                    CHUNK_SAMPLES, exception_on_overflow=False)
+                chunk = self._stream.read(CHUNK_SAMPLES, exception_on_overflow=False)
             except OSError:
-                break       # device vanished (BT flap) - keep what we have
+                break  # device vanished (BT flap) - keep what we have
             self._chunks.append(chunk)
             self._watch(chunk)
 
@@ -143,13 +142,18 @@ class PrerollFeeder(FrameProcessor):
     def __init__(self, log) -> None:
         super().__init__()
         self._log = log
-        self.capture = None     # WakeCapture, stopped on StartFrame
-        self.pcm = b""          # or pre-stopped PCM (tests)
+        self.capture = None  # WakeCapture, stopped on StartFrame
+        self.pcm = b""  # or pre-stopped PCM (tests)
 
     def _frames(self) -> list:
-        return [InputAudioRawFrame(audio=self.pcm[i:i + CHUNK_BYTES],
-                                   sample_rate=SAMPLE_RATE, num_channels=1)
-                for i in range(0, len(self.pcm), CHUNK_BYTES)]
+        return [
+            InputAudioRawFrame(
+                audio=self.pcm[i : i + CHUNK_BYTES],
+                sample_rate=SAMPLE_RATE,
+                num_channels=1,
+            )
+            for i in range(0, len(self.pcm), CHUNK_BYTES)
+        ]
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -159,8 +163,7 @@ class PrerollFeeder(FrameProcessor):
                 self.pcm = self.capture.stop()
                 self.capture = None
             if self.pcm:
-                self._log("preroll_fed",
-                          audio_s=round(len(self.pcm) / BYTES_PER_S, 1))
+                self._log("preroll_fed", audio_s=round(len(self.pcm) / BYTES_PER_S, 1))
                 for f in self._frames():
                     await self.push_frame(f)
                 self.pcm = b""

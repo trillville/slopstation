@@ -1,11 +1,6 @@
 """Keeps a lane running: start it, restart it after any exit, and emit the
 transitions so a crash LOOP is alertable.
 
-Replaces three cmd.exe supervisors. They carried this logic in a shell that
-re-reads its own file between lines (so a deploy that moved one killed it
-mid-run), needed an fd-9 redirect for single-instance, and could not print a
-parenthesis inside a parenthesised block.
-
     slopstation-supervise listener     one lane, in this console
     slopstation-start                  both lanes, or reload them onto new code
 
@@ -13,6 +8,7 @@ Single instance per lane is a byte lock held for the supervising process's
 lifetime. Windows drops it when the holder dies, so a killed supervisor cannot
 wedge the next one.
 """
+
 import argparse
 import hashlib
 import msvcrt
@@ -32,9 +28,58 @@ LANES = {
     "voice": [sys.executable, "-m", "slopstation.agent.voice_agent"],
 }
 
-# Bumping a pin has to install itself on the next launch, the way the old
-# voice supervisor's requirements/deps-ok gate did - CD pulls code, not wheels.
+# Bumping a pin has to install itself on the next launch: CD pulls code, not
+# wheels.
 PINS = ("pyproject.toml", "constraints.txt")
+
+# Process control by lane, shared with deploy.py and doctor.py. Filtered to
+# python* so the PowerShell doing the filtering - whose own command line holds
+# the needle - cannot match itself.
+_PIDS_PS = (
+    "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" "
+    '| ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'
+)
+_KILL_PS = (
+    "$p = @(Get-CimInstance Win32_Process | Where-Object "
+    "{{ $_.Name -like 'python*' -and $_.CommandLine -like '*{needle}*' }}); "
+    "$p | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}; "
+    "exit $p.Count"
+)
+
+
+def pids() -> dict[str, set[int]]:
+    """lane -> the pids of the pythons running it. Pids rather than a yes/no:
+    Stop-Process returns before the process leaves the table, so a caller
+    waiting for a RELAUNCH has to tell the corpse from its replacement."""
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", _PIDS_PS],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    out: dict[str, set[int]] = {lane: set() for lane in LANES}
+    for line in (r.stdout or "").splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if not pid.isdigit():
+            continue
+        for lane, argv in LANES.items():
+            if argv[-1] in cmd:
+                out[lane].add(int(pid))
+    return out
+
+
+def kill(lane: str) -> int:
+    """Stop the lane's PROCESS, never its supervisor: the supervisor relaunches
+    it on the next loop, which is what makes this a reload. Returns how many
+    were stopped."""
+    command = _KILL_PS.format(needle=LANES[lane][-1])
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return r.returncode
 
 
 def _lock_path(lane):
@@ -77,12 +122,22 @@ def _install_if_pins_changed(log):
     retries on the next launch."""
     digest = _pin_digest()
     sentinel = Path(sys.prefix) / "deps-ok"
-    if digest is None or (sentinel.exists()
-                          and sentinel.read_text().strip() == digest):
+    if digest is None or (sentinel.exists() and sentinel.read_text().strip() == digest):
         return
     print("[supervisor] pins changed - installing, takes a minute or two...")
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "-e",
-                        ".[dev]", "-c", "constraints.txt"], cwd=paths.HOME)
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-e",
+            ".[dev]",
+            "-c",
+            "constraints.txt",
+        ],
+        cwd=paths.HOME,
+    )
     if r.returncode:
         print("[supervisor] pip install failed - fix it and relaunch")
         return
@@ -102,34 +157,18 @@ def supervise(lane, passthrough):
     if lane == "listener":
         # Once per boot, OUTSIDE the loop: re-running it mid-session would
         # spawn a second watch loop against the live session lock.
-        subprocess.run([sys.executable, "-m", "slopstation.couch", "reconcile"],
-                       cwd=paths.HOME)
+        subprocess.run(
+            [sys.executable, "-m", "slopstation.couch", "reconcile"], cwd=paths.HOME
+        )
     log("start", what=lane)
     while True:
         code = subprocess.run(LANES[lane] + passthrough, cwd=paths.HOME).returncode
-        print(f"[supervisor] {lane} exited (code {code}) - "
-              f"restarting in {RESTART_S}s")
+        print(f"[supervisor] {lane} exited (code {code}) - restarting in {RESTART_S}s")
         log.warn("restart", what=lane, code=code)
         time.sleep(RESTART_S)
 
 
-def _kill_agent(lane):
-    """Kill the lane's PROCESS, never its supervisor: the supervisor relaunches
-    it on the next loop, which is what makes this a reload. Name-filtered to
-    python* so the matching powershell - whose own command line contains the
-    needle - cannot match itself."""
-    needle = LANES[lane][-1]
-    r = subprocess.run(
-        ["powershell", "-NoProfile", "-Command",
-         "$p = @(Get-CimInstance Win32_Process | Where-Object { "
-         f"$_.Name -like 'python*' -and $_.CommandLine -like '*{needle}*' }}); "
-         "$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; "
-         "exit $p.Count"],
-        capture_output=True, text=True)
-    return r.returncode
-
-
-def start(argv=None):
+def start():
     """Both lanes on the code on disk right now: start a supervisor that is
     down, reload one that is up. The Windows startup shortcut and the thing to
     run after a git pull."""
@@ -137,27 +176,34 @@ def start(argv=None):
     reloaded = False
     for lane in LANES:
         if _supervised(lane):
-            killed = _kill_agent(lane)
+            killed = kill(lane)
             reloaded = True
-            print(f"[start] {lane}: {'stopped' if killed else 'already down'}"
-                  " - its supervisor will bring it back")
+            print(
+                f"[start] {lane}: {'stopped' if killed else 'already down'}"
+                " - its supervisor will bring it back"
+            )
             log("lane_reloaded", what=lane, killed=killed)
         else:
             print(f"[start] {lane} down - starting it")
             log("lane_started", what=lane)
             subprocess.Popen(
                 [sys.executable, "-m", "slopstation.supervise", lane],
-                cwd=paths.HOME, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                cwd=paths.HOME,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
     if reloaded:
-        print(f"\n[start] reloaded - each supervisor relaunches its lane "
-              f"within ~{RESTART_S}s.")
+        print(
+            f"\n[start] reloaded - each supervisor relaunches its lane "
+            f"within ~{RESTART_S}s."
+        )
     return 0
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("lane", choices=sorted(LANES),
-                    help="which lane to supervise in this console")
+    ap.add_argument(
+        "lane", choices=sorted(LANES), help="which lane to supervise in this console"
+    )
     args, passthrough = ap.parse_known_args(argv)
     return supervise(args.lane, passthrough)
 

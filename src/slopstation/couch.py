@@ -2,52 +2,53 @@
 switch TV input -> watch loop. Invariant: nothing switches the TV to the
 gaming input before the host writes READY, so a pre-READY failure leaves the
 TV as the viewer had it."""
+
 from __future__ import annotations
 
-import os, socket, sys, time
-from typing import Callable
+import os
+import socket
+import sys
+import time
+from collections.abc import Callable
 
-from slopstation import cglib
-from slopstation import events
-from slopstation import gamepc
-from slopstation import tv
+from slopstation import cglib, events, gamepc, tv
 
-PORT_WAIT_S    = 90    # PC power-on/resume until sshd answers
-ENTER_ATTEMPTS = 60    # ~1/s; also covers waiting out logon after a cold boot
-READY_WAIT_S   = 120   # Enter dispatch until the READY marker appears
-WAKE_RETRY_S   = 30    # blind power_on re-send this far into the READY wait
-                       # (the gaming PC has no Ex-Link). Past the healthy
-                       # envelope: launches reach READY in ~9-20 s.
-ENTER_REDISPATCH = 1   # extra Enter dispatches after a DETECTED death, not a
-                       # timeout. All three recorded failures (2026-08-13
-                       # 17:20, 08-16 17:56, 08-19 01:18) were TVs that acked
-                       # power_on and stayed dark, burning the full window on
-                       # an already-exited Enter. The retry gets a fresh one.
-                       # Budget: 08-19's Enter died at 48.3 s (turn 7402df) and
-                       # the K15 waited another 71 s on a dead task, so
-                       # detection lands ~50 s in and a twice-failing launch
-                       # takes ~170 s instead of 121 s. Safe to redispatch
-                       # because Enter's abort path leaves OFFICE topology
-                       # behind - the clean state a fresh Enter wants.
-ENTER_SETTLE_S = 25    # how long a NOTREADY stays unremarkable: outlasts the
-                       # gap between schtasks /Run returning (task only
-                       # TRIGGERED) and it reading as running, plus the slowest
-                       # launch that ever worked (19.8 s).
-WATCH_POLL_S   = 5
-WATCH_FAILS    = 3     # consecutive ssh failures (ssh() raises) = session
-                       # dead. Low on purpose: a true sleep restores the TV in
-                       # ~20-30 s, and a false positive only costs a desk-side
-                       # relaunch (the Puck stays claimed, chord deaf).
-TV_WAIT_S      = 30    # how long the enter_died rescue waits for the set to
-                       # REPORT "on" before spending its redispatch or failing
-                       # with the TV named. State flips ~5 s after an accepted
-                       # frame (2026-08-19: standby t+1..4 s, on t+5 s).
-TV_POKE_S      = 6     # power_on re-send interval while the set answers
-                       # not-on; just past the ~5 s flip lag. power_on is
-                       # discrete, safe to repeat.
-TV_UNKNOWN_N   = 3     # unreadable answers before standing down to the blind
-                       # path. None is UNKNOWN, never "off" (Wi-Fi blip, IP
-                       # drift, no tvIp). Reads ride existing loops, ~0.5 s each.
+PORT_WAIT_S = 90  # PC power-on/resume until sshd answers
+ENTER_ATTEMPTS = 60  # ~1/s; also covers waiting out logon after a cold boot
+READY_WAIT_S = 120  # Enter dispatch until the READY marker appears
+WAKE_RETRY_S = 30  # blind power_on re-send this far into the READY wait
+# (the gaming PC has no Ex-Link). Past the healthy
+# envelope: launches reach READY in ~9-20 s.
+ENTER_REDISPATCH = 1  # extra Enter dispatches after a DETECTED death, not a
+# timeout. All three recorded failures (2026-08-13
+# 17:20, 08-16 17:56, 08-19 01:18) were TVs that acked
+# power_on and stayed dark, burning the full window on
+# an already-exited Enter. The retry gets a fresh one.
+# Budget: 08-19's Enter died at 48.3 s (turn 7402df) and
+# the K15 waited another 71 s on a dead task, so
+# detection lands ~50 s in and a twice-failing launch
+# takes ~170 s instead of 121 s. Safe to redispatch
+# because Enter's abort path leaves OFFICE topology
+# behind - the clean state a fresh Enter wants.
+ENTER_SETTLE_S = 25  # how long a NOTREADY stays unremarkable: outlasts the
+# gap between schtasks /Run returning (task only
+# TRIGGERED) and it reading as running, plus the slowest
+# launch that ever worked (19.8 s).
+WATCH_POLL_S = 5
+WATCH_FAILS = 3  # consecutive ssh failures (ssh() raises) = session
+# dead. Low on purpose: a true sleep restores the TV in
+# ~20-30 s, and a false positive only costs a desk-side
+# relaunch (the Puck stays claimed, chord deaf).
+TV_WAIT_S = 30  # how long the enter_died rescue waits for the set to
+# REPORT "on" before spending its redispatch or failing
+# with the TV named. State flips ~5 s after an accepted
+# frame (2026-08-19: standby t+1..4 s, on t+5 s).
+TV_POKE_S = 6  # power_on re-send interval while the set answers
+# not-on; just past the ~5 s flip lag. power_on is
+# discrete, safe to repeat.
+TV_UNKNOWN_N = 3  # unreadable answers before standing down to the blind
+# path. None is UNKNOWN, never "off" (Wi-Fi blip, IP
+# drift, no tvIp). Reads ride existing loops, ~0.5 s each.
 
 log = cglib.make_log("launch")
 
@@ -61,7 +62,7 @@ class Cancelled(BaseException):
     (launch_aborted, lock released, no last_error), not launch_failed."""
 
     def __init__(self, by: str) -> None:
-        self.by = by                    # the CANCELLING intent's turn, or ""
+        self.by = by  # the CANCELLING intent's turn, or ""
         super().__init__(by)
 
 
@@ -71,7 +72,7 @@ def raise_if_cancelled() -> None:
     try:
         by = cglib.CANCEL.read_text().strip()
     except OSError:
-        return                          # no marker - the overwhelming case
+        return  # no marker - the overwhelming case
     try:
         cglib.CANCEL.unlink(missing_ok=True)
     except OSError:
@@ -143,14 +144,16 @@ class TvEvidence:
     does not predict a refusal: failures at 11.8-20.0 h since the last
     session, successes at 22+ h."""
 
-    def __init__(self, ip: str | None, first: str | None, ms: Callable[[], int]) -> None:
+    def __init__(
+        self, ip: str | None, first: str | None, ms: Callable[[], int]
+    ) -> None:
         self.ip = ip
-        self.confirmed = False      # the set answered "on" at least once
-        self.gave_up = False        # stood down: TV_UNKNOWN_N unreadable answers
-        self.last = first           # last raw answer, for the error text
+        self.confirmed = False  # the set answered "on" at least once
+        self.gave_up = False  # stood down: TV_UNKNOWN_N unreadable answers
+        self.last = first  # last raw answer, for the error text
         self._unknowns = 0
         self._poke_at = time.time() + TV_POKE_S
-        self._ms = ms               # elapsed-since-intent, for the milestones
+        self._ms = ms  # elapsed-since-intent, for the milestones
 
     def undecided(self) -> bool:
         """A tvIp rig whose set has neither answered "on" nor been given up on."""
@@ -185,8 +188,12 @@ class TvEvidence:
             self._poke_at = time.time() + TV_POKE_S
 
 
-def wait_ready(turn: str, evidence: TvEvidence,
-               dispatch_enter: Callable[..., bool], ms: Callable[[], int]) -> None:
+def wait_ready(
+    turn: str,
+    evidence: TvEvidence,
+    dispatch_enter: Callable[..., bool],
+    ms: Callable[[], int],
+) -> None:
     """Poll the host until the READY marker echoes `turn`, re-dispatching a
     DETECTED dead Enter once (ENTER_REDISPATCH); raises once the window
     closes. `dispatch_enter` is start()'s closure, so its enter_sent reaches
@@ -215,7 +222,8 @@ def wait_ready(turn: str, evidence: TvEvidence,
             # The marker echoes the turn Enter was given: ours = ready.
             if st == turn:
                 log("host_ready", status=st, dur_ms=ms(), verified=True)
-                ready = True; break
+                ready = True
+                break
             if st != "NOTREADY":
                 if events.valid_turn(st):
                     # Someone else's turn: a stale marker. Keep waiting,
@@ -227,16 +235,20 @@ def wait_ready(turn: str, evidence: TvEvidence,
                 else:
                     # ISO timestamp: a PC deployed before turn-stamping.
                     # Accept, but record unverified.
-                    log("host_ready", status=st, dur_ms=ms(),
-                        verified=False)
-                    ready = True; break
+                    log("host_ready", status=st, dur_ms=ms(), verified=False)
+                    ready = True
+                    break
         except Exception as e:
             log.warn("status_poll_failed", err=str(e))
-            time.sleep(1); continue
+            time.sleep(1)
+            continue
         # Still NOTREADY. An Enter no longer running will never write the
         # marker, so the rest of the window is dead time: re-dispatch.
-        if (st == "NOTREADY" and time.time() >= settle_at
-                and gamepc.enter_running() is False):
+        if (
+            st == "NOTREADY"
+            and time.time() >= settle_at
+            and gamepc.enter_running() is False
+        ):
             # Enter writes the marker and THEN exits, so one (NOTREADY,
             # task-idle) pair can be those instants read in the wrong
             # order. Demand it twice: a marker that landed in between is
@@ -260,7 +272,8 @@ def wait_ready(turn: str, evidence: TvEvidence,
                             f"TV never reported on (PowerState="
                             f"{evidence.last!r} after {TV_WAIT_S}s of asking) "
                             "- the set is refusing the wake, not "
-                            "missing the frame")
+                            "missing the frame"
+                        )
                     cglib.touch_lock()
                     raise_if_cancelled()
                     evidence.poll()
@@ -276,7 +289,8 @@ def wait_ready(turn: str, evidence: TvEvidence,
         else:
             idle_seen = 0
         time.sleep(1)
-    if not ready: raise RuntimeError("host never reported READY")
+    if not ready:
+        raise RuntimeError("host never reported READY")
 
 
 def start(appid: str | None = None, turn: str | None = None) -> int:
@@ -300,11 +314,13 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     # The pre-read only shapes the log lines - acquire_lock is the arbiter.
     age = cglib.lock_age()
     if cglib.session_active(age):
-        log("launch_busy", lock_age_s=round(age)); return 1  # type: ignore[arg-type] # active implies aged
+        log("launch_busy", lock_age_s=round(age or 0))
+        return 1  # type: ignore[arg-type] # active implies aged
     if age is not None:
         log.warn("lock_recycled", lock_age_s=round(age))
     if not cglib.acquire_lock(f"{turn} {os.getpid()}"):
-        log("launch_busy", reason="lost_acquire_race"); return 1
+        log("launch_busy", reason="lost_acquire_race")
+        return 1
     # The Cancelled handler keys on this: a cancel consumed after our enter
     # went out may have raced the exit that wrote it.
     enter_sent = False
@@ -336,15 +352,19 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         # commands, and a valid-checksum guess is not safe to fire at a TV
         # someone is watching.
         tv0 = tv.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
-        log("launch_start", appid=appid,
-            **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}))
+        log(
+            "launch_start",
+            appid=appid,
+            **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
+        )
         exlink("power_on")
         # A set already on belongs to whoever was watching it - power_on was a
         # no-op there, and powering it off on failure would end their show. No
         # tvIp means no evidence, and the launch's own power_on is the guess.
         tv_woken = tv0 != "on"
         wol()
-        if not wait_port(): raise RuntimeError("gaming PC never became reachable")
+        if not wait_port():
+            raise RuntimeError("gaming PC never became reachable")
         log("ssh_up", dur_ms=ms())
 
         evidence = TvEvidence(tv_ip, tv0, ms)
@@ -362,8 +382,9 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
                     answer = gamepc.enter()
                     if answer == "OK":
                         enter_sent = True
-                        log(event, dur_ms=ms()); return True
-                    if answer not in refused:   # NOTASK:Enter / FAILED:<code> / DENIED
+                        log(event, dur_ms=ms())
+                        return True
+                    if answer not in refused:  # NOTASK:Enter / FAILED:<code> / DENIED
                         log.warn("enter_refused", answer=answer)
                         refused.add(answer)
                 except Exception as e:
@@ -374,7 +395,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         if not dispatch_enter("enter_dispatched"):
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
-        cglib.LAST_ERROR.unlink(missing_ok=True)   # success supersedes any old failure
+        cglib.LAST_ERROR.unlink(missing_ok=True)  # success supersedes any old failure
         exlink(cglib.config()["tvGamingCmd"])
         if appid:
             # Voice "play <title>" from cold. Best-effort - Big Picture up is
@@ -387,7 +408,8 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
                 emit("game_launch", appid=appid, result=answer)
             except Exception as e:
                 log.warn("game_launch_failed", appid=appid, err=str(e))
-        log("session_gaming", dur_ms=ms()); watch(expected=turn)
+        log("session_gaming", dur_ms=ms())
+        watch(expected=turn)
     except Exception as e:
         log.error("launch_failed", err=str(e), dur_ms=ms())
         try:
@@ -395,7 +417,8 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             cglib.LAST_ERROR.write_text(str(e))
         except OSError:
             pass
-        abort_teardown(tv_woken); return 1
+        abort_teardown(tv_woken)
+        return 1
     except BaseException as e:
         # Ctrl-C is a KeyboardInterrupt, not an Exception, so the handler above
         # never sees it; without this clause the lane dies silently, holding
@@ -414,7 +437,8 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
                 log("exit_dispatched", reason="cancel_after_enter")
             except Exception:
                 pass
-        abort_teardown(tv_woken); return 1
+        abort_teardown(tv_woken)
+        return 1
     return 0
 
 
@@ -429,9 +453,11 @@ def watch(expected: str | None = None) -> None:
         time.sleep(WATCH_POLL_S)
         cglib.touch_lock()
         try:
-            st = gamepc.status(); fails = 0
+            st = gamepc.status()
+            fails = 0
             if st == "NOTREADY":
-                log("session_ended", reason="host"); break
+                log("session_ended", reason="host")
+                break
             if expected and events.valid_turn(st) and st != expected:
                 log.warn("session_ended", reason="superseded", status=st)
                 return
@@ -459,7 +485,7 @@ def watch(expected: str | None = None) -> None:
 
 
 def reconcile() -> int:
-    """Run once at K15 startup (Start-Listener.bat), before the listener.
+    """Run once at K15 startup, by the listener's supervisor before the listener.
 
     A surviving session lock means the watch loop died with us: resume
     watching a live session so its end still restores the TV, or clear the
@@ -471,7 +497,7 @@ def reconcile() -> int:
     events.context(turn=events.new_turn())
     log("reconcile_found")
     answered = False
-    for _ in range(3):                  # boot-time network may need a moment
+    for _ in range(3):  # boot-time network may need a moment
         try:
             st = gamepc.status()
             answered = True
@@ -483,11 +509,10 @@ def reconcile() -> int:
                 # Whatever the marker says now IS this session's identity.
                 watch(expected=st if events.valid_turn(st) else None)
                 return 0
-            break                       # definitive NOTREADY - session is dead
+            break  # definitive NOTREADY - session is dead
         except Exception:
             time.sleep(2)
-    log.warn("reconcile_cleared",
-             reason="dead_session" if answered else "unreachable")
+    log.warn("reconcile_cleared", reason="dead_session" if answered else "unreachable")
     # Force-clear, not release_lock: the owner is known dead and its pid would
     # never match ours.
     cglib.LOCK.unlink(missing_ok=True)
@@ -504,7 +529,7 @@ def take_turn(argv: list[str]) -> str | None:
     if "--turn" in argv:
         i = argv.index("--turn")
         turn = argv[i + 1] if i + 1 < len(argv) else None
-        del argv[i:i + 2]
+        del argv[i : i + 2]
         return turn
     return None
 
@@ -515,7 +540,7 @@ if __name__ == "__main__":
     cmd = argv[0] if argv else "start"
     if cmd == "start":
         if len(argv) > 1 and not argv[1].isdigit():
-            sys.exit(usage())               # a non-digit appid is a caller bug
+            sys.exit(usage())  # a non-digit appid is a caller bug
         appid = argv[1] if len(argv) > 1 else None
         sys.exit(start(appid, turn))
     elif cmd == "reconcile":

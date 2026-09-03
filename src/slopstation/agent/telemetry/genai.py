@@ -23,10 +23,10 @@ text lane sets its own at span creation.
 tests/test_genai.py pins the attribute names on both sides. It is the only
 thing that will notice a pipecat upgrade quietly emptying the dashboard.
 """
+
 from __future__ import annotations
 
 import json
-
 from typing import Any
 
 # Sentry derives a gen_ai span's op from `sentry.op`, which must read
@@ -35,16 +35,17 @@ from typing import Any
 # spans; those stay plain spans - visible in the waterfall, absent from the
 # Agents dashboard - which is right, because they are not model calls Sentry
 # can cost or replay.
-CHAT_OPS = frozenset(("chat", "embeddings", "generate_content",
-                      "text_completion"))
+CHAT_OPS = frozenset(("chat", "embeddings", "generate_content", "text_completion"))
 
 # Pipecat's attribute -> Sentry's. Messages and tools are already JSON strings
 # by the time pipecat sets them and Sentry accepts the legacy {role, content}
 # message form, so these pass through verbatim instead of being rebuilt
 # element by element.
-PASSTHROUGH = (("input", "gen_ai.input.messages"),
-               ("tools", "gen_ai.tool.definitions"),
-               ("metrics.ttfb", "gen_ai.response.time_to_first_chunk"))
+PASSTHROUGH = (
+    ("input", "gen_ai.input.messages"),
+    ("tools", "gen_ai.tool.definitions"),
+    ("metrics.ttfb", "gen_ai.response.time_to_first_chunk"),
+)
 
 
 # The ids the next spans are stamped with. A module slot and not a ContextVar:
@@ -99,8 +100,8 @@ def sentry_attributes(attrs: dict, conversation: dict | None = None) -> dict:
     out = attrs.get("output")
     if out and "gen_ai.output.messages" not in attrs:
         add["gen_ai.output.messages"] = json.dumps(
-            [{"role": "assistant",
-              "parts": [{"type": "text", "content": str(out)}]}])
+            [{"role": "assistant", "parts": [{"type": "text", "content": str(out)}]}]
+        )
     return add
 
 
@@ -124,6 +125,7 @@ def reshape(span):
         if not add:
             return span
         from opentelemetry.sdk.trace import ReadableSpan
+
         return ReadableSpan(
             name=span_name(attrs) or span.name,
             context=span.context,

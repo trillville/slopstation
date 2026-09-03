@@ -1,8 +1,8 @@
-"""Blind test: the frozen EXLINK_FRAMES literals, the checksum builder, and
+"""The frozen EXLINK_FRAMES literals, the checksum builder, and
 vol_set clamping must agree - every table entry is rebuilt from its
-(c1, c2, c3, value) spec. Run:
-    pytest tests/test_exlink.py
+(c1, c2, c3, value) spec.
 """
+
 import sys
 import time
 
@@ -10,21 +10,22 @@ from slopstation import tv
 
 # name -> (c1, c2, c3, value), straight from the official worksheet rows.
 SPECS = {
-    "power_on":    (0x00, 0x00, 0x00, 0x02),
-    "power_off":   (0x00, 0x00, 0x00, 0x01),
-    "hdmi1":       (0x0A, 0x00, 0x05, 0x00),
-    "hdmi2":       (0x0A, 0x00, 0x05, 0x01),
-    "hdmi3":       (0x0A, 0x00, 0x05, 0x02),
-    "hdmi4":       (0x0A, 0x00, 0x05, 0x03),
-    "vol_up":      (0x01, 0x00, 0x01, 0x00),
-    "vol_down":    (0x01, 0x00, 0x02, 0x00),
+    "power_on": (0x00, 0x00, 0x00, 0x02),
+    "power_off": (0x00, 0x00, 0x00, 0x01),
+    "hdmi1": (0x0A, 0x00, 0x05, 0x00),
+    "hdmi2": (0x0A, 0x00, 0x05, 0x01),
+    "hdmi3": (0x0A, 0x00, 0x05, 0x02),
+    "hdmi4": (0x0A, 0x00, 0x05, 0x03),
+    "vol_up": (0x01, 0x00, 0x01, 0x00),
+    "vol_down": (0x01, 0x00, 0x02, 0x00),
     "mute_toggle": (0x02, 0x00, 0x00, 0x00),
 }
 
 
 def test_exlink():
     assert set(SPECS) == set(tv.EXLINK_FRAMES), (
-        f"table/spec drift: {set(SPECS) ^ set(tv.EXLINK_FRAMES)}")
+        f"table/spec drift: {set(SPECS) ^ set(tv.EXLINK_FRAMES)}"
+    )
     for name, spec in SPECS.items():
         built = tv.exlink_frame(*spec)
         frozen = tv.EXLINK_FRAMES[name]
@@ -33,11 +34,12 @@ def test_exlink():
     # Worksheet's own example: volume 20 -> checksum 0xC1.
     assert tv.vol_set_frame(20) == "082201000014c1"
     assert tv.vol_set_frame(0) == tv.exlink_frame(0x01, 0x00, 0x00, 0)
-    assert tv.vol_set_frame(-5) == tv.vol_set_frame(0)      # clamp low
-    assert tv.vol_set_frame(250) == tv.vol_set_frame(100)   # clamp high
+    assert tv.vol_set_frame(-5) == tv.vol_set_frame(0)  # clamp low
+    assert tv.vol_set_frame(250) == tv.vol_set_frame(100)  # clamp high
 
     # COM contention: retry once after a settle, then propagate.
     import types
+
     calls = {"n": 0}
 
     class FakePort:
@@ -45,10 +47,18 @@ def test_exlink():
             calls["n"] += 1
             if calls["n"] == 1:
                 raise fake_serial.SerialException("busy")
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def write(self, b): pass
-        def read(self, n): return bytes.fromhex("030cf1")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def write(self, b):
+            pass
+
+        def read(self, n):
+            return bytes.fromhex("030cf1")
 
     fake_serial = types.ModuleType("serial")
     fake_serial.SerialException = type("SerialException", (Exception,), {})
@@ -61,27 +71,28 @@ def test_exlink():
         assert calls["n"] == 2, "should have retried once"
         calls["n"] = 0
         FakePort.__init__ = lambda self, *a, **k: (_ for _ in ()).throw(
-            fake_serial.SerialException("always"))
+            fake_serial.SerialException("always")
+        )
         try:
             tv.exlink_send_hex("082202000000d4", "COMX")
-            assert False, "second failure must propagate"
+            raise AssertionError("second failure must propagate")
         except fake_serial.SerialException:
             pass
 
         # --- ack validation: 030cf1 or the command didn't land
         FakePort.__init__ = lambda self, *a, **k: None
 
-        FakePort.read = lambda self, n: bytes.fromhex("030cff")   # NAK
+        FakePort.read = lambda self, n: bytes.fromhex("030cff")  # NAK
         try:
             tv.exlink_send_hex("082202000000d4", "COMX")
-            assert False, "NAK must raise ExlinkNak"
+            raise AssertionError("NAK must raise ExlinkNak")
         except tv.ExlinkNak:
             pass
 
-        FakePort.read = lambda self, n: b""                       # TV silent/off
+        FakePort.read = lambda self, n: b""  # TV silent/off
         try:
             tv.exlink_send_hex("082202000000d4", "COMX")
-            assert False, "missing ack must raise ExlinkNak"
+            raise AssertionError("missing ack must raise ExlinkNak")
         except tv.ExlinkNak:
             pass
     finally:
@@ -92,6 +103,3 @@ def test_exlink():
         b = bytes.fromhex(hexs)
         assert len(b) == 7, f"{name}: {len(b)} bytes"
         assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"
-
-    print(f"OK - {len(SPECS)} frames cross-checked, vol_set clamps, "
-          f"ack validation raises on NAK/silence")

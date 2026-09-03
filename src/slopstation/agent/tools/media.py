@@ -7,17 +7,29 @@ import argparse
 import datetime
 import json
 from pathlib import Path
+from typing import Any
 
-
-from slopstation import cglib
-from slopstation.agent.tools.disk_health import (DISK_POLL_S, FREE_WARN_BYTES,
-                                     DiskHealthMonitor)
-from slopstation.agent.tools.media_clients import (ArrClient, MediaConfigurationError, MediaError,
-                                       _clean_text, _kind, _qbit_from_config,
-                                       _root_and_profile_gaps)
-from slopstation.agent.tools.media_proton import (ProtonPortMonitor, read_proton_port_state)
-from slopstation.agent.tools.media_health import (HEALTH_POLL_S, MediaHealthMonitor)
+from slopstation import cglib, paths
+from slopstation.agent.tools.disk_health import (
+    DISK_POLL_S,
+    FREE_WARN_BYTES,
+    DiskHealthMonitor,
+)
 from slopstation.agent.tools.media_checks import media_doctor
+from slopstation.agent.tools.media_clients import (
+    ArrClient,
+    MediaConfigurationError,
+    MediaError,
+    _clean_text,
+    _kind,
+    _qbit_from_config,
+    _root_and_profile_gaps,
+)
+from slopstation.agent.tools.media_health import HEALTH_POLL_S, MediaHealthMonitor
+from slopstation.agent.tools.media_proton import (
+    ProtonPortMonitor,
+    read_proton_port_state,
+)
 
 PRESETS = ("default", "1080p", "2160p")
 
@@ -40,7 +52,10 @@ class MediaService:
         client = self._client(kind)
         return self._existing(
             client.get(spec["resource"], {spec["id_key"]: catalog_id}),
-            spec["id_key"], catalog_id, client.name)
+            spec["id_key"],
+            catalog_id,
+            client.name,
+        )
 
     def find(self, kind, query):
         query = _clean_text(query)
@@ -65,8 +80,14 @@ class MediaService:
             title = _clean_text(row.get("title"))
             if catalog_id <= 0 or not title:
                 continue
-            out.append({public_key: catalog_id, "title": title, "year": year,
-                        "status": _clean_text(row.get("status"), 40)})
+            out.append(
+                {
+                    public_key: catalog_id,
+                    "title": title,
+                    "year": year,
+                    "status": _clean_text(row.get("status"), 40),
+                }
+            )
             if len(out) == 5:
                 break
         return out
@@ -80,30 +101,33 @@ class MediaService:
             raise MediaError("catalog id must be positive")
         row = self._library_row(kind, catalog_id)
         if row is None:
-            return {"kind": kind, "catalog_id": catalog_id,
-                    "in_library": False}
+            return {"kind": kind, "catalog_id": catalog_id, "in_library": False}
         if kind == "movie":
-            return {"kind": kind, "catalog_id": catalog_id,
-                    "in_library": True,
-                    "title": _clean_text(row.get("title"))
-                    or f"TMDB {catalog_id}",
-                    "year": row.get("year"),
-                    "available": bool(row.get("hasFile"))}
+            return {
+                "kind": kind,
+                "catalog_id": catalog_id,
+                "in_library": True,
+                "title": _clean_text(row.get("title")) or f"TMDB {catalog_id}",
+                "year": row.get("year"),
+                "available": bool(row.get("hasFile")),
+            }
         series = row
         rows = self.sonarr.get("episode", {"seriesId": int(series["id"])})
-        seasons = {}
+        seasons: dict[int, dict] = {}
         for episode in self._target_episodes(rows, monitored_only=False):
             number = int(episode.get("seasonNumber", 0) or 0)
-            row = seasons.setdefault(number, {"season": number, "have": 0,
-                                              "aired": 0})
+            row = seasons.setdefault(number, {"season": number, "have": 0, "aired": 0})
             row["aired"] += 1
             if episode.get("hasFile"):
                 row["have"] += 1
-        return {"kind": kind, "catalog_id": catalog_id, "in_library": True,
-                "title": _clean_text(series.get("title"))
-                or f"TVDB {catalog_id}",
-                "year": series.get("year"),
-                "seasons": [seasons[number] for number in sorted(seasons)]}
+        return {
+            "kind": kind,
+            "catalog_id": catalog_id,
+            "in_library": True,
+            "title": _clean_text(series.get("title")) or f"TVDB {catalog_id}",
+            "year": series.get("year"),
+            "seasons": [seasons[number] for number in sorted(seasons)],
+        }
 
     def profiles(self):
         return {
@@ -117,25 +141,34 @@ class MediaService:
         profiles = self.profiles()
         checks = {}
         for kind, client, root_key, presets_key in (
-                ("movie", self.radarr, "movieRoot", "moviePresets"),
-                ("series", self.sonarr, "seriesRoot", "seriesPresets")):
+            ("movie", self.radarr, "movieRoot", "moviePresets"),
+            ("series", self.sonarr, "seriesRoot", "seriesPresets"),
+        ):
             rows = client.get("rootfolder")
             if not isinstance(rows, list):
                 raise MediaError(f"{client.name} returned invalid root folders")
-            roots = [_clean_text(row.get("path")) for row in rows
-                     if isinstance(row, dict) and row.get("path")]
+            roots = [
+                _clean_text(row.get("path"))
+                for row in rows
+                if isinstance(row, dict) and row.get("path")
+            ]
             wanted_root = str(self.cfg[root_key])
             root_exists, missing_profiles = _root_and_profile_gaps(
-                roots, profiles[kind], wanted_root,
-                sorted(set(self.cfg[presets_key].values())))
+                roots,
+                profiles[kind],
+                wanted_root,
+                sorted(set(self.cfg[presets_key].values())),
+            )
             checks[kind] = {
                 "configured_root": wanted_root,
                 "root_exists": root_exists,
                 "missing_profiles": missing_profiles,
             }
         return {
-            "ok": all(check["root_exists"] and not check["missing_profiles"]
-                      for check in checks.values()),
+            "ok": all(
+                check["root_exists"] and not check["missing_profiles"]
+                for check in checks.values()
+            ),
             "services": status,
             "checks": checks,
         }
@@ -145,8 +178,11 @@ class MediaService:
         rows = client.get("qualityprofile")
         if not isinstance(rows, list):
             raise MediaError(f"{client.name} returned invalid quality profiles")
-        return [_clean_text(r.get("name")) for r in rows
-                if isinstance(r, dict) and r.get("name")]
+        return [
+            _clean_text(r.get("name"))
+            for r in rows
+            if isinstance(r, dict) and r.get("name")
+        ]
 
     def _profile(self, kind, preset):
         preset = str(preset or "default").lower()
@@ -154,21 +190,25 @@ class MediaService:
         if preset not in mapping:
             allowed = ", ".join(sorted(mapping)) or "none"
             raise MediaConfigurationError(
-                f"unknown {kind} preset {preset}; configured presets: {allowed}")
+                f"unknown {kind} preset {preset}; configured presets: {allowed}"
+            )
         wanted = str(mapping[preset])
         client = self._client(kind)
         rows = client.get("qualityprofile")
         if not isinstance(rows, list):
             raise MediaError(f"{client.name} returned invalid quality profiles")
         for row in rows:
-            if (isinstance(row, dict)
-                    and str(row.get("name", "")).casefold() == wanted.casefold()):
+            if (
+                isinstance(row, dict)
+                and str(row.get("name", "")).casefold() == wanted.casefold()
+            ):
                 try:
                     return int(row["id"]), wanted
                 except (KeyError, TypeError, ValueError) as e:
                     raise MediaError(f"{client.name} profile has no id") from e
         raise MediaConfigurationError(
-            f"{client.name} has no quality profile named {wanted}")
+            f"{client.name} has no quality profile named {wanted}"
+        )
 
     @staticmethod
     def _one(value, authority, resource):
@@ -199,8 +239,8 @@ class MediaService:
             raise MediaError("tmdb_id must be positive")
         profile_id, profile_name = self._profile("movie", preset)
         existing = self._existing(
-            self.radarr.get("movie", {"tmdbId": tmdb_id}),
-            "tmdbId", tmdb_id, "Radarr")
+            self.radarr.get("movie", {"tmdbId": tmdb_id}), "tmdbId", tmdb_id, "Radarr"
+        )
 
         if existing is not None:
             movie = dict(existing)
@@ -211,13 +251,16 @@ class MediaService:
             except (TypeError, ValueError):
                 current_profile_id = 0
             if movie.get("hasFile") and current_profile_id == profile_id:
-                return self._submission("movie", movie_id, title, tmdb_id,
-                                        preset, profile_name, True)
+                return self._submission(
+                    "movie", movie_id, title, tmdb_id, preset, profile_name, True
+                )
             baseline_file_id = None
             if movie.get("hasFile"):
                 rows = self.radarr.get("moviefile", {"movieId": movie_id})
                 if not isinstance(rows, list) or not rows:
-                    raise MediaError("Radarr reports a movie file but did not return it")
+                    raise MediaError(
+                        "Radarr reports a movie file but did not return it"
+                    )
                 try:
                     baseline_file_id = int(rows[0]["id"])
                 except (KeyError, TypeError, ValueError) as e:
@@ -227,7 +270,9 @@ class MediaService:
         else:
             candidate = self._one(
                 self.radarr.get("movie/lookup/tmdb", {"tmdbId": tmdb_id}),
-                "Radarr", "movie lookup")
+                "Radarr",
+                "movie lookup",
+            )
             payload = dict(candidate)
             payload.pop("id", None)
             payload.update(
@@ -237,20 +282,31 @@ class MediaService:
                 minimumAvailability="released",
                 addOptions={"searchForMovie": False, "addMethod": "manual"},
             )
-            movie = self._one(self.radarr.post("movie", payload),
-                              "Radarr", "created movie")
+            movie = self._one(
+                self.radarr.post("movie", payload), "Radarr", "created movie"
+            )
             movie_id = int(movie["id"])
             title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
             baseline_file_id = None
         command = self._one(
-            self.radarr.post("command", {"name": "MoviesSearch",
-                                          "movieIds": [movie_id]}),
-            "Radarr", "search command")
+            self.radarr.post(
+                "command", {"name": "MoviesSearch", "movieIds": [movie_id]}
+            ),
+            "Radarr",
+            "search command",
+        )
         command_ids = [int(command["id"])]
-        return self._submission("movie", movie_id, title, tmdb_id, preset,
-                                profile_name, False,
-                                baseline_file_id=baseline_file_id,
-                                command_ids=command_ids)
+        return self._submission(
+            "movie",
+            movie_id,
+            title,
+            tmdb_id,
+            preset,
+            profile_name,
+            False,
+            baseline_file_id=baseline_file_id,
+            command_ids=command_ids,
+        )
 
     @staticmethod
     def _seasons(value):
@@ -291,17 +347,27 @@ class MediaService:
     def _search_series(self, series_id, seasons):
         if seasons is None:
             command = self._one(
-                self.sonarr.post("command", {"name": "SeriesSearch",
-                                              "seriesId": series_id}),
-                "Sonarr", "search command")
+                self.sonarr.post(
+                    "command", {"name": "SeriesSearch", "seriesId": series_id}
+                ),
+                "Sonarr",
+                "search command",
+            )
             return [int(command["id"])]
         command_ids = []
         for season in seasons:
             command = self._one(
-                self.sonarr.post("command", {"name": "SeasonSearch",
-                                              "seriesId": series_id,
-                                              "seasonNumber": season}),
-                "Sonarr", "search command")
+                self.sonarr.post(
+                    "command",
+                    {
+                        "name": "SeasonSearch",
+                        "seriesId": series_id,
+                        "seasonNumber": season,
+                    },
+                ),
+                "Sonarr",
+                "search command",
+            )
             command_ids.append(int(command["id"]))
         return command_ids
 
@@ -322,11 +388,13 @@ class MediaService:
             isinstance(row, dict)
             and row.get("enable", True)
             and row.get("enableAutomaticSearch", True)
-            for row in indexers)
+            for row in indexers
+        )
         blocked = any(
             isinstance(row, dict)
             and str(row.get("source", "")).casefold() == "indexersearchcheck"
-            for row in health)
+            for row in health
+        )
         return enabled and not blocked
 
     def abandon_missing(self, operation):
@@ -334,8 +402,7 @@ class MediaService:
         kind = operation.get("kind")
         if kind == "movie_acquisition":
             movie_id = int(operation["external_ref"])
-            movie = self._one(self.radarr.get(f"movie/{movie_id}"),
-                              "Radarr", "movie")
+            movie = self._one(self.radarr.get(f"movie/{movie_id}"), "Radarr", "movie")
             if movie.get("hasFile"):
                 return {"have": 1, "missing": []}
             unmonitored = dict(movie)
@@ -357,24 +424,33 @@ class MediaService:
             except (KeyError, TypeError, ValueError) as e:
                 raise MediaError("Sonarr episode has no id") from e
         if episode_ids:
-            self.sonarr.put("episode/monitor", {
-                "episodeIds": sorted(episode_ids), "monitored": False})
-        by_season = {}
+            self.sonarr.put(
+                "episode/monitor",
+                {"episodeIds": sorted(episode_ids), "monitored": False},
+            )
+        by_season: dict = {}
         for row in missing:
             number = int(row.get("seasonNumber", 0) or 0)
             by_season[number] = by_season.get(number, 0) + 1
-        return {"have": len(targets) - len(missing),
-                "missing": [{"season": number, "episodes": by_season[number]}
-                            for number in sorted(by_season)]}
+        return {
+            "have": len(targets) - len(missing),
+            "missing": [
+                {"season": number, "episodes": by_season[number]}
+                for number in sorted(by_season)
+            ],
+        }
 
     def retry_search(self, operation):
         kind = operation.get("kind")
         external_ref = int(operation["external_ref"])
         if kind == "movie_acquisition":
             command = self._one(
-                self.radarr.post("command", {"name": "MoviesSearch",
-                                              "movieIds": [external_ref]}),
-                "Radarr", "search command")
+                self.radarr.post(
+                    "command", {"name": "MoviesSearch", "movieIds": [external_ref]}
+                ),
+                "Radarr",
+                "search command",
+            )
             return [int(command["id"])]
         if kind == "series_acquisition":
             metadata = operation.get("metadata") or {}
@@ -387,8 +463,11 @@ class MediaService:
         if not isinstance(rows, list) or not rows:
             return False
         wanted = set(seasons or [])
-        available = {int(row.get("seasonNumber", 0) or 0) for row in rows
-                     if isinstance(row, dict)}
+        available = {
+            int(row.get("seasonNumber", 0) or 0)
+            for row in rows
+            if isinstance(row, dict)
+        }
         return bool(available - {0}) if not wanted else wanted <= available
 
     def _monitor_series_episodes(self, rows, seasons):
@@ -410,15 +489,19 @@ class MediaService:
                 raise MediaError("Sonarr episode has no id")
             episode_ids.append(episode_id)
         if episode_ids:
-            self.sonarr.put("episode/monitor", {
-                "episodeIds": episode_ids,
-                "monitored": True,
-            })
+            self.sonarr.put(
+                "episode/monitor",
+                {
+                    "episodeIds": episode_ids,
+                    "monitored": True,
+                },
+            )
 
     def dispatch_pending_series_search(self, operation):
         metadata = operation.get("metadata") or {}
-        if (operation.get("kind") != "series_acquisition"
-                or not metadata.get("search_pending")):
+        if operation.get("kind") != "series_acquisition" or not metadata.get(
+            "search_pending"
+        ):
             return False
         series_id = int(operation["external_ref"])
         seasons = self._seasons(metadata.get("seasons"))
@@ -438,8 +521,8 @@ class MediaService:
         seasons = self._seasons(seasons)
         profile_id, profile_name = self._profile("series", preset)
         existing = self._existing(
-            self.sonarr.get("series", {"tvdbId": tvdb_id}),
-            "tvdbId", tvdb_id, "Sonarr")
+            self.sonarr.get("series", {"tvdbId": tvdb_id}), "tvdbId", tvdb_id, "Sonarr"
+        )
         search_pending = False
         command_ids = []
 
@@ -454,8 +537,7 @@ class MediaService:
             baseline_episode_files = None
             if profile_changed:
                 rows = self.sonarr.get("episode", {"seriesId": series_id})
-                targets = self._target_episodes(rows, seasons,
-                                                monitored_only=False)
+                targets = self._target_episodes(rows, seasons, monitored_only=False)
                 baseline_episode_files = {}
                 for episode in targets:
                     if not episode.get("hasFile"):
@@ -470,11 +552,19 @@ class MediaService:
             series = self._set_series_seasons(series, seasons)
             self.sonarr.put(f"series/{series_id}", series)
             observation = self.observe_series(
-                series_id, seasons,
-                baseline_episode_files=baseline_episode_files)
+                series_id, seasons, baseline_episode_files=baseline_episode_files
+            )
             if observation["complete"]:
-                return self._submission("series", series_id, title, tvdb_id,
-                                        preset, profile_name, True, seasons)
+                return self._submission(
+                    "series",
+                    series_id,
+                    title,
+                    tvdb_id,
+                    preset,
+                    profile_name,
+                    True,
+                    seasons,
+                )
             if observation["metadata_ready"]:
                 command_ids = self._search_series(series_id, seasons)
             else:
@@ -497,28 +587,46 @@ class MediaService:
                     "searchForCutoffUnmetEpisodes": False,
                 },
             )
-            series = self._one(self.sonarr.post("series", payload),
-                               "Sonarr", "created series")
+            series = self._one(
+                self.sonarr.post("series", payload), "Sonarr", "created series"
+            )
             series_id = int(series["id"])
             title = _clean_text(series.get("title")) or f"TVDB {tvdb_id}"
             baseline_episode_files = None
             if seasons is not None:
                 series["qualityProfileId"] = profile_id
-                series = self._set_series_seasons(series, seasons,
-                                                  exclusive=True)
+                series = self._set_series_seasons(series, seasons, exclusive=True)
                 self.sonarr.put(f"series/{series_id}", series)
             search_pending = True
-        return self._submission("series", series_id, title, tvdb_id, preset,
-                                profile_name, False, seasons,
-                                baseline_episode_files=baseline_episode_files,
-                                search_pending=search_pending,
-                                command_ids=command_ids)
+        return self._submission(
+            "series",
+            series_id,
+            title,
+            tvdb_id,
+            preset,
+            profile_name,
+            False,
+            seasons,
+            baseline_episode_files=baseline_episode_files,
+            search_pending=search_pending,
+            command_ids=command_ids,
+        )
 
     @staticmethod
-    def _submission(kind, external_ref, title, catalog_id, preset, profile,
-                    already_available, seasons=None, baseline_file_id=None,
-                    baseline_episode_files=None, search_pending=False,
-                    command_ids=None):
+    def _submission(
+        kind,
+        external_ref,
+        title,
+        catalog_id,
+        preset,
+        profile,
+        already_available,
+        seasons=None,
+        baseline_file_id=None,
+        baseline_episode_files=None,
+        search_pending=False,
+        command_ids=None,
+    ):
         out = {
             "ok": True,
             "kind": f"{kind}_acquisition",
@@ -547,8 +655,7 @@ class MediaService:
         if not value:
             return None
         try:
-            return datetime.datetime.fromisoformat(
-                str(value).replace("Z", "+00:00"))
+            return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         except ValueError:
             return None
 
@@ -594,7 +701,7 @@ class MediaService:
 
     @staticmethod
     def _queue_progress(records):
-        downloads = {}
+        downloads: dict = {}
         for index, row in enumerate(records):
             key = str(row.get("downloadId") or f"row-{index}")
             current = downloads.get(key)
@@ -608,15 +715,17 @@ class MediaService:
             return None
         return max(0, min(100, round((size - left) * 100 / size)))
 
-    def observe_movie(self, movie_id, baseline_file_id=None, command_ids=None,
-                      previous_phase=None):
-        movie = self._one(self.radarr.get(f"movie/{int(movie_id)}"),
-                          "Radarr", "movie")
+    def observe_movie(
+        self, movie_id, baseline_file_id=None, command_ids=None, previous_phase=None
+    ):
+        movie = self._one(self.radarr.get(f"movie/{int(movie_id)}"), "Radarr", "movie")
         if movie.get("hasFile"):
             if baseline_file_id is None:
-                return {"complete": True,
-                        "progress": {"phase": "ready", "percent": 100},
-                        "detail": "Radarr reports the movie imported"}
+                return {
+                    "complete": True,
+                    "progress": {"phase": "ready", "percent": 100},
+                    "detail": "Radarr reports the movie imported",
+                }
             rows = self.radarr.get("moviefile", {"movieId": int(movie_id)})
             if not isinstance(rows, list) or not rows:
                 raise MediaError("Radarr reports a movie file but did not return it")
@@ -625,34 +734,43 @@ class MediaService:
             except (KeyError, TypeError, ValueError) as e:
                 raise MediaError("Radarr movie file has no id") from e
             if current_file_id != int(baseline_file_id):
-                return {"complete": True,
-                        "progress": {"phase": "ready", "percent": 100},
-                        "detail": "Radarr imported the requested movie upgrade"}
+                return {
+                    "complete": True,
+                    "progress": {"phase": "ready", "percent": 100},
+                    "detail": "Radarr imported the requested movie upgrade",
+                }
         records = self._queue_records(self.radarr, "movieId", int(movie_id))
         percent = self._queue_progress(records)
         if records:
             progress = {"phase": "downloading"}
             if percent is not None:
                 progress["percent"] = percent
-            detail = (f"download is {percent}% complete" if percent is not None
-                      else "the movie download is active")
+            detail = (
+                f"download is {percent}% complete"
+                if percent is not None
+                else "the movie download is active"
+            )
         else:
-            phase = ("importing" if previous_phase == "downloading" else
-                     self._command_phase(self.radarr, command_ids))
+            phase = (
+                "importing"
+                if previous_phase == "downloading"
+                else self._command_phase(self.radarr, command_ids)
+            )
             progress = {"phase": phase}
-            detail = ("Radarr is importing the requested movie file"
-                      if phase == "importing" else
-                      "Radarr is searching for an acceptable movie release"
-                      if phase == "searching" else
-                      "no acceptable movie release is available yet; Radarr is watching")
+            detail = (
+                "Radarr is importing the requested movie file"
+                if phase == "importing"
+                else "Radarr is searching for an acceptable movie release"
+                if phase == "searching"
+                else "no acceptable movie release is available yet; Radarr is watching"
+            )
         return {"complete": False, "progress": progress, "detail": detail}
 
-    def _target_episodes(self, rows, seasons=None, now=None,
-                         monitored_only=True):
+    def _target_episodes(self, rows, seasons=None, now=None, monitored_only=True):
         seasons = self._seasons(seasons)
         if not isinstance(rows, list):
             raise MediaError("Sonarr returned invalid episodes")
-        now = now or datetime.datetime.now(datetime.timezone.utc)
+        now = now or datetime.datetime.now(datetime.UTC)
         targets = []
         for episode in rows:
             if not isinstance(episode, dict):
@@ -668,24 +786,32 @@ class MediaService:
             targets.append(episode)
         return targets
 
-    def observe_series(self, series_id, seasons=None, now=None,
-                       baseline_episode_files=None, command_ids=None,
-                       previous_phase=None):
+    def observe_series(
+        self,
+        series_id,
+        seasons=None,
+        now=None,
+        baseline_episode_files=None,
+        command_ids=None,
+        previous_phase=None,
+    ):
         rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
         metadata_ready = self._episode_metadata_ready(rows, seasons)
-        scope = [row for row in rows if isinstance(row, dict)
-                 and int(row.get("seasonNumber", 0) or 0) > 0
-                 and (seasons is None
-                      or int(row.get("seasonNumber", 0) or 0) in seasons)]
-        if metadata_ready and scope and not any(
-                row.get("monitored") for row in scope):
+        scope = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and int(row.get("seasonNumber", 0) or 0) > 0
+            and (seasons is None or int(row.get("seasonNumber", 0) or 0) in seasons)
+        ]
+        if metadata_ready and scope and not any(row.get("monitored") for row in scope):
             return {
                 "complete": False,
                 "canceled": True,
-                "progress": {"episodes": 0, "total_episodes": 0,
-                             "percent": 0},
+                "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
                 "detail": "Sonarr reports the requested episodes are unmonitored",
-                "metadata_ready": True}
+                "metadata_ready": True,
+            }
         targets = self._target_episodes(rows, seasons, now)
         baseline = baseline_episode_files or {}
         total = len(targets)
@@ -702,8 +828,11 @@ class MediaService:
                     continue
             ready += 1
         percent = round(ready * 100 / total) if total else 0
-        progress = {"episodes": ready, "total_episodes": total,
-                    "percent": percent}
+        progress: dict[str, Any] = {
+            "episodes": ready,
+            "total_episodes": total,
+            "percent": percent,
+        }
         if not metadata_ready:
             progress["phase"] = "searching"
             detail = "Sonarr is still populating episode metadata"
@@ -719,51 +848,74 @@ class MediaService:
         else:
             queue = self._queue_records(self.sonarr, "seriesId", int(series_id))
             wanted_ids = {int(row["id"]) for row in targets if row.get("id")}
-            queue = [row for row in queue
-                     if not row.get("episodeId")
-                     or int(row.get("episodeId", 0) or 0) in wanted_ids]
+            queue = [
+                row
+                for row in queue
+                if not row.get("episodeId")
+                or int(row.get("episodeId", 0) or 0) in wanted_ids
+            ]
             queue_percent = self._queue_progress(queue)
             if queue:
                 progress["phase"] = "downloading"
                 if queue_percent is not None:
                     progress["download_percent"] = queue_percent
-                detail = (f"download is {queue_percent}% complete; "
-                          f"{ready} of {total} episodes are imported"
-                          if queue_percent is not None else
-                          f"download is active; {ready} of {total} episodes are imported")
+                detail = (
+                    f"download is {queue_percent}% complete; "
+                    f"{ready} of {total} episodes are imported"
+                    if queue_percent is not None
+                    else f"download is active; {ready} of {total} episodes are imported"
+                )
             else:
-                phase = ("importing" if previous_phase == "downloading" else
-                         self._command_phase(self.sonarr, command_ids))
+                phase = (
+                    "importing"
+                    if previous_phase == "downloading"
+                    else self._command_phase(self.sonarr, command_ids)
+                )
                 progress["phase"] = phase
-                detail = (f"Sonarr is importing episodes; {ready} of {total} are ready"
-                          if phase == "importing" else
-                          "Sonarr is searching for acceptable episode releases"
-                          if phase == "searching" else
-                          "no acceptable episode release is available yet; Sonarr is watching")
+                detail = (
+                    f"Sonarr is importing episodes; {ready} of {total} are ready"
+                    if phase == "importing"
+                    else "Sonarr is searching for acceptable episode releases"
+                    if phase == "searching"
+                    else "no acceptable episode release is available yet; Sonarr is watching"
+                )
             complete = False
-        return {"complete": complete, "progress": progress, "detail": detail,
-                "metadata_ready": metadata_ready}
+        return {
+            "complete": complete,
+            "progress": progress,
+            "detail": detail,
+            "metadata_ready": metadata_ready,
+        }
 
     def observe(self, operation, now=None):
         kind = operation.get("kind")
         external_ref = int(operation["external_ref"])
         if kind == "movie_acquisition":
             metadata = operation.get("metadata") or {}
-            return self.observe_movie(external_ref,
-                                      metadata.get("baseline_file_id"),
-                                      metadata.get("command_ids"),
-                                      (operation.get("progress") or {}).get("phase"))
+            return self.observe_movie(
+                external_ref,
+                metadata.get("baseline_file_id"),
+                metadata.get("command_ids"),
+                (operation.get("progress") or {}).get("phase"),
+            )
         if kind == "series_acquisition":
             metadata = operation.get("metadata") or {}
             return self.observe_series(
-                external_ref, metadata.get("seasons"), now,
+                external_ref,
+                metadata.get("seasons"),
+                now,
                 metadata.get("baseline_episode_files"),
                 metadata.get("command_ids"),
-                (operation.get("progress") or {}).get("phase"))
+                (operation.get("progress") or {}).get("phase"),
+            )
         raise MediaError(f"unsupported media operation kind {kind}")
 
-    QUEUE_DELETE_PARAMS = {"removeFromClient": True, "blocklist": False,
-                           "skipRedownload": True, "changeCategory": False}
+    QUEUE_DELETE_PARAMS = {
+        "removeFromClient": True,
+        "blocklist": False,
+        "skipRedownload": True,
+        "changeCategory": False,
+    }
 
     @staticmethod
     def _cancel_commands(client, command_ids):
@@ -774,8 +926,10 @@ class MediaService:
                 if "HTTP 404" in str(e):
                     continue
                 raise
-            if (isinstance(row, dict)
-                    and str(row.get("status", "")).lower() in ("queued", "started")):
+            if isinstance(row, dict) and str(row.get("status", "")).lower() in (
+                "queued",
+                "started",
+            ):
                 client.delete(f"command/{command_id}")
 
     def _remove_queue(self, client, records):
@@ -792,11 +946,17 @@ class MediaService:
 
     def delete_movie(self, tmdb_id, command_ids=None):
         tmdb_id = int(tmdb_id)
-        movie = self._existing(self.radarr.get("movie", {"tmdbId": tmdb_id}),
-                               "tmdbId", tmdb_id, "Radarr")
+        movie = self._existing(
+            self.radarr.get("movie", {"tmdbId": tmdb_id}), "tmdbId", tmdb_id, "Radarr"
+        )
         if movie is None:
-            return {"ok": True, "kind": "movie", "catalog_id": tmdb_id,
-                    "removed": False, "detail": "the movie was not managed by Radarr"}
+            return {
+                "ok": True,
+                "kind": "movie",
+                "catalog_id": tmdb_id,
+                "removed": False,
+                "detail": "the movie was not managed by Radarr",
+            }
         movie_id = int(movie["id"])
         title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
         unmonitored = dict(movie)
@@ -806,120 +966,179 @@ class MediaService:
         queued = self._queue_records(self.radarr, "movieId", movie_id)
         downloads = self._remove_queue(self.radarr, queued)
         had_file = bool(movie.get("hasFile"))
-        self.radarr.delete(f"movie/{movie_id}", {
-            "deleteFiles": True, "addImportExclusion": False})
-        return {"ok": True, "kind": "movie", "catalog_id": tmdb_id,
-                "title": title, "removed": True, "downloads_canceled": downloads,
-                "files_deleted": 1 if had_file else 0,
-                "detail": f"removed {title} from Radarr and deleted its files"}
+        self.radarr.delete(
+            f"movie/{movie_id}", {"deleteFiles": True, "addImportExclusion": False}
+        )
+        return {
+            "ok": True,
+            "kind": "movie",
+            "catalog_id": tmdb_id,
+            "title": title,
+            "removed": True,
+            "downloads_canceled": downloads,
+            "files_deleted": 1 if had_file else 0,
+            "detail": f"removed {title} from Radarr and deleted its files",
+        }
 
-    def delete_series(self, tvdb_id, seasons=None, all_seasons=False,
-                      command_ids=None):
+    def delete_series(self, tvdb_id, seasons=None, all_seasons=False, command_ids=None):
         tvdb_id = int(tvdb_id)
         selected = self._seasons(seasons)
         if selected is None and not all_seasons:
             raise MediaError("series deletion needs seasons or explicit all_seasons")
-        series = self._existing(self.sonarr.get("series", {"tvdbId": tvdb_id}),
-                                "tvdbId", tvdb_id, "Sonarr")
+        series = self._existing(
+            self.sonarr.get("series", {"tvdbId": tvdb_id}), "tvdbId", tvdb_id, "Sonarr"
+        )
         if series is None:
-            return {"ok": True, "kind": "series", "catalog_id": tvdb_id,
-                    "removed": False, "detail": "the series was not managed by Sonarr"}
+            return {
+                "ok": True,
+                "kind": "series",
+                "catalog_id": tvdb_id,
+                "removed": False,
+                "detail": "the series was not managed by Sonarr",
+            }
         series_id = int(series["id"])
         title = _clean_text(series.get("title")) or f"TVDB {tvdb_id}"
         self._cancel_commands(self.sonarr, command_ids)
         if all_seasons:
             queued = self._queue_records(self.sonarr, "seriesId", series_id)
             downloads = self._remove_queue(self.sonarr, queued)
-            self.sonarr.delete(f"series/{series_id}", {
-                "deleteFiles": True, "addImportListExclusion": False})
-            return {"ok": True, "kind": "series", "catalog_id": tvdb_id,
-                    "title": title, "removed": True,
-                    "downloads_canceled": downloads, "all_seasons": True,
-                    "detail": f"removed all seasons of {title} from Sonarr and deleted their files"}
+            self.sonarr.delete(
+                f"series/{series_id}",
+                {"deleteFiles": True, "addImportListExclusion": False},
+            )
+            return {
+                "ok": True,
+                "kind": "series",
+                "catalog_id": tvdb_id,
+                "title": title,
+                "removed": True,
+                "downloads_canceled": downloads,
+                "all_seasons": True,
+                "detail": f"removed all seasons of {title} from Sonarr and deleted their files",
+            }
 
         episodes = self.sonarr.get("episode", {"seriesId": series_id})
         if not isinstance(episodes, list):
             raise MediaError("Sonarr returned invalid episodes")
-        wanted = [row for row in episodes if isinstance(row, dict)
-                  and int(row.get("seasonNumber", 0) or 0) in selected]
+        wanted = [
+            row
+            for row in episodes
+            if isinstance(row, dict)
+            and int(row.get("seasonNumber", 0) or 0) in selected
+        ]
         episode_ids = sorted({int(row["id"]) for row in wanted if row.get("id")})
         if episode_ids:
-            self.sonarr.put("episode/monitor", {
-                "episodeIds": episode_ids, "monitored": False})
+            self.sonarr.put(
+                "episode/monitor", {"episodeIds": episode_ids, "monitored": False}
+            )
         updated = dict(series)
         updated["seasons"] = [
             {**row, "monitored": False}
-            if isinstance(row, dict)
-            and int(row.get("seasonNumber", -1)) in selected else row
-            for row in series.get("seasons") or []]
+            if isinstance(row, dict) and int(row.get("seasonNumber", -1)) in selected
+            else row
+            for row in series.get("seasons") or []
+        ]
         self.sonarr.put(f"series/{series_id}", updated)
         wanted_ids = set(episode_ids)
-        queued = [row for row in self._queue_records(
-            self.sonarr, "seriesId", series_id)
-            if int(row.get("episodeId", 0) or 0) in wanted_ids]
+        queued = [
+            row
+            for row in self._queue_records(self.sonarr, "seriesId", series_id)
+            if int(row.get("episodeId", 0) or 0) in wanted_ids
+        ]
         downloads = self._remove_queue(self.sonarr, queued)
-        file_ids = sorted({int(row.get("episodeFileId", 0) or 0)
-                           for row in wanted if row.get("hasFile")
-                           and int(row.get("episodeFileId", 0) or 0) > 0})
+        file_ids = sorted(
+            {
+                int(row.get("episodeFileId", 0) or 0)
+                for row in wanted
+                if row.get("hasFile") and int(row.get("episodeFileId", 0) or 0) > 0
+            }
+        )
         for file_id in file_ids:
             self.sonarr.delete(f"episodefile/{file_id}")
         season_text = ", ".join(str(n) for n in selected)
-        return {"ok": True, "kind": "series", "catalog_id": tvdb_id,
-                "title": title, "removed": True, "seasons": selected,
-                "downloads_canceled": downloads, "files_deleted": len(file_ids),
-                "detail": f"deleted season {season_text} of {title} and stopped monitoring it"}
+        return {
+            "ok": True,
+            "kind": "series",
+            "catalog_id": tvdb_id,
+            "title": title,
+            "removed": True,
+            "seasons": selected,
+            "downloads_canceled": downloads,
+            "files_deleted": len(file_ids),
+            "detail": f"deleted season {season_text} of {title} and stopped monitoring it",
+        }
 
     def status(self):
         out = {}
         for name, client in (("radarr", self.radarr), ("sonarr", self.sonarr)):
             row = client.get("system/status")
             row = self._one(row, client.name, "system status")
-            out[name] = {"version": _clean_text(row.get("version"), 40),
-                         "app": _clean_text(row.get("appName"), 40)}
+            out[name] = {
+                "version": _clean_text(row.get("version"), 40),
+                "app": _clean_text(row.get("appName"), 40),
+            }
         return out
 
 
-def proton_port_monitor_from_config(cfg, secrets, log, transport=None,
-                                    path=None, now=None):
+def proton_port_monitor_from_config(
+    cfg, secrets, log, transport=None, path=None, now=None
+):
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
-            or not media_cfg.get("protonPortSync")):
+    if (
+        not isinstance(media_cfg, dict)
+        or not media_cfg.get("enabled")
+        or not media_cfg.get("protonPortSync")
+    ):
         return None
     try:
         poll_s = media_cfg.get("pollS", 30)
         if not isinstance(poll_s, (int, float)) or poll_s <= 0:
             raise MediaConfigurationError("media.pollS must be positive")
         return ProtonPortMonitor(
-            _qbit_from_config(media_cfg, secrets, transport), log,
-            path=path, poll_s=poll_s, now=now)
+            _qbit_from_config(media_cfg, secrets, transport),
+            log,
+            path=path,
+            poll_s=poll_s,
+            now=now,
+        )
     except MediaConfigurationError as e:
         log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
         return None
 
 
-def media_health_monitor_from_config(cfg, secrets, log, transport=None,
-                                     operations=None):
+def media_health_monitor_from_config(
+    cfg, secrets, log, transport=None, operations=None
+):
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
-            or not media_cfg.get("healthSync", True)):
+    if (
+        not isinstance(media_cfg, dict)
+        or not media_cfg.get("enabled")
+        or not media_cfg.get("healthSync", True)
+    ):
         return None
-    missing = [name for name in ("radarrApiKey", "sonarrApiKey")
-               if not cglib.real_key(secrets.get(name))]
+    missing = [
+        name
+        for name in ("radarrApiKey", "sonarrApiKey")
+        if not cglib.real_key(secrets.get(name))
+    ]
     if missing:
-        log.warn("lane_disabled", what="media_health_sync",
-                 reason="missing media API keys: " + ", ".join(missing))
+        log.warn(
+            "lane_disabled",
+            what="media_health_sync",
+            reason="missing media API keys: " + ", ".join(missing),
+        )
         return None
     try:
         poll_s = media_cfg.get("healthPollS", HEALTH_POLL_S)
         if not isinstance(poll_s, (int, float)) or poll_s <= 0:
             raise MediaConfigurationError("media.healthPollS must be positive")
         clients = tuple(
-            ArrClient(name, media_cfg[f"{name.lower()}Url"], secrets[key],
-                      transport=transport)
-            for name, key in (("Radarr", "radarrApiKey"),
-                              ("Sonarr", "sonarrApiKey")))
-        return MediaHealthMonitor(clients, log, poll_s=poll_s,
-                                  operations=operations)
+            ArrClient(
+                name, media_cfg[f"{name.lower()}Url"], secrets[key], transport=transport
+            )
+            for name, key in (("Radarr", "radarrApiKey"), ("Sonarr", "sonarrApiKey"))
+        )
+        return MediaHealthMonitor(clients, log, poll_s=poll_s, operations=operations)
     except (MediaConfigurationError, KeyError) as e:
         log.warn("lane_disabled", what="media_health_sync", reason=str(e))
         return None
@@ -941,30 +1160,35 @@ def _media_root(env_path):
 
 def disk_health_monitor_from_config(cfg, log, env_path=None):
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if (not isinstance(media_cfg, dict) or not media_cfg.get("enabled")
-            or not media_cfg.get("diskWatch", True)):
+    if (
+        not isinstance(media_cfg, dict)
+        or not media_cfg.get("enabled")
+        or not media_cfg.get("diskWatch", True)
+    ):
         return None
     try:
         poll_s = media_cfg.get("diskPollS", DISK_POLL_S)
         if not isinstance(poll_s, (int, float)) or poll_s <= 0:
             raise MediaConfigurationError("media.diskPollS must be positive")
-        warn_gb = media_cfg.get("diskFreeWarnGb", FREE_WARN_BYTES // 1024 ** 3)
+        warn_gb = media_cfg.get("diskFreeWarnGb", FREE_WARN_BYTES // 1024**3)
         if not isinstance(warn_gb, (int, float)) or warn_gb <= 0:
-            raise MediaConfigurationError(
-                "media.diskFreeWarnGb must be positive")
+            raise MediaConfigurationError("media.diskFreeWarnGb must be positive")
         if env_path is None:
-            env_path = cglib.BASE / "media" / ".env"
+            env_path = paths.HOME / "media" / ".env"
         root = _media_root(env_path)
         if not root:
             raise MediaConfigurationError(
-                f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1")
+                f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
+            )
         # Both volumes matter and are normally different: the library fills
         # from downloads, the checkout drive holds the config databases and
         # the event log. Anchors, so one volume named twice is watched once.
-        mounts = sorted({Path(root).anchor or root,
-                         Path(cglib.BASE).anchor or str(cglib.BASE)})
-        return DiskHealthMonitor(mounts, log, poll_s=poll_s,
-                                 free_warn_bytes=int(warn_gb * 1024 ** 3))
+        mounts = sorted(
+            {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
+        )
+        return DiskHealthMonitor(
+            mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
+        )
     except MediaConfigurationError as e:
         log.warn("lane_disabled", what="disk_watch", reason=str(e))
         return None
@@ -974,25 +1198,41 @@ def from_config(cfg, secrets, log, transport=None):
     media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
     if not isinstance(media_cfg, dict) or not media_cfg.get("enabled"):
         return None
-    missing = [name for name in ("radarrApiKey", "sonarrApiKey")
-               if not cglib.real_key(secrets.get(name))]
+    missing = [
+        name
+        for name in ("radarrApiKey", "sonarrApiKey")
+        if not cglib.real_key(secrets.get(name))
+    ]
     if missing:
-        log.warn("lane_disabled", what="media",
-                 reason="missing media API keys: " + ", ".join(missing))
+        log.warn(
+            "lane_disabled",
+            what="media",
+            reason="missing media API keys: " + ", ".join(missing),
+        )
         return None
     try:
-        radarr = ArrClient("Radarr", media_cfg["radarrUrl"],
-                           secrets["radarrApiKey"], transport=transport)
-        sonarr = ArrClient("Sonarr", media_cfg["sonarrUrl"],
-                           secrets["sonarrApiKey"], transport=transport)
+        radarr = ArrClient(
+            "Radarr",
+            media_cfg["radarrUrl"],
+            secrets["radarrApiKey"],
+            transport=transport,
+        )
+        sonarr = ArrClient(
+            "Sonarr",
+            media_cfg["sonarrUrl"],
+            secrets["sonarrApiKey"],
+            transport=transport,
+        )
         for key in ("movieRoot", "seriesRoot"):
             if not isinstance(media_cfg.get(key), str) or not media_cfg[key]:
                 raise MediaConfigurationError(f"media.{key} is missing")
         for key in ("moviePresets", "seriesPresets"):
             mapping = media_cfg.get(key)
-            if (not isinstance(mapping, dict) or not mapping
-                    or not all(isinstance(name, str) and name
-                               for name in mapping.values())):
+            if (
+                not isinstance(mapping, dict)
+                or not mapping
+                or not all(isinstance(name, str) and name for name in mapping.values())
+            ):
                 raise MediaConfigurationError(f"media.{key} is invalid")
         poll_s = media_cfg.get("pollS", 30)
         if not isinstance(poll_s, (int, float)) or poll_s <= 0:
@@ -1060,7 +1300,8 @@ def main(argv=None):
             if not isinstance(media_cfg, dict):
                 raise MediaConfigurationError("media configuration is missing")
             result = ProtonPortMonitor(
-                _qbit_from_config(media_cfg, secrets), log).reconcile_once()
+                _qbit_from_config(media_cfg, secrets), log
+            ).reconcile_once()
             print(json.dumps(result, indent=2))
             return 0 if result["state"] in ("active", "inactive") else 1
         if args.command == "set-qbit-port":
@@ -1093,24 +1334,30 @@ def main(argv=None):
             return 2
         else:
             from slopstation.agent.tools import operations
+
             store = operations.OperationStore(log)
             if args.command == "request-movie":
-                result = operations.track(store, service.request_movie(
-                    args.tmdb_id, args.preset))
+                result = operations.track(
+                    store, service.request_movie(args.tmdb_id, args.preset)
+                )
             elif args.command == "request-series":
-                result = operations.track(store, service.request_series(
-                    args.tvdb_id, args.preset, args.seasons))
+                result = operations.track(
+                    store,
+                    service.request_series(args.tvdb_id, args.preset, args.seasons),
+                )
             elif args.command == "delete-movie":
                 covered, command_ids = operations.covered_by_delete(
-                    store, "movie", args.tmdb_id)
+                    store, "movie", args.tmdb_id
+                )
                 result = service.delete_movie(args.tmdb_id, command_ids)
                 operations.record_deleted(store, covered, result)
             else:
                 covered, command_ids = operations.covered_by_delete(
-                    store, "series", args.tvdb_id,
-                    args.seasons, args.all_seasons)
+                    store, "series", args.tvdb_id, args.seasons, args.all_seasons
+                )
                 result = service.delete_series(
-                    args.tvdb_id, args.seasons, args.all_seasons, command_ids)
+                    args.tvdb_id, args.seasons, args.all_seasons, command_ids
+                )
                 operations.record_deleted(store, covered, result)
         print(json.dumps(result, indent=2))
         if args.command == "validate" and not result["ok"]:

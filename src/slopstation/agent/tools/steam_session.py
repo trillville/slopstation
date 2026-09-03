@@ -12,24 +12,26 @@ queued, and failures arrive as an X-eresult response HEADER, not a JSON body.
 Parsing is defensive throughout - shape drift must degrade to a spoken
 "couldn't reach Steam". Confirmed live 2026-08-14 from a WEB-audience token.
 """
+
 import base64
 import json
 import sys
 import time
 
-
 from slopstation import cglib
 
 API = "https://api.steampowered.com"
-LOGIN = "https://login.steampowered.com"        # the transfer-login host
+LOGIN = "https://login.steampowered.com"  # the transfer-login host
 COMMUNITY = "https://steamcommunity.com"
 STORE = "https://store.steampowered.com"
 # Steam inspects origin= on ClientComm GETs.
 ORIGIN = STORE
 # Must not read as a bot library's default UA - that is the flagged
 # fingerprint. Bump occasionally.
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
 
 # EAuthTokenPlatformType - WebBrowser is 2; MobileApp (3) is the flagged one.
 PLATFORM_WEBBROWSER = 2
@@ -41,7 +43,7 @@ def _jwt_exp(token):
     """The `exp` (unix seconds) out of a JWT, unverified. 0 if unreadable."""
     try:
         payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)        # restore base64 padding
+        payload += "=" * (-len(payload) % 4)  # restore base64 padding
         return int(json.loads(base64.urlsafe_b64decode(payload)).get("exp", 0))
     except Exception:
         return 0
@@ -61,7 +63,7 @@ class SteamSession:
         # target the wrong box.
         self.machine = machine_name or None
         self._access = None
-        self._access_exp = 0
+        self._access_exp = 0.0
         self._sess = None
 
     def available(self):
@@ -72,6 +74,7 @@ class SteamSession:
     def _session(self):
         if self._sess is None:
             import requests
+
             self._sess = requests.Session()
             self._sess.headers["User-Agent"] = UA
         return self._sess
@@ -93,8 +96,11 @@ class SteamSession:
         cookies). Transfer responses carry nothing in the body; the Set-Cookie
         is the payload."""
         r = self._session().post(
-            url, files={k: (None, str(v)) for k, v in fields.items()},
-            headers=headers or {}, timeout=20)
+            url,
+            files={k: (None, str(v)) for k, v in fields.items()},
+            headers=headers or {},
+            timeout=20,
+        )
         try:
             body = r.json()
         except ValueError:
@@ -108,7 +114,7 @@ class SteamSession:
         if getattr(r, "status_code", 200) != 401 or "access_token" not in payload:
             return r
         self._access = None
-        self._access_exp = 0
+        self._access_exp = 0.0
         payload = {**payload, "access_token": self.access_token()}
         fn = self._session().get if key == "params" else self._session().post
         return fn(f"{API}/{method}/", timeout=timeout, **{key: payload})
@@ -128,13 +134,17 @@ class SteamSession:
         """A ~24h access token, minted from the refresh token and cached until
         just before it expires. Raises if there is no refresh token."""
         if not cglib.real_key(self._refresh):
-            raise RuntimeError("no Steam refresh token - run: python steam_session.py enroll")
+            raise RuntimeError(
+                "no Steam refresh token - run: python steam_session.py enroll"
+            )
         if self._access and time.time() < self._access_exp - 120:
             return self._access
         tok = self._mint()
         if not tok:
-            raise RuntimeError("could not mint an access token - the refresh "
-                               "token may be expired or revoked; re-enroll")
+            raise RuntimeError(
+                "could not mint an access token - the refresh "
+                "token may be expired or revoked; re-enroll"
+            )
         self._access = tok
         self._access_exp = _jwt_exp(tok) or (time.time() + 23 * 3600)
         return tok
@@ -155,20 +165,27 @@ class SteamSession:
         """
         import secrets as _secrets
         from urllib.parse import unquote
+
         try:
             body, _ = self._login_post(
                 f"{LOGIN}/jwt/finalizelogin",
-                {"nonce": self._refresh,
-                 "sessionid": _secrets.token_hex(12),   # 24 hex, as the site sends
-                 "redir": f"{COMMUNITY}/login/home/?goto="},
-                headers={"Origin": COMMUNITY, "Referer": COMMUNITY + "/"})
+                {
+                    "nonce": self._refresh,
+                    "sessionid": _secrets.token_hex(12),  # 24 hex, as the site sends
+                    "redir": f"{COMMUNITY}/login/home/?goto=",
+                },
+                headers={"Origin": COMMUNITY, "Referer": COMMUNITY + "/"},
+            )
         except Exception as e:
             self.log.warn("token_mint_failed", stage="finalizelogin", err=str(e))
             return None
-        transfers = ((body or {}).get("transfer_info") or [])
+        transfers = (body or {}).get("transfer_info") or []
         if not transfers:
-            self.log.warn("token_mint_failed", stage="finalizelogin",
-                          err="no transfer_info (refresh token rejected?)")
+            self.log.warn(
+                "token_mint_failed",
+                stage="finalizelogin",
+                err="no transfer_info (refresh token rejected?)",
+            )
             return None
         # Any one transfer host that answers with the cookie is enough - same
         # session on different Steam domains - so keep trying on failure.
@@ -178,15 +195,19 @@ class SteamSession:
                 continue
             try:
                 _, cookies = self._login_post(
-                    url, {"steamID": self.steamid, **(t.get("params") or {})})
+                    url, {"steamID": self.steamid, **(t.get("params") or {})}
+                )
             except Exception as e:
                 self.log.warn("token_transfer_failed", url=str(url)[:60], err=str(e))
                 continue
             raw = cookies.get("steamLoginSecure")
             if raw and "||" in unquote(raw):
                 return unquote(raw).split("||", 1)[1]
-        self.log.warn("token_mint_failed", stage="transfer",
-                      err="no steamLoginSecure cookie from any transfer host")
+        self.log.warn(
+            "token_mint_failed",
+            stage="transfer",
+            err="no steamLoginSecure cookie from any transfer host",
+        )
         return None
 
     def token_expiry(self):
@@ -200,15 +221,21 @@ class SteamSession:
         """Logged-in clients (GetAllClientLogonInfo), each {instanceid,
         machine_name, os_name}. Empty when the PC's client is offline - not an
         error. Instanceids CHURN on every client login; never cache one."""
-        body, _ = self._get("IClientCommService/GetAllClientLogonInfo/v1",
-                           {"access_token": self.access_token(), "origin": ORIGIN})
+        body, _ = self._get(
+            "IClientCommService/GetAllClientLogonInfo/v1",
+            {"access_token": self.access_token(), "origin": ORIGIN},
+        )
         out = []
         for s in ((body or {}).get("response", {}) or {}).get("sessions", []) or []:
             iid = s.get("client_instanceid")
             if iid:
-                out.append({"instanceid": str(iid),
-                            "machine_name": s.get("machine_name", ""),
-                            "os_name": s.get("os_name", "")})
+                out.append(
+                    {
+                        "instanceid": str(iid),
+                        "machine_name": s.get("machine_name", ""),
+                        "os_name": s.get("os_name", ""),
+                    }
+                )
         return out
 
     def _target(self):
@@ -238,9 +265,13 @@ class SteamSession:
         tgt = self._target()
         if not tgt:
             return {}
-        params = {"access_token": self.access_token(), "origin": ORIGIN,
-                  "client_instanceid": tgt["instanceid"],
-                  "fields": "games", "include_client_info": "true"}
+        params = {
+            "access_token": self.access_token(),
+            "origin": ORIGIN,
+            "client_instanceid": tgt["instanceid"],
+            "fields": "games",
+            "include_client_info": "true",
+        }
         if changing_only:
             params["filters"] = "changing"
         body, _ = self._get("IClientCommService/GetClientAppList/v1", params)
@@ -257,9 +288,11 @@ class SteamSession:
                 "installed": bool(a.get("installed")),
                 "changing": bool(a.get("changing")),
                 "paused": bool(a.get("download_paused")),
-                "downloaded": done, "total": total,
+                "downloaded": done,
+                "total": total,
                 # -1 is Steam's "not in the queue"; None speaks better.
-                "queue": None if queue in (None, -1) else queue}
+                "queue": None if queue in (None, -1) else queue,
+            }
         return out
 
     def install(self, appid):
@@ -272,28 +305,45 @@ class SteamSession:
         try:
             tgt = self._target()
             if not tgt:
-                return {"ok": False, "error": "the gaming PC isn't online in Steam "
-                        "right now, so there's nothing to install to"}
-            _, eresult = self._post("IClientCommService/InstallClientApp/v1",
-                                   {"access_token": self.access_token(),
-                                    "appid": appid,
-                                    "client_instanceid": tgt["instanceid"]})
-            if eresult not in (None, "1"):          # 1 == EResult.OK
+                return {
+                    "ok": False,
+                    "error": "the gaming PC isn't online in Steam "
+                    "right now, so there's nothing to install to",
+                }
+            _, eresult = self._post(
+                "IClientCommService/InstallClientApp/v1",
+                {
+                    "access_token": self.access_token(),
+                    "appid": appid,
+                    "client_instanceid": tgt["instanceid"],
+                },
+            )
+            if eresult not in (None, "1"):  # 1 == EResult.OK
                 self.log.warn("install_failed", appid=appid, eresult=eresult)
-                return {"ok": False, "error": f"Steam refused the install (code {eresult})"}
+                return {
+                    "ok": False,
+                    "error": f"Steam refused the install (code {eresult})",
+                }
             time.sleep(1.5)
             app = self.app_list(changing_only=True).get(appid, {})
         except Exception as e:
             self.log.error("install_error", appid=appid, err=str(e))
-            return {"ok": False, "error": "couldn't reach Steam - the account "
-                    "session may need re-enrolling"}
+            return {
+                "ok": False,
+                "error": "couldn't reach Steam - the account "
+                "session may need re-enrolling",
+            }
         # Presence in the CHANGING list is the proof; a just-queued app has no
         # bytes yet, so byte arithmetic would not do.
         queued = bool(app)
-        self.log("install_queued", appid=appid, machine=tgt["machine_name"],
-                 verified=queued)
-        return {"ok": True, "detail": "queued the install on the gaming PC",
-                "verified": bool(queued)}
+        self.log(
+            "install_queued", appid=appid, machine=tgt["machine_name"], verified=queued
+        )
+        return {
+            "ok": True,
+            "detail": "queued the install on the gaming PC",
+            "verified": bool(queued),
+        }
 
     def download_status(self):
         """Apps mid-change, most-complete first - the list_games 'downloading'
@@ -303,16 +353,28 @@ class SteamSession:
         for appid, a in apps.items():
             if not a["changing"] and a["total"] <= a["downloaded"]:
                 continue
-            pct = (round(100 * a["downloaded"] / a["total"]) if a["total"] else None)
+            pct = round(100 * a["downloaded"] / a["total"]) if a["total"] else None
             if pct == 100 and a["installed"]:
                 continue
-            phase = ("finalizing" if pct == 100 else
-                     "paused" if a["paused"] else
-                     "queued" if a["queue"] is not None and not a["downloaded"] else
-                     "downloading")
-            rows.append({"appid": appid, "name": a["name"], "percent": pct,
-                         "paused": a["paused"], "queue": a["queue"],
-                         "phase": phase})
+            phase = (
+                "finalizing"
+                if pct == 100
+                else "paused"
+                if a["paused"]
+                else "queued"
+                if a["queue"] is not None and not a["downloaded"]
+                else "downloading"
+            )
+            rows.append(
+                {
+                    "appid": appid,
+                    "name": a["name"],
+                    "percent": pct,
+                    "paused": a["paused"],
+                    "queue": a["queue"],
+                    "phase": phase,
+                }
+            )
         rows.sort(key=lambda r: -(r["percent"] or 0))
         return rows
 
@@ -328,27 +390,35 @@ class SteamSession:
         devices", or ~200 days."""
         body, _ = self._post(
             "IAuthenticationService/BeginAuthSessionViaQR/v1",
-            {"device_friendly_name": "slopstation couch (K15)",
-             "platform_type": PLATFORM_WEBBROWSER,
-             "website_id": "Community"})
+            {
+                "device_friendly_name": "slopstation couch (K15)",
+                "platform_type": PLATFORM_WEBBROWSER,
+                "website_id": "Community",
+            },
+        )
         resp = (body or {}).get("response", {}) or {}
         client_id = resp.get("client_id")
         request_id = resp.get("request_id")
         challenge = resp.get("challenge_url")
         interval = float(resp.get("interval", 5) or 5)
         if not (client_id and request_id and challenge):
-            print("enrollment could not start - Steam returned no challenge. "
-                  "Check the machine's clock and network.")
+            print(
+                "enrollment could not start - Steam returned no challenge. "
+                "Check the machine's clock and network."
+            )
             return 1
         _print_qr(challenge)
-        print("\nScan the QR above with the Steam MOBILE APP (Steam Guard -> "
-              "scan), then approve. Waiting...\n")
+        print(
+            "\nScan the QR above with the Steam MOBILE APP (Steam Guard -> "
+            "scan), then approve. Waiting...\n"
+        )
         deadline = time.time() + 180
         while time.time() < deadline:
             time.sleep(interval)
             body, _ = self._post(
                 "IAuthenticationService/PollAuthSessionStatus/v1",
-                {"client_id": client_id, "request_id": request_id})
+                {"client_id": client_id, "request_id": request_id},
+            )
             r = (body or {}).get("response", {}) or {}
             refresh = r.get("refresh_token")
             if refresh:
@@ -366,14 +436,16 @@ class SteamSession:
         path = cglib.SECRETS
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except OSError:                     # no file yet - a fresh rig
+        except OSError:  # no file yet - a fresh rig
             data = {}
         except ValueError:
             # A present-but-unparseable secrets.json aborts: proceeding with {}
             # would os.replace the whole file with just this token.
-            print(f"REFUSING to write: {path} exists but is not valid JSON - "
-                  "fix it, then run enroll again.")
-            raise SystemExit(1)
+            print(
+                f"REFUSING to write: {path} exists but is not valid JSON - "
+                "fix it, then run enroll again."
+            )
+            raise SystemExit(1) from None
         data["steamRefreshToken"] = refresh
         cglib.write_json(path, data, indent=2)
         self._refresh = refresh
@@ -385,6 +457,7 @@ def _print_qr(text):
     """ASCII QR if the optional `qrcode` lib is present, else the raw URL."""
     try:
         import qrcode
+
         qr = qrcode.QRCode(border=1)
         qr.add_data(text)
         qr.make()
@@ -401,7 +474,9 @@ def _cli(argv):
     if cmd == "enroll":
         return s.enroll()
     if not s.available():
-        print("no Steam session - set steamId64 and run: python steam_session.py enroll")
+        print(
+            "no Steam session - set steamId64 and run: python steam_session.py enroll"
+        )
         return 1
     if cmd == "token":
         # doctor's health check: an unexpired token is not a working one - a
@@ -422,8 +497,10 @@ def _cli(argv):
     elif cmd == "install" and len(argv) > 1:
         print(json.dumps(s.install(int(argv[1])), indent=2))
     else:
-        print("usage: steam_session.py enroll | token | sessions | downloads "
-              "| install <appid>")
+        print(
+            "usage: steam_session.py enroll | token | sessions | downloads "
+            "| install <appid>"
+        )
         return 2
     return 0
 

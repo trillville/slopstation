@@ -1,17 +1,18 @@
-"""Blind test: _trim_carry trims the carried slice to whole exchanges starting
+"""_trim_carry trims the carried slice to whole exchanges starting
 at a plain user turn - a tool_result without its tool_use is a 400 from
-Anthropic. Run:
-    pytest tests/test_carry.py
+Anthropic.
 """
-
 
 from slopstation.agent.speech.session_runtime import _trim_carry
 
 U = {"role": "user", "content": "what racing games do i have"}
 A = {"role": "assistant", "content": "Three."}
-A_TOOL = {"role": "assistant",
-          "content": [{"type": "tool_use", "id": "t1", "name": "launch_game",
-                       "input": {"appid": 1}}]}
+A_TOOL = {
+    "role": "assistant",
+    "content": [
+        {"type": "tool_use", "id": "t1", "name": "launch_game", "input": {"appid": 1}}
+    ],
+}
 TOOL_RES = {"role": "tool", "tool_call_id": "t1", "content": "ok"}
 
 
@@ -48,5 +49,3 @@ def test_carry():
     convo = [U, A_TOOL, TOOL_RES, A, U, A_TOOL, TOOL_RES, A, U, A]
     m = _trim_carry(convo[-8:])
     assert first_is_plain_user(m) and no_dangling_tail(m), m
-    print("OK - _trim_carry: orphan-head dropped, dangling-tail dropped, "
-          "whole exchanges preserved, empties safe")

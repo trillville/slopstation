@@ -1,5 +1,6 @@
 """Scan the repo's emitters for event names and the field keys each call site
 passes. test_event_names freezes the result; nothing else imports this."""
+
 import re
 
 import helpers
@@ -8,15 +9,26 @@ REPO = helpers.REPO
 PC = REPO / "gaming-pc"
 
 # Names that match the call shapes but are not events.
-NOT_EVENTS = {"event"}                       # cglib's docstring example
+NOT_EVENTS = {"event"}  # cglib's docstring example
 
 # Names built at runtime, listed by hand. Field keys come from the call site.
 DYNAMIC = {
-    "enter_dispatched": {"dur_ms"}, "enter_redispatched": {"dur_ms"},
-    "exlink_send": {"again"},                # couch.exlink(**fields) passthrough
+    "enter_dispatched": {"dur_ms"},
+    "enter_redispatched": {"dur_ms"},
+    "exlink_send": {"again"},  # couch.exlink(**fields) passthrough
 }
-PC_DYNAMIC = {f"{t}_start": set() for t in (
-    "enter", "exit", "launchgame", "nav", "stopgame", "office-safety", "wake-safety")}
+PC_DYNAMIC = {
+    f"{t}_start": set()
+    for t in (
+        "enter",
+        "exit",
+        "launchgame",
+        "nav",
+        "stopgame",
+        "office-safety",
+        "wake-safety",
+    )
+}
 
 # Python call shapes. Group 'name' is the event; the scan then reads the
 # argument list that follows for `key=` tokens and dict-literal keys.
@@ -24,14 +36,20 @@ PC_DYNAMIC = {f"{t}_start": set() for t in (
 #   events.emit("lane", "x" ...) / emit(lane_var, "x" ...)   (the CLI, heartbeat)
 #   emit("x" ...)   (a local bound to log or log.warn)
 _PY = [
-    re.compile(r"(?:(?<![\w.])log|self\.log|self\._log)(?:\.(?:warn|error|info))?"
-               r"\(\s*\"(?P<name>[a-z][a-z0-9_]*)\""),
-    re.compile(r"(?<![\w.])(?:events\.)?emit\(\s*(?:\"(?P<lane>\w+)\"|\w+)\s*,\s*"
-               r"\"(?P<name>[a-z][a-z0-9_]*)\""),
+    re.compile(
+        r"(?:(?<![\w.])log|self\.log|self\._log)(?:\.(?:warn|error|info))?"
+        r"\(\s*\"(?P<name>[a-z][a-z0-9_]*)\""
+    ),
+    re.compile(
+        r"(?<![\w.])(?:events\.)?emit\(\s*(?:\"(?P<lane>\w+)\"|\w+)\s*,\s*"
+        r"\"(?P<name>[a-z][a-z0-9_]*)\""
+    ),
     re.compile(r"(?<![\w.])emit\(\s*\"(?P<name>[a-z][a-z0-9_]*)\""),
 ]
 _PS = re.compile(r"Write-(?:Cg)?Event\s+'(?P<name>[a-z][a-z0-9_]*)'")
-_BAT = re.compile(r"slopstation\.events\s+emit\s+(?P<lane>\w+)\s+(?P<name>[a-z][a-z0-9_]*)")
+_BAT = re.compile(
+    r"slopstation\.events\s+emit\s+(?P<lane>\w+)\s+(?P<name>[a-z][a-z0-9_]*)"
+)
 _KEY = re.compile(r"(?<![\w.])([a-z][a-z0-9_]*)\s*=(?!=)")
 _DICT_KEY = re.compile(r"\"([a-z][a-z0-9_]*)\"\s*:")
 
@@ -47,7 +65,7 @@ def _args(text, start):
         elif c == ")":
             depth -= 1
         i += 1
-    return text[start:i - 1]
+    return text[start : i - 1]
 
 
 def python_files():
@@ -81,10 +99,10 @@ def scan_powershell():
     for path in sorted(PC.glob("*.ps1")):
         text = path.read_text(encoding="utf-8")
         for m in _PS.finditer(text):
-            rest = text[m.end():m.end() + 300]
+            rest = text[m.end() : m.end() + 300]
             keys = set()
             if rest.lstrip().startswith("@{"):
-                body = rest[rest.index("@{") + 2:rest.index("}")]
+                body = rest[rest.index("@{") + 2 : rest.index("}")]
                 keys = set(re.findall(r"([A-Za-z_]\w*)\s*=", body))
             out.setdefault(m.group("name"), set()).update(keys)
     for name, keys in PC_DYNAMIC.items():
@@ -111,13 +129,28 @@ def scan_lanes():
 
 
 def scan():
-    return {"python": scan_python(), "powershell": scan_powershell(),
-            "bat": scan_bat(), "lanes": scan_lanes()}
+    return {
+        "python": scan_python(),
+        "powershell": scan_powershell(),
+        "bat": scan_bat(),
+        "lanes": scan_lanes(),
+    }
 
 
 if __name__ == "__main__":
     import json
+
     s = scan()
-    print(json.dumps({k: ({n: sorted(f) for n, f in sorted(v.items())}
-                          if isinstance(v, dict) else sorted(v))
-                      for k, v in s.items()}, indent=1))
+    print(
+        json.dumps(
+            {
+                k: (
+                    {n: sorted(f) for n, f in sorted(v.items())}
+                    if isinstance(v, dict)
+                    else sorted(v)
+                )
+                for k, v in s.items()
+            },
+            indent=1,
+        )
+    )

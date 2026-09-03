@@ -19,6 +19,7 @@ CLI:
     python library.py probe <deals|search ...|reviews <appid>|news <appid>
                              |hltb <name>|trending|recent>
 """
+
 from __future__ import annotations
 
 import glob
@@ -28,7 +29,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-
 
 from slopstation import cglib
 
@@ -43,12 +43,13 @@ log = cglib.make_log("library")
 def fetch_installed_ssh() -> list[dict]:
     """Production path (K15): the gaming PC enumerates its own ACFs."""
     from slopstation import gamepc
+
     return parse_games_json(gamepc.games())
 
 
 def parse_games_json(text: str) -> list[dict]:
     rows = json.loads(text.strip().lstrip("﻿"))
-    if isinstance(rows, dict):          # single-game library edge
+    if isinstance(rows, dict):  # single-game library edge
         rows = [rows]
     return rows
 
@@ -56,6 +57,7 @@ def parse_games_json(text: str) -> list[dict]:
 def fetch_installed_local() -> list[dict]:
     """Running ON the gaming PC: same fields as the Dispatch `games` verb."""
     import winreg
+
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
         steam = winreg.QueryValueEx(k, "SteamPath")[0].replace("/", "\\")
     roots = {steam.lower()}
@@ -76,10 +78,15 @@ def fetch_installed_local() -> list[dict]:
             name = ascii_only(f.get("name", ""))
             if f.get("appid") and name and f["appid"] not in seen:
                 seen.add(f["appid"])
-                rows.append({"appid": int(f["appid"]), "name": name,
-                             "state": int(f.get("StateFlags", 0) or 0),
-                             "size": int(f.get("SizeOnDisk", 0) or 0),
-                             "lastPlayed": int(f.get("LastPlayed", 0) or 0)})
+                rows.append(
+                    {
+                        "appid": int(f["appid"]),
+                        "name": name,
+                        "state": int(f.get("StateFlags", 0) or 0),
+                        "size": int(f.get("SizeOnDisk", 0) or 0),
+                        "lastPlayed": int(f.get("LastPlayed", 0) or 0),
+                    }
+                )
     return rows
 
 
@@ -134,6 +141,7 @@ def refresh(local: bool = False) -> int:
 def fetch_collections_ssh() -> list[dict]:
     """Big Picture collections as [{name, id}]. Needs the PC awake."""
     from slopstation import gamepc
+
     return parse_games_json(gamepc.collections())
 
 
@@ -153,15 +161,19 @@ def refresh_collections() -> int:
 
 def show() -> int:
     index = load()
-    rows = sorted(index.get("installed", []),
-                  key=lambda r: r.get("lastPlayed", 0), reverse=True)
+    rows = sorted(
+        index.get("installed", []), key=lambda r: r.get("lastPlayed", 0), reverse=True
+    )
     if not rows:
         print("no index - run: python library.py refresh")
         return 1
     print(f"refreshed {index.get('refreshed', '?')} - {len(rows)} installed")
     for r in rows:
-        last = (time.strftime("%Y-%m-%d", time.localtime(r["lastPlayed"]))
-                if r.get("lastPlayed") else "never")
+        last = (
+            time.strftime("%Y-%m-%d", time.localtime(r["lastPlayed"]))
+            if r.get("lastPlayed")
+            else "never"
+        )
         print(f"  {r['appid']:>8}  {last}  {r['name']}")
     return 0
 
@@ -169,17 +181,25 @@ def show() -> int:
 # --- layers 2-3: owned/playtime + metadata ------------------------------------
 
 META_CACHE = cglib.STATE / "metadata-cache.json"
-_CTRL = {28: "full", 18: "partial"}          # Steam category ids
+_CTRL = {28: "full", 18: "partial"}  # Steam category ids
 
 
 def fetch_owned(api_key: str, steamid: str) -> dict:
     """Account-global playtime + recency (appmanifest LastPlayed is
     per-machine). One call, own key only."""
     import requests
+
     r = requests.get(
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/",
-        params={"key": api_key, "steamid": steamid, "include_appinfo": "1",
-                "include_played_free_games": "1", "format": "json"}, timeout=30)
+        params={
+            "key": api_key,
+            "steamid": steamid,
+            "include_appinfo": "1",
+            "include_played_free_games": "1",
+            "format": "json",
+        },
+        timeout=30,
+    )
     r.raise_for_status()
     out = {}
     for g in r.json().get("response", {}).get("games", []):
@@ -196,27 +216,36 @@ def fetch_meta_one(appid: int) -> dict:
     """appdetails (genres/controller/desc/score/year) + SteamSpy tags. Caller
     paces the requests."""
     import requests
+
     meta = {}
-    r = requests.get("https://store.steampowered.com/api/appdetails",
-                     params={"appids": appid}, timeout=20)
+    r = requests.get(
+        "https://store.steampowered.com/api/appdetails",
+        params={"appids": appid},
+        timeout=20,
+    )
     d = r.json().get(str(appid), {})
     if d.get("success"):
         data = d["data"]
         cats = {c["id"] for c in data.get("categories", [])}
-        meta.update({
-            "genres": [g["description"] for g in data.get("genres", [])],
-            "controller": next((v for k, v in _CTRL.items() if k in cats), "none"),
-            "desc": re.sub(r"[^\x20-\x7E]", "",
-                           data.get("short_description", ""))[:160],
-            "score": (data.get("metacritic") or {}).get("score"),
-            "year": (data.get("release_date") or {}).get("date", "")[-4:],
-        })
-    r2 = requests.get("https://steamspy.com/api.php",
-                      params={"request": "appdetails", "appid": str(appid)}, timeout=20)
+        meta.update(
+            {
+                "genres": [g["description"] for g in data.get("genres", [])],
+                "controller": next((v for k, v in _CTRL.items() if k in cats), "none"),
+                "desc": re.sub(r"[^\x20-\x7E]", "", data.get("short_description", ""))[
+                    :160
+                ],
+                "score": (data.get("metacritic") or {}).get("score"),
+                "year": (data.get("release_date") or {}).get("date", "")[-4:],
+            }
+        )
+    r2 = requests.get(
+        "https://steamspy.com/api.php",
+        params={"request": "appdetails", "appid": str(appid)},
+        timeout=20,
+    )
     tags = r2.json().get("tags") or {}
     if isinstance(tags, dict):
-        meta["tags"] = [t for t, _ in
-                        sorted(tags.items(), key=lambda kv: -kv[1])[:10]]
+        meta["tags"] = [t for t, _ in sorted(tags.items(), key=lambda kv: -kv[1])[:10]]
     return meta
 
 
@@ -259,7 +288,7 @@ def refresh_owned() -> int:
 
 
 # --- shared by the catalog and steamstore -------------------------------------
-NOT_GAMES = {228980}                        # Steamworks Common Redistributables
+NOT_GAMES = {228980}  # Steamworks Common Redistributables
 
 
 def ascii_only(s: str | None) -> str:
@@ -284,15 +313,14 @@ def steam_creds() -> tuple[str, str] | None:
 # --- the sync orchestrator (all layers, staleness- and key-gated) ------------
 # Layer 1 needs the PC awake and fail-softs when asleep; layers 2-3 come from
 # the Steam cloud, so the catalog stays current while the rig sleeps.
-OWNED_MAX_AGE_S = 6 * 3600      # playtime/recency drift slowly; one call/6h
+OWNED_MAX_AGE_S = 6 * 3600  # playtime/recency drift slowly; one call/6h
 _sync_lock = threading.Lock()
 
 
 def _iso_age(index: dict, key: str) -> float | None:
     """Seconds since index[key] (iso timestamp), or None if absent/unparseable."""
     try:
-        return time.time() - time.mktime(time.strptime(index[key],
-                                                        "%Y-%m-%dT%H:%M:%S"))
+        return time.time() - time.mktime(time.strptime(index[key], "%Y-%m-%dT%H:%M:%S"))
     except (KeyError, ValueError):
         return None
 
@@ -306,19 +334,20 @@ def sync(meta_limit: int = 200) -> None:
     try:
         # Layer 1b only when layer 1 SUCCEEDED - both need the PC awake, so
         # gating spares a sleeping sync (and the blind test) a 15 s ssh wait.
-        if refresh() == 0:                          # layer 1 (fail-softs asleep)
-            refresh_collections()                   # layer 1b (PC-dependent too)
+        if refresh() == 0:  # layer 1 (fail-softs asleep)
+            refresh_collections()  # layer 1b (PC-dependent too)
         # Layer 4 is keyless, so it runs BEFORE the key gate. Reached through
-        # the module attribute so the blind suite's patches bite.
+        # the module attribute so the test suite's patches bite.
         from slopstation.agent.tools import steamstore
+
         d_age = _iso_age(steamstore.load_deals(), "refreshed")
         if d_age is None or d_age > steamstore.DEALS_MAX_AGE_S:
             steamstore.refresh_deals()
         if not steam_creds():
-            return                                  # no Steam key: layers 1+4 only
+            return  # no Steam key: layers 1+4 only
         age = _iso_age(load(), "ownedRefreshed")
         if age is None or age > OWNED_MAX_AGE_S:
-            refresh_owned()                         # layer 2
+            refresh_owned()  # layer 2
         index = load()
         appids = {r["appid"] for r in index.get("installed", [])}
         appids.update(int(a) for a in index.get("owned", {}))
@@ -348,12 +377,15 @@ def catalog_lines() -> list[str]:
     appid|name|tags|genres|hours|lastPlayed|installed|ctrl"""
     index = load()
     meta = load_meta()
-    owned = {k: v for k, v in index.get("owned", {}).items()
-             if int(k) not in NOT_GAMES}
-    installed_ids = {r["appid"] for r in index.get("installed", [])
-                     if r["appid"] not in NOT_GAMES}
-    rows = {r["appid"]: r["name"] for r in index.get("installed", [])
-            if r["appid"] not in NOT_GAMES}
+    owned = {k: v for k, v in index.get("owned", {}).items() if int(k) not in NOT_GAMES}
+    installed_ids = {
+        r["appid"] for r in index.get("installed", []) if r["appid"] not in NOT_GAMES
+    }
+    rows = {
+        r["appid"]: r["name"]
+        for r in index.get("installed", [])
+        if r["appid"] not in NOT_GAMES
+    }
     for appid, o in owned.items():
         rows.setdefault(int(appid), o.get("name") or f"app {appid}")
     # Playtest/beta stubs have no metadata and pollute recommendations.
@@ -364,15 +396,25 @@ def catalog_lines() -> list[str]:
         m = meta.get(str(appid), {})
         # Day precision: month-only rows made the model guess wrong about
         # what was played last (2026-08-15).
-        last = (time.strftime("%Y-%m-%d", time.localtime(o["last"]))
-                if o.get("last") else "never")
-        lines.append((appid in installed_ids, o.get("hours", 0), (
-            f"{appid}|{name}|{','.join(m.get('tags', [])[:5])}"
-            f"|{','.join(m.get('genres', [])[:3])}|{o.get('hours', 0)}h"
-            f"|{last}|{'inst' if appid in installed_ids else 'notinst'}"
-            f"|{m.get('controller', '?')}")))
+        last = (
+            time.strftime("%Y-%m-%d", time.localtime(o["last"]))
+            if o.get("last")
+            else "never"
+        )
+        lines.append(
+            (
+                appid in installed_ids,
+                o.get("hours", 0),
+                (
+                    f"{appid}|{name}|{','.join(m.get('tags', [])[:5])}"
+                    f"|{','.join(m.get('genres', [])[:3])}|{o.get('hours', 0)}h"
+                    f"|{last}|{'inst' if appid in installed_ids else 'notinst'}"
+                    f"|{m.get('controller', '?')}"
+                ),
+            )
+        )
     lines.sort(key=lambda t: (not t[0], -t[1]))
-    return [l for _, _, l in lines]
+    return [line for _, _, line in lines]
 
 
 def catalog() -> int:
@@ -384,9 +426,11 @@ def catalog() -> int:
 
 
 def usage() -> int:
-    print("usage: library.py sync | refresh [--local-steam] [--owned] "
-          "[--meta [N]] | show | catalog | probe <deals|search ...|reviews "
-          "<appid>|news <appid>|hltb <name>|trending|recent>")
+    print(
+        "usage: library.py sync | refresh [--local-steam] [--owned] "
+        "[--meta [N]] | show | catalog | probe <deals|search ...|reviews "
+        "<appid>|news <appid>|hltb <name>|trending|recent>"
+    )
     return 2
 
 
@@ -410,6 +454,7 @@ if __name__ == "__main__":
         sys.exit(catalog())
     elif args[:1] == ["probe"]:
         from slopstation.agent.tools import steamstore
+
         sys.exit(steamstore.probe(args[1:]))
     else:
         sys.exit(usage())

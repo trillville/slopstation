@@ -55,7 +55,7 @@ dependencies = [
 dev = [
   "pytest>=8.4",
   "pytest-asyncio>=1.0",
-  "pyflakes==3.4.0",   # the undefined-name guard in tests/test_lint.py
+  "ruff>=0.16",
   "mypy==2.3.1",
 ]
 
@@ -67,6 +67,7 @@ slopstation-supervise = "slopstation.supervise:main"
 slopstation-listener = "slopstation.chord_listener:main"
 slopstation-voice = "slopstation.agent.voice_agent:cli"
 slopstation-doctor = "slopstation.doctor:main"
+slopstation-refreeze = "slopstation.refreeze:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -76,21 +77,26 @@ slopstation = ["agent/grammar.yaml", "agent/models/*.onnx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra"
 # The pre-roll pipeline tests are coroutines; auto mode runs them without
 # a marker on each one.
 asyncio_mode = "auto"
 
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 88
+
+[tool.ruff.lint]
+# pyflakes and the pycodestyle errors, import order, modern syntax, and the
+# bugbear set. Style beyond that is the formatter's job.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
 [tool.mypy]
-# Lenient by choice: it holds the existing annotations consistent; it does not
-# demand new ones.
 python_version = "3.13"
-ignore_missing_imports = true
 mypy_path = "src"
 files = ["src"]
-# Runtime scratch, not shipped code.
-exclude = "(^|[\\/])(worker_home|models)([\\/]|$)"
-
-[[tool.mypy.overrides]]
-# Runtime scratch, not shipped code.
-module = ["slopstation.agent.bench.*"]
-ignore_errors = true
+ignore_missing_imports = true
+# Most of the code is unannotated; without this mypy skips those bodies and
+# passes vacuously.
+check_untyped_defs = true

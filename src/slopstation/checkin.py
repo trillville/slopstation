@@ -22,13 +22,13 @@ doctor.py's check-in row is what tells those apart.
 
 DRILL: kill a lane and confirm its monitor - and only its monitor - pages.
 """
+
 from __future__ import annotations
 
 import json
 import threading
 import time
 import urllib.request
-
 from urllib.parse import urlsplit
 
 from slopstation import events
@@ -66,12 +66,16 @@ def parse_dsn(dsn: object) -> tuple[str, str, str] | None:
     if not events.real_key(dsn):
         return None
     try:
-        parts = urlsplit(dsn.strip())            # type: ignore[union-attr] # real_key proved str
+        parts = urlsplit(dsn.strip())  # type: ignore[union-attr] # real_key proved str
     except ValueError:
         return None
     project = parts.path.strip("/")
-    if (parts.scheme not in ("http", "https") or not parts.hostname
-            or not parts.username or not project.isdigit()):
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or not parts.username
+        or not project.isdigit()
+    ):
         return None
     return parts.hostname, project, parts.username
 
@@ -87,11 +91,12 @@ def checkin_url(dsn: object, lane: str) -> str | None:
 def send(url: str, status: str = "ok") -> bool:
     """One check-in. POST rather than GET so monitor_config rides along and
     the monitor upserts itself. Never raises."""
-    body = json.dumps({"monitor_config": MONITOR_CONFIG,
-                       "status": status}).encode("utf-8")
+    body = json.dumps({"monitor_config": MONITOR_CONFIG, "status": status}).encode(
+        "utf-8"
+    )
     req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": "application/json"})
+        url, data=body, method="POST", headers={"Content-Type": "application/json"}
+    )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
             return 200 <= r.status < 300
@@ -104,6 +109,7 @@ def _config_dsn() -> object:
     chord lane must import on a machine that has no config.json yet."""
     try:
         from slopstation import cglib
+
         return cglib.config().get("sentryDsn")
     except Exception:
         return None
@@ -142,8 +148,7 @@ def start(lane: str, cfg: dict | None = None) -> threading.Thread | None:
                     if ok:
                         events.emit(lane, "checkin", events.INFO, monitor=slug)
                     else:
-                        events.emit(lane, "checkin_failed", events.WARN,
-                                    monitor=slug)
+                        events.emit(lane, "checkin_failed", events.WARN, monitor=slug)
                     was = ok
             except Exception:
                 pass

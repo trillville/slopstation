@@ -19,19 +19,17 @@ threshold measured so far is void and wakeThreshold must be re-derived from
 --wake-trials. And it is speaker-specific by design, so train it on everyone
 who uses the room or guests get worse service.
 """
+
 import argparse
 import json
 import sys
 import wave
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[2]                      # .../slopstation
-
+from slopstation import paths
 from slopstation.agent.speech import audio
-from slopstation import cglib
 
-MIN_POSITIVE = 3                            # openWakeWord's documented floor
+MIN_POSITIVE = 3  # openWakeWord's documented floor
 
 
 def check_clips(folder, what):
@@ -51,19 +49,22 @@ def check_clips(folder, what):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    clips = cglib.BASE / "logs" / "wake"
+    clips = paths.HOME / "logs" / "wake"
     ap.add_argument("--yes", type=Path, default=clips / "yes")
     ap.add_argument("--no", dest="no_dir", type=Path, default=clips / "no")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
-    voice = json.loads((cglib.BASE / "config.json")
-                       .read_text(encoding="utf-8-sig"))["voice"]
+    voice = json.loads((paths.HOME / "config.json").read_text(encoding="utf-8-sig"))[
+        "voice"
+    ]
 
     pos = check_clips(args.yes, "Sort real wakes from logs/wake into here.")
-    neg = check_clips(args.no_dir,
-                      "Sort false fires from logs/wake into here. Adding ~10 s "
-                      "of your ordinary speech (real commands) helps too.")
+    neg = check_clips(
+        args.no_dir,
+        "Sort false fires from logs/wake into here. Adding ~10 s "
+        "of your ordinary speech (real commands) helps too.",
+    )
     if len(pos) < MIN_POSITIVE:
         sys.exit(f"{len(pos)} positives, openWakeWord wants at least {MIN_POSITIVE}")
 
@@ -72,13 +73,15 @@ def main():
     # runs is a silent mismatch. pa/device are unused until a stream opens.
     listener = audio.WakeListener(None, voice, None)
     out = args.out or listener.model_path.with_name(
-        f"{listener.model_path.stem}_verifier.pkl")
+        f"{listener.model_path.stem}_verifier.pkl"
+    )
 
     print(f"model      {listener.model_path.name} ({listener.model_source})")
     print(f"positives  {len(pos)} in {args.yes}")
     print(f"negatives  {len(neg)} in {args.no_dir}")
 
     import openwakeword
+
     openwakeword.train_custom_verifier(
         positive_reference_clips=str(args.yes),
         negative_reference_clips=str(args.no_dir),
@@ -88,11 +91,13 @@ def main():
     )
 
     print(f"\nwrote {out}")
-    print(f"\nTo enable, in config.json under \"voice\":\n"
-          f'    "wakeVerifier": "{out.name}",\n'
-          f'    "wakeVerifierThreshold": 0.1\n'
-          f"Then RE-RUN --wake-trials. The verifier replaces the score, so "
-          f"every\nthreshold measured before this is void.")
+    print(
+        f'\nTo enable, in config.json under "voice":\n'
+        f'    "wakeVerifier": "{out.name}",\n'
+        f'    "wakeVerifierThreshold": 0.1\n'
+        f"Then RE-RUN --wake-trials. The verifier replaces the score, so "
+        f"every\nthreshold measured before this is void."
+    )
     return 0
 
 

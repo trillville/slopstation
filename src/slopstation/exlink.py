@@ -5,11 +5,10 @@
 
 Frames come from tv.py, the COM port from config.json.
 """
+
 import sys
 
-from slopstation import cglib
-from slopstation import events
-from slopstation import tv
+from slopstation import cglib, events, tv
 
 
 def _emit(cmd, ack=None, err=None, **extra):
@@ -20,8 +19,7 @@ def _emit(cmd, ack=None, err=None, **extra):
     if err is None:
         events.emit("manual", "exlink_send", cmd=cmd, ack=ack, **extra)
     else:
-        events.emit("manual", "exlink_nak", events.ERROR, cmd=cmd, err=err,
-                    **extra)
+        events.emit("manual", "exlink_nak", events.ERROR, cmd=cmd, err=err, **extra)
 
 
 def main(argv):
@@ -51,8 +49,7 @@ def main(argv):
             _emit(argv[0], err=str(e))
             print(f"{argv[0]}: FAILED - {e}")
             return 1
-    print("usage: exlink.py " + "|".join(tv.EXLINK_FRAMES)
-          + " | vol_set <0-100>")
+    print("usage: exlink.py " + "|".join(tv.EXLINK_FRAMES) + " | vol_set <0-100>")
     return 2
 
 

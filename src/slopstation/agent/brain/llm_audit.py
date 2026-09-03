@@ -11,6 +11,8 @@ A stream tee, not a hook: LLMService's event handlers are function-call
 shaped and observers see frames, of which a server-side tool pushes none.
 Every event reaches Pipecat untouched and in order.
 """
+
+
 def search_item(item):
     """-> (kind, query) for a provider-executed search item, else None.
     Matches a type CONTAINING 'search', not an exact string: the family grows
@@ -19,9 +21,11 @@ def search_item(item):
     if "search" not in kind:
         return None
     action = getattr(item, "action", None)
-    query = (getattr(action, "query", None)
-             or getattr(item, "query", None)
-             or (str(action)[:200] if action else ""))
+    query = (
+        getattr(action, "query", None)
+        or getattr(item, "query", None)
+        or (str(action)[:200] if action else "")
+    )
     return kind, str(query or "")
 
 
@@ -40,7 +44,7 @@ class _Tee:
             try:
                 self._sink(event)
             except Exception:
-                pass                            # never break the conversation
+                pass  # never break the conversation
             yield event
 
     async def close(self):
@@ -68,9 +72,9 @@ def install(service, log, spans=None, context=None):
         responses = service._client.responses
         create = responses.create
     except AttributeError:
-        return False                            # pipecat moved; not fatal
+        return False  # pipecat moved; not fatal
 
-    seen = []                                   # searches from the current turn
+    seen = []  # searches from the current turn
 
     def sink(event):
         item = getattr(event, "item", None)
@@ -114,13 +118,17 @@ def _feed_back(service, context, seen):
     async def _process_context(ctx):
         if seen:
             try:
-                ctx.add_message({
-                    "role": "system",
-                    "content": "[For your own reference: you ran these web "
-                               "searches on the previous turn and answered "
-                               "from their results - " + "; ".join(seen[:5])
-                               + ". If asked where that answer came from, "
-                               "this is the answer.]"})
+                ctx.add_message(
+                    {
+                        "role": "system",
+                        "content": "[For your own reference: you ran these web "
+                        "searches on the previous turn and answered "
+                        "from their results - "
+                        + "; ".join(seen[:5])
+                        + ". If asked where that answer came from, "
+                        "this is the answer.]",
+                    }
+                )
             except Exception:
                 pass
             seen.clear()

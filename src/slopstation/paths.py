@@ -6,6 +6,7 @@ An installed package can be imported from anywhere, so this is no longer
 install is editable. SLOPSTATION_HOME overrides it; anything that runs the
 package from outside a checkout has to set that.
 """
+
 import os
 import pathlib
 
