@@ -3,6 +3,7 @@ and re-checks under its lock, reconcile runs once per boot, an elevated window
 is refused, and start()/deploy speak schtasks."""
 
 import subprocess
+import sys
 import time
 import types
 
@@ -48,7 +49,31 @@ def test_the_job_object_can_be_made():
     # die with the test process.
     job = supervise._kill_on_close_job()
     assert job
-    assert supervise.ctypes.windll.kernel32.CloseHandle(job)
+    assert supervise._k32.CloseHandle(job)
+
+
+def test_a_process_in_the_job_takes_its_children_with_it():
+    """The guarantee the wrapper relies on: when it exits - or is terminated -
+    everything it started is gone too, venv launcher's grandchild included."""
+    parent = (
+        "import subprocess, sys\n"
+        "from slopstation import supervise\n"
+        "supervise._die_together()\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "print(child.pid, flush=True)\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", parent], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 0, out.stderr
+    pid = int(out.stdout.split()[0])
+    time.sleep(1)
+    listing = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True
+    ).stdout
+    assert "python" not in listing.lower(), (
+        f"child {pid} outlived its parent: {listing}"
+    )
 
 
 def test_lane_installs_then_runs_and_restarts_a_crash(monkeypatch, tmp_path):

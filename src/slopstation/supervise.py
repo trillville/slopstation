@@ -24,6 +24,7 @@ import msvcrt
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 
 from slopstation import cglib, paths
@@ -160,19 +161,38 @@ class _ExtendedLimits(ctypes.Structure):
     ]
 
 
+# Typed prototypes, or GetCurrentProcess's pseudo-handle (-1) comes back as a
+# 32-bit int and AssignProcessToJobObject sees an invalid handle.
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.CreateJobObjectW.restype = wintypes.HANDLE
+_k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+_k32.SetInformationJobObject.restype = wintypes.BOOL
+_k32.SetInformationJobObject.argtypes = [
+    wintypes.HANDLE,
+    ctypes.c_int,
+    wintypes.LPVOID,
+    wintypes.DWORD,
+]
+_k32.AssignProcessToJobObject.restype = wintypes.BOOL
+_k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+_k32.GetCurrentProcess.restype = wintypes.HANDLE
+_k32.GetCurrentProcess.argtypes = []
+_k32.CloseHandle.restype = wintypes.BOOL
+_k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
 def _kill_on_close_job() -> int:
     """A job object whose processes all die when its last handle closes."""
-    k32 = ctypes.windll.kernel32
-    job = k32.CreateJobObjectW(None, None)
+    job = _k32.CreateJobObjectW(None, None)
     if not job:
-        raise ctypes.WinError()
+        raise ctypes.WinError(ctypes.get_last_error())
     limits = _ExtendedLimits()
     limits.BasicLimitInformation.LimitFlags = _JOB_KILL_ON_CLOSE
-    ok = k32.SetInformationJobObject(
+    ok = _k32.SetInformationJobObject(
         job, _JOB_EXTENDED_LIMITS, ctypes.byref(limits), ctypes.sizeof(limits)
     )
     if not ok:
-        raise ctypes.WinError()
+        raise ctypes.WinError(ctypes.get_last_error())
     return job
 
 
@@ -187,9 +207,8 @@ def _die_together() -> None:
     and /End left the lane running as an orphan beside its replacement."""
     global _job
     job = _kill_on_close_job()
-    k32 = ctypes.windll.kernel32
-    if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
-        raise ctypes.WinError()
+    if not _k32.AssignProcessToJobObject(job, _k32.GetCurrentProcess()):
+        raise ctypes.WinError(ctypes.get_last_error())
     _job = job
 
 
