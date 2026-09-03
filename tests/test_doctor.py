@@ -14,6 +14,7 @@ import serial
 
 import helpers
 from slopstation import config, doctor, gamepc, paths, sessionlock, statefile, supervise
+from slopstation.agent.tools import media_clients
 
 
 class _Serial:
@@ -339,9 +340,9 @@ def _series_op(external_ref, seasons):
 @pytest.fixture
 def sonarr_wanted(monkeypatch, media_up):
     monkeypatch.setattr(
-        doctor,
-        "_arr_get",
-        lambda url, key, path, params=None, timeout=4: _wanted_missing(),
+        media_clients.ArrClient,
+        "get",
+        lambda self, endpoint, params=None: _wanted_missing(),
     )
 
 

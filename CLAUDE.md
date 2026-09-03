@@ -91,6 +91,13 @@ needs audio devices (the K15); both skip themselves. The python in `ci.yml` and
 `constraints.txt` is frozen from that venv, so a cp313 pin has no wheel for an
 older CI and the install fails.
 
+The venv's editable install points at ONE checkout, the main one. From a git
+worktree, pytest tests the worktree's code (pyproject's `pythonpath` puts its
+`src` first, and conftest passes that on to the interpreters the suite
+spawns) - but `python -m slopstation.<module>` and the console scripts run
+the MAIN checkout's code. To run a module from a worktree, set
+`PYTHONPATH=src`.
+
 ## Deploying
 
 - K15: `git pull`, then `Start-Slopstation.bat` (ends and re-runs both lane
