@@ -98,3 +98,4 @@ ignore_missing_imports = true
 # Most of the code is unannotated; without this mypy skips those bodies and
 # passes vacuously.
 check_untyped_defs = true
+warn_unused_ignores = true

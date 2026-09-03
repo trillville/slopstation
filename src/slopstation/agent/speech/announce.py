@@ -111,9 +111,17 @@ class Announcer:
         finally:
             pa.terminate()
 
+    def stop(self) -> None:
+        """End the announcer thread once its queue has drained. A lane runs it
+        for the life of the process; the tests do not."""
+        self._q.put(None)
+
     def _run(self):
         while True:
-            kind, operation_id, key = self._q.get()
+            item = self._q.get()
+            if item is None:
+                return
+            kind, operation_id, key = item
             self.abort.clear()
             # Session owns the speaker; a mid-session retrieval may mark the
             # operation acknowledged while we wait.

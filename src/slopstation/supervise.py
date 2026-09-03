@@ -84,6 +84,7 @@ def query(lane: str) -> dict[str, str] | None:
 
 
 def running(lane: str) -> bool:
+    # schtasks localises the Status text; this rig is English.
     return (query(lane) or {}).get("Status") == "Running"
 
 

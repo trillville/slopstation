@@ -381,5 +381,5 @@ def start(cfg, secrets, log):
     threading.Thread(
         target=server.serve_forever, daemon=True, name="remote-interface"
     ).start()
-    log("lane_up", what="remote_interface", host=host, port=port)
+    log("lane_up", what="remote_interface", host=host, port=server.server_address[1])
     return server

@@ -26,8 +26,6 @@ DRILL: kill a lane and confirm its monitor - and only its monitor - pages.
 from __future__ import annotations
 
 import json
-import threading
-import time
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -66,7 +64,7 @@ def parse_dsn(dsn: object) -> tuple[str, str, str] | None:
     if not events.real_key(dsn):
         return None
     try:
-        parts = urlsplit(dsn.strip())  # type: ignore[union-attr] # real_key proved str
+        parts = urlsplit(dsn.strip())  # real_key proved it a str
     except ValueError:
         return None
     project = parts.path.strip("/")
@@ -115,7 +113,7 @@ def _config_dsn() -> object:
         return None
 
 
-def start(lane: str, cfg: dict | None = None) -> threading.Thread | None:
+def start(lane: str, cfg: dict | None = None) -> events.Ticker | None:
     """Check in for `lane` every minute for as long as this process runs.
     Returns None when there is nothing to do - no DSN, or a test run. A test
     must never touch a live monitor, the same rule as env=test JSONL.
@@ -133,27 +131,24 @@ def start(lane: str, cfg: dict | None = None) -> threading.Thread | None:
 
     slug = SLUG_PREFIX + lane
 
+    was = None
+
     def tick():
         global last_ok
-        was = None
-        while True:
-            try:
-                ok = send(url)
-                last_ok = ok
-                if ok is not was:
-                    # Two literal calls, not one with a conditional name:
-                    # _events_scan reads event names out of the SOURCE, and a
-                    # name it cannot see is a name test_event_names cannot
-                    # freeze.
-                    if ok:
-                        events.emit(lane, "checkin", events.INFO, monitor=slug)
-                    else:
-                        events.emit(lane, "checkin_failed", events.WARN, monitor=slug)
-                    was = ok
-            except Exception:
-                pass
-            time.sleep(INTERVAL_S)
+        nonlocal was
+        ok = send(url)
+        last_ok = ok
+        if ok is not was:
+            # Two literal calls, not one with a conditional name:
+            # _events_scan reads event names out of the SOURCE, and a
+            # name it cannot see is a name test_event_names cannot
+            # freeze.
+            if ok:
+                events.emit(lane, "checkin", events.INFO, monitor=slug)
+            else:
+                events.emit(lane, "checkin_failed", events.WARN, monitor=slug)
+            was = ok
 
-    t = threading.Thread(target=tick, daemon=True, name=f"checkin-{lane}")
+    t = events.Ticker(f"checkin-{lane}", INTERVAL_S, tick)
     t.start()
     return t

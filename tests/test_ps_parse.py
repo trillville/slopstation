@@ -11,6 +11,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 PC = ROOT / "gaming-pc"
 MEDIA_START = ROOT / "media" / "Start-Media.ps1"
@@ -112,8 +114,7 @@ def owned(text, fn):
 
 def test_ps_parse():
     if not shutil.which("powershell"):
-        print("SKIP - powershell not on PATH")
-        return
+        pytest.skip("powershell not on PATH")
     dispatch, common, nav = read(DISPATCH), read(COMMON), read(NAV)
 
     # 1. Every script parses.

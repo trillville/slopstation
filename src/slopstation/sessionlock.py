@@ -87,7 +87,7 @@ def _recycle_stale(content: str) -> bool:
         for _ in range(8):
             try:
                 os.replace(guard, lock_file())
-                guard = None  # type: ignore[assignment] # consumed by the swap; not ours to unlink
+                guard = None  # consumed by the swap; not ours to unlink
                 return True
             except OSError:
                 if active():

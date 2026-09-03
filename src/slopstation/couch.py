@@ -316,7 +316,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     age = sessionlock.age()
     if sessionlock.active(age):
         log("launch_busy", lock_age_s=round(age or 0))
-        return 1  # type: ignore[arg-type] # active implies aged
+        return 1
     if age is not None:
         log.warn("lock_recycled", lock_age_s=round(age))
     if not sessionlock.acquire(f"{turn} {os.getpid()}"):

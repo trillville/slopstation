@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, TypeGuard
@@ -320,7 +320,30 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
 HEARTBEAT_S = 60
 
 
-def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> threading.Thread:
+class Ticker(threading.Thread):
+    """A daemon thread that calls `tick` every `interval_s` for as long as the
+    process runs, swallowing whatever it raises. Set `stop` to end it: a lane
+    never does; the tests do."""
+
+    def __init__(
+        self, name: str, interval_s: float, tick: Callable[[], object]
+    ) -> None:
+        super().__init__(daemon=True, name=name)
+        self.interval_s = interval_s
+        self._tick = tick
+        self.stop = threading.Event()
+
+    def run(self) -> None:
+        while True:
+            try:
+                self._tick()
+            except Exception:
+                pass
+            if self.stop.wait(self.interval_s):
+                return
+
+
+def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> Ticker:
     """Emit `heartbeat` from a daemon thread for as long as this process runs.
     A dead process writes nothing, so silence and idle look identical. Writes
     JSONL ONLY, not through the lane logger: ~1440 lines/day would swamp
@@ -335,15 +358,11 @@ def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> threading.Thr
     check-ins arrive is a dead collector; check-ins missing is a dead lane.
     """
 
-    def tick():
-        while True:
-            try:
-                emit(lane, "heartbeat", INFO, interval_s=interval_s)
-            except Exception:
-                pass
-            time.sleep(interval_s)
-
-    t = threading.Thread(target=tick, daemon=True, name=f"heartbeat-{lane}")
+    t = Ticker(
+        f"heartbeat-{lane}",
+        interval_s,
+        lambda: emit(lane, "heartbeat", INFO, interval_s=interval_s),
+    )
     t.start()
     return t
 
