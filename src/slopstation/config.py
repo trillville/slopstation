@@ -82,7 +82,7 @@ def missing(cfg: dict, voice: bool = False) -> list[str]:
 
 
 def secrets() -> dict:
-    """secrets.json as a dict. Reads paths.secrets_file() at call time (tests re-point it)."""
+    """secrets.json as a dict, read under whatever paths.HOME is at call time."""
     try:
         return events.load_secrets(paths.secrets_file())
     except ValueError:
