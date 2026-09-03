@@ -44,9 +44,8 @@ def test_gate_runs_before_each_launch(monkeypatch, tmp_path):
 
 
 def test_installer_rechecks_under_the_lock(monkeypatch, tmp_path):
-    answers = iter(
-        [True, False]
-    )  # changed at the door, installed by the time we hold the lock
+    # Changed at the door, installed by the time we hold the lock.
+    answers = iter([True, False])
     ran = []
     monkeypatch.setattr(supervise, "SENTINEL", tmp_path / "deps-ok")
     monkeypatch.setattr(supervise, "pins_changed", lambda: next(answers))
