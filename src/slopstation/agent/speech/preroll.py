@@ -101,8 +101,8 @@ class WakeCapture:
 
     def disarm_deadline(self) -> None:
         """Retire the CHIME_BY_S fallback; quiet detection stays armed. Called
-        at the pipeline handoff: the pump now outlives the old stop point by
-        the whole setup (the Flux connect), where a one-breath command is
+        at the pipeline handoff: the pump runs on through the whole setup
+        (the Flux connect), where a one-breath command is
         still mid-word at 1.5 s - the deadline would beep over it. Past the
         handoff, quiet detection and the gate's final-transcript backstop own
         the chime."""

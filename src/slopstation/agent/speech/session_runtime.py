@@ -437,8 +437,7 @@ class Session:
         #
         # enable_interruptions=True is 1.7's LIVE behavior: Flux broadcast an
         # interruption on every talk-over and the output transport honored it,
-        # cutting the answer (the old "no barge-in" comment here described
-        # intent, not what shipped). False = answers play through talk-over.
+        # cutting the answer. False = answers play through talk-over.
         turns = UserTurnProcessor(
             user_turn_strategies=ExternalUserTurnStrategies(enable_interruptions=True)
         )

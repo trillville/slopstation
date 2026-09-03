@@ -31,6 +31,8 @@ LANES = {
 # Bumping a pin has to install itself on the next launch: CD pulls code, not
 # wheels.
 PINS = ("pyproject.toml", "constraints.txt")
+# Written only after pip succeeds, so a half-built venv retries next launch.
+SENTINEL = Path(sys.prefix) / "deps-ok"
 
 # Process control by lane, shared with deploy.py and doctor.py. Filtered to
 # python* so the PowerShell doing the filtering - whose own command line holds
@@ -116,13 +118,16 @@ def _pin_digest():
     return h.hexdigest()
 
 
+def pins_changed() -> bool:
+    """True when the pins differ from what the venv last installed."""
+    try:
+        return _pin_digest() != SENTINEL.read_text().strip()
+    except OSError:
+        return True  # no sentinel: never installed, or the install failed
+
+
 def _install_if_pins_changed(log):
-    """Reinstall when pyproject or constraints moved since the last success.
-    The sentinel is written only AFTER pip succeeds, so a half-built venv
-    retries on the next launch."""
-    digest = _pin_digest()
-    sentinel = Path(sys.prefix) / "deps-ok"
-    if digest is None or (sentinel.exists() and sentinel.read_text().strip() == digest):
+    if not pins_changed():
         return
     print("[supervisor] pins changed - installing, takes a minute or two...")
     r = subprocess.run(
@@ -141,7 +146,7 @@ def _install_if_pins_changed(log):
     if r.returncode:
         print("[supervisor] pip install failed - fix it and relaunch")
         return
-    sentinel.write_text(digest)
+    SENTINEL.write_text(_pin_digest() or "")
     log("deps_installed", what="venv")
 
 

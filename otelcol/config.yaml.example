@@ -29,8 +29,8 @@ receivers:
   filelog/events:
     include:
       # EDIT ME. Print it, do not guess it, and use FORWARD slashes:
-      #   python -c "import events; print(events.LOG_DIR)"
-      # k15-*.jsonl, so blind-suite runs writing test-*.jsonl never leave the
+      #   .venv\Scripts\python -c "from slopstation import events; print(events.LOG_DIR)"
+      # k15-*.jsonl, so test runs writing test-*.jsonl never leave the
       # machine, and events.py's archive\ is out of the glob.
       - C:/Users/minipc/Desktop/slopstation/logs/k15-*.jsonl
     start_at: beginning

@@ -101,8 +101,8 @@ TABLE = [
     ("start", None, {}),
     ("play", None, {}),
     ("switch to the garage", None, {}),  # unknown input name
-    ("show me deadlock", None, {}),  # a game name: no nav/collection
-    # marker -> assistant (game page)
+    # a game name: no nav/collection marker -> assistant (game page)
+    ("show me deadlock", None, {}),
     ("show me the pictures", None, {}),  # not a nav target -> assistant
     # Risky-command narrowness: casual variants must NOT end a session.
     ("end it", None, {}),

@@ -159,7 +159,7 @@ def make_ducker(cfg, dry_run):
     # Session-length room ducking; details on TvDucker. Steps are SOUNDBAR
     # volume points, moved by remote-key relay and verified against the TV's
     # readback. Off unless duckSteps/duckToPct AND tvIp are set. First use on
-    # a machine needs `.venv\Scripts\python tv_remote.py pair`, accepted on
+    # a machine needs `slopstation.agent.tools.tv_remote pair`, accepted on
     # the TV.
     duck_steps = int(voice.get("duckSteps", 0) or 0)
     duck_to_pct = int(voice.get("duckToPct", 0) or 0)
@@ -332,7 +332,7 @@ def main():
         log(
             "lane_disabled",
             what="steam_session",
-            reason="no refresh token - run steam_session.py enroll",
+            reason="no refresh token - run steam_session enroll",
         )
 
     if steam is not None and not args.dry_run:

@@ -1,8 +1,8 @@
 """Does the -9999 stream death follow the MME host API, or the machine?
 
-    .venv\\Scripts\\python bench\\probe_host_api.py 7200      (2 hours)
-    .venv\\Scripts\\python bench\\probe_host_api.py 600 --dump run1.json
-    .venv\\Scripts\\python bench\\probe_host_api.py 60 --channels 6
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_host_api 7200      (2 hours)
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_host_api 600 --dump run1.json
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_host_api 60 --channels 6
 
 Runs on the K15. STOP THE VOICE SUPERVISOR FIRST - it holds the same mic.
 

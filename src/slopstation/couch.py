@@ -16,39 +16,36 @@ from slopstation import cglib, events, gamepc, tv
 PORT_WAIT_S = 90  # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60  # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S = 120  # Enter dispatch until the READY marker appears
-WAKE_RETRY_S = 30  # blind power_on re-send this far into the READY wait
-# (the gaming PC has no Ex-Link). Past the healthy
-# envelope: launches reach READY in ~9-20 s.
-ENTER_REDISPATCH = 1  # extra Enter dispatches after a DETECTED death, not a
-# timeout. All three recorded failures (2026-08-13
-# 17:20, 08-16 17:56, 08-19 01:18) were TVs that acked
-# power_on and stayed dark, burning the full window on
-# an already-exited Enter. The retry gets a fresh one.
-# Budget: 08-19's Enter died at 48.3 s (turn 7402df) and
-# the K15 waited another 71 s on a dead task, so
-# detection lands ~50 s in and a twice-failing launch
-# takes ~170 s instead of 121 s. Safe to redispatch
-# because Enter's abort path leaves OFFICE topology
-# behind - the clean state a fresh Enter wants.
-ENTER_SETTLE_S = 25  # how long a NOTREADY stays unremarkable: outlasts the
-# gap between schtasks /Run returning (task only
-# TRIGGERED) and it reading as running, plus the slowest
-# launch that ever worked (19.8 s).
+# blind power_on re-send this far into the READY wait (the gaming PC has no Ex-Link).
+# Past the healthy envelope: launches reach READY in ~9-20 s.
+WAKE_RETRY_S = 30
+# extra Enter dispatches after a DETECTED death, not a timeout. All three recorded
+# failures (2026-08-13 17:20, 08-16 17:56, 08-19 01:18) were TVs that acked power_on and
+# stayed dark, burning the full window on an already-exited Enter. The retry gets a
+# fresh one. Budget: 08-19's Enter died at 48.3 s (turn 7402df) and the K15 waited
+# another 71 s on a dead task, so detection lands ~50 s in and a twice-failing launch
+# takes ~170 s instead of 121 s. Safe to redispatch because Enter's abort path leaves
+# OFFICE topology behind - the clean state a fresh Enter wants.
+ENTER_REDISPATCH = 1
+# how long a NOTREADY stays unremarkable: outlasts the gap between schtasks /Run
+# returning (task only TRIGGERED) and it reading as running, plus the slowest launch
+# that ever worked (19.8 s).
+ENTER_SETTLE_S = 25
 WATCH_POLL_S = 5
-WATCH_FAILS = 3  # consecutive ssh failures (ssh() raises) = session
-# dead. Low on purpose: a true sleep restores the TV in
-# ~20-30 s, and a false positive only costs a desk-side
-# relaunch (the Puck stays claimed, chord deaf).
-TV_WAIT_S = 30  # how long the enter_died rescue waits for the set to
-# REPORT "on" before spending its redispatch or failing
-# with the TV named. State flips ~5 s after an accepted
-# frame (2026-08-19: standby t+1..4 s, on t+5 s).
-TV_POKE_S = 6  # power_on re-send interval while the set answers
-# not-on; just past the ~5 s flip lag. power_on is
-# discrete, safe to repeat.
-TV_UNKNOWN_N = 3  # unreadable answers before standing down to the blind
-# path. None is UNKNOWN, never "off" (Wi-Fi blip, IP
-# drift, no tvIp). Reads ride existing loops, ~0.5 s each.
+# consecutive ssh failures (ssh() raises) = session dead. Low on purpose: a true sleep
+# restores the TV in ~20-30 s, and a false positive only costs a desk-side relaunch (the
+# Puck stays claimed, chord deaf).
+WATCH_FAILS = 3
+# how long the enter_died rescue waits for the set to REPORT "on" before spending its
+# redispatch or failing with the TV named. State flips ~5 s after an accepted frame
+# (2026-08-19: standby t+1..4 s, on t+5 s).
+TV_WAIT_S = 30
+# power_on re-send interval while the set answers not-on; just past the ~5 s flip lag.
+# power_on is discrete, safe to repeat.
+TV_POKE_S = 6
+# unreadable answers before standing down to the blind path. None is UNKNOWN, never
+# "off" (Wi-Fi blip, IP drift, no tvIp). Reads ride existing loops, ~0.5 s each.
+TV_UNKNOWN_N = 3
 
 log = cglib.make_log("launch")
 
@@ -520,7 +517,7 @@ def reconcile() -> int:
 
 
 def usage() -> int:
-    print("usage: couch.py [start [appid] [--turn <hex>]|reconcile]")
+    print("usage: python -m slopstation.couch [start [appid] [--turn <hex>]|reconcile]")
     return 2
 
 

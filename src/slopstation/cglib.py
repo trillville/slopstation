@@ -22,10 +22,10 @@ STATE = paths.HOME / "state"
 LOCK = STATE / "session.lock"
 LOCK_STALE_S = 300  # a live session touches the lock every few seconds
 LAST_ERROR = STATE / "last_error"  # written by couch.py on launch failure
-CANCEL = STATE / "cancel"  # one line: the cancelling turn (may be empty).
-# Written by voice end_session, unlinked by
-# couch.py at every launch wait; stale copies
-# voided at the next launch's start.
+# One line, the cancelling turn (may be empty). Written by voice end_session,
+# unlinked by couch.py at every launch wait; stale copies voided at the next
+# launch's start.
+CANCEL = STATE / "cancel"
 
 
 def lock_age() -> float | None:

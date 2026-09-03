@@ -1,4 +1,4 @@
-"""A REAL session pipeline end-to-end minus STT -
+"""A REAL session pipeline end-to-end minus STT, on the K15 -
 LocalAudioTransport on real devices, GrammarGate, dry-run dispatch, earcons
 through the actual speaker, and the exit phrase ending the worker. Scripted
 TranscriptionFrames stand in for Flux, whose connect path needs the key.
@@ -7,6 +7,7 @@ Brief tones will be audible.
 
 import asyncio
 
+import helpers
 from slopstation import cglib
 from slopstation.agent.brain.dispatch import Dispatch
 from slopstation.agent.speech.grammar_gate import GrammarGate, GrammarMatcher
@@ -109,3 +110,9 @@ async def run():
     # are 0.9 s behind, past ACK_COALESCE_S, so they ack normally.
     folded = len(log.find("earcon_folded"))
     assert folded == 1, f"{folded} acks folded, want exactly the first"
+
+
+async def test_session_pipeline():
+    """On the K15 only: real devices, and the live config.json."""
+    helpers.wants("audio")
+    await run()

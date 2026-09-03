@@ -22,9 +22,8 @@ RID_INPUT = 0x42  # ID_TRITON_CONTROLLER_STATE in SDL
 # the same interface that streams 0x42 state reports. All u16 little-endian,
 # no padding.
 HAPTIC_RUMBLE = 0x80  # 10B: type u8, intensity u16, left speed u16 + gain s8, right speed u16 + gain s8
-HAPTIC_PULSE = (
-    0x81  # 8B: side u8, on_us u16, off_us u16, repeat u16; zero-filled = stop tone
-)
+# 8B: side u8, on_us u16, off_us u16, repeat u16; zero-filled = stop tone
+HAPTIC_PULSE = 0x81
 HAPTIC_TONE = 0x83  # 10B: side u8, gain_db s8, freq u16, duration_ms u16, lfo_freq u16, lfo_depth u8
 
 

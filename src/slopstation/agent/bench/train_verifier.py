@@ -1,6 +1,6 @@
 """Train the second-stage verifier from clips this rig actually fired on.
 
-    .venv\\Scripts\\python bench\\train_verifier.py
+    .venv\\Scripts\\python -m slopstation.agent.bench.train_verifier
 
 Runs on the K15, where the clips already are: audio.py writes every wake
 fire's pre-roll to logs/wake/*.wav, and labelling is sorting those by ear.

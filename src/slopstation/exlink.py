@@ -49,7 +49,11 @@ def main(argv):
             _emit(argv[0], err=str(e))
             print(f"{argv[0]}: FAILED - {e}")
             return 1
-    print("usage: exlink.py " + "|".join(tv.EXLINK_FRAMES) + " | vol_set <0-100>")
+    print(
+        "usage: python -m slopstation.exlink "
+        + "|".join(tv.EXLINK_FRAMES)
+        + " | vol_set <0-100>"
+    )
     return 2
 
 

@@ -297,8 +297,8 @@ def test_couch():
     # --- a PC that predates the verb: no information is not death -------------
     # enterstate answers DENIED on an un-deployed gaming PC; an ssh blip
     # raises. Both must leave the old timeout behaviour unchanged.
-    couch.READY_WAIT_S = 0.3  # short window: must time out, not
-    # be rescued
+    # short window: must time out, not be rescued
+    couch.READY_WAIT_S = 0.3
     for label, reply in (("DENIED", "DENIED"), ("blip", RuntimeError("blip"))):
         fresh_state()
         log, sent = wire(

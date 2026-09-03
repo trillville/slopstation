@@ -13,8 +13,9 @@ import numpy as np
 SAMPLE_RATE = 16000
 GAP_MS = 70  # silence between the bursts of a counted earcon
 ATTACK_MS = 5  # per-note fade-in (click prevention)
-RELEASE_MS = 10  # per-note fade-out to true zero - a decaying note still
-# clicks if it is simply truncated
+# per-note fade-out to true zero - a decaying note still clicks if it is simply
+# truncated
+RELEASE_MS = 10
 
 # Bell timbre: partials decaying faster the higher they are.
 PARTIALS = ((1, 1.00), (2, 0.22), (3, 0.07))

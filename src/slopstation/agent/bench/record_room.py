@@ -1,6 +1,6 @@
 """Capture the living room as training data for a custom wake word.
 
-    .venv\\Scripts\\python bench\\record_room.py 2400        (40 minutes)
+    .venv\\Scripts\\python -m slopstation.agent.bench.record_room 2400        (40 minutes)
 
 Runs on the K15 - the point is THIS mic in THIS room. Close the voice
 supervisor first; it holds the same mic. Play a dialogue-heavy film or a game

@@ -1,6 +1,6 @@
 """Split a recording of repeated wake phrases into one-utterance clips.
 
-    .venv\\Scripts\\python bench\\slice_utterances.py positives.wav out\\dir
+    .venv\\Scripts\\python -m slopstation.agent.bench.slice_utterances positives.wav out\\dir
 
 Feeds wake-training/bench_real.py (real-voice recall) and
 bench/train_verifier.py (positive examples); both want one utterance per wav.

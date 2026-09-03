@@ -383,7 +383,7 @@ def probe(args: list[str]) -> int:
 
 def usage() -> int:
     print(
-        "usage: steamstore.py <deals|search ...|reviews <appid>|news <appid>"
+        "usage: python -m slopstation.agent.tools.steamstore <deals|search ...|reviews <appid>|news <appid>"
         "|hltb <name>|trending|recent>"
     )
     return 2

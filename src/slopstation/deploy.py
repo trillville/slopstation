@@ -17,7 +17,6 @@ back is therefore the failure, not something to start from here.
 from __future__ import annotations
 
 import argparse
-import pathlib
 import subprocess
 import sys
 import time
@@ -34,13 +33,6 @@ RELAUNCH_S = 90  # supervisor backoff is 10 s; this is that with room
 # or two"; a cold venv on this box is longer, and this is a ceiling that only
 # elapses when something is genuinely stuck, not a wait that is spent.
 REINSTALL_S = 900
-
-# The supervisor's dependency gate, read rather than guessed: it hashes the
-# pin files and compares that to a sentinel in the venv, inside its restart
-# loop, so killing the agent is what makes it fire. The sentinel is written
-# only after pip succeeds, so a failed install leaves the reinstall pending
-# too - which a diff of the commits being landed would not show.
-DEPS_OK = pathlib.Path(sys.prefix) / "deps-ok"
 
 # Compose reads compose.yaml only when something runs `up`, so a landed edit to
 # it changes nothing until this script runs - the containers keep the shape
@@ -115,15 +107,6 @@ def wait_idle(budget_s: float) -> bool:
         time.sleep(IDLE_POLL_S)
 
 
-def reinstall_pending() -> bool:
-    """True when the supervisor will pip install before it relaunches its
-    lane, so the relaunch wait has to cover that too."""
-    try:
-        return supervise._pin_digest() != DEPS_OK.read_text().strip()
-    except OSError:
-        return True  # no venv, or no sentinel: the gate fires
-
-
 def wait_fresh(
     want: set[str], killed: dict[str, set[int]], budget_s: float
 ) -> set[str]:
@@ -189,7 +172,7 @@ def main(argv: list[str]) -> int:
         # running, and doctor.py only WARNs about that, so this is the only
         # thing standing between a dead chord lane and a green CD run. Voice is
         # an overlay and may stay off.
-        reinstall = reinstall_pending()
+        reinstall = supervise.pins_changed()
         budget = REINSTALL_S if reinstall else RELAUNCH_S
         if reinstall:
             print(

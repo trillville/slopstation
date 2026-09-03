@@ -15,9 +15,9 @@ from the K15 before first use and accept the popup on the TV.
 
 CLI (lane=manual):
 
-    .venv\\Scripts\\python tv_remote.py pair
-    .venv\\Scripts\\python tv_remote.py vol            read current volume
-    .venv\\Scripts\\python tv_remote.py down|up [n]    n volume keys
+    .venv\\Scripts\\python -m slopstation.agent.tools.tv_remote pair
+    .venv\\Scripts\\python -m slopstation.agent.tools.tv_remote vol            read current volume
+    .venv\\Scripts\\python -m slopstation.agent.tools.tv_remote down|up [n]    n volume keys
 """
 
 import sys
@@ -279,7 +279,9 @@ def main(argv):
         )
         print(f"{argv[0]} x{n}: volume {before} -> {after}")
         return 0
-    print("usage: tv_remote.py pair | vol | down [n] | up [n]")
+    print(
+        "usage: python -m slopstation.agent.tools.tv_remote pair | vol | down [n] | up [n]"
+    )
     return 2
 
 

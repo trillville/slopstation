@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import msvcrt
 import os
 import pathlib
 import platform
@@ -29,11 +30,6 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
-
-try:  # Windows-only; the append lock needs it
-    import msvcrt
-except ImportError:  # pragma: no cover - no such rig today
-    msvcrt = None  # type: ignore[assignment] # _append falls back to a bare append
 from typing import Any, TypeGuard
 
 from slopstation import paths
@@ -244,10 +240,6 @@ LOCK_WAIT_S = 0.2
 
 def _append(path: pathlib.Path, line: str) -> None:
     data = (line + chr(10)).encode("utf-8")
-    if msvcrt is None:
-        with path.open("ab") as f:
-            f.write(data)
-        return
     fd = os.open(str(path.parent / ".emit.lock"), os.O_CREAT | os.O_RDWR)
     held = False
     try:

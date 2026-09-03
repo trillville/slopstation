@@ -12,8 +12,8 @@ Output: state/library.json, written atomically. sync() runs on a background
 thread at startup and after each voice session.
 
 CLI:
-    python library.py sync                        (every layer, as the agent does)
-    python library.py refresh [--local-steam] [--owned] [--meta [N]]
+    python -m slopstation.agent.tools.library sync                        (every layer, as the agent does)
+    python -m slopstation.agent.tools.library refresh [--local-steam] [--owned] [--meta [N]]
     python library.py show
     python library.py catalog
     python library.py probe <deals|search ...|reviews <appid>|news <appid>
@@ -165,7 +165,7 @@ def show() -> int:
         index.get("installed", []), key=lambda r: r.get("lastPlayed", 0), reverse=True
     )
     if not rows:
-        print("no index - run: python library.py refresh")
+        print("no index - run: python -m slopstation.agent.tools.library refresh")
         return 1
     print(f"refreshed {index.get('refreshed', '?')} - {len(rows)} installed")
     for r in rows:
@@ -427,7 +427,7 @@ def catalog() -> int:
 
 def usage() -> int:
     print(
-        "usage: library.py sync | refresh [--local-steam] [--owned] "
+        "usage: python -m slopstation.agent.tools.library sync | refresh [--local-steam] [--owned] "
         "[--meta [N]] | show | catalog | probe <deals|search ...|reviews "
         "<appid>|news <appid>|hltb <name>|trending|recent>"
     )

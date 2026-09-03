@@ -6,16 +6,15 @@ import os
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+from slopstation import paths
 
 
 def _local_settings():
     url = None
     token = None
-    config_path = HERE / "config.json"
-    secrets_path = HERE / "secrets.json"
+    config_path = paths.HOME / "config.json"
+    secrets_path = paths.HOME / "secrets.json"
     try:
         cfg = json.loads(config_path.read_text(encoding="utf-8-sig"))
         text_cfg = cfg.get("textInterface") or {}

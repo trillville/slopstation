@@ -162,7 +162,7 @@ def check_haptics():
             FAIL,
             "haptics",
             f"write failed ({e})",
-            "protocol drift after firmware update? re-run calibrate.py + haptic_test.py",
+            "protocol drift after firmware update? re-run slopstation.calibrate and slopstation.haptic_test",
         )
     finally:
         dev.close()
@@ -535,7 +535,7 @@ def check_voice_keys():
 
 def check_venv(cfg):
     venv = pathlib.Path(sys.prefix)
-    if (venv / "deps-ok").exists():
+    if supervise.SENTINEL.exists():
         report(PASS, "venv", "bootstrapped (deps-ok sentinel present)")
         model = cfg["voice"].get("wakeModel", "")
         # Same resolution order as audio.py _resolve_model.
@@ -555,7 +555,11 @@ def check_venv(cfg):
             / f"{model}.onnx"
         )
         if vendored.exists():
-            report(PASS, "wake model", f"{model}.onnx vendored in agent\\models")
+            report(
+                PASS,
+                "wake model",
+                f"{model}.onnx vendored in src\\slopstation\\agent\\models",
+            )
         elif onnx.exists():
             report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
         else:
@@ -565,7 +569,7 @@ def check_venv(cfg):
                 f"{model}.onnx not present",
                 "a pretrained name is auto-fetched on the agent's first "
                 "run; a custom one has no upstream and must be committed "
-                "to agent\\models",
+                "to src\\slopstation\\agent\\models",
             )
     else:
         report(
@@ -670,8 +674,7 @@ def check_steam_session():
                     WARN,
                     "steam session",
                     f"token expires in {days:.0f} days",
-                    "re-scan soon: agent\\.venv\\Scripts\\python "
-                    "agent\\tools\\steam_session.py enroll",
+                    "re-scan soon: python -m slopstation.agent.tools.steam_session enroll",
                 )
             else:
                 # Unexpired != working: QR enrolment can yield a web-audience

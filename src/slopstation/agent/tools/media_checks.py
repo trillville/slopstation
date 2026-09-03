@@ -9,9 +9,8 @@ media.managedIndexers, which the operator wrote.
 
 import json
 import subprocess
-from pathlib import Path
 
-from slopstation import cglib
+from slopstation import cglib, paths
 from slopstation.agent.tools.media_clients import (
     ArrClient,
     MediaConfigurationError,
@@ -497,7 +496,7 @@ def media_doctor(
         "enabled" if media_cfg.get("enabled") else "media.enabled is false",
     )
 
-    media_dir = Path(__file__).resolve().parents[2] / "media"
+    media_dir = paths.HOME / "media"
     try:
         rows = (compose_runner or _compose_services)(media_dir)
         states = {

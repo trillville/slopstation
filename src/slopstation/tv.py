@@ -23,8 +23,8 @@ EXLINK_FRAMES = {
     "hdmi4": "08220a000503c4",
     "vol_up": "082201000100d4",
     "vol_down": "082201000200d3",
-    "mute_toggle": "082202000000d4",  # the only toggle here - power_on/off
-    # are discrete, so safe to re-send
+    # the only toggle here - power_on/off are discrete, so safe to re-send
+    "mute_toggle": "082202000000d4",
 }
 
 # Every frame the S90C accepts acks with exactly these three bytes.

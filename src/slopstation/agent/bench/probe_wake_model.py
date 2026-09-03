@@ -1,8 +1,8 @@
 """Does a wake model load, cost what it should, and mean the same thing here
 as it did on the machine that trained it?
 
-    .venv\\Scripts\\python bench\\probe_wake_model.py models\\hey_x_v1.0.onnx
-    .venv\\Scripts\\python bench\\probe_wake_model.py m.onnx --dump k15.json
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_wake_model models\\hey_x_v1.0.onnx
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_wake_model m.onnx --dump k15.json
     python bench\\probe_wake_model.py --compare gamepc.json k15.json
 
 Exit code is non-zero on a failed compare.

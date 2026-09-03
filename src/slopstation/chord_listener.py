@@ -16,12 +16,11 @@ COUCH = [sys.executable, "-m", "slopstation.couch"]
 
 # Re-bench after controller firmware updates.
 HAPTIC_GAIN = 0  # s8 dB-ish; 0 = natural level, 120 = clamped max
-BUSY_COOLDOWN_S = (
-    5.0  # a held chord re-validates every ~2s; don't machine-gun the busy buzz
-)
+# a held chord re-validates every ~2s; don't machine-gun the busy buzz
+BUSY_COOLDOWN_S = 5.0
 FAIL_CHECK_S = 2.0  # how often to look for couch.py's last_error marker
-PARTIAL_COOLDOWN_S = 10.0  # rate limit for chord_partial; an idle hand on the
-# controller must not flood the lane
+# rate limit for chord_partial; an idle hand on the controller must not flood the lane
+PARTIAL_COOLDOWN_S = 10.0
 ERR_STALE_S = 600  # failures older than this are history, not news
 STANDOFF_POLL_S = 0.5  # how often to ask the lock whether the Puck is spoken for
 

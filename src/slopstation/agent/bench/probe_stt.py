@@ -1,11 +1,11 @@
 """Does Flux hear a command well enough to ACT on it?
 
-    .venv\\Scripts\\python bench\\probe_stt.py
-    .venv\\Scripts\\python bench\\probe_stt.py --raw-names     (the old keyterms)
-    .venv\\Scripts\\python bench\\probe_stt.py --no-keyterms   (no boost at all)
-    .venv\\Scripts\\python bench\\probe_stt.py --raw-tags     (SteamSpy's tag strings)
-    .venv\\Scripts\\python bench\\probe_stt.py --capitalized  (proper-noun case)
-    .venv\\Scripts\\python bench\\probe_stt.py --sweep         (fuzzyTitleThreshold)
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_stt
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_stt --raw-names     (the old keyterms)
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_stt --no-keyterms   (no boost at all)
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_stt --raw-tags     (SteamSpy's tag strings)
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_stt --capitalized  (proper-noun case)
+    .venv\\Scripts\\python -m slopstation.agent.bench.probe_stt --sweep         (fuzzyTitleThreshold)
 
 Live Deepgram, real money, non-deterministic. Windows SAPI speaks each
 utterance, so this measures the STT config, not tonight's room.
@@ -309,7 +309,7 @@ def main():
     resolve_game = titles.build_resolver(voice_cfg["fuzzyTitleThreshold"])
     resolve_coll = titles.build_collection_resolver(voice_cfg["fuzzyTitleThreshold"])
     if resolve_game is None:
-        print("no installed titles indexed - run library.py sync")
+        print("no installed titles indexed - run library sync")
         return 1
     # The gate matches the grammar FIRST and resolves only the slot, so the
     # resolver never sees "play " or the trailing period.
