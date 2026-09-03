@@ -8,10 +8,10 @@ leave the real checkout behind.
     python -m slopstation.deploy --sha <sha> [--wait-minutes 120]
 
 Exit code = doctor.py's (its FAIL count); 1 if the deploy could not finish.
-The reload is kill-and-let-the-supervisor-relaunch, never a start: a runner
-outside the interactive session would put a started lane in session 0, where it
-reaches neither the Puck nor the audio devices. An agent that does not come
-back is therefore the failure, not something to start from here.
+The reload is `schtasks /End` then `/Run` on each lane's task. The scheduler
+starts a task in the session it was registered for - the logged-on user's,
+where the Puck and the audio devices are - whichever process asks, so the
+runner can bring the chord lane back even when it was down.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ log = cglib.make_log("deploy")
 ROOT = paths.HOME
 
 IDLE_POLL_S = 15
-RELAUNCH_S = 90  # supervisor backoff is 10 s; this is that with room
+RELAUNCH_S = 90  # a /Run is near-instant; this is room for a slow box
 # A relaunch that has to pip install first. The supervisor calls it "a minute
 # or two"; a cold venv on this box is longer, and this is a ceiling that only
 # elapses when something is genuinely stuck, not a wait that is spent.
@@ -107,18 +107,15 @@ def wait_idle(budget_s: float) -> bool:
         time.sleep(IDLE_POLL_S)
 
 
-def wait_fresh(
-    want: set[str], killed: dict[str, set[int]], budget_s: float
-) -> set[str]:
-    """The lanes with no live pid OTHER than the one we just killed. Measured
-    2026-08-30: Stop-Process returns while the corpse is still in the process
-    table, so a name-only check read it as the replacement and passed ~10 s
-    before the supervisor had relaunched anything - which is the entire window
-    this is here to watch."""
+def wait_up(want: set[str], installed: bool, budget_s: float) -> set[str]:
+    """The lanes whose task is not Running once the budget is spent. When the
+    pins changed, the lane is also not counted up until its wrapper has
+    written the sentinel: Running alone would be pip, not the lane."""
     deadline = time.time() + budget_s
     while True:
-        live = supervise.pids()
-        missing = {lane for lane in want if not (live[lane] - killed.get(lane, set()))}
+        missing = {lane for lane in want if not supervise.running(lane)}
+        if installed and supervise.pins_changed():
+            missing = set(want)
         if not missing or time.time() >= deadline:
             return missing
         time.sleep(5)
@@ -163,28 +160,30 @@ def main(argv: list[str]) -> int:
         after = git("rev-parse", "--short", "HEAD")
         print(f"checkout {before} -> {after}", flush=True)
 
-        pids_before = supervise.pids()
-        was = {lane for lane, pids in pids_before.items() if pids}
+        was = {lane for lane in supervise.LANES if supervise.running(lane)}
         for lane in sorted(was):
-            log("deploy_reloaded", what=lane, killed=supervise.kill(lane))
+            log("deploy_reloaded", what=lane, killed=int(supervise.stop(lane)))
         # The chord lane is required back whether or not it was up to begin
         # with: a deploy that leaves it dead has landed code that nothing is
-        # running, and doctor.py only WARNs about that, so this is the only
-        # thing standing between a dead chord lane and a green CD run. Voice is
-        # an overlay and may stay off.
+        # running, and doctor.py only WARNs about that. Voice is an overlay:
+        # it comes back only if it was up, so a lane someone stopped on
+        # purpose stays stopped.
+        want = was | {"listener"}
+        for lane in sorted(want):
+            supervise.run(lane)
         reinstall = supervise.pins_changed()
         budget = REINSTALL_S if reinstall else RELAUNCH_S
         if reinstall:
             print(
-                "pins changed - the supervisor pip installs before the "
-                f"agent comes back; waiting up to {budget / 60:.0f} min",
+                "pins changed - the lane installs them before it comes up; "
+                f"waiting up to {budget / 60:.0f} min",
                 flush=True,
             )
-        missing = wait_fresh(was | {"listener"}, pids_before, budget)
+        missing = wait_up(want, reinstall, budget)
         if missing:
             raise RuntimeError(
                 f"{', '.join(sorted(missing))} not running {budget:.0f}s after the "
-                "reload - no supervisor to relaunch it? run Start-Slopstation.bat there"
+                "reload - task not registered? run Setup-K15-Tasks.ps1 there"
             )
 
         if media_enabled():

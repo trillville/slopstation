@@ -1,32 +1,38 @@
-"""Keeps a lane running: start it, restart it after any exit, and emit the
-transitions so a crash LOOP is alertable.
+"""The lanes as scheduled tasks: what each one runs, and the verbs the deployer,
+the doctor and Start-Slopstation.bat use on them.
 
-    slopstation-supervise listener     one lane, in this console
-    slopstation-start                  both lanes, or reload them onto new code
+Task Scheduler owns the lifecycle - start at logon, restart on failure, one
+instance at a time, in the logged-on session where the Puck and the audio
+devices are - and Setup-K15-Tasks.ps1 declares it. Each task's action is
 
-Single instance per lane is a byte lock held for the supervising process's
-lifetime. Windows drops it when the holder dies, so a killed supervisor cannot
-wedge the next one.
+    slopstation-lane <name>
+
+the wrapper below: install changed pins, run the lane, return its exit code so
+a crash reads as a failed task and the scheduler relaunches it. A Windows
+service cannot host these lanes: session 0 reaches neither device.
+
+    slopstation-start          start what is down, reload what is up
 """
 
 import argparse
+import csv
+import ctypes
 import hashlib
+import io
 import msvcrt
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from slopstation import cglib, paths
-
-RESTART_S = 10
 
 # What each lane runs. Module invocations, not paths: the package is installed.
 LANES = {
     "listener": [sys.executable, "-m", "slopstation.chord_listener"],
     "voice": [sys.executable, "-m", "slopstation.agent.voice_agent"],
 }
+TASKS = {lane: f"\\Slopstation\\{lane}" for lane in LANES}
 
 # Bumping a pin has to install itself on the next launch: CD pulls code, not
 # wheels.
@@ -35,78 +41,68 @@ PINS = ("pyproject.toml", "constraints.txt")
 # the .lock beside it serialises installers.
 SENTINEL = Path(sys.prefix) / "deps-ok"
 
-# Process control by lane, shared with deploy.py and doctor.py. Filtered to
-# python* so the PowerShell doing the filtering - whose own command line holds
-# the needle - cannot match itself.
-_PIDS_PS = (
-    "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" "
-    '| ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'
-)
-_KILL_PS = (
-    "$p = @(Get-CimInstance Win32_Process | Where-Object "
-    "{{ $_.Name -like 'python*' -and $_.CommandLine -like '*{needle}*' }}); "
-    "$p | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}; "
-    "exit $p.Count"
+STOP_WAIT_S = 15
+
+REFUSAL = (
+    "refusing to run elevated: a lane started from an administrator window "
+    "cannot be stopped, or even seen, from a normal one - and the deployer "
+    "runs in a normal one. Use a normal window."
 )
 
 
-def pids() -> dict[str, set[int]]:
-    """lane -> the pids of the pythons running it. Pids rather than a yes/no:
-    Stop-Process returns before the process leaves the table, so a caller
-    waiting for a RELAUNCH has to tell the corpse from its replacement."""
-    r = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", _PIDS_PS],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    out: dict[str, set[int]] = {lane: set() for lane in LANES}
-    for line in (r.stdout or "").splitlines():
-        pid, _, cmd = line.strip().partition(" ")
-        if not pid.isdigit():
-            continue
-        for lane, argv in LANES.items():
-            if argv[-1] in cmd:
-                out[lane].add(int(pid))
-    return out
-
-
-def kill(lane: str) -> int:
-    """Stop the lane's PROCESS, never its supervisor: the supervisor relaunches
-    it on the next loop, which is what makes this a reload. Returns how many
-    were stopped."""
-    command = _KILL_PS.format(needle=LANES[lane][-1])
-    r = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", command],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    return r.returncode
-
-
-def _lock_path(lane):
-    return Path(tempfile.gettempdir()) / f"slopstation-{lane}.lock"
-
-
-def _hold(lane):
-    """The single-instance lock, or None when another supervisor holds it."""
-    handle = open(_lock_path(lane), "w")
+def elevated() -> bool:
     try:
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError:
-        handle.close()
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+# --- the tasks ----------------------------------------------------------------
+
+
+def _schtasks(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["schtasks", *args], capture_output=True, text=True, timeout=30
+    )
+
+
+def query(lane: str) -> dict[str, str] | None:
+    """The task's verbose row as a dict (Status, Last Result, Last Run Time,
+    ...), or None when it is not registered."""
+    r = _schtasks("/Query", "/TN", TASKS[lane], "/FO", "CSV", "/V")
+    if r.returncode:
         return None
-    return handle
+    rows = list(csv.reader(io.StringIO(r.stdout)))
+    if len(rows) < 2:
+        return None
+    return dict(zip(rows[0], rows[1], strict=False))
 
 
-def _supervised(lane):
-    """True when a supervisor already holds this lane's lock."""
-    handle = _hold(lane)
-    if handle is None:
-        return True
-    handle.close()
-    return False
+def running(lane: str) -> bool:
+    return (query(lane) or {}).get("Status") == "Running"
+
+
+def stop(lane: str) -> bool:
+    """End the task and wait for the scheduler to agree it has stopped, so a
+    /Run straight after is not refused as a second instance. True when there
+    was something to stop."""
+    if not running(lane):
+        return False
+    _schtasks("/End", "/TN", TASKS[lane])
+    deadline = time.time() + STOP_WAIT_S
+    while running(lane) and time.time() < deadline:
+        time.sleep(0.5)
+    return True
+
+
+def run(lane: str) -> bool:
+    """Start the task. The scheduler starts it in the session it was
+    registered for, whoever asks - which is what lets the deployer bring a
+    lane back."""
+    return _schtasks("/Run", "/TN", TASKS[lane]).returncode == 0
+
+
+# --- the wrapper the tasks run --------------------------------------------------
 
 
 def _pin_digest():
@@ -131,9 +127,9 @@ def pins_changed() -> bool:
 
 
 def _install_if_pins_changed(log):
-    """One installer at a time: both supervisors start together, and two pips
-    in one venv corrupt it. The second waits on the lock, then re-reads the
-    sentinel the first wrote and skips."""
+    """One installer at a time: both tasks start at logon together, and two
+    pips in one venv corrupt it. The second waits on the lock, then re-reads
+    the sentinel the first wrote and skips."""
     if not pins_changed():
         return
     with open(SENTINEL.with_name("deps.lock"), "w") as lock:
@@ -146,11 +142,11 @@ def _install_if_pins_changed(log):
         try:
             if not pins_changed():
                 return
-            print("[supervisor] pins changed - installing, takes a minute or two...")
+            print("[lane] pins changed - installing, takes a minute or two...")
             pip = [sys.executable, "-m", "pip", "install", "-e", ".[dev]"]
             r = subprocess.run([*pip, "-c", "constraints.txt"], cwd=paths.HOME)
             if r.returncode:
-                print("[supervisor] pip install failed - fix it and relaunch")
+                print("[lane] pip install failed - fix it and relaunch")
                 return
             SENTINEL.write_text(_pin_digest() or "")
             log("deps_installed", what="venv")
@@ -159,70 +155,85 @@ def _install_if_pins_changed(log):
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def supervise(lane, passthrough):
-    """One lane, restarted forever. Returns an exit code only when it could
-    not start at all."""
-    log = cglib.make_log("supervisor")
-    handle = _hold(lane)
-    if handle is None:
-        print(f"[supervisor] another {lane} supervisor is running - close it first")
+def _uptime_s() -> float:
+    return ctypes.windll.kernel32.GetTickCount64() / 1000
+
+
+def _first_launch_this_boot() -> bool:
+    """True once per boot. The marker holds the boot's epoch; a launch that
+    reads the same boot back is the scheduler restarting a crashed lane, not a
+    boot."""
+    marker = cglib.STATE / "listener.boot"
+    boot = round(time.time() - _uptime_s())
+    try:
+        if abs(int(marker.read_text()) - boot) < 30:
+            return False
+    except (OSError, ValueError):
+        pass
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(boot))
+    return True
+
+
+def lane(name: str, passthrough: list[str]) -> int:
+    """Run one lane once and return its exit code. The scheduler restarts a
+    task whose action failed, so a crash comes back on its interval; a clean
+    exit (--once) stays down."""
+    if elevated():
+        print(f"[lane] {REFUSAL}")
         return 1
-    if lane == "listener":
-        # Once per boot, OUTSIDE the loop: re-running it mid-session would
-        # spawn a second watch loop against the live session lock.
+    log = cglib.make_log("supervisor")
+    _install_if_pins_changed(log)
+    if name == "listener" and _first_launch_this_boot():
+        # Once per boot, before the listener: re-running it after a mid-session
+        # crash would spawn a second watch loop against the live session lock.
         subprocess.run(
             [sys.executable, "-m", "slopstation.couch", "reconcile"], cwd=paths.HOME
         )
-    log("start", what=lane)
-    while True:
-        # Inside the loop: a deploy lands new pins and then kills the lane,
-        # and the relaunch is where they have to be installed.
-        _install_if_pins_changed(log)
-        code = subprocess.run(LANES[lane] + passthrough, cwd=paths.HOME).returncode
-        print(f"[supervisor] {lane} exited (code {code}) - restarting in {RESTART_S}s")
-        log.warn("restart", what=lane, code=code)
-        time.sleep(RESTART_S)
+    log("start", what=name)
+    code = subprocess.run(LANES[name] + passthrough, cwd=paths.HOME).returncode
+    if code:
+        # The scheduler relaunches a failed task; this is the alertable trace
+        # of a crash loop.
+        log.warn("restart", what=name, code=code)
+    return code
 
 
-def start():
-    """Both lanes on the code on disk right now: start a supervisor that is
-    down, reload one that is up. The Windows startup shortcut and the thing to
-    run after a git pull."""
+def lane_main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("lane", choices=sorted(LANES))
+    args, passthrough = ap.parse_known_args(argv)
+    return lane(args.lane, passthrough)
+
+
+# --- Start-Slopstation.bat -------------------------------------------------------
+
+
+def start() -> int:
+    """Both lanes on the code on disk right now: start a task that is down,
+    end and re-run one that is up. The thing to run after a git pull."""
+    if elevated():
+        print(f"[start] {REFUSAL}")
+        return 1
     log = cglib.make_log("supervisor")
-    reloaded = False
-    for lane in LANES:
-        if _supervised(lane):
-            killed = kill(lane)
-            reloaded = True
+    for name in LANES:
+        info = query(name)
+        if info is None:
             print(
-                f"[start] {lane}: {'stopped' if killed else 'already down'}"
-                " - its supervisor will bring it back"
+                f"[start] {name}: {TASKS[name]} is not registered - run Setup-K15-Tasks.ps1"
             )
-            log("lane_reloaded", what=lane, killed=killed)
+            return 1
+        if info.get("Status") == "Running":
+            stop(name)
+            run(name)
+            print(f"[start] {name}: reloaded")
+            log("lane_reloaded", what=name, killed=1)
         else:
-            print(f"[start] {lane} down - starting it")
-            log("lane_started", what=lane)
-            subprocess.Popen(
-                [sys.executable, "-m", "slopstation.supervise", lane],
-                cwd=paths.HOME,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-            )
-    if reloaded:
-        print(
-            f"\n[start] reloaded - each supervisor relaunches its lane "
-            f"within ~{RESTART_S}s."
-        )
+            run(name)
+            print(f"[start] {name}: started")
+            log("lane_started", what=name)
     return 0
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
-        "lane", choices=sorted(LANES), help="which lane to supervise in this console"
-    )
-    args, passthrough = ap.parse_known_args(argv)
-    return supervise(args.lane, passthrough)
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(lane_main())

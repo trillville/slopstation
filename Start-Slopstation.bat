@@ -1,5 +1,5 @@
 @echo off
-rem The Windows startup shortcut (shell:startup -> this file) and the thing to
-rem run after a git pull: both lanes on the code on disk right now.
+rem Start what is down, reload what is up: the thing to run after a git pull.
+rem The lanes themselves start at logon as scheduled tasks (Setup-K15-Tasks.ps1).
 cd /d "%~dp0"
 .venv\Scripts\slopstation-start.exe

@@ -20,7 +20,7 @@ NAV = PC / "Nav-BigPicture.ps1"
 
 # Prints one 'FILE|LINE|MESSAGE' per parse error, then 'PARSED <n>'.
 PARSE_PS = r"""
-$files = @(Get-ChildItem '{pc}\*.ps1') + @(Get-Item '{media}')
+$files = @(Get-ChildItem '{pc}\*.ps1') + @(Get-Item '{media}') + @(Get-ChildItem '{root}\*.ps1')
 foreach ($f in $files) {{
   $errs = $null
   [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs) | Out-Null
@@ -35,7 +35,7 @@ def read(p):
 
 
 def parse_all():
-    script = PARSE_PS.format(pc=str(PC), media=str(MEDIA_START))
+    script = PARSE_PS.format(pc=str(PC), media=str(MEDIA_START), root=str(ROOT))
     enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     cmd = [
         "powershell",

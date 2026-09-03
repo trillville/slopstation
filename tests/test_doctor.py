@@ -89,9 +89,11 @@ def test_doctor(monkeypatch):
     rows.clear()
 
     # --- listener ------------------------------------------------------------
-    monkeypatch.setattr(supervise, "pids", lambda: {"listener": {1}, "voice": set()})
+    monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
     assert doctor.check_listener() is True and levels()["listener"] == "PASS"
-    monkeypatch.setattr(supervise, "pids", lambda: {"listener": set(), "voice": set()})
+    monkeypatch.setattr(
+        supervise, "query", lambda lane: {"Status": "Ready", "Last Result": "1"}
+    )
     assert doctor.check_listener() is False and levels()["listener"] == "WARN"
     rows.clear()
 
