@@ -32,11 +32,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import checkin
 import cglib
 from agent.speech import earcons
 import events
 from agent.tools import library
-from agent.telemetry import tracing
+from agent.telemetry import sentry
 from agent.speech.audio import (WakeListener, list_devices, open_audio,
                                 play_pcm, rebuild_audio)
 from agent.speech.grammar_gate import GrammarMatcher
@@ -328,7 +329,7 @@ def main():
     remote.start(cfg, secrets, log)
 
     # Before the wake loop, so the first session is traced too. Fail-soft.
-    tracing.setup(cfg, secrets, log)
+    sentry.setup(cfg, log)
 
     # LAST: open_audio blocks until the configured device answers (~15 s on a
     # cold boot; forever on a dead mic). Everything above must already be
@@ -349,6 +350,11 @@ def main():
     # bench mode would page.
     if not (args.wake_trials or args.false_accept_soak or args.once):
         events.start_heartbeat("voice")
+        # This lane's own cron monitor: its death pages on its own, and the
+        # listener's stays green. No-ops without a sentryDsn, and the bench
+        # modes above stay out of it for the same reason they skip the
+        # heartbeat - a quiet bench must not page.
+        checkin.start("voice", cfg)
 
     if args.wake_trials:
         log("wake_trials_start")
@@ -400,10 +406,10 @@ def main():
             continue
         # One id per conversation, minted before the event loop exists so
         # asyncio.run carries it into every task inside (and to_thread into
-        # dispatch). Langfuse groups follow-ups on it. Minted after the wait
-        # returns (a wake_stream_died must not carry a session that never
-        # opens) and before log("wake"), so the wake carries the session it
-        # opens.
+        # dispatch). A Sentry Conversation groups follow-ups on it. Minted
+        # after the wait returns (a wake_stream_died must not carry a session
+        # that never opens) and before log("wake"), so the wake carries the
+        # session it opens.
         events.context(session=events.new_turn())
         if score is None:
             # A bulletin just finished: the mic opens for a follow-up with no
@@ -426,15 +432,22 @@ def main():
             announcer.session_active.set()
         ending = "close"
         try:
-            # Inside the try so the finally's unduck is always paired with it.
-            duck(restore=False)
-            asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
-                                    input_idx, output_idx, capture,
-                                    operations=operation_store, ack=ack,
-                                    steam=steam, media=media_service,
-                                    on_end_session=lambda: duck(restore=True)))
+            # One trace id for the whole session, in the spans and in every
+            # line the session writes. Opened before asyncio.run: the context
+            # is copied INTO the loop and cannot be back-filled after.
+            with sentry.session_trace():
+                # Inside the try so the finally's unduck is always paired with it.
+                duck(restore=False)
+                asyncio.run(run_session(cfg, secrets, matcher, args.dry_run,
+                                        input_idx, output_idx, capture,
+                                        operations=operation_store, ack=ack,
+                                        steam=steam, media=media_service,
+                                        on_end_session=lambda: duck(restore=True)))
         except Exception as e:
             log.error("session_crashed", err=repr(e))
+            # The event is the alertable half; this is the stack trace, which
+            # couch.log has never carried off the machine.
+            sentry.capture(e)
             ending = "fail"
         finally:
             if capture:                         # None on a follow-up open

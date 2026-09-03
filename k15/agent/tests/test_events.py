@@ -142,8 +142,11 @@ def main():
     events._last_day = None
     assert events._cli(["emit", "supervisor", "restart",
                         "what=listener", "code=3", "--level", "warn"]) == 0
-    rec = read(sorted(tmp.glob("test-*.jsonl"))[-1])[-1]
-    assert rec["event"] == "restart" and rec["level"] == "warn"
+    # By event, not [-1]: the 50 ms heartbeat above is still ticking into the
+    # same file, so the CLI's line is not reliably the last one.
+    rec = [r for r in read(sorted(tmp.glob("test-*.jsonl"))[-1])
+           if r["event"] == "restart"][-1]
+    assert rec["level"] == "warn"
     assert rec["code"] == 3, f"cmd.exe text must land as a number, got {rec['code']!r}"
     assert events._cli(["nonsense"]) == 2, "a bad CLI call must not pretend to work"
     print("  cli: supervisor restart lands with a numeric exit code")

@@ -1,14 +1,14 @@
 """Structured events: one JSON object per line, beside the human log.
 
 Every `log(...)` call lands twice - the human line in couch.log, and a record
-in logs/{service}-YYYYMMDD.jsonl that Grafana Alloy tails.
+in logs/{service}-YYYYMMDD.jsonl that the OpenTelemetry Collector tails.
 
 Stdlib only and no import of cglib: the chord lane runs on system python, and
 cglib imports this, so the emit boundary cannot fail on a cycle (hence secrets
 are re-loaded here). Nothing here may add a dependency, open a socket, or
 block. Fail-soft throughout: a lost event never costs the
-caller. Daily files are never renamed - Alloy holds a read handle open on
-Windows - so the date is in the name and expired files are deleted.
+caller. Daily files are never renamed - the shipper holds a read handle
+open on Windows - so the date is in the name and expired files are deleted.
 
 CLI, so the cmd.exe supervisors can emit too:
 
@@ -42,14 +42,15 @@ TTL_DAYS = 14
 # module-level LOG_DIR / "archive" would freeze the real path at import time
 # and let a test write into the live log directory.
 ARCHIVE_NAME = "archive"
-ARCHIVE_DAYS = 2        # out of Alloy's glob; see _prune
+ARCHIVE_DAYS = 2        # out of the shipper's glob; see _prune
 
-# The whole level vocabulary. A Loki label alerts group on, so it stays small
-# and every value has an emitter (cglib._Log: no `debug`).
+# The whole level vocabulary. It becomes the log record's SEVERITY, which
+# alerts group on, so it stays small and every value has an emitter
+# (cglib._Log: no `debug`).
 INFO, WARN, ERROR = "info", "warn", "error"
 
-# Keys the EMITTER owns. A caller field of the same name would shadow a Loki
-# label or make the record lie, so it is renamed rather than dropped.
+# Keys the EMITTER owns. A caller field of the same name would shadow a log
+# attribute or make the record lie, so it is renamed rather than dropped.
 _EMITTER_OWNED = frozenset(("ts", "level", "env", "service", "lane", "event",
                             "host"))
 
@@ -63,7 +64,8 @@ _HUMAN_MAX = 80
 
 
 def _service() -> str:
-    """The role this box plays; a Loki label, so keep it low-cardinality.
+    """The role this box plays; a log attribute alerts select on, so keep it
+    low-cardinality.
     Overridable for the bench; the hostname is a field, not this."""
     return os.environ.get("CG_SERVICE", "k15")
 
@@ -193,11 +195,13 @@ def _prune() -> None:
     expired ones. Called on the first emit of a process and at date rollover,
     never per line.
 
-    The move keeps Alloy cheap: its glob is k15-*.jsonl and a tailed file
-    costs ~0.04% of a core whether or not it can still change (A/B-measured),
-    so TTL_DAYS=14 meant 13 tailers on finished files. archive/ is outside the
-    glob and the delete pass scans both folders. Moving a file Alloy holds
-    open is safe: Windows lets the rename through and the handle follows."""
+    The move keeps the shipper cheap: its glob is k15-*.jsonl and a tailed
+    file costs ~0.04% of a core whether or not it can still change (A/B-measured
+    under Alloy; the collector's filelog receiver polls the same glob), so
+    TTL_DAYS=14 meant 13 tailers on finished files. archive/ is outside the
+    glob and the delete pass scans both folders. Moving a file the shipper
+    holds open is safe: Windows lets the rename through and the handle
+    follows."""
     now = time.time()
     archive = LOG_DIR / ARCHIVE_NAME
     try:
@@ -325,12 +329,13 @@ def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> threading.Thr
     JSONL ONLY, not through cglib's logger: ~1440 lines/day would swamp
     couch.log. Daemon thread, and the loop swallows everything.
 
-    ALERTING: an absence rule cannot be "heartbeat count < 1" - a dead lane
-    returns no series, so the threshold never evaluates and the rule must fire
-    through Grafana's *No data = Alerting*; under *No data = OK* the two most
-    important alerts are inert and look healthy. Drill: kill a lane and
-    confirm it pages (~7 min chord lane, ~10 voice - the 5-minute count window
-    has to empty before `for:` starts).
+    ALERTING: this proves the SHIPPER is alive, not the lane. A
+    count-below-threshold on it cannot prove a lane is up - a dead lane emits
+    no rows at all, and whether a threshold evaluates an empty window is
+    undocumented in Sentry, the same trap *No data = OK* was in Grafana.
+    checkin.py carries lane liveness instead, where a missed check-in is an
+    alert by construction. The two read together: heartbeats missing while
+    check-ins arrive is a dead collector; check-ins missing is a dead lane.
     """
     def tick():
         while True:

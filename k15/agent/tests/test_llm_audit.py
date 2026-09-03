@@ -86,9 +86,9 @@ def main():
            ev("response.output_text.delta"),
            ev("response.completed")]
     svc = FakeService(FakeStream(evs))
-    tracing = FakeTracing()
+    spans = FakeTracing()
     ctx = FakeContext()
-    assert llm_audit.install(svc, log, tracing=tracing, context=ctx) is True
+    assert llm_audit.install(svc, log, spans=spans, context=ctx) is True
 
     stream = asyncio.run(svc._client.responses.create(model="x", stream=True))
     got = asyncio.run(drain(stream))
@@ -100,7 +100,7 @@ def main():
     assert len(rec) == 1, rec
     assert rec[0]["query"] == "couch co-op 2026"
     assert rec[0]["kind"] == "web_search_call" and rec[0]["status"] == "completed"
-    assert tracing.spans == [("web_search_call", "couch co-op 2026", "completed")]
+    assert spans.spans == [("web_search_call", "couch co-op 2026", "completed")]
     print("  search: logged once and spanned, with its query")
 
     # Both `added` and `done` carry the item; only `done` counts, and that
@@ -147,9 +147,9 @@ def main():
 
     class Angry:
         def tool_span(self, *a, **kw):
-            raise RuntimeError("tracing is down")
+            raise RuntimeError("span sink is down")
 
-    llm_audit.install(boom, log, tracing=Angry())
+    llm_audit.install(boom, log, spans=Angry())
     out = asyncio.run(drain(asyncio.run(
         boom._client.responses.create(stream=True))))
     assert len(out) == 1, "a throwing sink swallowed an event"

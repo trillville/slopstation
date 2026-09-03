@@ -140,7 +140,7 @@ correlation suffix; every other command returns `DENIED`.
 | `k15/agent/brain/` (`assistant.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
 | `k15/agent/tools/` (`media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py`, `library.py`, `steamstore.py`) | Domain tools: Radarr/Sonarr, the durable ledger, the Steam catalogue and store, the TV |
 | `k15/agent/interfaces/` (`text.py`, `remote.py`) | Front-ends: LAN HTTP, and the MCP adapter over localhost |
-| `k15/agent/telemetry/` (`tracing.py`, `traces.py`) | Per-turn traces and the Langfuse exporter |
+| `k15/agent/telemetry/` (`sentry.py`, `genai.py`, `traces.py`) | Sentry wiring, the pipecat-to-Sentry span adapter, and per-turn trace dumps |
 | `k15/agent/tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
 | `k15/media/` | Docker Compose media services and their runbook |
 | `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
@@ -322,8 +322,16 @@ is the source of truth:
 - Gaming PC tasks: `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`
 - Forced SSH dispatcher: `C:\CouchGaming\logs\pc-dispatch-YYYYMMDD.jsonl`
 
-Grafana Alloy mirrors these files to Loki; Langfuse holds assistant traces.
-Use the repository’s Grafana and Langfuse skills for remote diagnosis.
+One Sentry project, `slopstation`, holds all of it. An OpenTelemetry
+Collector (contrib) on each machine tails those files into Sentry Logs —
+install it from `k15/otelcol/config.yaml.example` and
+`gaming-pc/otelcol/config.yaml.example`. The voice lane adds the rest from
+`config.json`'s `sentryDsn` alone: crashes as Issues, the pipeline as traces,
+and the LLM calls as agent monitoring. Each lane checks in to its own cron
+monitor every minute, so a dead lane pages without the shipper's help.
+
+Use the repository’s `sentry` skill for remote diagnosis; it documents the
+attribute model and the event vocabulary.
 
 ## Tests
 

@@ -1,7 +1,7 @@
 """Blind test: voice_agent.main() - lane bring-up per config shape, the bench
 modes, the wake loop's event order, dry-run plumbing, --once, a crashing
 session. Every external seam stubbed (audio, wake model, pipeline, announcer,
-operations, steam, tracing). Named test_agent, not test_voice_agent: Start-K15.bat's
+operations, steam, telemetry). Named test_agent, not test_voice_agent: Start-K15.bat's
 reload and doctor find the live agent by the substring voice_agent.py. Run:
     .venv\\Scripts\\python tests\\test_agent.py
 """
@@ -19,7 +19,7 @@ from agent.tools import media
 from agent.tools import operations
 from agent.tools import operations_monitors
 from agent.tools import steam_session
-from agent.telemetry import tracing
+from agent.telemetry import sentry
 from agent import voice_agent as va
 
 REAL_KEY = "k" * 40
@@ -181,7 +181,7 @@ def stub_everything():
     events.start_heartbeat = lambda lane, **kw: None
     cglib.rotate_log = lambda: None
     cglib.load_secrets = lambda: dict(SECRETS)
-    tracing.setup = lambda cfg, secrets, log: False
+    sentry.setup = lambda cfg, log: False
     announce.Announcer = FakeAnnouncer
     operations.OperationStore = FakeOperationStore
     operations_monitors.SteamMonitor = FakeSteamMonitor

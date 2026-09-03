@@ -12,6 +12,7 @@ import time
 from agent.brain import assistant
 import cglib
 from agent.brain import llm_audit
+from agent.telemetry import sentry
 from agent.telemetry import traces
 
 # Both SDKs default to 600 s per attempt plus retries. remote.py abandons its
@@ -38,6 +39,7 @@ class AnthropicBackend:
         self.cache_note = ""
         self.server_tools = assistant.server_tools(voice, "anthropic") if voice else []
 
+    @sentry.agent("assistant")
     def turn(self, system_text, user_text, impls):
         # cache_control on the system block caches tools+system together: a
         # breakpoint covers everything before it, and the render order is
@@ -49,16 +51,33 @@ class AnthropicBackend:
         self.messages.append({"role": "user", "content": user_text})
         spoken = []          # text carried across pause_turn continuations
         while True:
-            resp = self.client.messages.create(
-                model=self.model, max_tokens=400, system=system,
-                messages=self.messages,
-                tools=assistant.anthropic_tools(set(impls)) + self.server_tools)
-            u = resp.usage
+            tools = assistant.anthropic_tools(set(impls)) + self.server_tools
+            # The span closes before the tool loop below, so tool spans land
+            # beside it under the agent span rather than inside it - Sentry's
+            # documented hierarchy.
+            with sentry.chat_span("anthropic", self.model, system=system_text,
+                                  messages=self.messages, tools=tools) as span:
+                resp = self.client.messages.create(
+                    model=self.model, max_tokens=400, system=system,
+                    messages=self.messages, tools=tools)
+                u = resp.usage
+                text = " ".join(b.text for b in resp.content if b.type == "text")
+                # getattr throughout: every one of these is read ONLY for
+                # the span, and arguments are evaluated before response() can
+                # swallow anything - so a field a provider stopped sending
+                # would kill the turn rather than cost a span attribute.
+                usage = {
+                    "input": getattr(u, "input_tokens", None),
+                    "output": getattr(u, "output_tokens", None),
+                    "cache_read": getattr(u, "cache_read_input_tokens", None),
+                    "cache_write": getattr(u, "cache_creation_input_tokens", None),
+                }
+                span.response(model=getattr(resp, "model", None),
+                              output=text, usage=usage)
             self.cache_note = (
                 f"cache w{getattr(u, 'cache_creation_input_tokens', 0) or 0}"
                 f"/r{getattr(u, 'cache_read_input_tokens', 0) or 0}")
             self.messages.append({"role": "assistant", "content": resp.content})
-            text = " ".join(b.text for b in resp.content if b.type == "text")
             if resp.stop_reason == "pause_turn":
                 # Contract: re-send the partial assistant content as-is and
                 # let the model continue. Server tool blocks need no
@@ -96,17 +115,30 @@ class OpenAIBackend:
         self.messages = []              # trace mirror; real state is server-side
         self.server_tools = assistant.server_tools(voice, "openai") if voice else []
 
+    @sentry.agent("assistant")
     def turn(self, system_text, user_text, impls):
         self.messages.append({"role": "user", "content": user_text})
         pending = [{"role": "user", "content": user_text}]
         while True:
-            resp = self.client.responses.create(
-                model=self.model, instructions=system_text, input=pending,
-                tools=assistant.openai_tools(set(impls)) + self.server_tools,
-                reasoning={"effort": self.effort},
-                max_output_tokens=1500, previous_response_id=self.prev)
+            tools = assistant.openai_tools(set(impls)) + self.server_tools
+            with sentry.chat_span("openai", self.model, system=system_text,
+                                  messages=pending, tools=tools) as span:
+                resp = self.client.responses.create(
+                    model=self.model, instructions=system_text, input=pending,
+                    tools=tools, reasoning={"effort": self.effort},
+                    max_output_tokens=1500, previous_response_id=self.prev)
+                u, det = resp.usage, getattr(resp.usage, "input_tokens_details", None)
+                out_det = getattr(u, "output_tokens_details", None)
+                usage = {          # getattr for the same reason as above
+                    "input": getattr(u, "input_tokens", None),
+                    "output": getattr(u, "output_tokens", None),
+                    "cache_read": getattr(det, "cached_tokens", None),
+                    "reasoning": getattr(out_det, "reasoning_tokens", None),
+                }
+                span.response(model=getattr(resp, "model", None),
+                              output=getattr(resp, "output_text", None),
+                              usage=usage)
             self.prev = resp.id
-            det = getattr(resp.usage, "input_tokens_details", None)
             self.cache_note = (
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
             # Server-side searches are ITEMS in resp.output, not function

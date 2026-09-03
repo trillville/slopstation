@@ -13,6 +13,9 @@
   "tvIdleCmd":   "hdmi1",
   "tvOffWhenDone": true,
 
+  "sentryDsn": "",
+  "_sentryDsn": "OPTIONAL, and the ONLY key telemetry needs: Sentry project settings > Client Keys (DSN). Empty = every Sentry path stays inert, which is what lets a deploy land before this machine has been touched. Its public half is not a secret - it ships inside client apps by design - so it lives here and not in secrets.json. Sets errors, voice traces and agent monitoring in the voice lane, and the cron check-in in BOTH lanes. The collector that ships logs reads its own copy from C:\\ProgramData\\otelcol-contrib\\config.yaml and is not configured from here.",
+
   "media": {
     "enabled": false,
     "_enabled": "Set true only after the sidecars, roots, quality profiles, and Radarr/Sonarr API keys are configured.",
@@ -102,7 +105,6 @@
     "assistantSearchMaxUses": 2,
     "steamDataTools": true,
     "location": {"city": "", "region": "", "country": "US", "timezone": ""},
-    "langfuseHost": "https://us.cloud.langfuse.com",
     "followUpAfterAnnounce": true,
     "inputs": {
       "apple tv": "hdmi1", "appletv": "hdmi1", "the apple tv": "hdmi1",

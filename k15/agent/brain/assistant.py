@@ -11,7 +11,7 @@ import cglib
 from agent.tools import library
 from agent.tools import steamstore
 # tool spans; the module self-gates: REPL/bench are no-ops
-from agent.telemetry import tracing
+from agent.telemetry import sentry
 
 ASK_TTL_S = 120                 # a delete confirmation goes stale
 
@@ -833,13 +833,13 @@ TOOL_DEFS = [
 def record_tool_call(name, args, out, log=None):
     """Emit one tool call to both telemetry sinks. Pipecat's llm span carries
     the completion TEXT only, so a tool-calling turn traces as output:null;
-    the event is greppable, joins on turn, and outlives Langfuse's 30-day
-    retention. Fail-soft on both, and log=None keeps the Loki half quiet.
+    the event is greppable and joins on turn. Fail-soft on both, and
+    log=None keeps the log half quiet.
 
     Both lanes record through here - the voice pipeline below and the text
     interface - so the event shape has one home."""
     try:
-        tracing.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
+        sentry.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
     except Exception:
         pass
     if log:

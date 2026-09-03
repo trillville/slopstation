@@ -322,8 +322,8 @@ class _Log:
         self._write(events.INFO, event, fields)
 
     # Three levels, not four; `info` is the spelled-out form of __call__. No
-    # `debug`: `level` is a Loki LABEL alerts key on, so an unemitted level is
-    # a permanently empty dashboard value.
+    # `debug`: `level` becomes the log record's SEVERITY, which alerts key on,
+    # so an unemitted level is a permanently empty dashboard value.
     def info(self, event: str, /, **fields: Any) -> None:
         self._write(events.INFO, event, fields)
 
@@ -335,8 +335,9 @@ class _Log:
 
 
 def make_log(lane: str) -> _Log:
-    """One logger per lane. The lane is a Loki label, so the set stays small and
-    fixed: tests/test_event_names.py LANES is the enforced list."""
+    """One logger per lane. The lane is a log attribute alerts select on, so
+    the set stays small and fixed: tests/test_event_names.py LANES is the
+    enforced list."""
     return _Log(lane)
 
 

@@ -23,7 +23,7 @@ $scripts = @(
 
 # Own copy of the emitter, like Dispatch.ps1's: this script cannot dot-source
 # CouchGaming.common.ps1 - it is what ships it, and common's $CG.LogDir would
-# point at this checkout instead of the runtime folder Alloy tails.
+# point at this checkout instead of the runtime folder the shipper tails.
 # test_event_names.py holds every $owned list equal to events._EMITTER_OWNED.
 function Write-CgEvent([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 'info') {
     try {
