@@ -1,14 +1,12 @@
-# Voice venv constraints - as-built transitive versions, enforced at install
-# (Start-Voice.bat passes `-c constraints.txt`).
+# The K15 venv's constraints - as-built transitive versions, enforced at
+# install (the supervisor passes `-c constraints.txt`).
 #
-# Regenerate ON THE K15, with the voice venv's own python:
-#   .venv\Scripts\python refreeze.py
+# Regenerate ON THE K15, from its venv:
+#   .venv\Scripts\slopstation-refreeze
 # Do not redirect `pip freeze` by hand: it writes pins only and would eat this
 # header, and PowerShell 5.1's `>` writes UTF-16, which is not a pins file.
-# Touch requirements.txt too when the new pins are meant to INSTALL: the
-# supervisor's gate compares THAT file alone against .venv\deps-ok, so a
-# constraints-only change would not install itself. A freeze that merely
-# records a venv which already resolved needs no touch.
+# The supervisor's install gate hashes pyproject.toml AND this file, so a
+# change to either installs itself on the next launch.
 # Frozen 2026-08-30 from the K15's cp313 venv. Freeze ONLY from there: a cp311
 # list misses audioop-lts (py>=3.13 only), and a cp313 pin has no wheel for an
 # older CI - which is why ci.yml runs 3.13 too.

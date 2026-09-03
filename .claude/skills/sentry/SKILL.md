@@ -21,7 +21,7 @@ Four surfaces, and picking the right one is most of the job:
 | **Agents / Conversations** | LLM calls, tools, tokens, prompts | "what did the assistant actually do" |
 
 Retention: logs and spans 30 days, errors 90. The local JSONL
-(`k15/logs/k15-*.jsonl`) keeps 14 days and is the offline source of truth.
+(`logs/k15-*.jsonl`) keeps 14 days and is the offline source of truth.
 
 ## Follow a `turn`
 
@@ -50,7 +50,7 @@ given is an attribute beside it.
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
 | `lane` | k15: `voice` `launch` `listener` `library` `steam` `traces` `supervisor` `manual` `deploy` — gamepc: `enter` `exit` `launchgame` `nav` `stopgame` `wake-safety` `office-safety` `dispatch` `pc-transcript` |
 | `severity` | `info` `warn` `error` — the whole set; there is no `debug` |
-| `env` | `prod`, `test` — **always filter `env:prod`** unless investigating the blind suite |
+| `env` | `prod`, `test` — **always filter `env:prod`** unless investigating the test suite |
 | `event` | the closed vocabulary below |
 
 Everything else is per-event: `turn` `session` `dur_ms` `err` `appid` `score` …
@@ -201,7 +201,7 @@ them together with the heartbeat count:
   `lane:wake-safety`.
 
 The frozen list — every name, its field keys and its lane — is
-`k15/agent/tests/test_event_names.py`; a rename is a deliberate edit there.
+`tests/test_event_names.py`; a rename is a deliberate edit there.
 
 Event names are a closed vocabulary and never contain variable data — an appid
 or a score is always a field.
@@ -247,7 +247,7 @@ Spans carry transcripts and completions verbatim. Treat them as private.
    a dead lane (the crons tell you which); no `launch_failed` means launches
    are fine. Say so rather than "nothing found".
 5. **`couch.log` and the JSONL on the K15 are the offline mirror.** If Sentry
-   has a gap, `k15/logs/k15-*.jsonl` is the source of truth — but the
+   has a gap, `logs/k15-*.jsonl` is the source of truth — but the
    collector persists its read offsets, so an outage backfills rather than
    skipping.
 

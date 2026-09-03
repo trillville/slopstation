@@ -47,9 +47,9 @@ The system has three operating constraints:
 - **Nothing switches the TV to HDMI 4 until the gaming PC confirms a successful
   launch.** That acknowledgement is named `READY` in the protocol. A failed
   launch leaves the viewer’s current input unchanged.
-- **The chord lane is independent of voice.** Core K15 modules use system
-  Python and the standard library; the voice overlay has its own virtual
-  environment and may fail without taking down controller launch.
+- **The chord lane is independent of voice.** The two are separate processes
+  under separate supervisors, so the voice agent may fail without taking
+  down controller launch.
 - **External systems own long-running work.** Steam, Radarr, and Sonarr execute
   operations. Slopstation records correlation and progress, then resumes
   observation after a restart.
@@ -135,6 +135,7 @@ correlation suffix; every other command returns `DENIED`.
 | `src/slopstation/couch.py`, `chord_listener.py` | Session orchestration and controller input |
 | `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
 | `src/slopstation/events.py`, `cglib.py`, `doctor.py` | State, telemetry, configuration, and diagnostics |
+| `src/slopstation/supervise.py`, `deploy.py`, `paths.py` | Lane supervision, the CD deployer, and where runtime data lives |
 | `src/slopstation/agent/` | The voice/assistant half of the package |
 | `src/slopstation/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
 | `src/slopstation/agent/brain/` (`assistant.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
@@ -298,8 +299,8 @@ Useful commands:
 
 ```powershell
 # General text interface
-python -m slopstation.slop
-python -m slopstation.slop "what is downloading?"
+.venv\Scripts\python -m slopstation.slop
+.venv\Scripts\python -m slopstation.slop "what is downloading?"
 
 # Durable Steam and media work
 .venv\Scripts\python -m slopstation.agent.tools.operations list
@@ -308,7 +309,7 @@ python -m slopstation.slop "what is downloading?"
 .venv\Scripts\python -m slopstation.agent.tools.operations reconcile
 ```
 
-`tools\operations.py abandon <operation-id> --execute` performs authoritative media
+`operations abandon <operation-id> --execute` performs authoritative media
 cleanup through Radarr or Sonarr. The generic `cancel` command refuses work it
 cannot safely cancel at the external authority.
 
@@ -322,13 +323,13 @@ no inbound firewall rule: its server stays on localhost behind the tunnel.
 Every intent carries a `turn` ID through K15 and gaming-PC events. Local JSONL
 is the source of truth:
 
-- K15: `k15\logs\k15-YYYYMMDD.jsonl`
+- K15: `logs\k15-YYYYMMDD.jsonl` under the checkout
 - Gaming PC tasks: `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`
 - Forced SSH dispatcher: `C:\CouchGaming\logs\pc-dispatch-YYYYMMDD.jsonl`
 
 One Sentry project, `slopstation`, holds all of it. An OpenTelemetry
 Collector (contrib) on each machine tails those files into Sentry Logs —
-install it from `k15/otelcol/config.yaml.example` and
+install it from `otelcol/config.yaml.example` and
 `gaming-pc/otelcol/config.yaml.example`. The voice lane adds the rest from
 `config.json`'s `sentryDsn` alone: crashes as Issues, the pipeline as traces,
 and the LLM calls as agent monitoring. Each lane checks in to its own cron
@@ -341,14 +342,15 @@ attribute model and the event vocabulary.
 
 ```powershell
 .venv\Scripts\pytest
+.venv\Scripts\ruff check .
+.venv\Scripts\mypy
 ```
 
 Hardware-bound Steam and audio tests skip themselves when the machine lacks
 what they need: a local Steam install for the library tests, and
-`CG_TEST_AUDIO=1` on the K15 for the ones that open real devices. GitHub
-Actions runs the suite and mypy on Windows for every pull request and every
-push to `main`.
-every pull request and every push to `main`.
+`SLOPSTATION_TEST_AUDIO=1` on the K15 for the ones that open real devices.
+GitHub Actions runs all three for every pull request and every push to
+`main`.
 
 ## Fixed rig contract
 
@@ -367,5 +369,5 @@ them; `agent/tools/tv_remote.py` is the working volume path.
 
 Runtime-only state is intentionally absent from Git: real config, secrets, the
 media `.env`, VirtualHere binaries and PINs, DisplayMagician shortcuts,
-scheduled-task registrations, SSH/firewall state, logs, operation state, voice
+scheduled-task registrations, SSH/firewall state, logs, operation state, the
 virtual environment, and wake-training data.

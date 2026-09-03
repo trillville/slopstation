@@ -49,7 +49,7 @@ remain Sonarr desired state after the originating Slopstation operation ends.
 ## Storage and addresses
 
 `Start-Media.ps1` maps one Windows media root to `/data` in Radarr and Sonarr.
-That root is `MEDIA_ROOT` in `k15\media\.env` - written there, not in the
+That root is `MEDIA_ROOT` in `media\.env` - written there, not in the
 shell environment, and gitignored, so read the live value rather than assuming
 one. `.env.example` starts it at `C:\Media`.
 
@@ -84,7 +84,7 @@ Install Docker Desktop with Linux containers, then run from the repository
 root:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\k15\media\Start-Media.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\media\Start-Media.ps1
 ```
 
 On first run the script copies `.env.example` to `.env`, generates Homarr's
@@ -106,7 +106,7 @@ Run qBittorrent as a native Windows application; do not add it to Compose.
 - Default save path: `<MEDIA_ROOT>\torrents`.
 - Categories: create `radarr` and `sonarr`.
 
-Set `media.qbittorrentNetworkInterface` in `k15\config.json` to the exact
+Set `media.qbittorrentNetworkInterface` in `config.json` to the exact
 interface name qBittorrent reports.
 
 ### 3. Configure Prowlarr
@@ -149,7 +149,7 @@ Test the root, download client, and remote mapping before continuing.
 ### 5. Create quality profiles
 
 Create every distinct profile name referenced by `moviePresets` and
-`seriesPresets` in `k15\config.json`. The example configuration maps movie
+`seriesPresets` in `config.json`. The example configuration maps movie
 defaults to Blu-ray/HDR/lossless-audio policy and offers explicit `1080p` and
 `2160p` steering; series presets provide the corresponding TV profiles.
 
@@ -164,7 +164,7 @@ minimum scores. A strict profile waits when no qualifying release exists.
 
 ### 6. Enable Slopstation
 
-Copy the Radarr and Sonarr API keys into `k15\secrets.json`. Maintenance and
+Copy the Radarr and Sonarr API keys into `secrets.json`. Maintenance and
 port synchronization additionally use the Prowlarr key and qBittorrent Web UI
 password:
 
@@ -181,13 +181,13 @@ indexers, then set `enabled` to `true`.
 
 ### 7. Validate and start unattended operation
 
-From `k15\agent`:
+From the checkout root:
 
 ```powershell
-.venv\Scripts\python tools\media.py status
-.venv\Scripts\python tools\media.py profiles
-.venv\Scripts\python tools\media.py validate
-.venv\Scripts\python tools\media.py doctor
+.venv\Scripts\python -m slopstation.agent.tools.media status
+.venv\Scripts\python -m slopstation.agent.tools.media profiles
+.venv\Scripts\python -m slopstation.agent.tools.media validate
+.venv\Scripts\python -m slopstation.agent.tools.media doctor
 ```
 
 `validate` checks roots and exact profile names. `doctor` additionally checks
@@ -297,20 +297,20 @@ stopped, stale, missing, or unrecognized state never changes qBittorrent.
 Validate once:
 
 ```powershell
-cd C:\Users\minipc\Desktop\slopstation\k15\agent
-.venv\Scripts\python tools\media.py proton-port
-.venv\Scripts\python tools\media.py sync-proton-port --execute
+cd C:\Users\minipc\Desktop\slopstation
+.venv\Scripts\python -m slopstation.agent.tools.media proton-port
+.venv\Scripts\python -m slopstation.agent.tools.media sync-proton-port --execute
 ```
 
 Confirm the returned port matches Proton and qBittorrent, then set
-`media.protonPortSync` to `true` and reload with `Start-K15.bat`. The monitor
+`media.protonPortSync` to `true` and reload with `Start-Slopstation.bat`. The monitor
 checks immediately and every `media.pollS` seconds. Log-format changes fail
 closed and emit `proton_port_sync_failed`.
 
 Manual fallback:
 
 ```powershell
-.venv\Scripts\python tools\media.py set-qbit-port <active-port> --execute
+.venv\Scripts\python -m slopstation.agent.tools.media set-qbit-port <active-port> --execute
 ```
 
 ## Monitoring and incident response
@@ -351,7 +351,7 @@ smartd is a hand install on the K15 that CD never performs; `doctor.py` reports
 it absent. Run from the checkout root; every step needs Administrator:
 
 ```powershell
-Copy-Item k15\smartd.conf.example "$env:ProgramFiles\smartmontools\bin\smartd.conf"
+Copy-Item smartd.conf.example "$env:ProgramFiles\smartmontools\bin\smartd.conf"
 & "$env:ProgramFiles\smartmontools\bin\smartd.exe" install
 Start-Service smartd
 ```
@@ -371,7 +371,7 @@ disk. Add `-M test` to the device line, restart, and confirm one
 ```powershell
 Restart-Service smartd
 Select-String -Path (Join-Path $env:USERPROFILE `
-    'Desktop\slopstation\k15\logs\k15-*.jsonl') -Pattern smart_warning |
+    'Desktop\slopstation\logs\k15-*.jsonl') -Pattern smart_warning |
     Select-Object -Last 3
 ```
 
@@ -392,7 +392,7 @@ this hardware.
 Start diagnosis with:
 
 ```powershell
-.venv\Scripts\python tools\media.py doctor
+.venv\Scripts\python -m slopstation.agent.tools.media doctor
 .venv\Scripts\python tools\operations.py list --active
 docker compose --project-directory ..\media --env-file ..\media\.env ps
 ```
@@ -407,7 +407,7 @@ the K15; upstream may already be ahead. From the checkout root:
 
 ```powershell
 'flaresolverr', 'prowlarr', 'radarr', 'sonarr', 'homarr', 'glances' | ForEach-Object {
-    $container = docker compose --project-directory k15\media --env-file k15\media\.env ps -q $_
+    $container = docker compose --project-directory media --env-file media\.env ps -q $_
     $image = docker inspect --format '{{.Image}}' $container
     docker image inspect --format '{{index .RepoDigests 0}}' $image
 }
@@ -427,18 +427,18 @@ service. None of it is in this repo, and none of it survives a rebuilt config
 volume (which is also why the health monitor polls instead of taking
 webhooks: a notification connection would live in the same database).
 
-`MEDIA_CONFIG_ROOT` lives in `k15\media\.env`, not the shell environment, so
+`MEDIA_CONFIG_ROOT` lives in `media\.env`, not the shell environment, so
 read it the way `Start-Media.ps1` does. Back up while the stack is stopped, or
 the SQLite files may copy mid-write. From the checkout root:
 
 ```
-$cfg = @{}; Get-Content k15\media\.env | ForEach-Object { if ($_ -match '^\s*([^#=]+)=(.*)$') { $cfg[$Matches[1].Trim()] = $Matches[2].Trim() } }
-docker compose --project-directory k15\media --env-file k15\media\.env stop
+$cfg = @{}; Get-Content media\.env | ForEach-Object { if ($_ -match '^\s*([^#=]+)=(.*)$') { $cfg[$Matches[1].Trim()] = $Matches[2].Trim() } }
+docker compose --project-directory media --env-file media\.env stop
 Copy-Item -Recurse $cfg.MEDIA_CONFIG_ROOT "$($cfg.MEDIA_CONFIG_ROOT)-backup"
-.\k15\media\Start-Media.ps1
+.\media\Start-Media.ps1
 ```
 
-Back up `k15\media\.env` alongside the config root: Homarr's database is
+Back up `media\.env` alongside the config root: Homarr's database is
 encrypted with the `SECRET_ENCRYPTION_KEY` that lives there, so a restored
 `homarr` directory without that exact key has lost every stored credential.
 
@@ -453,7 +453,7 @@ Every path the Arr databases store is a container path, so a move is host-side
 only: nothing in `config.json`, `compose.yaml`, or either Arr database changes.
 
 1. **Quiesce.** Let the download queue drain, then `docker compose
-   --project-directory k15\media --env-file k15\media\.env down`, and exit
+   --project-directory media --env-file media\.env down`, and exit
    qBittorrent from its tray icon rather than just closing its window.
 
 2. **Copy the whole root in one pass, and keep the old tree** until the new one
@@ -464,7 +464,7 @@ only: nothing in `config.json`, `compose.yaml`, or either Arr database changes.
 
    | Knob | Where |
    |---|---|
-   | `MEDIA_ROOT` | `k15\media\.env` |
+   | `MEDIA_ROOT` | `media\.env` |
    | Default save path | qBittorrent; categories with a blank save path inherit it |
    | Remote path mapping | Radarr and Sonarr, one entry each |
    | Share path | the SMB share publishing the root, if there is one |
@@ -479,7 +479,7 @@ only: nothing in `config.json`, `compose.yaml`, or either Arr database changes.
    membership has none on the new one, and playback fails with access denied
    while every service still reports healthy.
 
-5. **Verify the mount, not the string.** `tools\media.py doctor` compares root
+5. **Verify the mount, not the string.** `-m slopstation.agent.tools.media doctor` compares root
    paths as text and passes on a bind mount that is broken or empty. Confirm
    each Arr root reports the new volume's free space, and that `docker exec
    slopstation-media-radarr-1 df -h /data` names it.

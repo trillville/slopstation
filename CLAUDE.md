@@ -32,23 +32,25 @@ deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
 ## Running the tests
 
     .venv\Scripts\pytest      (from the repo root; on the K15 set
-                               CG_TEST_AUDIO=1 to include the audio tests)
+                               SLOPSTATION_TEST_AUDIO=1 to include the audio tests)
+    .venv\Scripts\ruff check .
+    .venv\Scripts\mypy
 
-`tests/conftest.py` does the setup every test used to import `_bootstrap` for:
-CG_ENV, tempdirs for logs and state, a config fixture, and - because pytest
-shares one process where the old runner gave each file its own - restoring
-whatever a test rebinds. Patch inside a test or a fixture, never at module
-scope: module scope runs during collection, before any fixture, and leaks into
-the whole session.
+`tests/conftest.py` sets SLOPSTATION_ENV, tempdirs for logs and state and the
+config fixture, and - because pytest shares one process where the old runner
+gave each file its own - restores whatever a test rebinds. Patch inside a test
+or a fixture, never at module scope: module scope runs during collection,
+before any fixture, and leaks into the whole session.
 
 Several rules here are tests: `test_event_names` (the frozen vocabulary - a new
 event is added there, a rename is a deliberate edit there), `test_imports`
-(imports without config or hardware; every `module.attr` resolves - run it
-after any move), `test_lint` (pyflakes, plus the frozen subpackage list),
-`test_ps_parse` (every `.ps1` parses; the PC-side contract agrees with itself;
-every gaming-pc script is in `Deploy.ps1`'s set - one that is not deploys green
-and is simply absent). `test_turn.py` reads the SHIPPING `Dispatch.ps1`, so
-gaming-pc regex changes are drilled from here.
+(every module imports in a fresh interpreter with no config.json - run it after
+any move), `test_ps_parse` (every `.ps1` parses; the PC-side contract agrees
+with itself; every gaming-pc script is in `Deploy.ps1`'s set - one that is not
+deploys green and is simply absent). `test_turn.py` reads the SHIPPING
+`Dispatch.ps1`, so gaming-pc regex changes are drilled from here. mypy runs
+with `check_untyped_defs`, so a moved attribute fails there even in unannotated
+code.
 `test_library` needs a local Steam (the gaming PC); `test_session_pipeline`
 needs audio devices (the K15); both skip themselves. The python in `ci.yml` and
 `pyproject.toml` MIRRORS the K15's interpreter and is not a floor:
@@ -91,7 +93,7 @@ diagnosis - but nobody fixes it automatically.
   records the cp313 venv's transitives, and no other machine can produce it.
   The supervisor's install gate hashes `pyproject.toml` AND `constraints.txt`
   against a `deps-ok` sentinel in the venv, so a change to either installs
-  itself on the next deploy. Use `slopstation/agent/refreeze.py`, never a
+  itself on the next deploy. Use `slopstation-refreeze`, never a
   hand-rolled `pip freeze >`: that writes pins only and eats the header, and
   PowerShell 5.1's `>` writes UTF-16.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on

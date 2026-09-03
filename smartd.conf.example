@@ -1,7 +1,7 @@
 # smartd on the K15 - SMART for the USB-attached media drive.
 #
 # Copy to the install dir and register the service (both need Administrator):
-#   copy k15\smartd.conf.example "%PROGRAMFILES%\smartmontools\bin\smartd.conf"
+#   copy smartd.conf.example "%PROGRAMFILES%\smartmontools\bin\smartd.conf"
 #   "%PROGRAMFILES%\smartmontools\bin\smartd.exe" install
 #   Start-Service smartd
 #
