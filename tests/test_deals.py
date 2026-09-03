@@ -9,7 +9,8 @@ import sys
 
 import pytest
 
-from slopstation import config, logbook
+from helpers import CapturingLog
+from slopstation import config
 from slopstation.agent.tools import library, steamstore
 
 # appid -> (name, discount_pct, final_cents, formatted). The fake GetItems
@@ -237,7 +238,7 @@ def test_hltb_fails_soft_then_hits_the_cache(store, monkeypatch):
 
 
 def test_refresh_deals_writes_the_file_list_games_reads(keyed, monkeypatch):
-    log = logbook.CapturingLog("library")
+    log = CapturingLog("library")
     monkeypatch.setattr(steamstore, "log", log)
     steamstore.refresh_deals()
     deals = steamstore.load_deals()

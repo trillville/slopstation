@@ -16,7 +16,8 @@ import types
 
 import pytest
 
-from slopstation import logbook, sessionlock, statefile
+from helpers import CapturingLog
+from slopstation import sessionlock, statefile
 from slopstation.agent.brain import assistant, backends
 from slopstation.agent.brain.dispatch import Dispatch
 from slopstation.agent.tools import library, steamstore
@@ -222,7 +223,7 @@ class RaisingSteam:
 
 @pytest.fixture
 def log():
-    return logbook.CapturingLog("assistant")
+    return CapturingLog("assistant")
 
 
 @pytest.fixture
@@ -636,7 +637,7 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn():
 def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
     # A tool-calling llm span traces as output:null, so function_schemas is the
     # one place that emits which tool ran with what args.
-    tlog = logbook.CapturingLog("voice")
+    tlog = CapturingLog("voice")
     calls = {"n": 0}
 
     def spy(kind, query, status=None):

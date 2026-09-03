@@ -75,7 +75,7 @@ class DiskHealthMonitor:
                 )
                 self._low.add(mount)
         elif mount in self._low:
-            self.log.info(
+            self.log(
                 "disk_space_cleared", mount=mount, free_gb=free_gb, pct_free=pct_free
             )
             self._low.discard(mount)

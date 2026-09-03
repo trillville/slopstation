@@ -1,26 +1,17 @@
 """Sentry cron check-ins: one monitor per lane, so a dead lane pages by itself.
 
-Liveness is the one signal that must not ride the log shipper - a dead
-collector and a dead lane look identical in the log stream, and a missed
-check-in is an alert by construction rather than a threshold that has to
-evaluate an empty window. Every other alert can be a log query; this cannot.
-
-Everything the check-in URL needs is inside the DSN, so this adds no config
-key of its own:
+Liveness must not ride the log shipper - a dead collector and a dead lane
+look identical in the log stream - and a missed check-in is an alert by
+construction rather than a threshold over an empty window. Everything the
+check-in URL needs is inside the DSN, so this adds no config key:
 
     https://<key>@<host>/<project>
       -> https://<host>/api/<project>/cron/k15-<lane>/<key>/
 
-Stdlib only, like every module in this directory (events.py documents why),
-and fail-soft throughout: a check-in that cannot be sent costs telemetry,
-never the lane.
-
-BILLING: every Sentry plan includes ONE cron monitor and the second is a PAYG
-line item. With no budget set, the second lane's check-in is rejected and its
-monitor never registers - which reads exactly like a lane that never started.
-doctor.py's check-in row is what tells those apart.
-
-DRILL: kill a lane and confirm its monitor - and only its monitor - pages.
+Stdlib only and fail-soft throughout: a check-in that cannot be sent costs
+telemetry, never the lane. Every Sentry plan includes ONE cron monitor; the
+second lane's check-in is rejected until a budget is set, which reads exactly
+like a lane that never started - doctor.py's check-in row tells them apart.
 """
 
 from __future__ import annotations
@@ -29,15 +20,14 @@ import json
 import urllib.request
 from urllib.parse import urlsplit
 
-from slopstation import events
+from slopstation import config, events
 
 INTERVAL_S = 60
 TIMEOUT_S = 5
 
-# Sentry upserts the monitor from this on the first check-in, so a rebuilt org
-# needs no clicking. checkin_margin is how many minutes late a check-in may
-# be; two consecutive misses at a 1-minute interval page ~4 min after a lane
-# dies, which is fast enough to matter and survives one network blip.
+# Sentry upserts the monitor from this on the first check-in. Two consecutive
+# misses at a 1-minute interval page ~4 min after a lane dies, which is fast
+# enough to matter and survives one network blip.
 MONITOR_CONFIG = {
     "schedule": {"type": "interval", "value": 1, "unit": "minute"},
     "checkin_margin": 2,
@@ -48,12 +38,8 @@ MONITOR_CONFIG = {
 }
 
 # Renaming a slug orphans its monitor in Sentry and silently stops paging for
-# that lane, so these are as frozen as the event vocabulary.
+# that lane, so this is as frozen as the event vocabulary.
 SLUG_PREFIX = "k15-"
-
-# Set by start(); read by doctor.py to tell "never configured" from "cannot
-# reach Sentry". None until a lane has tried at least once.
-last_ok: bool | None = None
 
 
 def parse_dsn(dsn: object) -> tuple[str, str, str] | None:
@@ -64,7 +50,7 @@ def parse_dsn(dsn: object) -> tuple[str, str, str] | None:
     if not events.real_key(dsn):
         return None
     try:
-        parts = urlsplit(dsn.strip())  # real_key proved it a str
+        parts = urlsplit(dsn.strip())
     except ValueError:
         return None
     project = parts.path.strip("/")
@@ -102,47 +88,31 @@ def send(url: str, status: str = "ok") -> bool:
         return False
 
 
-def _config_dsn() -> object:
-    """config.json's sentryDsn, read at CALL time and never at import: the
-    chord lane must import on a machine that has no config.json yet."""
-    try:
-        from slopstation import config
-
-        return config.current().get("sentryDsn")
-    except Exception:
-        return None
-
-
 def start(lane: str, cfg: dict | None = None) -> events.Ticker | None:
     """Check in for `lane` every minute for as long as this process runs.
-    Returns None when there is nothing to do - no DSN, or a test run. A test
-    must never touch a live monitor, the same rule as env=test JSONL.
-
-    The first result is logged once per process (a lane that cannot reach
-    Sentry is worth one line, not one a minute); after that only transitions
-    are, so a flapping uplink cannot flood the stream.
-    """
+    Returns None when there is nothing to do: no DSN, or a test run, which
+    must never touch a live monitor. The first result is logged, then only
+    transitions, so a flapping uplink cannot flood the stream."""
     if events.ENV != "prod":
         return None
-    dsn = cfg.get("sentryDsn") if cfg is not None else _config_dsn()
-    url = checkin_url(dsn, lane)
+    if cfg is None:
+        try:
+            cfg = config.current()
+        except Exception:
+            return None  # a box with no config.json yet still runs the lane
+    url = checkin_url(cfg.get("sentryDsn"), lane)
     if url is None:
         return None
 
     slug = SLUG_PREFIX + lane
-
     was = None
 
     def tick():
-        global last_ok
         nonlocal was
         ok = send(url)
-        last_ok = ok
         if ok is not was:
-            # Two literal calls, not one with a conditional name:
-            # _events_scan reads event names out of the SOURCE, and a
-            # name it cannot see is a name test_event_names cannot
-            # freeze.
+            # Two literal calls: _events_scan reads event names out of the
+            # source, and a name it cannot see cannot be frozen.
             if ok:
                 events.emit(lane, "checkin", events.INFO, monitor=slug)
             else:

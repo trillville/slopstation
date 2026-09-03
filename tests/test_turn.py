@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from slopstation import couch, events, gamepc, logbook
+from helpers import CapturingLog
+from slopstation import couch, events, gamepc
 from slopstation.agent.brain import dispatch as dp
 
 DISPATCH = Path(__file__).resolve().parents[1] / "gaming-pc" / "Dispatch.ps1"
@@ -194,7 +195,7 @@ def test_the_wire_carries_a_valid_turn_and_refuses_an_uncorrelated_beat(wire):
 def test_dispatch_hands_the_id_over_without_the_contextvar(wire, monkeypatch):
     # With no ambient turn, a Dispatch that was told the turn must still tag
     # both machine-crossing verbs - what GrammarGate does when it mints the id.
-    d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, logbook.CapturingLog("d"))
+    d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, CapturingLog("d"))
     assert d.utterance == dp.Utterance(None, None), (
         "a fresh Dispatch must not carry a stale utterance"
     )

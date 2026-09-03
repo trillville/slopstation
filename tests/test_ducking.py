@@ -4,7 +4,7 @@ takeover, and the debt that self-heals a failed restore.
 
 import dataclasses
 
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.tools import tv_remote
 
 
@@ -51,7 +51,7 @@ def ducker(steps=10, room=None, **kw):
     """A ducker on a FakeRoom (vol 14, on, by default); pause is a no-op so
     the readback polls do not wait."""
     room = room or FakeRoom()
-    log = logbook.CapturingLog("voice")
+    log = CapturingLog("voice")
     dk = tv_remote.TvDucker(
         steps,
         "192.0.2.1",

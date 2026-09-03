@@ -12,7 +12,8 @@ from urllib.parse import quote
 
 import pytest
 
-from slopstation import logbook, paths
+from helpers import CapturingLog
+from slopstation import paths
 from slopstation.agent.tools import steam_session as ss
 
 STEAMID = "76561190000"
@@ -43,7 +44,7 @@ def two_clients():
 
 @pytest.fixture
 def log():
-    return logbook.CapturingLog("steam")
+    return CapturingLog("steam")
 
 
 @pytest.fixture

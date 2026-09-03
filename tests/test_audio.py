@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.speech import audio
 
 VOICE = {"inputDeviceName": "ReSpeaker", "outputDeviceName": "ReSpeaker"}
@@ -36,14 +36,14 @@ class FakePA:
 
 
 def test_no_fragment_is_the_system_default():
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     idx = audio.resolve_device(FakePA(["Whatever"]), "", True, log=log)
     assert idx is None, "an unset fragment must still mean system default"
     assert log.find("audio_device"), log.events()
 
 
 def test_present_device_resolves_to_its_index():
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     pa = FakePA(["Realtek", "Echo Cancelling Speakerphone (reSpeaker Flex)"])
     idx = audio.resolve_device(pa, "ReSpeaker", True, log=log)
     assert idx == 1, idx
@@ -51,7 +51,7 @@ def test_present_device_resolves_to_its_index():
 
 
 def test_absent_device_raises_instead_of_defaulting():
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     # A silently resolved absent device is the bug.
     with pytest.raises(audio.DeviceMissing) as e:
         audio.resolve_device(FakePA(["Realtek"]), "ReSpeaker", True, log=log)
@@ -73,7 +73,7 @@ def test_open_audio_waits_rather_than_binding_the_wrong_endpoint(monkeypatch):
     """Recovery that resolves onto the system default reports success and
     stays deaf (62 rounds, 5 min 10 s). open_audio must return the real
     device or keep waiting."""
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     table = ["Realtek"]  # array not back yet
     calls = []
 

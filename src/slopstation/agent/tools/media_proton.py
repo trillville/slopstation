@@ -134,7 +134,7 @@ class ProtonPortMonitor:
         result.update(updated)
         self._last_failure = None
         if updated["changed"]:
-            self.log.info(
+            self.log(
                 "proton_port_synced",
                 port=updated["listen_port"],
                 previous_port=updated["previous_port"],

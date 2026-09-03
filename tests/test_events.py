@@ -8,7 +8,8 @@ import subprocess
 import sys
 import time
 
-from slopstation import events, logbook, paths
+from helpers import CapturingLog
+from slopstation import events, paths
 
 # One emitter process; SLOPSTATION_HOME in its environment points it at the
 # test's own tree.
@@ -84,7 +85,7 @@ def test_a_caller_field_may_be_named_anything():
     # A colliding caller kwarg raises TypeError at argument BINDING, before any
     # try/except inside emit - hence positional-only parameters, emitter keys
     # winning, and the caller's value kept under f_*.
-    log = logbook.CapturingLog("voice")
+    log = CapturingLog("voice")
     for name in (
         "ts",
         "level",
@@ -245,16 +246,3 @@ def test_concurrent_emitters_keep_every_line(tmp_path):
     for line in lines:
         json.loads(line)  # a torn line raises here
     assert len(lines) == 720, f"lost {720 - len(lines)} lines to the race"
-
-
-# -- the shared test double keeps the production shape ---------------------
-
-
-def test_capturing_log_keeps_the_production_shape():
-    cap = logbook.CapturingLog("voice")
-    cap("wake", score=0.5)
-    cap.warn("earcon_failed", err="x")
-    cap.error("pipeline_error", err="y")
-    assert cap.events() == ["wake", "earcon_failed", "pipeline_error"]
-    assert cap.find("earcon_failed")[0]["level"] == "warn"
-    assert cap.find("pipeline_error")[0]["level"] == "error"

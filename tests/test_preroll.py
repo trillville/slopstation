@@ -12,7 +12,7 @@ import time
 import pytest
 
 import helpers
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.speech.preroll import (
     CHUNK_BYTES,
     CHUNK_SAMPLES,
@@ -188,7 +188,7 @@ def test_near_miss_reports_one_event_per_run_with_its_peak(monkeypatch):
             return b"\x01\x00" * n  # non-zero: watchdog stays quiet
 
     lst = bare_listener(np=np, model=ScriptedModel(), near_miss_factor=0.2)
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     monkeypatch.setattr(audio, "log", log)
     score, peak = lst._listen(LiveStream(), 0.5, None, None)
     misses = log.find("wake_near_miss")
@@ -208,7 +208,7 @@ def test_clip_dump_writes_prunes_and_never_raises(monkeypatch, tmp_path):
     from slopstation.agent.speech import audio
 
     ring = [b"\x01\x00" * CHUNK_SAMPLES] * 3
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     monkeypatch.setattr(audio, "log", log)
     # clips_dir() lives under this test's own logs/, so nothing to re-point.
     for i in range(5):
@@ -329,7 +329,7 @@ def test_wake_ack_is_claimed_exactly_once():
 
 
 def test_feeder_chunking(monkeypatch):
-    feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
+    feeder = PrerollFeeder(CapturingLog("preroll"))
     monkeypatch.setattr(feeder, "pcm", b"\xaa" * (CHUNK_BYTES * 2 + 100))
     frames = feeder._frames()
     assert [len(f.audio) for f in frames] == [CHUNK_BYTES, CHUNK_BYTES, 100]
@@ -346,7 +346,7 @@ async def test_feeder_stops_capture_at_startframe(monkeypatch):
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-    feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
+    feeder = PrerollFeeder(CapturingLog("preroll"))
     marker = b"\xbb" * CHUNK_BYTES
     capture = WakeCapture(FakeStream(), [marker])
     monkeypatch.setattr(feeder, "capture", capture)
@@ -412,7 +412,7 @@ async def test_pipeline_ordering(monkeypatch):
             await self.push_frame(frame, direction)
 
     marker = b"".join(bytes([0xA0 + i]) * CHUNK_BYTES for i in range(4))
-    feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
+    feeder = PrerollFeeder(CapturingLog("preroll"))
     pa = pyaudio.PyAudio()
     wake_stream = pa.open(
         format=pyaudio.paInt16,

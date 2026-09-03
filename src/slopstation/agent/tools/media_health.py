@@ -113,7 +113,7 @@ class MediaHealthMonitor:
             )
         for source in sorted(seen or ()):
             if source not in current:
-                self.log.info("media_health_cleared", app=client.name, source=source)
+                self.log("media_health_cleared", app=client.name, source=source)
         self._issues[client.name] = set(current)
 
     def _history(self, client):
@@ -195,7 +195,7 @@ class MediaHealthMonitor:
             # new episodes long after the operation that requested it closed.
             # This is the audit trail for a grab the ledger cannot explain -
             # the only record that a release nobody asked for arrived.
-            self.log.info(
+            self.log(
                 "media_grab_unattributed",
                 app=client.name,
                 title=entry["title"],

@@ -6,7 +6,7 @@ import dataclasses
 
 import pytest
 
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.speech import session_runtime
 from slopstation.agent.speech.grammar_gate import stt_confidence
 from slopstation.agent.tools import library, titles
@@ -90,7 +90,7 @@ def test_generic_english_does_not_take_a_slot():
 
 
 def test_the_cap_is_announced_not_silent(monkeypatch):
-    log = logbook.CapturingLog()
+    log = CapturingLog()
     monkeypatch.setattr(session_runtime, "MAX_KEYTERMS", 3)
     monkeypatch.setattr(session_runtime, "log", log)
     terms = session_runtime.stt_keyterms(VOICE, "hey jarvis")

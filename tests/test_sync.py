@@ -10,7 +10,8 @@ import types
 
 import pytest
 
-from slopstation import config, logbook
+from helpers import CapturingLog
+from slopstation import config
 from slopstation.agent.tools import library, steamstore
 
 KEYLESS = {"steamApiKey": "dg_...", "steamId64": ""}
@@ -166,7 +167,7 @@ def test_second_sync_while_one_runs_is_a_noop(keyed, monkeypatch):
 def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
     """The events: the real layer 1 says sync_done / sync_skipped on the
     library lane."""
-    log = logbook.CapturingLog("library")
+    log = CapturingLog("library")
     monkeypatch.setattr(library, "log", log)
     monkeypatch.setattr(
         library,

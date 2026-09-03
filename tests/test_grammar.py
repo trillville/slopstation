@@ -15,7 +15,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.speech import earcons
 from slopstation.agent.speech.grammar_gate import (
     GrammarGate,
@@ -190,7 +190,7 @@ def drive(matcher, monkeypatch):
     EndWorkerFrames it pushed, its log, and the gate."""
 
     def _drive(frames, arm, ack=None):
-        glog = logbook.CapturingLog("voice")
+        glog = CapturingLog("voice")
         gate = GrammarGate(matcher, None, glog, ack=ack)
         pushed = []
 

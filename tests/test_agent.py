@@ -16,6 +16,7 @@ import time
 import pytest
 
 import helpers
+from helpers import CapturingLog
 from slopstation import config, events, logbook
 from slopstation.agent import voice_agent as va
 from slopstation.agent.speech import announce
@@ -166,7 +167,7 @@ class FakeDucker:
         pass
 
 
-class CtxLog(logbook.CapturingLog):
+class CtxLog(CapturingLog):
     """CapturingLog plus the ambient session id at each call."""
 
     def _write(self, level, event, fields):
@@ -254,13 +255,11 @@ def stubbed(monkeypatch):
 def run(monkeypatch, stubbed):
     """main() with the given argv over the stubs; returns (exit code or
     "ended", log, run_session calls). `wakes` scripts the listener and
-    `session` runs inside the faked run_session. config.use() is
-    process-wide, so the suite's config goes back afterwards."""
-    suite_cfg = config.current()
+    `session` runs inside the faked run_session."""
 
     def run(argv, cfg, wakes=(), session=None):
         FakeListener.wakes.extend(wakes)
-        config.use(cfg)
+        monkeypatch.setattr(config, "_current", cfg)
         log = CtxLog("voice")
         monkeypatch.setattr(va, "log", log)
         calls = []
@@ -301,8 +300,7 @@ def run(monkeypatch, stubbed):
             rc = "ended"
         return rc, log, calls
 
-    yield run
-    config.use(suite_cfg)
+    return run
 
 
 def test_a_missing_voice_key_fails_startup(run):

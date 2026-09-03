@@ -8,7 +8,8 @@ import json
 import pytest
 
 import helpers
-from slopstation import events, logbook
+from helpers import CapturingLog
+from slopstation import events
 from slopstation.agent.telemetry import sentry
 
 DSN = "https://abc123def456abc123def456abc12345@o4509876.ingest.us.sentry.io/1234567"
@@ -125,7 +126,7 @@ def _boom(*a, **k):
 def test_setup_without_a_dsn_is_disabled_quietly(_tracing_off):
     # No DSN -> disabled quietly, NOT an error: the normal unconfigured state,
     # and the one that lets a deploy land before the K15 is touched.
-    log = logbook.CapturingLog("voice")
+    log = CapturingLog("voice")
     assert sentry.setup({}, log) is False
     assert sentry.is_on() is False
     assert log.find("lane_disabled"), log.events()
@@ -137,7 +138,7 @@ def test_an_exploding_sdk_is_an_error_event_and_a_false(_tracing_off, monkeypatc
     # voice_agent calls setup() BARE, before the wake loop, so anything that
     # escapes it is an agent that will not start. A DSN present and the SDK
     # exploding must be an error event and a False, never a raise.
-    log = logbook.CapturingLog("voice")
+    log = CapturingLog("voice")
     monkeypatch.setattr(sentry, "_init", _boom)
     assert sentry.setup({"sentryDsn": DSN}, log) is False
     assert log.find("sentry_setup_failed"), log.events()
@@ -147,7 +148,7 @@ def test_an_exploding_sdk_is_an_error_event_and_a_false(_tracing_off, monkeypatc
 def test_a_declining_sdk_stops_before_tracing(_tracing_off, monkeypatch):
     # The SDK merely declining (no sentry-sdk in the venv) stops there rather
     # than half-wiring tracing on top of it.
-    log = logbook.CapturingLog("voice")
+    log = CapturingLog("voice")
     monkeypatch.setattr(sentry, "_init", lambda *a, **k: False)
     assert sentry.setup({"sentryDsn": DSN}, log) is False
     assert not log.find("tracing_setup_failed"), log.events()

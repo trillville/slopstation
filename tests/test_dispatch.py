@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from helpers import fresh_state
-from slopstation import gamepc, logbook, sessionlock, tv  # gamepc: the ssh seam
+from helpers import CapturingLog, seed_lock
+from slopstation import gamepc, sessionlock, tv  # gamepc: the ssh seam
 from slopstation.agent.brain import dispatch as dp
 from slopstation.agent.tools import library
 
@@ -27,7 +27,7 @@ CFG = {
 def harness(dry_run=False, on_end_session=None):
     """A Dispatch over CFG and a capturing log, as a lane builds one:
     (dispatch, log)."""
-    log = logbook.CapturingLog("dispatch")
+    log = CapturingLog("dispatch")
     return dp.Dispatch(CFG, log, dry_run=dry_run, on_end_session=on_end_session), log
 
 
@@ -68,25 +68,25 @@ def host(monkeypatch):
 
 
 def test_lock_arbiter():
-    fresh_state(10)  # fresh lock
+    seed_lock(10)  # fresh lock
     d, _ = harness(dry_run=True)
     r = d.start_session()
     assert not r.ok and r.earcon == "busy", r
 
-    fresh_state(None)
+    seed_lock(None)
     d, log = harness(dry_run=True)
     r = d.start_session(appid=12345)
     assert r.ok and "couch.py start 12345" in r.detail, r
     # Assert on the EVENT, not its prose: dashboards group by event name.
     assert "dry_run_would" in log.events(), log.records
 
-    fresh_state(999)  # stale lock = launchable
+    seed_lock(999)  # stale lock = launchable
     d, _ = harness(dry_run=True)
     assert d.start_session().ok
 
 
 def test_live_start_spawns_couch(spawned):
-    fresh_state(None)
+    seed_lock(None)
     d, _ = harness()
     r = d.start_session(appid=777)
     # Positional, not tail-anchored: a turn id may follow the appid.
@@ -132,7 +132,7 @@ def test_input_map_and_gaming_input_semantics(sent, spawned, host):
 
     # No session: "switch to the pc" means "start a session" - spawns the full
     # couch launch and never touches the TV (couch.py flips at READY).
-    fresh_state(None)
+    seed_lock(None)
     sent.clear()
     r = d.switch_input("the pc")
     assert r.ok and spawned and spawned[0][-1] == "start" and not sent, (
@@ -141,7 +141,7 @@ def test_input_map_and_gaming_input_semantics(sent, spawned, host):
         sent,
     )
     # Mid-launch (fresh lock, host pre-READY): truthful busy, no switch.
-    fresh_state(10)
+    seed_lock(10)
     host("NOTREADY")
     sent.clear()
     r = d.switch_input("the pc")
@@ -158,37 +158,38 @@ def test_input_map_and_gaming_input_semantics(sent, spawned, host):
 def test_end_session_over_ssh_outcomes(host):
     # With the rig busy, ending writes the cancel marker couch.py consumes
     # BEFORE the ssh, so the launch stands down even if the exit never lands.
-    fresh_state(10)
+    seed_lock(10)
     host("OK")
     d, log = harness()
     assert d.end_session().ok
     assert sessionlock.cancel_file().exists(), "a busy rig's end must leave the marker"
     assert "end_session_dispatched" in log.events()
-    fresh_state(10)
+    seed_lock(10)
     host("FAILED:1")
     d, _ = harness()
     assert not d.end_session().ok
-    fresh_state(10)  # mid-launch, PC mid-wake: still an end
+    seed_lock(10)  # mid-launch, PC mid-wake: still an end
     host(ssh_down)
     d, log = harness()
     r = d.end_session()
     assert r.ok and sessionlock.cancel_file().exists(), r
     assert "end_session_dispatched" in log.events()
-    # Idle rig: nothing to cancel, so an unreachable PC is a real failure.
-    fresh_state(None)
+
+
+def test_end_session_on_an_idle_rig_is_a_failure(host):
+    # Nothing to cancel, so an unreachable PC is a real failure, and no marker.
+    host(ssh_down)
     d, _ = harness()
     r = d.end_session()
     assert not r.ok and r.earcon == "fail"
-    assert not sessionlock.cancel_file().exists(), (
-        "an idle rig's end must not leave a marker"
-    )
+    assert not sessionlock.cancel_file().exists()
 
 
 def test_end_session_restores_the_room_before_the_exit(host):
     # The room ducker restores HERE, before the exit: the voice session stays
     # open for the idle timeout, by which time couch has cut TV power and
     # remote keys relay nothing (2026-08-22).
-    fresh_state(10)
+    seed_lock(10)
     order = []
     host(lambda cmd, **kw: order.append(f"ssh {cmd}") or "OK")
     d, _ = harness(on_end_session=lambda: order.append("restore"))
@@ -205,7 +206,7 @@ def test_end_session_restores_the_room_before_the_exit(host):
 
 
 def test_play_game_session_live_ssh_outcomes_and_cold_start(monkeypatch, host, spawned):
-    fresh_state(10)  # fresh lock = session up
+    seed_lock(10)  # fresh lock = session up
     d, _ = harness()
     host("OK")
     assert d.play_game(1888160).ok
@@ -234,7 +235,7 @@ def test_play_game_session_live_ssh_outcomes_and_cold_start(monkeypatch, host, s
     host(ssh_down)
     d, _ = harness()
     assert d.play_game(1).earcon == "fail"
-    fresh_state(None)  # cold: full couch launch
+    seed_lock(None)  # cold: full couch launch
     d, _ = harness()
     r = d.play_game(777)
     i = spawned[0].index("start")
@@ -273,7 +274,7 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     monkeypatch, host
 ):
     monkeypatch.setattr(library, "installed_name", lambda a: None)
-    fresh_state(None)
+    seed_lock(None)
     d, log = harness()
     wire = []
     host(lambda cmd, **kw: wire.append(cmd) or "OK")
@@ -294,10 +295,10 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     assert "start one first" in r.detail, r
     # Mid-start (fresh lock) is a distinct busy from no-session: the reply must
     # not tell the model to start what is already starting (2026-08-15).
-    fresh_state(10)
+    seed_lock(10)
     r = d.nav("downloads")
     assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
-    fresh_state(None)
+    seed_lock(None)
     # An unknown kind is refused HERE and never reaches the wire.
     wire2 = []
     host(lambda cmd, **kw: wire2.append(cmd) or "OK")
@@ -313,7 +314,7 @@ def test_an_unregistered_task_says_so_on_every_verb_that_fires_one(monkeypatch, 
     # as a broken verb (2026-08-14).
     d, _ = harness()
     monkeypatch.setattr(library, "installed_name", lambda a: None)
-    fresh_state(5)  # a live session, so play_game takes the ssh path
+    seed_lock(5)  # a live session, so play_game takes the ssh path
     for verb, task, call in (
         ("nav", "Nav", lambda: d.nav("downloads")),
         ("stop", "StopGame", lambda: d.quit_game(1)),

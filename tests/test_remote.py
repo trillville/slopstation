@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 import helpers
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.interfaces import remote
 
 INNER_TOKEN = "i" * 64
@@ -123,7 +123,7 @@ def cfg(inner):
 
 @pytest.fixture
 def log():
-    return logbook.CapturingLog("voice")
+    return CapturingLog("voice")
 
 
 @pytest.fixture

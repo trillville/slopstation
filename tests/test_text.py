@@ -9,7 +9,7 @@ import urllib.request
 import pytest
 
 import helpers
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.brain import backends
 from slopstation.agent.interfaces import text
 from slopstation.agent.telemetry import traces
@@ -113,7 +113,7 @@ def cfg():
 
 @pytest.fixture
 def log():
-    return logbook.CapturingLog("voice")
+    return CapturingLog("voice")
 
 
 @pytest.fixture

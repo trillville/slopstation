@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 import helpers
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.tools import (
     disk_health,
     media,
@@ -188,9 +188,7 @@ def service():
         profiles=[{"id": 20, "name": "Series HD"}, {"id": 21, "name": "Series UHD"}],
         root_folders=[{"id": 1, "path": "/data/TV"}],
     )
-    return media.MediaService(
-        SERVICE_CFG, logbook.CapturingLog("voice"), radarr, sonarr
-    )
+    return media.MediaService(SERVICE_CFG, CapturingLog("voice"), radarr, sonarr)
 
 
 # --- authenticated HTTP shape -------------------------------------------------
@@ -339,7 +337,7 @@ def test_proton_log_parsing(proton_log, tmp_path):
 def test_proton_monitor_syncs_a_fresh_mapping(proton_log, qbit, qbit_web, monkeypatch):
     qbit_web.preferences["listen_port"] = 33125
     proton_monitor = media_proton.ProtonPortMonitor(
-        qbit, logbook.CapturingLog("voice"), path=proton_log, now=PROTON_NOW
+        qbit, CapturingLog("voice"), path=proton_log, now=PROTON_NOW
     )
     synced = proton_monitor.reconcile_once()
     assert synced["changed"] and synced["previous_port"] == 33125
@@ -421,7 +419,7 @@ def test_health_watch_reports_transitions_once():
             ]
         },
     )
-    watch_log = logbook.CapturingLog("voice")
+    watch_log = CapturingLog("voice")
     watch = media_health.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
 
     watch.reconcile_once()
@@ -478,7 +476,7 @@ def test_health_watch_reports_a_dead_app_once():
         def get(self, endpoint, params=None):
             raise media_clients.MediaError("connection refused")
 
-    watch_log = logbook.CapturingLog("voice")
+    watch_log = CapturingLog("voice")
     dead = media_health.MediaHealthMonitor((DeadArr(),), watch_log)
     dead.reconcile_once()
     dead.reconcile_once()
@@ -491,7 +489,7 @@ def test_health_watch_is_off_when_config_says_so():
         media.media_health_monitor_from_config(
             {"media": {"enabled": True, "healthSync": False}},
             {},
-            logbook.CapturingLog("voice"),
+            CapturingLog("voice"),
         )
         is None
     )
@@ -510,7 +508,7 @@ class FakeLedger:
 
 def test_unattributed_grabs_are_reported_per_download():
     grab_sonarr = FakeArr("Sonarr")
-    watch_log = logbook.CapturingLog("voice")
+    watch_log = CapturingLog("voice")
     grabs = media_health.MediaHealthMonitor(
         (grab_sonarr,),
         watch_log,
@@ -555,7 +553,7 @@ def test_unattributed_grabs_are_reported_per_download():
 
 def test_no_ledger_means_no_attribution():
     grab_sonarr = FakeArr("Sonarr")
-    watch_log = logbook.CapturingLog("voice")
+    watch_log = CapturingLog("voice")
     blind = media_health.MediaHealthMonitor((grab_sonarr,), watch_log)
     blind.reconcile_once()
     grab_sonarr.history["records"].append(
@@ -603,7 +601,7 @@ class FakeShutil:
 def test_disk_watch_reports_crossings(monkeypatch):
     table = {"M:": Usage(1000 * GB, 100 * GB), "C:": Usage(1000 * GB, 900 * GB)}
     monkeypatch.setattr(disk_health, "shutil", FakeShutil(table))
-    disk_log = logbook.CapturingLog("voice")
+    disk_log = CapturingLog("voice")
     disk = disk_health.DiskHealthMonitor(
         ("M:", "C:"), disk_log, free_warn_bytes=250 * GB
     )
@@ -635,7 +633,7 @@ def test_disk_watch_reports_crossings(monkeypatch):
 
 
 def test_disk_watch_needs_config_and_a_host_root():
-    disk_log = logbook.CapturingLog("voice")
+    disk_log = CapturingLog("voice")
     assert (
         media.disk_health_monitor_from_config(
             {"media": {"enabled": True, "diskWatch": False}}, disk_log
@@ -1261,7 +1259,7 @@ def test_delete_series_is_scoped_to_seasons(service):
 
 def test_from_config_needs_the_lane_and_its_keys():
     cfg = json.loads(json.dumps(helpers.CONFIG))
-    log = logbook.CapturingLog("voice")
+    log = CapturingLog("voice")
     assert media.from_config(cfg, {}, log) is None
     cfg["media"]["enabled"] = True
     assert media.from_config(cfg, {}, log) is None
@@ -1296,7 +1294,7 @@ def test_track_survives_a_failing_store():
     }
 
     class FailingStore:
-        log = logbook.CapturingLog("voice")
+        log = CapturingLog("voice")
 
         def track_external(self, *args, **kwargs):
             raise OSError("disk unavailable")
@@ -1410,7 +1408,7 @@ def _doctor(tmp_path, qbit_preferences):
     return media_checks.media_doctor(
         doctor_cfg,
         DOCTOR_SECRETS,
-        logbook.CapturingLog("voice"),
+        CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,
         compose_runner=lambda media_dir: compose_rows,

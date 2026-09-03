@@ -16,47 +16,39 @@ from slopstation import config, events, gamepc, logbook, sessionlock, tv
 PORT_WAIT_S = 90  # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60  # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S = 120  # Enter dispatch until the READY marker appears
-# blind power_on re-send this far into the READY wait (the gaming PC has no Ex-Link).
-# Past the healthy envelope: launches reach READY in ~9-20 s.
+# A blind power_on re-send this far into the READY wait: past the healthy
+# envelope (READY in ~9-20 s), and the gaming PC cannot wake the TV itself.
 WAKE_RETRY_S = 30
-# extra Enter dispatches after a DETECTED death, not a timeout. All three recorded
-# failures (2026-08-13 17:20, 08-16 17:56, 08-19 01:18) were TVs that acked power_on and
-# stayed dark, burning the full window on an already-exited Enter. The retry gets a
-# fresh one. Budget: 08-19's Enter died at 48.3 s (turn 7402df) and the K15 waited
-# another 71 s on a dead task, so detection lands ~50 s in and a twice-failing launch
-# takes ~170 s instead of 121 s. Safe to redispatch because Enter's abort path leaves
-# OFFICE topology behind - the clean state a fresh Enter wants.
+# Extra Enter dispatches after a DETECTED death, not a timeout. Every recorded
+# failure was a TV that acked power_on and stayed dark while the K15 waited
+# out the window on an Enter that had already exited. Safe to redispatch:
+# Enter's abort path leaves OFFICE topology behind, the state a fresh one wants.
 ENTER_REDISPATCH = 1
-# how long a NOTREADY stays unremarkable: outlasts the gap between schtasks /Run
-# returning (task only TRIGGERED) and it reading as running, plus the slowest launch
-# that ever worked (19.8 s).
+# How long a NOTREADY stays unremarkable: the gap between schtasks /Run
+# returning and the task reading as running, plus the slowest launch that
+# ever worked (~20 s).
 ENTER_SETTLE_S = 25
 WATCH_POLL_S = 5
-# consecutive ssh failures (ssh() raises) = session dead. Low on purpose: a true sleep
-# restores the TV in ~20-30 s, and a false positive only costs a desk-side relaunch (the
-# Puck stays claimed, chord deaf).
+# Consecutive ssh failures that end a session. Low on purpose: a true sleep
+# restores the TV in ~20-30 s, and a false positive only costs a relaunch.
 WATCH_FAILS = 3
-# how long the enter_died rescue waits for the set to REPORT "on" before spending its
-# redispatch or failing with the TV named. State flips ~5 s after an accepted frame
-# (2026-08-19: standby t+1..4 s, on t+5 s).
+# How long the enter_died rescue waits for the set to REPORT "on" before
+# spending its redispatch; the state flips ~5 s after an accepted frame.
 TV_WAIT_S = 30
-# power_on re-send interval while the set answers not-on; just past the ~5 s flip lag.
-# power_on is discrete, safe to repeat.
-TV_POKE_S = 6
-# unreadable answers before standing down to the blind path. None is UNKNOWN, never
-# "off" (Wi-Fi blip, IP drift, no tvIp). Reads ride existing loops, ~0.5 s each.
+TV_POKE_S = 6  # power_on re-send interval while the set answers not-on
+# Unreadable answers before standing down to the blind path. None is UNKNOWN
+# (Wi-Fi blip, IP drift, no tvIp), never "off".
 TV_UNKNOWN_N = 3
 
 log = logbook.logger("launch")
 
 
 class Cancelled(BaseException):
-    """A requested stop of an in-flight launch. ssh `exit` alone stops only an
-    Enter already RUNNING, so it can race this process's redispatch rescue and
-    drop OFFICE topology plus a released Puck onto a live session; end_session
-    also writes sessionlock.cancel_file(), consumed by every wait in start(). BaseException
-    on purpose, like KeyboardInterrupt: it must ride the abort handler
-    (launch_aborted, lock released, no last_error), not launch_failed."""
+    """A requested stop of an in-flight launch: end_session writes
+    sessionlock.cancel_file(), which every wait in start() consumes (ssh
+    `exit` alone stops only an Enter already RUNNING, so it can race the
+    redispatch rescue). BaseException on purpose, like KeyboardInterrupt: it
+    rides the abort handler (lock released, no last_error), not launch_failed."""
 
     def __init__(self, by: str) -> None:
         self.by = by  # the CANCELLING intent's turn, or ""
@@ -130,18 +122,12 @@ def wait_port(timeout: float = PORT_WAIT_S) -> bool:
 
 
 class TvEvidence:
-    """The set's own word, read during start()'s READY wait on tvIp rigs.
-    Never gates Enter - the panel's ~5 s flip lag would tax every healthy
-    launch (36 of 38 land in a 9.1-12.9 s band). It re-pokes power_on early
-    (TV_POKE_S), so a set taking the second frame lights inside Enter's
-    retry-apply window, and it gates the enter_died rescue. Every recorded
-    refusal acked power_on and stayed dark - the serial receiver is powered
-    in standby - and the PC cannot see the panel either (EDID and all three
-    WMI monitor classes read identically awake or asleep, 2026-08-13).
-    Unreadable (no tvIp, IP drift, Wi-Fi blip) is not refused: fail open,
-    and fail closed only on the set's own word at the rescue. Idle duration
-    does not predict a refusal: failures at 11.8-20.0 h since the last
-    session, successes at 22+ h."""
+    """The set's own word, read during start()'s READY wait on tvIp rigs. It
+    never gates Enter (the panel's ~5 s flip lag would tax every healthy
+    launch); it re-pokes power_on while the set answers not-on, and it gates
+    the enter_died rescue. Every recorded refusal acked power_on and stayed
+    dark, and the PC cannot see the panel either. Unreadable is not refused:
+    fail open, and fail closed only on the set's own word at the rescue."""
 
     def __init__(
         self, ip: str | None, first: str | None, ms: Callable[[], int]
@@ -169,10 +155,8 @@ class TvEvidence:
         self.last = tv.tv_power_state(self.ip, timeout=0.5, raw=True)
         if self.last == "on":
             self.confirmed = True
-            # dur_ms is elapsed-since-intent and polling starts only after
-            # wait_port, so a COLD boot censors it (~20-90 s of boot with
-            # the panel long since lit); warm-PC launches approximate
-            # frame-to-lit.
+            # Polling starts after wait_port, so only a warm-PC launch's
+            # dur_ms approximates frame-to-lit.
             log("tv_on", dur_ms=self._ms())
             return
         if self.last is None:
@@ -342,16 +326,11 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
 
     try:
         tv_ip = config.current().get("tvIp")
-        # Raw depth rung as the launch FOUND the set: "on", "standby", ""
-        # (deep: hours off, IP server still answering with PowerState drained)
-        # or the "unreachable" sentinel - events.emit drops None-valued fields,
-        # so an unreachable set would otherwise log like a rig with no tvIp.
-        # Ex-Link cannot answer this: its ack is a constant 030cf1 whatever
-        # the power state or command, nothing past three bytes (2026-08-19).
-        # Do not re-run that probe and do not brute-force the command space
-        # hunting a status frame - the same protocol carries service-mode
-        # commands, and a valid-checksum guess is not safe to fire at a TV
-        # someone is watching.
+        # The raw state as the launch FOUND the set, or "unreachable": events.emit
+        # drops None-valued fields, so None would log like a rig with no tvIp.
+        # Ex-Link cannot answer this - its ack is constant whatever the state -
+        # and do not go hunting a status frame in its command space: the same
+        # protocol carries service-mode commands.
         tv0 = tv.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
         log(
             "launch_start",
@@ -396,15 +375,12 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         if not dispatch_enter("enter_dispatched"):
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
-        sessionlock.last_error_file().unlink(
-            missing_ok=True
-        )  # success supersedes any old failure
+        sessionlock.last_error_file().unlink(missing_ok=True)  # success supersedes it
         exlink(config.current()["tvGamingCmd"])
         if appid:
             # Voice "play <title>" from cold. Best-effort - Big Picture up is
-            # a working outcome, except on ALREADY (appid already running from
-            # an EARLIER session), where the couch cannot drive it: warn
-            # (2026-08-13 turn 14852d).
+            # a working outcome - except ALREADY (the game was left running by
+            # an earlier session), which the couch cannot drive: warn.
             try:
                 answer = gamepc.launch(appid)
                 emit = log.warn if answer == "ALREADY" else log
@@ -423,17 +399,15 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         abort_teardown(tv_woken)
         return 1
     except BaseException as e:
-        # Ctrl-C is a KeyboardInterrupt, not an Exception, so the handler above
-        # never sees it; without this clause the lane dies silently, holding
-        # the lock until staleness recycles it (2026-08-16 b43b74). Cancelled
-        # lands here too, and neither writes LAST_ERROR.
+        # KeyboardInterrupt and Cancelled: without this clause the lane would
+        # die holding the lock until staleness recycled it. Neither writes
+        # last_error - a deliberate stop is not a failure to buzz about.
         by = {"cancelled_by": e.by} if isinstance(e, Cancelled) and e.by else {}
         log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms(), **by)
         if isinstance(e, Cancelled) and enter_sent:
             # The canceller's exit stops a RUNNING Enter, but one still inside
-            # the schtasks trigger gap when Exit finishes runs to completion,
-            # claiming the Puck and TV-GAMING with no watcher alive (~7 s of
-            # exit variance, 0b785e). Our own exit, strictly after our last
+            # the schtasks trigger gap runs to completion and claims the Puck
+            # with no watcher alive. Our own exit, strictly after our last
             # enter, closes the ordering.
             try:
                 gamepc.exit()

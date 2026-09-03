@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from helpers import fresh_state
+from helpers import CapturingLog, seed_lock
 from slopstation import chord_listener as cl
 from slopstation import events, logbook, sessionlock
 
@@ -96,19 +96,19 @@ def drive(monkeypatch):
     report, so this is the Puck sitting untouched."""
 
     def _drive(lock_age_s, stop_after, session_starts_at=None, error_age_s=None):
-        fresh_state(lock_age_s)
+        seed_lock(lock_age_s)
         if error_age_s is not None:
             sessionlock.last_error_file().write_text("Enter exited without READY")
             when = time.time() - error_age_s
             os.utime(sessionlock.last_error_file(), (when, when))
-        cap = logbook.CapturingLog("listener")
+        cap = CapturingLog("listener")
         fake = FakeHid()
         ticks = [0]
 
         def fake_sleep(_s):
             ticks[0] += 1
             if session_starts_at is not None and ticks[0] == session_starts_at:
-                fresh_state(0)  # a launch just took the lock
+                seed_lock(0)  # a launch just took the lock
             if ticks[0] >= stop_after:
                 raise Stop()
 
@@ -130,17 +130,17 @@ def drive(monkeypatch):
 
 
 def test_active_reads_a_fresh_lock_as_spoken_for_and_a_stale_one_as_free():
-    fresh_state(None)
+    seed_lock(None)
     assert sessionlock.active() is False, "no lock must read as free"
 
-    fresh_state(10)
+    seed_lock(10)
     assert sessionlock.active() is True, "a fresh lock means the Puck is spoken for"
 
-    fresh_state(sessionlock.LOCK_STALE_S - 5)
+    seed_lock(sessionlock.LOCK_STALE_S - 5)
     assert sessionlock.active() is True, "just inside the window is still active"
 
     # A lock nobody cleaned up must not permanently deafen the chord lane.
-    fresh_state(sessionlock.LOCK_STALE_S + 5)
+    seed_lock(sessionlock.LOCK_STALE_S + 5)
     assert sessionlock.active() is False, "a stale lock must read as free"
 
 
@@ -163,7 +163,7 @@ def test_stand_off_lets_go_once_and_reports_only_the_transition():
 
 @pytest.mark.parametrize("age", [0, 10, sessionlock.LOCK_STALE_S - 1])
 def test_a_live_session_leaves_nothing_open(age):
-    fresh_state(age)
+    seed_lock(age)
     puck, h = held_puck()
     if sessionlock.active():
         puck.stand_off()
@@ -227,8 +227,7 @@ def test_a_stale_error_marker_is_discarded_unheld(monkeypatch):
     # A launch started by voice or from a phone leaves nobody holding the
     # Puck. The age-out must not be gated on the buzz, or the marker
     # strands until the next successful launch (2026-08-30, stranded 5 h).
-    fresh_state()
-    cap = logbook.CapturingLog("listener")
+    cap = CapturingLog("listener")
     monkeypatch.setattr(cl, "log", cap)
     sessionlock.last_error_file().write_text("Enter exited without READY")
     stale = time.time() - cl.ERR_STALE_S - 60
@@ -240,8 +239,7 @@ def test_a_stale_error_marker_is_discarded_unheld(monkeypatch):
 
 def test_a_fresh_error_marker_is_kept_unheld(monkeypatch):
     # Fresh and unheld: kept, so the next hand on the Puck still feels it.
-    fresh_state()
-    cap = logbook.CapturingLog("listener")
+    cap = CapturingLog("listener")
     monkeypatch.setattr(cl, "log", cap)
     sessionlock.last_error_file().write_text("Enter exited without READY")
     cl.signal_last_error(None)

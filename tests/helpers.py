@@ -1,22 +1,20 @@
 """Shared test helpers: the repository layout, the config fixture, the machine
-gates, and the state-directory reset."""
+gates, the session-lock seed, and the capturing logger."""
 
 import functools
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
-from slopstation import paths, sessionlock
+from slopstation import events, logbook, sessionlock
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "src" / "slopstation"
 
-# config.example.json as a dict; a test that needs specific values calls
-# config.use(...) itself.
+# config.example.json as a dict: what config.current() answers under the suite.
 CONFIG = json.loads((REPO / "config.example.json").read_text(encoding="utf-8-sig"))
 
 
@@ -34,10 +32,9 @@ def modname(path):
 
 @functools.cache
 def _present():
-    """What this machine can actually run: steam (a local install - the gaming
-    PC) and audio (real devices - the K15, opt-in because the mic is shared
-    with a live lane). Detected here rather than passed in, so `pytest` on its
-    own does the right thing on either box. SLOPSTATION_TEST_HAS overrides it."""
+    """What this machine can run: steam (a local install - the gaming PC) and
+    audio (real devices - the K15, opt-in because the mic is shared with a
+    live lane). SLOPSTATION_TEST_HAS overrides the detection."""
     override = os.environ.get("SLOPSTATION_TEST_HAS")
     if override is not None:
         return frozenset(n for n in override.split(",") if n)
@@ -61,15 +58,34 @@ def wants(*needs):
         pytest.skip(f"needs {', '.join(missing)}")
 
 
-def fresh_state(lock_age_s=None, lock_content="x"):
-    """A fresh runtime home for this test: every state file, log and marker
-    moves with paths.HOME. lock_age_s seeds a session lock of that age (None =
-    absent). Returns the state directory."""
-    paths.HOME = Path(tempfile.mkdtemp(prefix="slopstation-test-home-"))
-    state = paths.state()
-    state.mkdir(parents=True)
-    if lock_age_s is not None:
-        sessionlock.lock_file().write_text(lock_content)
-        old = time.time() - lock_age_s
-        os.utime(sessionlock.lock_file(), (old, old))
-    return state
+def seed_lock(age_s, content="x"):
+    """A session lock of that age in this test's runtime home; None removes it."""
+    lock = sessionlock.lock_file()
+    if age_s is None:
+        lock.unlink(missing_ok=True)
+        return
+    lock.write_text(content)
+    old = time.time() - age_s
+    os.utime(lock, (old, old))
+
+
+class CapturingLog(logbook.Logger):
+    """The production logger's shape, recording instead of writing, so a change
+    to the logging interface breaks the tests. Assert on events and fields."""
+
+    def __init__(self, lane="test"):
+        super().__init__(lane)
+        self.records = []
+
+    def _write(self, level, event, fields):
+        rec = {
+            ("f_" + k if k in events._EMITTER_OWNED else k): v
+            for k, v in fields.items()
+        }
+        self.records.append(dict(rec, level=level, event=event))
+
+    def events(self):
+        return [r["event"] for r in self.records]
+
+    def find(self, event):
+        return [r for r in self.records if r["event"] == event]

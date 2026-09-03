@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 import helpers
-from slopstation import logbook, paths
+from helpers import CapturingLog
+from slopstation import paths
 from slopstation.agent.speech import announce
 from slopstation.agent.tools import operations, operations_monitors
 
@@ -114,7 +115,7 @@ class FakeMedia(_Double):
 
 @pytest.fixture
 def log():
-    return logbook.CapturingLog("voice")
+    return CapturingLog("voice")
 
 
 def _stardew(store):

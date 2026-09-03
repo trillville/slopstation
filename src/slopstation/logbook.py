@@ -28,15 +28,18 @@ def rotate(max_bytes: int = 5_000_000) -> None:
 
 
 class Logger:
-    """Called as `log("event", field=value, ...)`. Under the test suite
-    (env=test) the console still gets everything but couch.log does not."""
+    """Called as `log("event", field=value, ...)`; `warn` and `error` are the
+    other two levels (no `debug`: the level becomes the record's severity,
+    which alerts key on, so an unemitted level is an empty dashboard value).
+    Under the test suite the console still gets everything but couch.log
+    does not."""
 
     def __init__(self, lane: str) -> None:
         self.lane = lane
 
     def _write(self, level: str, event: str, fields: dict) -> None:
-        # The whole body is guarded, not just the I/O: every log call funnels
-        # through here, so anything that raises crashes the lane.
+        # The whole body is guarded: every log call funnels through here, so
+        # anything that raises crashes the lane.
         try:
             # level POSITIONAL on both calls - by keyword it would collide
             # with a caller field named `level` (see events.emit).
@@ -61,12 +64,6 @@ class Logger:
     def __call__(self, event: str, /, **fields: Any) -> None:
         self._write(events.INFO, event, fields)
 
-    # Three levels, not four; `info` is the spelled-out form of __call__. No
-    # `debug`: `level` becomes the log record's SEVERITY, which alerts key on,
-    # so an unemitted level is a permanently empty dashboard value.
-    def info(self, event: str, /, **fields: Any) -> None:
-        self._write(events.INFO, event, fields)
-
     def warn(self, event: str, /, **fields: Any) -> None:
         self._write(events.WARN, event, fields)
 
@@ -76,32 +73,5 @@ class Logger:
 
 def logger(lane: str) -> Logger:
     """One logger per lane. The lane is a log attribute alerts select on, so
-    the set stays small and fixed: tests/test_event_names.py LANES is the
-    enforced list."""
+    the set stays small: tests/test_event_names.py LANES is the enforced list."""
     return Logger(lane)
-
-
-class CapturingLog(Logger):
-    """Test double with the PRODUCTION shape - same signature, same levels -
-    recording instead of writing, so a change to the logging interface breaks
-    the tests. Assert on events and fields, never prose."""
-
-    def __init__(self, lane: str = "test", echo: bool = False) -> None:
-        super().__init__(lane)
-        self.records: list[dict] = []
-        self.echo = echo
-
-    def _write(self, level: str, event: str, fields: dict) -> None:
-        rec = {
-            ("f_" + k if k in events._EMITTER_OWNED else k): v
-            for k, v in fields.items()
-        }
-        self.records.append(dict(rec, level=level, event=event))
-        if self.echo:
-            print(f"[{self.lane}] " + events.human(event, level, **fields))
-
-    def events(self) -> list[str]:
-        return [r["event"] for r in self.records]
-
-    def find(self, event: str) -> list[dict]:
-        return [r for r in self.records if r["event"] == event]

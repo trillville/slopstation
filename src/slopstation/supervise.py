@@ -20,14 +20,13 @@ import csv
 import ctypes
 import hashlib
 import io
-import msvcrt
 import subprocess
 import sys
 import time
 from ctypes import wintypes
 from pathlib import Path
 
-from slopstation import logbook, paths
+from slopstation import logbook, paths, statefile
 
 # What each lane runs. Module invocations, not paths: the package is installed.
 LANES = {
@@ -36,17 +35,14 @@ LANES = {
 }
 TASKS = {lane: f"\\Slopstation\\{lane}" for lane in LANES}
 
-# Bumping a pin has to install itself on the next launch: CD pulls code, not
-# wheels.
+# CD pulls code, not wheels, so a bumped pin installs itself on the next
+# launch. The sentinel is written only after pip succeeds, so a half-built
+# venv retries.
 PINS = ("pyproject.toml", "constraints.txt")
-# Written only after pip succeeds, so a half-built venv retries next launch;
-# the .lock beside it serialises installers.
 SENTINEL = Path(sys.prefix) / "deps-ok"
 
 STOP_WAIT_S = 15
-RESTART_S = (
-    10  # a crashed lane is back this soon; a crash LOOP is one restart every RESTART_S
-)
+RESTART_S = 10  # a crashed lane is back this soon; a crash loop restarts this often
 
 REFUSAL = (
     "refusing to run elevated: a lane started from an administrator window "
@@ -56,10 +52,7 @@ REFUSAL = (
 
 
 def elevated() -> bool:
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except (AttributeError, OSError):
-        return False
+    return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
 # --- the tasks ----------------------------------------------------------------
@@ -89,11 +82,10 @@ def running(lane: str) -> bool:
 
 
 def stop(lane: str) -> bool:
-    """End the task and wait for the scheduler to agree it has stopped. True
-    when there was something to stop; raises when it did not stop in time.
-    Never a quiet True: a caller that went on to /Run would be refused as a
-    second instance (IgnoreNew) and then take the OLD instance for its
-    relaunch - a deploy that reports success with the old code running."""
+    """End the task and wait until the scheduler agrees; True when there was
+    something to stop. A timeout raises rather than answering a quiet True:
+    a caller that went on to /Run would be refused (IgnoreNew) and take the
+    old instance, still on the old code, for its relaunch."""
     if not running(lane):
         return False
     _schtasks("/End", "/TN", TASKS[lane])
@@ -201,11 +193,10 @@ _job = None  # the wrapper's handle: held for its lifetime, never closed
 
 
 def _die_together() -> None:
-    """Put THIS process in a kill-on-close job, so every process it starts - the
-    lane, and the interpreter the venv launcher spawns for it - dies with it.
-    Ending the task is TerminateProcess on the wrapper, which closes its handles
-    and so the job. Measured 2026-09-03: the scheduler does not do this itself,
-    and /End left the lane running as an orphan beside its replacement."""
+    """Put THIS process in a kill-on-close job, so the lane and the interpreter
+    the venv launcher spawns for it die with it. Ending the task is
+    TerminateProcess on the wrapper, which closes its handles and so the job;
+    the scheduler itself left the lane running beside its replacement."""
     global _job
     job = _kill_on_close_job()
     if not _k32.AssignProcessToJobObject(job, _k32.GetCurrentProcess()):
@@ -238,32 +229,21 @@ def pins_changed() -> bool:
 
 
 def _install_if_pins_changed(log):
-    """One installer at a time: both tasks start at logon together, and two
-    pips in one venv corrupt it. The second waits on the lock, then re-reads
-    the sentinel the first wrote and skips."""
+    """Both tasks start at logon together and two pips in one venv corrupt it,
+    so the install runs under a lock; the second task re-reads the sentinel
+    the first wrote and skips."""
     if not pins_changed():
         return
-    with open(SENTINEL.with_name("deps.lock"), "w") as lock:
-        while True:
-            try:
-                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-                break
-            except OSError:
-                time.sleep(1)
-        try:
-            if not pins_changed():
-                return
-            print("[lane] pins changed - installing, takes a minute or two...")
-            pip = [sys.executable, "-m", "pip", "install", "-e", ".[dev]"]
-            r = subprocess.run([*pip, "-c", "constraints.txt"], cwd=paths.HOME)
-            if r.returncode:
-                print("[lane] pip install failed - fix it and relaunch")
-                return
-            SENTINEL.write_text(_pin_digest() or "")
-            log("deps_installed", what="venv")
-        finally:
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    with statefile.guard(SENTINEL):
+        if not pins_changed():
+            return
+        print("[lane] pins changed - installing, takes a minute or two...")
+        pip = [sys.executable, "-m", "pip", "install", "-e", ".[dev]"]
+        if subprocess.run([*pip, "-c", "constraints.txt"], cwd=paths.HOME).returncode:
+            print("[lane] pip install failed - fix it and relaunch")
+            return
+        SENTINEL.write_text(_pin_digest() or "")
+        log("deps_installed", what="venv")
 
 
 def _uptime_s() -> float:
@@ -288,27 +268,20 @@ def _first_launch_this_boot() -> bool:
 
 def lane(name: str, passthrough: list[str]) -> int:
     """Run one lane, and run it again RESTART_S after any crash, for as long as
-    the task lives. A clean exit (--once, Ctrl-C) ends the task.
-
-    The wrapper owns crash recovery because the scheduler does not: measured
-    2026-09-03, a task whose action exits non-zero is left at Ready, whether
-    the run was started by /Run or by a trigger. What the scheduler is good
-    for - starting at logon in the interactive session, a name to /End and
-    /Run, one instance at a time - it keeps."""
+    the task lives. A clean exit (--once, Ctrl-C) ends the task."""
     if elevated():
         print(f"[lane] {REFUSAL}")
         return 1
     _die_together()
     log = logbook.logger("supervisor")
     if name == "listener" and _first_launch_this_boot():
-        # Once per boot, before the listener: re-running it after a mid-session
-        # crash would spawn a second watch loop against the live session lock.
+        # Once per boot, not per restart: a reconcile after a mid-session crash
+        # would start a second watch loop against the live session lock.
         subprocess.run(
             [sys.executable, "-m", "slopstation.couch", "reconcile"], cwd=paths.HOME
         )
     while True:
-        # Inside the loop: a deploy lands new pins and then ends the task, but
-        # a crash-restart must pick them up too.
+        # Inside the loop, so a crash-restart picks up pins a deploy landed.
         _install_if_pins_changed(log)
         log("start", what=name)
         code = subprocess.run(LANES[name] + passthrough, cwd=paths.HOME).returncode
