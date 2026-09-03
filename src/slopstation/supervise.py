@@ -1,15 +1,16 @@
 """The lanes as scheduled tasks: what each one runs, and the verbs the deployer,
 the doctor and Start-Slopstation.bat use on them.
 
-Task Scheduler owns the lifecycle - start at logon, restart on failure, one
-instance at a time, in the logged-on session where the Puck and the audio
-devices are - and Setup-K15-Tasks.ps1 declares it. Each task's action is
+Task Scheduler owns the lifecycle - start at logon, one instance at a time, in
+the logged-on session where the Puck and the audio devices are - and
+Setup-K15-Tasks.ps1 declares it. Each task's action is
 
     slopstation-lane <name>
 
-the wrapper below: install changed pins, run the lane, return its exit code so
-a crash reads as a failed task and the scheduler relaunches it. A Windows
-service cannot host these lanes: session 0 reaches neither device.
+the wrapper below: install changed pins, run the lane, and run it again after
+a crash. The scheduler's own restart-on-failure does not fire on a non-zero
+exit (measured), so the wrapper carries that. A Windows service cannot host
+these lanes: session 0 reaches neither device.
 
     slopstation-start          start what is down, reload what is up
 """
@@ -42,6 +43,9 @@ PINS = ("pyproject.toml", "constraints.txt")
 SENTINEL = Path(sys.prefix) / "deps-ok"
 
 STOP_WAIT_S = 15
+RESTART_S = (
+    10  # a crashed lane is back this soon; a crash LOOP is one restart every RESTART_S
+)
 
 REFUSAL = (
     "refusing to run elevated: a lane started from an administrator window "
@@ -110,6 +114,83 @@ def run(lane: str) -> None:
         raise RuntimeError(
             f"schtasks /Run {TASKS[lane]} failed: {(r.stderr or r.stdout).strip()}"
         )
+
+
+# --- the job object: end the wrapper, end everything it started ------------------
+_JOB_KILL_ON_CLOSE = 0x2000
+_JOB_EXTENDED_LIMITS = 9
+
+
+class _BasicLimits(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_int64),
+        ("PerJobUserTimeLimit", ctypes.c_int64),
+        ("LimitFlags", ctypes.c_uint32),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", ctypes.c_uint32),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", ctypes.c_uint32),
+        ("SchedulingClass", ctypes.c_uint32),
+    ]
+
+
+class _IoCounters(ctypes.Structure):
+    _fields_ = [
+        (name, ctypes.c_uint64)
+        for name in (
+            "ReadOperationCount",
+            "WriteOperationCount",
+            "OtherOperationCount",
+            "ReadTransferCount",
+            "WriteTransferCount",
+            "OtherTransferCount",
+        )
+    ]
+
+
+class _ExtendedLimits(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _BasicLimits),
+        ("IoInfo", _IoCounters),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def _kill_on_close_job() -> int:
+    """A job object whose processes all die when its last handle closes."""
+    k32 = ctypes.windll.kernel32
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError()
+    limits = _ExtendedLimits()
+    limits.BasicLimitInformation.LimitFlags = _JOB_KILL_ON_CLOSE
+    ok = k32.SetInformationJobObject(
+        job, _JOB_EXTENDED_LIMITS, ctypes.byref(limits), ctypes.sizeof(limits)
+    )
+    if not ok:
+        raise ctypes.WinError()
+    return job
+
+
+_job = None  # the wrapper's handle: held for its lifetime, never closed
+
+
+def _die_together() -> None:
+    """Put THIS process in a kill-on-close job, so every process it starts - the
+    lane, and the interpreter the venv launcher spawns for it - dies with it.
+    Ending the task is TerminateProcess on the wrapper, which closes its handles
+    and so the job. Measured 2026-09-03: the scheduler does not do this itself,
+    and /End left the lane running as an orphan beside its replacement."""
+    global _job
+    job = _kill_on_close_job()
+    k32 = ctypes.windll.kernel32
+    if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
+        raise ctypes.WinError()
+    _job = job
 
 
 # --- the wrapper the tasks run --------------------------------------------------
@@ -186,27 +267,36 @@ def _first_launch_this_boot() -> bool:
 
 
 def lane(name: str, passthrough: list[str]) -> int:
-    """Run one lane once and return its exit code. The scheduler restarts a
-    task whose action failed, so a crash comes back on its interval; a clean
-    exit (--once) stays down."""
+    """Run one lane, and run it again RESTART_S after any crash, for as long as
+    the task lives. A clean exit (--once, Ctrl-C) ends the task.
+
+    The wrapper owns crash recovery because the scheduler does not: measured
+    2026-09-03, a task whose action exits non-zero is left at Ready, whether
+    the run was started by /Run or by a trigger. What the scheduler is good
+    for - starting at logon in the interactive session, a name to /End and
+    /Run, one instance at a time - it keeps."""
     if elevated():
         print(f"[lane] {REFUSAL}")
         return 1
+    _die_together()
     log = cglib.make_log("supervisor")
-    _install_if_pins_changed(log)
     if name == "listener" and _first_launch_this_boot():
         # Once per boot, before the listener: re-running it after a mid-session
         # crash would spawn a second watch loop against the live session lock.
         subprocess.run(
             [sys.executable, "-m", "slopstation.couch", "reconcile"], cwd=paths.HOME
         )
-    log("start", what=name)
-    code = subprocess.run(LANES[name] + passthrough, cwd=paths.HOME).returncode
-    if code:
-        # The scheduler relaunches a failed task; this is the alertable trace
-        # of a crash loop.
+    while True:
+        # Inside the loop: a deploy lands new pins and then ends the task, but
+        # a crash-restart must pick them up too.
+        _install_if_pins_changed(log)
+        log("start", what=name)
+        code = subprocess.run(LANES[name] + passthrough, cwd=paths.HOME).returncode
+        if code == 0:
+            return 0
+        print(f"[lane] {name} exited (code {code}) - restarting in {RESTART_S}s")
         log.warn("restart", what=name, code=code)
-    return code
+        time.sleep(RESTART_S)
 
 
 def lane_main(argv=None) -> int:

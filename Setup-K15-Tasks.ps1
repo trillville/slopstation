@@ -6,9 +6,11 @@
 #
 # Each task runs `slopstation-lane <name>` at logon, in the logged-on user's
 # own session - a service would land in session 0, which reaches neither the
-# Puck nor the audio devices - and restarts it a minute after any failure. The
-# task, not a shortcut, is what brings the lanes up after a reboot; there is
-# nothing to put in shell:startup any more. Re-run after moving the checkout.
+# Puck nor the audio devices. The wrapper restarts a crashed lane itself; the
+# scheduler's restart-on-failure is not set because, measured 2026-09-03, it
+# does not fire on a non-zero exit at all. The task, not a shortcut, is what
+# brings the lanes up after a reboot; there is nothing to put in shell:startup
+# any more. Re-run after moving the checkout.
 param([string]$Checkout = $PSScriptRoot)
 
 $lane = Join-Path $Checkout ".venv\Scripts\slopstation-lane.exe"
@@ -21,7 +23,6 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 # instance at a time, and a task that missed its logon trigger runs on the
 # next chance rather than waiting for the next logon.
 $settings = New-ScheduledTaskSettingsSet `
-    -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 # Limited, never Highest: an elevated lane cannot be stopped from the normal

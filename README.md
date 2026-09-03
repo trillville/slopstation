@@ -184,7 +184,7 @@ correlation suffix; every other command returns `DENIED`.
    .\Start-Slopstation.bat
    ```
 
-   The tasks start at logon and restart a crashed lane a minute later;
+   The tasks start at logon; a crashed lane is back ten seconds later, and
    each launch reinstalls by itself whenever the pins change.
 7. If TV volume ducking is enabled, run
    `.venv\Scripts\python -m slopstation.agent.tools.tv_remote pair`

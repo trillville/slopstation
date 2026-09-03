@@ -3,6 +3,7 @@ and re-checks under its lock, reconcile runs once per boot, an elevated window
 is refused, and start()/deploy speak schtasks."""
 
 import subprocess
+import time
 import types
 
 import pytest
@@ -20,13 +21,16 @@ def _completed(stdout="", returncode=0):
     return types.SimpleNamespace(stdout=stdout, stderr="", returncode=returncode)
 
 
-def test_lane_installs_then_runs_and_returns_the_exit_code(monkeypatch, tmp_path):
-    fresh_state()
+class Stop(Exception):
+    pass
+
+
+def _lane_seams(monkeypatch, tmp_path, lane_code):
     calls = []
 
     def fake_run(argv, **kw):
         calls.append("pip" if "pip" in argv else argv[-1])
-        return _completed(returncode=0 if "pip" in argv else 3)
+        return _completed(returncode=0 if "pip" in argv else lane_code)
 
     monkeypatch.setattr(supervise, "SENTINEL", tmp_path / "deps-ok")
     monkeypatch.setattr(
@@ -34,10 +38,39 @@ def test_lane_installs_then_runs_and_returns_the_exit_code(monkeypatch, tmp_path
     )
     monkeypatch.setattr(supervise, "_pin_digest", lambda: "digest")
     monkeypatch.setattr(supervise, "_first_launch_this_boot", lambda: False)
+    monkeypatch.setattr(supervise, "_die_together", lambda: None)  # not pytest's job
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert supervise.lane("voice", ["--once"]) == 3
+    return calls
+
+
+def test_the_job_object_can_be_made():
+    # Made and closed with nothing in it; joining it would make pytest itself
+    # die with the test process.
+    job = supervise._kill_on_close_job()
+    assert job
+    assert supervise.ctypes.windll.kernel32.CloseHandle(job)
+
+
+def test_lane_installs_then_runs_and_restarts_a_crash(monkeypatch, tmp_path):
+    fresh_state()
+    calls = _lane_seams(monkeypatch, tmp_path, lane_code=3)
+
+    def backoff(_s):
+        raise Stop  # the restart pause is where the test gets off
+
+    monkeypatch.setattr(time, "sleep", backoff)
+    with pytest.raises(Stop):
+        supervise.lane("voice", ["--once"])
     assert calls == ["pip", "--once"]
     assert (tmp_path / "deps-ok").read_text() == "digest"
+
+
+def test_lane_ends_with_a_clean_exit(monkeypatch, tmp_path):
+    fresh_state()
+    (tmp_path / "deps-ok").write_text("digest")
+    calls = _lane_seams(monkeypatch, tmp_path, lane_code=0)
+    assert supervise.lane("voice", ["--once"]) == 0
+    assert calls == ["--once"]
 
 
 def test_listener_reconciles_once_per_boot(monkeypatch):

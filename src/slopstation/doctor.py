@@ -143,7 +143,7 @@ def check_listener():
         "listener",
         "running (owns the Puck - haptic check skipped)",
         "NOT running - the chord is deaf",
-        "run Start-Slopstation.bat (a crashed lane is retried every minute)",
+        "run Start-Slopstation.bat (a crashed lane is back within seconds)",
         "assuming not running",
     )
 
