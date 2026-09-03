@@ -22,7 +22,7 @@ def rotate(max_bytes: int = 5_000_000) -> None:
     logf = paths.couch_log()
     try:
         if logf.stat().st_size > max_bytes:
-            os.replace(logf, logf.with_suffix(".log.1"))
+            os.replace(logf, logf.with_name(logf.name + ".1"))
     except OSError:
         pass
 
