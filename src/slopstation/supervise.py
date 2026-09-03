@@ -31,7 +31,8 @@ LANES = {
 # Bumping a pin has to install itself on the next launch: CD pulls code, not
 # wheels.
 PINS = ("pyproject.toml", "constraints.txt")
-# Written only after pip succeeds, so a half-built venv retries next launch.
+# Written only after pip succeeds, so a half-built venv retries next launch;
+# the .lock beside it serialises installers.
 SENTINEL = Path(sys.prefix) / "deps-ok"
 
 # Process control by lane, shared with deploy.py and doctor.py. Filtered to
@@ -120,34 +121,42 @@ def _pin_digest():
 
 def pins_changed() -> bool:
     """True when the pins differ from what the venv last installed."""
+    digest = _pin_digest()
+    if digest is None:
+        return False  # no pin files to compare: nothing to install from
     try:
-        return _pin_digest() != SENTINEL.read_text().strip()
+        return digest != SENTINEL.read_text().strip()
     except OSError:
         return True  # no sentinel: never installed, or the install failed
 
 
 def _install_if_pins_changed(log):
+    """One installer at a time: both supervisors start together, and two pips
+    in one venv corrupt it. The second waits on the lock, then re-reads the
+    sentinel the first wrote and skips."""
     if not pins_changed():
         return
-    print("[supervisor] pins changed - installing, takes a minute or two...")
-    r = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "-e",
-            ".[dev]",
-            "-c",
-            "constraints.txt",
-        ],
-        cwd=paths.HOME,
-    )
-    if r.returncode:
-        print("[supervisor] pip install failed - fix it and relaunch")
-        return
-    SENTINEL.write_text(_pin_digest() or "")
-    log("deps_installed", what="venv")
+    with open(SENTINEL.with_name("deps.lock"), "w") as lock:
+        while True:
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(1)
+        try:
+            if not pins_changed():
+                return
+            print("[supervisor] pins changed - installing, takes a minute or two...")
+            pip = [sys.executable, "-m", "pip", "install", "-e", ".[dev]"]
+            r = subprocess.run([*pip, "-c", "constraints.txt"], cwd=paths.HOME)
+            if r.returncode:
+                print("[supervisor] pip install failed - fix it and relaunch")
+                return
+            SENTINEL.write_text(_pin_digest() or "")
+            log("deps_installed", what="venv")
+        finally:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def supervise(lane, passthrough):
@@ -158,7 +167,6 @@ def supervise(lane, passthrough):
     if handle is None:
         print(f"[supervisor] another {lane} supervisor is running - close it first")
         return 1
-    _install_if_pins_changed(log)
     if lane == "listener":
         # Once per boot, OUTSIDE the loop: re-running it mid-session would
         # spawn a second watch loop against the live session lock.
@@ -167,6 +175,9 @@ def supervise(lane, passthrough):
         )
     log("start", what=lane)
     while True:
+        # Inside the loop: a deploy lands new pins and then kills the lane,
+        # and the relaunch is where they have to be installed.
+        _install_if_pins_changed(log)
         code = subprocess.run(LANES[lane] + passthrough, cwd=paths.HOME).returncode
         print(f"[supervisor] {lane} exited (code {code}) - restarting in {RESTART_S}s")
         log.warn("restart", what=lane, code=code)

@@ -46,7 +46,7 @@ def clips(wav_paths, window):
         if sr != RATE:
             sys.exit(
                 f"{path.name}: {sr} Hz, need {RATE}. Record with "
-                f"k15/agent/bench/record_room.py, which writes 16 kHz mono."
+                f"python -m slopstation.agent.bench.record_room, which writes 16 kHz mono."
             )
         if audio.ndim > 1:
             audio = audio[:, 0]
