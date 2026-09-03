@@ -15,7 +15,9 @@ import time
 import urllib.parse
 import urllib.request
 
-from slopstation import config, haptics, paths, sessionlock, supervise
+from slopstation import config, haptics, paths, sessionlock, statefile, supervise
+from slopstation.agent.tools import operations
+from slopstation.agent.tools.media_clients import ArrClient
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 # An episode aired this long ago, still monitored and still missing, is not
@@ -775,39 +777,23 @@ def check_media(cfg):
     )
 
 
-def _arr_get(url, key, path, params=None, timeout=4):
-    query = "?" + urllib.parse.urlencode(params) if params else ""
-    request = urllib.request.Request(
-        str(url).rstrip("/") + path + query, headers={"X-Api-Key": key}
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def _owned_seasons():
     """series id -> monitored seasons an active operation owns, None meaning
-    the whole series. Unreadable ledger owns nothing: the row then over-
-    reports, which is the safe direction."""
+    the whole series. An unreadable ledger owns nothing: the row then
+    over-reports, which is the safe direction."""
     owned: dict = {}
-    try:
-        rows = json.loads(
-            (paths.state() / "operations.json").read_text(encoding="utf-8")
-        )
-        for row in rows if isinstance(rows, list) else ():
-            if (
-                not isinstance(row, dict)
-                or row.get("kind") != "series_acquisition"
-                or row.get("state") not in ("QUEUED", "RUNNING", "UNKNOWN")
-            ):
-                continue
-            seasons = (row.get("metadata") or {}).get("seasons")
-            key = str(row.get("external_ref"))
-            if seasons is None or (key in owned and owned[key] is None):
-                owned[key] = None
-            else:
-                owned.setdefault(key, set()).update(int(n) for n in seasons)
-    except Exception:
-        return owned
+    for row in statefile.load(operations.operations_file(), []):
+        if (
+            row.get("kind") != "series_acquisition"
+            or row.get("state") not in operations.ACTIVE
+        ):
+            continue
+        seasons = (row.get("metadata") or {}).get("seasons")
+        key = str(row.get("external_ref"))
+        if seasons is None or owned.get(key, ()) is None:
+            owned[key] = None
+        else:
+            owned.setdefault(key, set()).update(int(n) for n in seasons)
     return owned
 
 
@@ -833,10 +819,8 @@ def check_media_monitoring(cfg):
         )
         return
     try:
-        page = _arr_get(
-            media["sonarrUrl"],
-            key,
-            "/api/v3/wanted/missing",
+        page = ArrClient("Sonarr", media["sonarrUrl"], key).get(
+            "wanted/missing",
             {
                 "pageSize": 500,
                 "sortKey": "airDateUtc",
@@ -938,14 +922,14 @@ def check_remote(cfg):
 
 
 def check_operations():
-    operations_file = paths.state() / "operations.json"
-    if not operations_file.exists():
+    ledger = operations.operations_file()
+    if not ledger.exists():
         report(PASS, "operations", "no operations recorded")
         return
     try:
-        rows = json.loads(operations_file.read_text(encoding="utf-8"))
-        active = [o for o in rows if o.get("state") in ("QUEUED", "RUNNING", "UNKNOWN")]
-        unknown = [o for o in active if o.get("state") == "UNKNOWN"]
+        rows = json.loads(ledger.read_text(encoding="utf-8"))
+        active = [o for o in rows if o.get("state") in operations.ACTIVE]
+        unknown = [o for o in active if o.get("state") == operations.UNKNOWN]
         pending = [o for o in rows if o.get("announcement_pending")]
         note = (
             f"{len(rows)} recorded, {len(active)} active, "
