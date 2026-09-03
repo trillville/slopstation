@@ -83,19 +83,33 @@ def main():
     # -- the conversation stamp ------------------------------------------------
     # Pinned rather than read from events.current(): the reader is a batch
     # export thread with none of the calling context.
-    genai.set_conversation("3b7e", "9f2c1a")
+    genai.set_session("3b7e")
+    genai.set_turn("9f2c1a")
     add3 = genai.sentry_attributes(PIPECAT_LLM)
     # One voice session is one Conversation is one `session` in the JSONL.
     assert add3["gen_ai.conversation.id"] == "3b7e", add3
     assert add3["couch.turn"] == "9f2c1a"
-    genai.set_conversation()
-    assert "gen_ai.conversation.id" not in genai.sentry_attributes(PIPECAT_LLM)
+
+    # TWO setters, because the ids have different lifetimes: the session is
+    # pinned once at session start, the turn is minted per utterance long
+    # after. Setting a new turn must not disturb the session.
+    genai.set_turn("aa11bb")
+    add4 = genai.sentry_attributes(PIPECAT_LLM)
+    assert add4["couch.turn"] == "aa11bb"
+    assert add4["gen_ai.conversation.id"] == "3b7e", "a new turn dropped the session"
+
+    # A turn never outlives its session.
+    genai.set_session()
+    cleared = genai.sentry_attributes(PIPECAT_LLM)
+    assert "gen_ai.conversation.id" not in cleared
+    assert "couch.turn" not in cleared, "the turn survived the session ending"
+
     # A span that already carries one keeps it - the text lane sets its own.
-    genai.set_conversation("3b7e")
+    genai.set_session("3b7e")
     assert "gen_ai.conversation.id" not in genai.sentry_attributes(
         dict(PIPECAT_LLM, **{"gen_ai.conversation.id": "own"}))
-    genai.set_conversation()
-    print("  stamp: conversation id + turn, pinned and cleared")
+    genai.set_session()
+    print("  stamp: session and turn pinned independently, cleared together")
 
     # -- reshape, against a real ReadableSpan ---------------------------------
     try:
@@ -175,6 +189,8 @@ def main():
             tok = events.context(session="3b7e", turn="9f2c1a")
             with sentry.session_trace() as trace_id:
                 assert events.current()["trace"] == trace_id
+                # As grammar_gate does when an utterance arrives.
+                sentry.set_turn("9f2c1a")
                 with trace.get_tracer("pipecat").start_as_current_span("llm") as s:
                     for k, v in PIPECAT_LLM.items():
                         s.set_attribute(k, v)
@@ -182,8 +198,8 @@ def main():
             # The pin does not outlive the session, or the next one's spans
             # would join a Conversation they were not part of.
             assert "trace" not in events.current()
-            assert genai.sentry_attributes(PIPECAT_LLM).get(
-                "gen_ai.conversation.id") is None
+            for gone in ("gen_ai.conversation.id", "couch.turn"):
+                assert genai.sentry_attributes(PIPECAT_LLM).get(gone) is None, gone
             events.reset(tok)
         finally:
             sentry._on = False

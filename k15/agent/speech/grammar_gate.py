@@ -28,6 +28,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from agent.speech import earcons
 import events
+from agent.telemetry import sentry
 from agent.tools import titles
 from agent.brain.dispatch import Result
 
@@ -312,6 +313,9 @@ class GrammarGate(FrameProcessor):
                 # it; the session id set at wake survives the merge.
                 turn = events.new_turn()
                 events.context(turn=turn)
+                # Spans are exported off a batch thread that cannot see the
+                # context above, so the turn is pinned for them separately.
+                sentry.set_turn(turn)
                 # Backstop: a final transcript proves the turn ended even if
                 # no UserStoppedSpeakingFrame arrived (otherwise no feedback
                 # until the action completes, up to 15 s of ssh).
@@ -343,6 +347,10 @@ class GrammarGate(FrameProcessor):
                                   reason="assistant_disabled", confidence=conf)
                     await self._earcon("fail")
                     return
-                self.log("gate_miss", text=text, fallback="assistant", confidence=conf)
+                # reason on BOTH gate_miss paths, so the field is total: one
+                # that appears on only one path makes `reason:assistant_disabled`
+                # look like the whole story.
+                self.log("gate_miss", text=text, fallback="assistant",
+                         reason="no_grammar_match", confidence=conf)
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

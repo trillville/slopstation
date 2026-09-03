@@ -47,23 +47,35 @@ PASSTHROUGH = (("input", "gen_ai.input.messages"),
                ("metrics.ttfb", "gen_ai.response.time_to_first_chunk"))
 
 
-# The voice session in flight, pinned by sentry.session_trace. A module slot
-# and not a ContextVar: the reader is a batch export thread.
-_conversation: dict = {}
+# The ids the next spans are stamped with. A module slot and not a ContextVar:
+# the reader is a batch export thread with none of the calling context.
+#
+# TWO setters because the two ids have different lifetimes. The session is
+# pinned once by sentry.session_trace and lasts the whole conversation; the
+# turn is minted per utterance, deep inside the pipeline, long after the
+# session began. Pinning both at session start left couch.turn empty on every
+# span - measured 2026-09-03, and the reason this is not one function.
+_ids: dict = {}
 
 
-def set_conversation(session=None, turn=None) -> None:
-    """Pin the ids the next spans are stamped with; no arguments clears."""
-    _conversation.clear()
+def set_session(session=None) -> None:
+    """Start a conversation, or end one. Clears the turn either way: a turn
+    never outlives the session it belongs to."""
+    _ids.clear()
     if session:
         # What collects a session's turns into one Sentry Conversation. It is
         # our `session`, so a Conversation and a run of JSONL lines are the
         # same thing seen twice.
-        _conversation["gen_ai.conversation.id"] = session
+        _ids["gen_ai.conversation.id"] = session
+
+
+def set_turn(turn=None) -> None:
+    """Point the next spans at one utterance. Joins them to that turn's log
+    lines, and to the gaming PC's half of the same intent."""
     if turn:
-        # Joins the span to the log line, and to the gaming PC's half of the
-        # same intent.
-        _conversation["couch.turn"] = turn
+        _ids["couch.turn"] = turn
+    else:
+        _ids.pop("couch.turn", None)
 
 
 def sentry_attributes(attrs: dict, conversation: dict | None = None) -> dict:
@@ -73,7 +85,7 @@ def sentry_attributes(attrs: dict, conversation: dict | None = None) -> dict:
     if op not in CHAT_OPS:
         return {}
     add: dict[str, Any] = {"sentry.op": f"gen_ai.{op}"}
-    for k, v in (_conversation if conversation is None else conversation).items():
+    for k, v in (_ids if conversation is None else conversation).items():
         if k not in attrs:
             add[k] = v
     model = attrs.get("gen_ai.request.model")

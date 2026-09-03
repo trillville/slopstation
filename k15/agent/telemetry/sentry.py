@@ -229,20 +229,27 @@ def session_trace():
     except Exception:
         yield None
         return
-    ctx = events.current()
-    # The export thread cannot read events.current(), so the ids pipecat's
-    # spans get stamped with are pinned here for the session's length.
-    genai.set_conversation(ctx.get("session"), ctx.get("turn"))
+    # The export thread cannot read events.current(), so the id pipecat's
+    # spans get stamped with is pinned here for the session's length. The TURN
+    # is not knowable yet - it is minted per utterance inside the pipeline, so
+    # grammar_gate calls set_turn as each one is born.
+    genai.set_session(events.current().get("session"))
     events_token = events.context(trace=hex_id)
     try:
         yield hex_id
     finally:
-        genai.set_conversation()
+        genai.set_session()
         events.reset(events_token)
         try:
             otel_context.detach(otel_token)
         except Exception:
             pass
+
+
+def set_turn(turn):
+    """Point the next spans at this utterance. Called where the turn id is
+    born; no-ops harmlessly when tracing is off."""
+    genai.set_turn(turn)
 
 
 def conversation_id():
