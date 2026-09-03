@@ -154,35 +154,6 @@ def test_reshape_exports_a_broken_span_unchanged():
     assert genai.reshape(b) is b
 
 
-class Inner:
-    """The SpanExporter surface SentryShape forwards to, recording each call."""
-
-    def __init__(self):
-        self.calls: list = []
-
-    def export(self, spans):
-        self.calls.append(("export", spans))
-        return "exported"
-
-    def shutdown(self):
-        self.calls.append(("shutdown",))
-        return "down"
-
-    def force_flush(self, timeout_millis=30000):
-        self.calls.append(("force_flush", timeout_millis))
-        return True
-
-
-def test_exporter_wrapper_delegates():
-    b = Broken()
-    inner = Inner()
-    wrap = genai.SentryShape(inner)
-    assert wrap.export([b]) == "exported"
-    assert inner.calls == [("export", [b])]
-    assert wrap.shutdown() == "down"
-    assert wrap.force_flush() is True and ("force_flush", 30000) in inner.calls
-
-
 @pytest.fixture
 def memory_exporter(monkeypatch):
     """A real TracerProvider exporting through SentryShape into memory, with
@@ -218,10 +189,15 @@ def test_end_to_end_through_a_real_provider(memory_exporter):
             assert events.current()["trace"] == trace_id
             # As grammar_gate does when an utterance arrives.
             sentry.set_turn("9f2c1a")
-            with trace.get_tracer("pipecat").start_as_current_span("llm") as s:
-                for k, v in PIPECAT_LLM.items():
-                    s.set_attribute(k, v)
-            sentry.tool_span("web_search", "hades reviews", "ok")
+
+            @sentry.agent("assistant")
+            def turn():
+                with trace.get_tracer("pipecat").start_as_current_span("llm") as s:
+                    for k, v in PIPECAT_LLM.items():
+                        s.set_attribute(k, v)
+                sentry.tool_span("web_search", "hades reviews", "ok")
+
+            turn()
         # The pin does not outlive the session, or the next one's spans
         # would join a Conversation they were not part of.
         assert "trace" not in events.current()
@@ -231,7 +207,13 @@ def test_end_to_end_through_a_real_provider(memory_exporter):
         events.reset(tok)
 
     out = {s.name: s for s in mem.get_finished_spans()}
-    assert set(out) == {"chat claude-haiku-4-5", "execute_tool web_search"}, out
+    assert set(out) == {
+        "invoke_agent assistant",
+        "chat claude-haiku-4-5",
+        "execute_tool web_search",
+    }, out
+    agent = out["invoke_agent assistant"].attributes
+    assert agent["sentry.op"] == "gen_ai.invoke_agent"
     llm = out["chat claude-haiku-4-5"].attributes
     assert llm["sentry.op"] == "gen_ai.chat"
     assert llm["gen_ai.conversation.id"] == "3b7e", llm
@@ -239,6 +221,7 @@ def test_end_to_end_through_a_real_provider(memory_exporter):
     assert llm["gen_ai.input.messages"] == PIPECAT_LLM["input"]
     tool = out["execute_tool web_search"].attributes
     assert tool["sentry.op"] == "gen_ai.execute_tool"
+    assert tool["gen_ai.tool.call.arguments"] == "hades reviews"
     assert tool["gen_ai.tool.call.result"] == "ok"
     # One session, one trace: the log line's `trace` field and every span
     # in the session carry the same id, which is the click from one to

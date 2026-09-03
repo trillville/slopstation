@@ -52,18 +52,19 @@ def fuzzy_norm(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", spoken_form(s)).strip()
 
 
+def _nosub(title: str) -> tuple[str, str]:
+    """The spoken form without its subtitle, and that without a trailing
+    number: ('hades 2', 'hades') for 'Hades II: The Underworld'."""
+    nosub = spoken_form(re.split(r"[:–—]| - ", title)[0])
+    return nosub, re.sub(r"\s+\d+$", "", nosub).strip()
+
+
 def variants(title: str) -> list[str]:
     """Spoken-matchable forms of one raw title, most-specific first."""
-    out = []
-    full = spoken_form(title)
-    if full:
-        out.append(full)
-    nosub = spoken_form(re.split(r"[:–—]| - ", title)[0])
-    if nosub and nosub not in out:
-        out.append(nosub)
-    nonum = re.sub(r"\s+\d+$", "", nosub).strip()
-    if nonum and nonum not in out:
-        out.append(nonum)
+    out: list[str] = []
+    for v in (spoken_form(title), *_nosub(title)):
+        if v and v not in out:
+            out.append(v)
     return out
 
 
@@ -84,14 +85,13 @@ def keyterm_forms(title: str) -> list[str]:
 
     full = spoken_form(title)
     add(full)
-    nosub = spoken_form(re.split(r"[:–—]| - ", title)[0])
+    nosub, nonum = _nosub(title)
     add(nosub)
     toks = full.split()
     for i, t in enumerate(toks[:-1]):
         if len(t) == 1 and t.isdigit():
             add(" ".join(toks[: i + 1]))
             break
-    nonum = re.sub(r"\s+\d+$", "", nosub).strip()
     if not re.search(r"\d$", nonum):
         add(nonum)
     return out

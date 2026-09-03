@@ -116,7 +116,6 @@ def test_lost_keys_are_noticed_by_readback_and_a_top_up_round_finishes():
 
 
 def test_relay_dead_verifies_nothing_and_owes_nothing():
-    # 08-21 ack-then-refuse
     dk, room, log = ducker(room=FakeRoom(press_error=RuntimeError("ws down")))
     dk.duck()
     assert room.vol == 14 and dk.out == 0

@@ -564,49 +564,35 @@ def check_voice_keys():
 
 
 def check_venv(cfg):
-    venv = pathlib.Path(sys.prefix)
-    if supervise.SENTINEL.exists():
-        report(PASS, "venv", "bootstrapped (deps-ok sentinel present)")
-        model = cfg["voice"].get("wakeModel", "")
-        # Same resolution order as audio.py _resolve_model.
-        vendored = (
-            pathlib.Path(__file__).resolve().parent
-            / "agent"
-            / "models"
-            / f"{model}.onnx"
-        )
-        onnx = (
-            venv
-            / "Lib"
-            / "site-packages"
-            / "openwakeword"
-            / "resources"
-            / "models"
-            / f"{model}.onnx"
-        )
-        if vendored.exists():
-            report(
-                PASS,
-                "wake model",
-                f"{model}.onnx vendored in src\\slopstation\\agent\\models",
-            )
-        elif onnx.exists():
-            report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
-        else:
-            report(
-                WARN,
-                "wake model",
-                f"{model}.onnx not present",
-                "a pretrained name is auto-fetched on the agent's first "
-                "run; a custom one has no upstream and must be committed "
-                "to src\\slopstation\\agent\\models",
-            )
-    else:
+    if not supervise.SENTINEL.exists():
         report(
             WARN,
             "venv",
             "not bootstrapped (no deps-ok sentinel)",
             "run Start-Slopstation.bat once (~2 min with network)",
+        )
+        return
+    report(PASS, "venv", "bootstrapped (deps-ok sentinel present)")
+    model = cfg["voice"].get("wakeModel", "")
+    # Same resolution order as audio.py _resolve_model.
+    vendored = pathlib.Path(__file__).parent / "agent" / "models" / f"{model}.onnx"
+    pretrained = (
+        pathlib.Path(
+            sys.prefix, "Lib", "site-packages", "openwakeword", "resources", "models"
+        )
+        / f"{model}.onnx"
+    )
+    if vendored.exists():
+        report(PASS, "wake model", f"{model}.onnx vendored in {vendored.parent}")
+    elif pretrained.exists():
+        report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
+    else:
+        report(
+            WARN,
+            "wake model",
+            f"{model}.onnx not present",
+            "a pretrained name is fetched on the agent's first run; a custom "
+            f"one must be committed to {vendored.parent}",
         )
 
 

@@ -1,7 +1,6 @@
 """Radarr/Sonarr acquisitions that failed or stalled, found by polling."""
 
-import threading
-
+from slopstation import events
 from slopstation.agent.tools.media_clients import MediaError, _clean_text
 
 # Servarr history eventTypes that mean a grab did not become a file.
@@ -17,6 +16,21 @@ def _history_id(row):
         return int(row.get("id"))
     except (AttributeError, TypeError, ValueError):
         return -1
+
+
+def _data_field(row, name, limit=160):
+    data = row.get("data")
+    return _clean_text(data.get(name) if isinstance(data, dict) else None, limit)
+
+
+def _collapse(entries, row, row_id, entry):
+    """One entry per download: a season pack grabs or fails once per episode
+    and is one line to a human. `records` keeps the fan-out visible."""
+    key = _clean_text(row.get("downloadId"), 60) or str(row_id)
+    if key in entries:
+        entries[key]["records"] += 1
+    else:
+        entries[key] = {**entry, "records": 1}
 
 
 def _queue_detail(row):
@@ -47,24 +61,13 @@ class MediaHealthMonitor:
         # Without the ledger a grab cannot be attributed, so that row stays
         # silent rather than calling everything unattributed.
         self.operations = operations
-        self._stop = threading.Event()
         self._issues = {}
         self._history_id = {}
         self._stalled = {}
         self._last_failure = {}
 
     def start(self):
-        threading.Thread(
-            target=self._run, daemon=True, name="media-health-monitor"
-        ).start()
-
-    def stop(self):
-        self._stop.set()
-
-    def _run(self):
-        while not self._stop.is_set():
-            self.reconcile_once()
-            self._stop.wait(self.poll_s)
+        events.Ticker("media-health-monitor", self.poll_s, self.reconcile_once).start()
 
     def reconcile_once(self):
         for client in self.clients:
@@ -144,43 +147,27 @@ class MediaHealthMonitor:
                 continue
             kind = _clean_text(row.get("eventType"), 40)
             if kind == GRAB_EVENT:
-                # Same collapse as failures: a season pack grabs once per
-                # episode and is one line to a human.
-                key = _clean_text(row.get("downloadId"), 60) or str(row_id)
-                entry = grabs.get(key)
-                if entry is None:
-                    grabs[key] = {
+                _collapse(
+                    grabs,
+                    row,
+                    row_id,
+                    {
                         "ref": _clean_text(row.get(GRAB_REF.get(client.name, "")), 20),
                         "title": _clean_text(row.get("sourceTitle"), 120),
-                        "indexer": _clean_text(
-                            (row.get("data") or {}).get("indexer")
-                            if isinstance(row.get("data"), dict)
-                            else None,
-                            60,
-                        ),
-                        "records": 1,
-                    }
-                else:
-                    entry["records"] += 1
-                continue
-            if kind not in FAILURE_EVENTS:
-                continue
-            data = row.get("data")
-            # A season pack fails once per episode. Collapsing on the download
-            # makes one bad grab one line; `records` keeps the fan-out visible.
-            key = _clean_text(row.get("downloadId"), 60) or str(row_id)
-            entry = failures.get(key)
-            if entry is None:
-                failures[key] = {
-                    "kind": kind,
-                    "title": _clean_text(row.get("sourceTitle"), 120),
-                    "err": _clean_text(
-                        (data or {}).get("message") if isinstance(data, dict) else None
-                    ),
-                    "records": 1,
-                }
-            else:
-                entry["records"] += 1
+                        "indexer": _data_field(row, "indexer", 60),
+                    },
+                )
+            elif kind in FAILURE_EVENTS:
+                _collapse(
+                    failures,
+                    row,
+                    row_id,
+                    {
+                        "kind": kind,
+                        "title": _clean_text(row.get("sourceTitle"), 120),
+                        "err": _data_field(row, "message"),
+                    },
+                )
         for entry in failures.values():
             self.log.error(
                 "media_import_failed",
@@ -191,10 +178,9 @@ class MediaHealthMonitor:
                 records=entry["records"],
             )
         for entry in self._unattributed(client, grabs).values():
-            # INFO, not warn: a monitored season legitimately keeps grabbing
-            # new episodes long after the operation that requested it closed.
-            # This is the audit trail for a grab the ledger cannot explain -
-            # the only record that a release nobody asked for arrived.
+            # INFO, not warn: a monitored season keeps grabbing new episodes
+            # long after the operation that asked for it closed. This is the
+            # only record that a release nobody asked for arrived.
             self.log(
                 "media_grab_unattributed",
                 app=client.name,

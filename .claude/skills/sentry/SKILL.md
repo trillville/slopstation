@@ -165,7 +165,7 @@ them together with the heartbeat count:
   means the second cron monitor was never registered: every Sentry plan
   includes one, and the second needs a pay-as-you-go budget.
 - **operations**: `operation_created` `operation_observed`
-  `operation_announced` `operation_cancel_refused` — durable observations of
+  `operation_announced` — durable observations of
   externally-owned work on `lane:voice`. `operation_observed` carries the
   previous/current state, structured progress, and detail. `UNKNOWN` is an
   observation gap, not a failure; terminal delivery is `operation_announced`.
@@ -173,7 +173,8 @@ them together with the heartbeat count:
   `install_queued` `install_failed` — the account session. The lane means
   **hand-run**, like `manual` does for `exlink.py`: the agent passes its own
   logger in, so a voice-driven session files these under `lane:voice` and only
-  `python tools/steam_session.py …` at the console lands on `lane:steam`.
+  `python -m slopstation.agent.tools.steam_session …` at the console lands on
+  `lane:steam`.
   Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter —
   true means the first TV-GAMING apply missed and the retry rescued the

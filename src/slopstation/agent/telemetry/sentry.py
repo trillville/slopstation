@@ -15,12 +15,11 @@ One sentry_sdk.init, in this order and for these reasons:
 want from it is event linking: an exception attaches to the OTel span it broke
 on, which is the whole reason errors and traces are worth having in one
 place. The half we decline is its exporter, because genai.SentryShape has to
-wrap ours - two would double-ship every span. The endpoint and auth still come
-from the SDK's own DSN helper, the same call the integration makes, so a
-region or path change upstream is picked up rather than re-derived here.
+wrap ours - two would double-ship every span.
 
 Enabled by config.json's `sentryDsn` alone: no secrets.json key, because a
 DSN's public half is not a secret - it ships inside client apps by design.
+Template junk reads as absent, the same rule as every other keyed lane.
 
 Every entry point returns a bool and swallows everything: a bad DSN or a dead
 uplink costs telemetry, never voice.
@@ -36,6 +35,7 @@ import functools
 import json
 import logging
 import random
+from typing import cast
 
 from slopstation import config, events
 from slopstation.agent.telemetry import genai
@@ -53,12 +53,6 @@ def is_on():
     return _on
 
 
-def enabled(cfg):
-    """A real DSN in config.json. Template junk reads as absent, the same rule
-    as every other keyed lane."""
-    return config.real_key(cfg.get("sentryDsn"))
-
-
 def otlp_target(dsn):
     """(url, headers) for Sentry's OTLP traces endpoint, from the SDK's own
     DSN helper - the same call OTLPIntegration makes, so a region or path
@@ -73,14 +67,6 @@ def otlp_target(dsn):
     )
 
 
-def _exporter(url, headers):
-    """The OTLP exporter OTLPIntegration would have built, wrapped so genai
-    can reshape spans on the way out."""
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-    return genai.SentryShape(OTLPSpanExporter(endpoint=url, headers=headers))
-
-
 def _init(dsn, log):
     """sentry_sdk.init: errors, and the linking that puts them on the right
     span. True if the SDK is live."""
@@ -92,8 +78,6 @@ def _init(dsn, log):
             dsn=dsn,
             environment=events.ENV,
             integrations=[OTLPIntegration(setup_otlp_traces_exporter=False)],
-            # Transcripts and completions are the point of the traces; without
-            # this Sentry drops every prompt and reply.
             send_default_pii=True,
             # Logs reach Sentry through the collector reading the JSONL. The
             # SDK must not ship a second copy of the same lines.
@@ -122,8 +106,11 @@ def _trace(dsn, log):
     global _on
     try:
         from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
         from pipecat.utils.tracing.setup import setup_tracing
 
         # WARNING, not CRITICAL: export errors - a wrong DSN, a dead uplink -
@@ -142,7 +129,11 @@ def _trace(dsn, log):
         if not isinstance(provider, TracerProvider):
             log.warn("lane_disabled", what="tracing", reason="no SDK tracer provider")
             return False
-        provider.add_span_processor(BatchSpanProcessor(_exporter(url, headers)))
+        # The exporter OTLPIntegration would have built, wrapped so genai can
+        # reshape spans on the way out. SentryShape duck-types SpanExporter
+        # rather than subclassing it (genai says why), hence the cast.
+        exporter = genai.SentryShape(OTLPSpanExporter(endpoint=url, headers=headers))
+        provider.add_span_processor(BatchSpanProcessor(cast(SpanExporter, exporter)))
         _on = True
         log("lane_up", what="tracing", backend="sentry", endpoint=url)
         return True
@@ -170,7 +161,7 @@ def setup(cfg, log):
     global _on
     _on = False
     try:
-        if not enabled(cfg):
+        if not config.real_key(cfg.get("sentryDsn")):
             log(
                 "lane_disabled",
                 what="sentry",
@@ -419,10 +410,7 @@ def tool_span(kind, query, result=None):
     if not _on:
         return
     try:
-        from opentelemetry import trace as _otel
-
-        tracer = _otel.get_tracer("slopstation.llm")
-        with tracer.start_as_current_span(
+        with _tracer().start_as_current_span(
             f"execute_tool {kind}",
             attributes={
                 "sentry.op": "gen_ai.execute_tool",

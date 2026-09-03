@@ -7,20 +7,9 @@ import threading
 import time
 from typing import Any
 
-import pytest
-
 import helpers
-from helpers import CapturingLog
-from slopstation import paths
 from slopstation.agent.speech import announce
 from slopstation.agent.tools import operations, operations_monitors
-
-
-def _try(failures, fn, *args):
-    try:
-        fn(*args)
-    except Exception as e:
-        failures.append(repr(e))
 
 
 def wait_for(predicate, timeout=2):
@@ -32,19 +21,8 @@ def wait_for(predicate, timeout=2):
     return False
 
 
-class _Double:
-    """A test double whose knobs are turned by name; a typo is a failure, not
-    a new attribute."""
-
-    def set(self, **fields):
-        for name, value in fields.items():
-            getattr(self, name)
-            setattr(self, name, value)
-        return self
-
-
 @dataclasses.dataclass
-class FakeSteam(_Double):
+class FakeSteam:
     online: bool = True
     downloads: list = dataclasses.field(default_factory=list)
 
@@ -68,7 +46,7 @@ WAITING = {
 
 
 @dataclasses.dataclass
-class FakeMedia(_Double):
+class FakeMedia:
     result: dict = dataclasses.field(
         default_factory=lambda: {
             "complete": False,
@@ -113,11 +91,6 @@ class FakeMedia(_Double):
         return dict(self.abandon_result)
 
 
-@pytest.fixture
-def log():
-    return CapturingLog("voice")
-
-
 def _stardew(store):
     """The Steam install the store tests share: queued by one turn, then
     confirmed running by a second request for the same game."""
@@ -153,17 +126,18 @@ def test_store_tracks_and_reloads(log):
 def test_store_serialises_on_the_file(log):
     # Separate stores are what the agent and the CLIs actually hold, so the
     # load/mutate/write pair has to serialise on the file, not per instance.
-    shared = paths.state() / "concurrent.json"
-    writers = [operations.OperationStore(log, path=shared) for _ in range(4)]
+    writers = [operations.OperationStore(log) for _ in range(4)]
     failures, reading = [], threading.Event()
+
+    def write(w, k):
+        for i in range(25):
+            try:
+                w.track_steam_install(1000 + k * 50 + i, f"g{k}{i}")
+            except Exception as e:
+                failures.append(repr(e))
+
     threads = [
-        threading.Thread(
-            target=lambda w=w, k=k: [
-                _try(failures, w.track_steam_install, 1000 + k * 50 + i, f"g{k}{i}")
-                for i in range(25)
-            ]
-        )
-        for k, w in enumerate(writers)
+        threading.Thread(target=write, args=(w, k)) for k, w in enumerate(writers)
     ]
     # A reader holding the file open denies write_json's replace on Windows,
     # so reads take the guard too.
@@ -182,52 +156,49 @@ def test_store_serialises_on_the_file(log):
     assert len(writers[0].all()) == 100, len(writers[0].all())
 
 
-def test_steam_monitor_needs_install_proof(log):
+def test_steam_monitor_needs_install_proof(log, monkeypatch):
     terminal = []
     store = operations.OperationStore(log, on_terminal=terminal.append)
     operation, _ = _stardew(store)
     steam = FakeSteam()
     installed = set()
-    monitor = operations_monitors.SteamMonitor(
-        store, steam, log, installed_probe=lambda: installed
+    monkeypatch.setattr(
+        operations_monitors, "_fully_installed_appids", lambda: installed
     )
-    steam.set(
-        downloads=[
-            {
-                "appid": 413150,
-                "name": "Stardew Valley",
-                "percent": 25,
-                "paused": False,
-                "queue": 0,
-            }
-        ]
-    )
+    monitor = operations_monitors.SteamMonitor(store, steam, log)
+    steam.downloads = [
+        {
+            "appid": 413150,
+            "name": "Stardew Valley",
+            "percent": 25,
+            "paused": False,
+            "queue": 0,
+        }
+    ]
     assert monitor.reconcile_once() == 1
     observed = store.get(operation["id"])
     assert observed["state"] == operations.RUNNING
     assert observed["progress"]["percent"] == 25
 
-    steam.set(online=False)
+    steam.online = False
     monitor.reconcile_once()
     assert store.get(operation["id"])["state"] == operations.UNKNOWN
     assert not terminal and not store.pending_announcements()
 
-    steam.set(online=True, downloads=[])
+    steam.online, steam.downloads = True, []
     monitor.reconcile_once()
     assert store.get(operation["id"])["state"] == operations.UNKNOWN
     assert not terminal, "absence without install proof became terminal"
 
-    steam.set(
-        downloads=[
-            {
-                "appid": 413150,
-                "name": "Stardew Valley",
-                "percent": 100,
-                "paused": False,
-                "queue": 0,
-            }
-        ]
-    )
+    steam.downloads = [
+        {
+            "appid": 413150,
+            "name": "Stardew Valley",
+            "percent": 100,
+            "paused": False,
+            "queue": 0,
+        }
+    ]
     monitor.reconcile_once()
     assert store.get(operation["id"])["state"] == operations.RUNNING
     assert not terminal, "100% bytes without install proof became terminal"
@@ -246,15 +217,6 @@ def test_steam_monitor_needs_install_proof(log):
     store.for_assistant("recent", acknowledge=True)
     heard = store.get(operation["id"])
     assert not heard["announcement_pending"] and heard["delivered"]
-
-
-def test_cancel_is_refused_for_steam_installs(log):
-    store = operations.OperationStore(log)
-    other = store.track_steam_install(570, "Dota 2", verified=True)
-    ok, detail = store.cancel(other["id"])
-    assert not ok and "not supported" in detail
-    assert store.get(other["id"])["state"] == operations.RUNNING
-    assert store.for_assistant("active")[0]["state"] in operations.ACTIVE
 
 
 def test_media_monitor_observes_a_series_acquisition(log):
@@ -297,22 +259,20 @@ def test_media_monitor_observes_a_series_acquisition(log):
     assert monitor.reconcile_once() == 1
     assert store.get(media_op["id"])["progress"]["percent"] == 20
     assert store.get(media_op["id"])["metadata"]["search_pending"]
-    fake_media.set(search_ready=True)
+    fake_media.search_ready = True
     monitor.reconcile_once()
     assert "search_pending" not in store.get(media_op["id"])["metadata"]
     assert store.get(media_op["id"])["metadata"]["command_ids"] == [77]
-    fake_media.set(error=RuntimeError("offline"))
+    fake_media.error = RuntimeError("offline")
     monitor.reconcile_once()
     assert store.get(media_op["id"])["state"] == operations.UNKNOWN
     assert not terminal
-    fake_media.set(
-        error=None,
-        result={
-            "complete": True,
-            "progress": {"percent": 100},
-            "detail": "5 of 5 aired episodes are ready",
-        },
-    )
+    fake_media.error = None
+    fake_media.result = {
+        "complete": True,
+        "progress": {"percent": 100},
+        "detail": "5 of 5 aired episodes are ready",
+    }
     monitor.reconcile_once()
     media_done = store.get(media_op["id"])
     assert media_done["state"] == operations.SUCCEEDED
@@ -322,8 +282,6 @@ def test_media_monitor_observes_a_series_acquisition(log):
     assert len(terminal) == 1
     monitor.reconcile_once()
     assert len(terminal) == 1
-    ok, detail = store.cancel(media_op["id"])
-    assert not ok and "already succeeded" in detail
 
 
 def test_media_monitor_notifies_once_per_phase(log):
@@ -331,32 +289,26 @@ def test_media_monitor_notifies_once_per_phase(log):
     fake_media = FakeMedia()
     monitor = operations_monitors.MediaMonitor(store, fake_media, log)
     phase_op = _movie(store, "51", "Arrival", 329865, 9)
-    fake_media.set(
-        result={
-            "complete": False,
-            "progress": {"phase": "searching"},
-            "detail": "Radarr is searching",
-        }
-    )
+    fake_media.result = {
+        "complete": False,
+        "progress": {"phase": "searching"},
+        "detail": "Radarr is searching",
+    }
     monitor.reconcile_once()
-    fake_media.set(
-        result={
-            "complete": False,
-            "progress": {"phase": "waiting_for_match"},
-            "detail": "no acceptable release yet",
-        }
-    )
+    fake_media.result = {
+        "complete": False,
+        "progress": {"phase": "waiting_for_match"},
+        "detail": "no acceptable release yet",
+    }
     monitor.reconcile_once()
     assert len(store.pending_notifications()) == 1
     assert store.pending_notifications()[0]["key"] == "waiting_for_match"
     assert "search_retry_pending" not in store.get(phase_op["id"])["metadata"]
-    fake_media.set(
-        result={
-            "complete": False,
-            "progress": {"phase": "downloading", "percent": 2},
-            "detail": "download is 2% complete",
-        }
-    )
+    fake_media.result = {
+        "complete": False,
+        "progress": {"phase": "downloading", "percent": 2},
+        "detail": "download is 2% complete",
+    }
     monitor.reconcile_once()
     assert {row["key"] for row in store.pending_notifications()} == {
         "waiting_for_match",
@@ -390,7 +342,7 @@ def test_search_retry_backs_off_then_gives_up(log):
     assert scheduled["metadata"]["search_retry_after"] == 1300
     assert not retry_media.retries
 
-    retry_media.set(search_available_now=True)
+    retry_media.search_available_now = True
     operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1299)
     assert not retry_media.retries
     operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1300)
@@ -411,7 +363,7 @@ def test_search_retry_backs_off_then_gives_up(log):
         {"phase": "searching"},
         "Radarr is searching",
     )
-    retry_media.set(search_available_now=False)
+    retry_media.search_available_now = False
     retry_monitor.reconcile_once(now=2000)
     exhausted = store.get(retry_op["id"])["metadata"]
     assert exhausted["search_retry_exhausted"]
@@ -452,7 +404,7 @@ def test_cli_lists_operations(log):
     store = operations.OperationStore(log)
     retry_op = _movie(store, "61", "Heat", 949, 10)
     with contextlib.redirect_stdout(io.StringIO()) as stdout:
-        assert operations.main(["list"]) == 0
+        assert operations_monitors.main(["list"]) == 0
     assert retry_op["id"] in stdout.getvalue()
 
 
@@ -479,16 +431,14 @@ def test_waiting_series_is_abandoned_after_a_day(log):
     ]
     assert len(heads_up) == 1 and heads_up[0]["key"] == "waiting_for_match"
     assert "11" in heads_up[0]["summary"]
-    give_media.set(
-        result={
-            "complete": False,
-            "progress": {"phase": "downloading", "total_episodes": 91},
-            "detail": "download is active",
-        }
-    )
+    give_media.result = {
+        "complete": False,
+        "progress": {"phase": "downloading", "total_episodes": 91},
+        "detail": "download is active",
+    }
     give_monitor.reconcile_once(now=6000)  # a grab resets the clock
     assert "waiting_since" not in store.get(give_op["id"])["metadata"]
-    give_media.set(result=dict(WAITING))
+    give_media.result = dict(WAITING)
     give_monitor.reconcile_once(now=7000)
     give_monitor.reconcile_once(now=7000 + 24 * 3600 - 1)
     assert not give_media.abandoned

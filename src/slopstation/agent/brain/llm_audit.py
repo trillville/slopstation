@@ -31,7 +31,7 @@ def search_item(item):
 
 class _Tee:
     """Passes an OpenAI AsyncStream through unchanged, calling `sink` for each
-    event. Mirrors the surface Pipecat uses: __aiter__, then close/aclose."""
+    event. Mirrors the surface Pipecat uses: __aiter__, then close."""
 
     def __init__(self, stream, sink):
         self._stream, self._sink = stream, sink
@@ -48,20 +48,7 @@ class _Tee:
             yield event
 
     async def close(self):
-        await self._close()
-
-    async def aclose(self):
-        await self._close()
-
-    async def _close(self):
-        for name in ("close", "aclose"):
-            fn = getattr(self._stream, name, None)
-            if fn:
-                try:
-                    await fn()
-                except Exception:
-                    pass
-                return
+        await self._stream.close()
 
 
 def install(service, log, spans=None, context=None):

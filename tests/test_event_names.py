@@ -129,7 +129,6 @@ PYTHON = {
     "nav_failed": {"err", "kind"},
     "operation_announce_hook_failed": {"err", "operation"},
     "operation_announced": {"operation"},
-    "operation_cancel_refused": {"authority", "operation"},
     "operation_created": {
         "authority",
         "external_ref",
@@ -204,8 +203,6 @@ PYTHON = {
     "trace_save_failed": {"err"},
     "trace_saved": {"file", "messages", "pruned"},
     "tracing_setup_failed": {"err"},
-    "tts_fallback": {"err", "using", "wanted"},
-    "tts_selected": {"engine", "local"},
     "tv_duck_deficit": {"steps"},
     "tv_duck_failed": {"err", "restore", "stage"},
     "tv_duck_skipped": {"debt", "reason", "state"},

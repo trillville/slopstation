@@ -1,38 +1,23 @@
 """The wake model detects SYNTHESIZED speech - no mic, no human.
 Windows SAPI speaks the CONFIGURED wake phrase in two voices (oWW trains on
-synthetic TTS), plus negatives that must NOT fire. Follows config.json rather
-than pinning hey_jarvis; the model ships in from the gaming PC. Downloads the
-oWW models on first run. SAPI may mispronounce an invented phrase, so a low
-score here alongside good live trials is the test's limit, not the model's.
+synthetic TTS), plus negatives that must NOT fire. Follows the configured wake
+model rather than pinning hey_jarvis; the model ships in from the gaming PC.
+Downloads the oWW models on first run. SAPI may mispronounce an invented
+phrase, so a low score here alongside good live trials is the test's limit,
+not the model's.
     pytest tests/test_wake.py
 """
 
-import json
 import subprocess
 import wave
 
 import numpy as np
-import pytest
 
 import helpers
-from slopstation import paths
 from slopstation.agent.speech.audio import WakeListener, wake_phrase
 
 CHUNK = WakeListener.CHUNK
-
-
-@pytest.fixture
-def model():
-    """The configured wake model: config.json under the runtime home, then
-    config.example.json at the repo root so a fresh checkout still runs."""
-    for path in (paths.config_file(), helpers.REPO / "config.example.json"):
-        try:
-            return json.loads(path.read_text(encoding="utf-8-sig"))["voice"][
-                "wakeModel"
-            ]
-        except (OSError, ValueError, KeyError):
-            continue
-    return "hey_jarvis_v0.1"
+MODEL = helpers.CONFIG["voice"]["wakeModel"]  # the suite's config
 
 
 def cases(phrase):
@@ -74,11 +59,11 @@ def max_score(listener, path):
     return best
 
 
-def test_wake(model, tmp_path):
+def test_wake(tmp_path):
     # audio.wake_phrase, the production derivation: the filename IS the
     # phrase, so an off-convention model name breaks here loudly.
-    phrase = wake_phrase(model)
-    listener = WakeListener(None, {"wakeModel": model}, None)  # model only; no mic
+    phrase = wake_phrase(MODEL)
+    listener = WakeListener(None, {"wakeModel": MODEL}, None)  # model only; no mic
     pos, neg = [], []
     for i, (voice, text, is_wake) in enumerate(cases(phrase)):
         p = tmp_path / f"case{i}.wav"

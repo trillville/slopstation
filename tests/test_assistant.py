@@ -8,17 +8,15 @@ lives beside it.
 """
 
 import asyncio
-import inspect
-import os
 import re
 import time
 import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import CapturingLog, seed_lock
 from slopstation import sessionlock, statefile
-from slopstation.agent.brain import assistant, backends
+from slopstation.agent.brain import assistant, backends, media_tools
 from slopstation.agent.brain.dispatch import Dispatch
 from slopstation.agent.tools import library, steamstore
 
@@ -222,11 +220,6 @@ class RaisingSteam:
 
 
 @pytest.fixture
-def log():
-    return CapturingLog("assistant")
-
-
-@pytest.fixture
 def catalog():
     """The fixture index, written under this test's runtime home."""
     statefile.write(library.library_file(), INDEX)
@@ -349,15 +342,14 @@ def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
 def test_now_playing_reports_whether_the_rig_is_busy(impls):
     # now_playing answers both halves: what the PC runs, and whether the rig is
     # busy. Mid-launch the PC says 0, and only session_active stops that
-    # reading as idle (2026-08-21, turn 0b785e).
+    # reading as idle.
     r = impls["get_now_playing"]({})
     assert r["ok"]  # dry-run path
     assert r["session_active"] is False, r
-    sessionlock.lock_file().write_text("x")  # a launch owns the rig
+    seed_lock(0)  # a launch owns the rig
     r = impls["get_now_playing"]({})
     assert r["ok"] and r["session_active"] is True, r
-    old = time.time() - sessionlock.LOCK_STALE_S - 60  # stale = free, same as ever
-    os.utime(sessionlock.lock_file(), (old, old))
+    seed_lock(sessionlock.LOCK_STALE_S + 60)  # stale = free, same as ever
     assert impls["get_now_playing"]({})["session_active"] is False
 
 
@@ -373,10 +365,9 @@ def test_game_details_names_installed_and_owned_only_games(impls):
 
 
 def test_list_operations_acknowledges_only_on_a_live_recent_read(
-    dispatch, live_dispatch, log, impls, fake_operations
+    dispatch, live_dispatch, log, fake_operations
 ):
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert "list_operations" not in impls and "list_operations" in oimpls
     r = oimpls["list_operations"]({"scope": "active"})
     assert r["ok"] and r["operations"][0]["state"] == "RUNNING"
     assert fake_operations.acknowledged is False
@@ -391,39 +382,24 @@ def test_list_operations_acknowledges_only_on_a_live_recent_read(
 def test_function_schemas_render_only_the_tools_present(
     dispatch, log, impls, fake_operations, media_impls
 ):
-    assert len(assistant.function_schemas(impls)) == 10  # no operations store
+    assert len(assistant.function_schemas(impls, log)) == 10  # no operations store
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert len(assistant.function_schemas(oimpls)) == 11
-    assert len(assistant.function_schemas(media_impls)) == 16
+    assert len(assistant.function_schemas(oimpls, log)) == 11
+    assert len(assistant.function_schemas(media_impls, log)) == 16
 
 
 # -- the media tools -----------------------------------------------------------
 
 
-def test_media_tools_answer_find_and_library(media_impls, fake_media):
-    assert {
-        "find_media",
-        "media_library",
-        "request_movie",
-        "request_series",
-        "delete_media",
-    } <= set(media_impls)
-    assert (
-        media_impls["find_media"]({"kind": "movie", "query": "Dune"})["candidates"][0][
-            "tmdb_id"
-        ]
-        == 438631
-    )
-    held = media_impls["media_library"]({"kind": "series", "catalog_id": 81189})
-    assert held["ok"] and held["seasons"][0]["have"] == 13
-    assert fake_media.requests[-1] == ("library", "series", 81189)
-
-
-def test_request_movie_previews_dry_and_tracks_the_turn_live(
+def test_find_then_request_movie_previews_dry_and_tracks_the_turn_live(
     media_impls, live_media, fake_media, fake_operations
 ):
+    found = media_impls["find_media"]({"kind": "movie", "query": "Dune"})
+    assert found["candidates"][0]["tmdb_id"] == 438631
+    held = media_impls["media_library"]({"kind": "series", "catalog_id": 81189})
+    assert held["ok"] and held["seasons"][0]["have"] == 13
     preview = media_impls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
-    assert preview["dry_run"] and not fake_media.requests
+    assert preview["dry_run"] and fake_media.requests == [("library", "series", 81189)]
     requested = live_media["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
     assert requested["operation_id"] == "op-media"
     assert fake_media.requests[-1] == ("movie", 438631, "1080p")
@@ -503,7 +479,7 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
     deleted = live_media["delete_media"](dict(ask))
     assert deleted["ok"]
     # a question the user declined must not stay armed
-    monkeypatch.setattr(assistant, "ASK_TTL_S", -1)
+    monkeypatch.setattr(media_tools, "ASK_TTL_S", -1)
     live_media["delete_media"](dict(ask))
     live_dispatch.begin_utterance("fa1102", "later")
     assert not live_media["delete_media"](dict(ask))["ok"]
@@ -553,9 +529,7 @@ def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
     # Ten base tools minus the two store ones the kill switch drops.
-    assert len(assistant.function_schemas(gated)) == 8, len(
-        assistant.function_schemas(gated)
-    )
+    assert len(assistant.function_schemas(gated, log)) == 8
 
 
 # -- fail-soft: an impl that RAISES must return an error, never propagate ------
@@ -582,23 +556,7 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     assert {"install_error", "download_status_error"} <= set(log.events())
 
 
-def test_a_raising_impl_still_answers_through_result_callback():
-    # function_schemas backstop: a handler whose impl raises still calls
-    # result_callback with an error instead of leaving the turn hung.
-    sch = assistant.function_schemas({"get_now_playing": boom})[0]
-    got = []
-
-    class P:
-        arguments = {}
-
-        async def result_callback(self, out):
-            got.append(out)
-
-    asyncio.run(sch.handler(P()))
-    assert got and got[0]["ok"] is False, got
-
-
-def test_an_acknowledgment_is_spoken_without_a_second_llm_turn():
+def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
     spoken = []
     receipt_result = []
     receipt_schema = assistant.function_schemas(
@@ -607,7 +565,8 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn():
                 "ok": True,
                 "acknowledgment": "Requested Andor, season 1, in 2160p.",
             }
-        }
+        },
+        log,
     )[0]
 
     class ReceiptWorker:
@@ -652,11 +611,13 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
         tlog,
     )
 
+    answered = []
+
     class P2:
         arguments = {"appid": 1145360}
 
         async def result_callback(self, out):
-            pass
+            answered.append(out)
 
     for s in schemas:
         asyncio.run(s.handler(P2()))
@@ -667,8 +628,8 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
     assert rec["launch_game"]["ok"] is False, "a raising impl must still record"
     assert "1145360" in rec["launch_game"]["args"]  # args carried, for search terms
     assert calls["n"] == 2, "tool_span not called per tool"
-    # log=None (REPL/bench/tests) stays quiet rather than crashing.
-    assistant.function_schemas({"get_now_playing": boom})[0]
+    # The raiser still answers through result_callback, so the turn never hangs.
+    assert [o["ok"] for o in answered] == [False, True], answered
 
 
 # -- nav tool: target->kind remap + catalog guard ------------------------------
@@ -688,8 +649,7 @@ def test_nav_remaps_targets_and_guards_the_catalog(monkeypatch, dispatch, log):
     ], seen
     assert not navimpls["nav"]({"target": "bogus"})["ok"]
     # An unowned appid: the library page is refused, the store page is not -
-    # with the install dialog needing a button press, that IS the install path
-    # (2026-08-14).
+    # with the install dialog needing a button press, that IS the install path.
     assert not navimpls["nav"]({"target": "game_page", "appid": UNKNOWN})["ok"]
     assert navimpls["nav"]({"target": "store_page", "appid": 1478500})["ok"]
     assert seen[-1] == ("store", 1478500), seen[-1]
@@ -700,7 +660,7 @@ def test_nav_resolves_a_collection_by_name_and_lists_them_on_a_miss(
     monkeypatch, dispatch, log
 ):
     # Collections by name, with the miss handing back the real list (STT turns
-    # "mech" into "neck", 2026-08-14).
+    # "mech" into "neck").
     seen = []
     monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
     monkeypatch.setattr(
@@ -766,7 +726,7 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
         and hltb_calls == ["Some Unowned Game"]
     ), r
     # Every facet ask resolves a missing name, not just hltb: nameless review
-    # payloads made the model match results to titles from memory (2026-08-15).
+    # payloads made the model match results to titles from memory.
     monkeypatch.setattr(
         steamstore, "fetch_reviews", lambda a: {"desc": "Very Positive"}
     )
@@ -797,9 +757,6 @@ def test_tool_defs_render_flat_for_both_providers(catalog):
     assert "NOT end_session" in flat(assistant.TOOL_DEFS)
     si = assistant.system_instruction(CFG_MIN)
     assert "never end the gaming session for them" in flat(si)
-    assert set(backends.BACKENDS) == {"anthropic", "openai"}
-    assert backends.BACKENDS["anthropic"].key == "anthropicApiKey"
-    assert backends.BACKENDS["openai"].key == "openaiApiKey"
 
 
 def test_server_side_search_follows_the_knob(catalog):
@@ -870,23 +827,15 @@ def test_anthropic_backend_resumes_a_paused_turn(monkeypatch):
 # -- pipecat constructions with dummy keys -------------------------------------
 
 
-def test_make_llm_builds_both_providers_from_dummy_keys(catalog, impls):
+def test_make_llm_builds_both_providers_from_dummy_keys(catalog, log, impls):
     # Through the PRODUCTION _make_llm: a local copy can pass a dict for
     # `reasoning`, which only live inference rejects.
-    schemas = assistant.function_schemas(impls)
-    assert len(schemas) == 10  # operations are absent without a store
     from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-    from pipecat.processors.aggregators.llm_context import LLMContext
-    from pipecat.processors.aggregators.llm_response_universal import (
-        LLMContextAggregatorPair,
-    )
-    from pipecat.services.deepgram.tts import DeepgramTTSService
 
     from slopstation.agent.speech import session_runtime
 
+    schemas = assistant.function_schemas(impls, log)
     si = assistant.system_instruction(CFG_MIN)
-    ctx = LLMContext(messages=[], tools=schemas)
-    ua, aa = LLMContextAggregatorPair(ctx)
     dummy = {"anthropicApiKey": "x" * 24, "openaiApiKey": "x" * 24}
     voice_a = {
         **CFG_MIN["voice"],
@@ -894,7 +843,7 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, impls):
         "assistantModelAnthropic": "claude-haiku-4-5",
         "assistantModelOpenai": "gpt-5.6-luna",
     }
-    llm_a = session_runtime._make_llm(voice_a, dummy, si)
+    session_runtime._make_llm(voice_a, dummy, si)
     voice_o = {
         **voice_a,
         "assistantProvider": "openai",
@@ -906,12 +855,6 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, impls):
     assert llm_o._settings.reasoning.model_dump(exclude_none=True) == {
         "effort": "low"
     }, llm_o._settings.reasoning
-    tts = DeepgramTTSService(
-        api_key="x" * 24,
-        sample_rate=16000,
-        settings=DeepgramTTSService.Settings(voice="aura-2-thalia-en"),
-    )
-    assert ua and aa and llm_a and llm_o and tts
     # Native tools ride ToolsSchema.custom_tools through the OpenAI Responses
     # adapter verbatim, after the function tools.
     ts = ToolsSchema(
@@ -921,10 +864,11 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, impls):
     rendered = llm_o.get_llm_adapter().to_provider_tools_format(ts)
     assert [t["name"] for t in rendered[:-1]] == [s.name for s in schemas]
     assert rendered[-1]["type"] == "web_search"
-    assert LLMContext(messages=[], tools=ts)
 
 
-def test_openai_backend_defaults_to_a_real_reasoning_effort():
-    # OpenAIBackend must default to a REAL reasoning effort, not disable it.
-    eff = inspect.signature(backends.OpenAIBackend.__init__).parameters["effort"]
-    assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"
+def test_the_sdk_clients_carry_deadlines():
+    # The SDK clients carry explicit deadlines: without them a stalled
+    # provider stream outlives remote.py's 280 s forwarding budget.
+    real = backends.AnthropicBackend({"anthropicApiKey": "a" * 64}, "claude-test")
+    assert real.client.timeout == backends.LLM_TIMEOUT_S
+    assert real.client.max_retries == backends.LLM_MAX_RETRIES

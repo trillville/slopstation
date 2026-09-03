@@ -45,12 +45,12 @@ try {
     $retried = $false
     if (-not (Wait-For { Test-TvIsPrimary } 20 'TV is primary (2160p)')) {
         # No gate can catch a TV that never woke: while detached, its EDID and
-        # all three WMI monitor classes read identically asleep or awake
-        # (2026-08-13, full power cycle). A retry is the only defence.
+        # all three WMI monitor classes read identically asleep or awake.
+        # A retry is the only defence.
         # The OFFICE apply between attempts is load-bearing: a failed TV-GAMING
         # apply detaches the desk without activating the TV, QueryDisplayConfig
         # then has no valid paths, and DisplayMagician cannot initialise, so
-        # every further apply is a silent no-op (2026-08-13, 7 dead applies).
+        # every further apply is a silent no-op.
         $retried = $true
         Log 'TV-GAMING did not take - restoring OFFICE, then one retry'
         Write-CgEvent 'profile_retry' @{ profile = 'TV-GAMING' } 'warn'
@@ -103,20 +103,17 @@ try {
     Log "READY (foreground: '$fg')"
     # dur_ms here is time-to-READY, the launch-health distribution. Warn when
     # nothing took the foreground - the TV still switches, but the failure looks
-    # like success. Warn too when a game was already up, focused or not: four
-    # such sessions (2026-08-13, turns 2c7936/457a79/14852d/b01c9d) were all
-    # abandoned inside three minutes, Big Picture holding focus and answering
-    # the pad while the TV frame never changed. Not input routing -
-    # steam://forceinputappid/0 changed nothing on b01c9d. The only cure known
-    # to work is the game not running: 8289e9 ran 90 clean minutes once AC6
-    # was gone.
+    # like success. Warn too when a game was already up, focused or not: such
+    # sessions get abandoned within minutes, Big Picture holding focus and
+    # answering the pad while the TV frame never changes, and the only cure
+    # known to work is the game not running (input routing changed nothing).
     Write-CgEvent 'ready' @{ focused = $focused; fg = $fg; running_appid = $running } $(if ($focused -and -not $running) { 'info' } else { 'warn' })
 }
 catch {
     # Height is sampled BEFORE the recovery changes it, and guarded so a
     # throwing probe cannot skip the office restore. It separates "the TV never
     # came up" (desk still at its own height) from "the apply detached
-    # everything and left no active display" (2026-08-13).
+    # everything and left no active display".
     $height = -1
     try { $height = Get-PrimaryHeight } catch { }
     Write-CgEvent 'enter_failed' @{ err = "$_"; primary_height = $height } 'error'

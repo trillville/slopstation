@@ -277,8 +277,6 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         app = self.server.app
-        # Bound, not app.log.warn(...): the event-name scan reads this shape.
-        log = app.log
         length = self._declared_length()
         if length is not None and length > MAX_BODY:
             self._drain(length)
@@ -305,11 +303,11 @@ class RemoteHandler(BaseHTTPRequestHandler):
         ok = self._authorized()
         app.note_auth(ok)
         if not ok:
-            log.warn("remote_auth_failed", reason="bad or missing token")
+            app.log.warn("remote_auth_failed", reason="bad or missing token")
             self._json(401, {"error": "unauthorized"})
             return
         if app.throttled():
-            log.warn("remote_throttled", limit=RATE_LIMIT)
+            app.log.warn("remote_throttled", limit=RATE_LIMIT)
             self._json(429, {"error": "rate limit"})
             return
         try:
@@ -323,7 +321,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
         try:
             response = app.rpc(message)
         except Exception as e:
-            log.error("remote_request_failed", err=str(e))
+            app.log.error("remote_request_failed", err=str(e))
             self._json(200, _error(message.get("id"), -32603, "internal error"))
             return
         if response is None:

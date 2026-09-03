@@ -1,11 +1,10 @@
 """Authenticated transports for the media sidecars, and the vocabulary every
-media module shares.
+media module shares. Leaf of the media import graph.
 
-Nothing above this module speaks HTTP. The shared names live here rather than
-in media.py because their callers span three modules and this is the leaf of
-the import graph - anywhere else is a cycle.
+Nothing above this module speaks HTTP.
 """
 
+import datetime
 import http.cookies
 import json
 import urllib.error
@@ -32,12 +31,19 @@ def _clean_text(value, limit=160):
     return "".join(c for c in str(value or "").strip() if c.isprintable())[:limit]
 
 
-"""`authority` is the lowercase name the operation ledger and the
-download-client category use; ArrClient.name is the capitalized one the API
-errors carry."""
+def _parse_time(value):
+    """An ISO 8601 timestamp as a datetime, or None."""
+    try:
+        return datetime.datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+# `authority` is the lowercase name the operation ledger, the download-client
+# category and MediaService's client attribute use; ArrClient.name is the
+# capitalized one the API errors carry.
 KINDS = {
     "movie": {
-        "client": "radarr",
         "authority": "radarr",
         "resource": "movie",
         "id_key": "tmdbId",
@@ -47,7 +53,6 @@ KINDS = {
         "category_field": "movieCategory",
     },
     "series": {
-        "client": "sonarr",
         "authority": "sonarr",
         "resource": "series",
         "id_key": "tvdbId",
@@ -66,20 +71,11 @@ def _kind(kind):
         raise MediaError(f"unknown media kind {kind}") from None
 
 
-def _root_and_profile_gaps(root_paths, profile_names, wanted_root, wanted_profiles):
-    """The two library-policy answers validate() and the doctor both need.
-    Pure: the caller fetches and names what it wants, so each keeps its own
-    behaviour on missing config. Roots compare case-folded and without a
-    trailing separator - Servarr echoes the path back in either form."""
-    normalized = {str(path).rstrip("/\\").casefold() for path in root_paths}
-    root_exists = (
-        bool(wanted_root) and str(wanted_root).rstrip("/\\").casefold() in normalized
-    )
-    available = {str(name).casefold() for name in profile_names}
-    missing = [
-        name for name in wanted_profiles if str(name).casefold() not in available
-    ]
-    return root_exists, missing
+def _split_url(name, value):
+    parsed = urllib.parse.urlsplit(str(value).rstrip("/"))
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise MediaConfigurationError(f"{name} URL is invalid")
+    return parsed
 
 
 def _http_transport(method, url, headers, body, timeout):
@@ -104,15 +100,11 @@ class ArrClient:
     """Small authenticated JSON client for one local Servarr API."""
 
     def __init__(self, name, base_url, api_key, api_version="v3", transport=None):
-        parsed = urllib.parse.urlsplit(str(base_url).rstrip("/"))
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise MediaConfigurationError(f"{name} URL is invalid")
         self.name = name
-        self.base_url = str(base_url).rstrip("/")
+        self.base_url = _split_url(name, base_url).geturl()
         self.api_version = api_version
         self.api_key = api_key
         self.transport = transport or _http_transport
-        self.timeout = HTTP_TIMEOUT_S
 
     def request(self, method, endpoint, params=None, payload=None):
         endpoint = endpoint.lstrip("/")
@@ -123,7 +115,7 @@ class ArrClient:
         headers = {"Accept": "application/json", "X-Api-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
-        return self.transport(method, url, headers, body, self.timeout)
+        return self.transport(method, url, headers, body, HTTP_TIMEOUT_S)
 
     def get(self, endpoint, params=None):
         return self.request("GET", endpoint, params=params)
@@ -151,23 +143,30 @@ def _qbit_http_transport(method, url, headers, body, timeout):
         raise MediaError("qBittorrent is unreachable") from e
 
 
+def _configured_password(value):
+    # events.real_key with the floor a Web UI password can meet.
+    return (
+        isinstance(value, str)
+        and "..." not in value
+        and not value.upper().startswith("PLACEHOLDER")
+        and len(value.strip()) >= 6
+    )
+
+
 class QbittorrentClient:
     """Authenticated boundary for diagnostics and explicit maintenance."""
 
     def __init__(self, base_url, username, password, transport=None):
-        parsed = urllib.parse.urlsplit(str(base_url).rstrip("/"))
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise MediaConfigurationError("qBittorrent URL is invalid")
+        parsed = _split_url("qBittorrent", base_url)
         if not isinstance(username, str) or not username:
             raise MediaConfigurationError("media.qbittorrentUsername is missing")
-        if not isinstance(password, str) or not password:
+        if not _configured_password(password):
             raise MediaConfigurationError("qbittorrentPassword is missing")
-        self.base_url = str(base_url).rstrip("/")
+        self.base_url = parsed.geturl()
         self.origin = f"{parsed.scheme}://{parsed.netloc}"
         self.username = username
         self.password = password
         self.transport = transport or _qbit_http_transport
-        self.timeout = HTTP_TIMEOUT_S
         self.sid = None
         self.sid_cookie = None
 
@@ -192,7 +191,7 @@ class QbittorrentClient:
                 f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
                 headers,
                 body,
-                self.timeout,
+                HTTP_TIMEOUT_S,
             )
 
         try:
@@ -288,22 +287,9 @@ class QbittorrentClient:
         }
 
 
-def _configured_password(value):
-    return (
-        isinstance(value, str)
-        and "..." not in value
-        and not value.upper().startswith("PLACEHOLDER")
-        and len(value.strip()) >= 6
-    )
-
-
-def _qbit_from_config(media_cfg, secrets, transport=None):
-    password = secrets.get("qbittorrentPassword")
-    if not _configured_password(password):
-        raise MediaConfigurationError("qbittorrentPassword is missing")
+def _qbit_from_config(media_cfg, secrets):
     return QbittorrentClient(
         media_cfg.get("qbittorrentUrl", ""),
         media_cfg.get("qbittorrentUsername", ""),
-        password,
-        transport=transport,
+        secrets.get("qbittorrentPassword"),
     )

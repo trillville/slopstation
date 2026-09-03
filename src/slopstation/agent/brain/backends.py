@@ -91,10 +91,7 @@ class AnthropicBackend(Backend):
                 )
                 u = resp.usage
                 text = " ".join(b.text for b in resp.content if b.type == "text")
-                # getattr throughout: every one of these is read ONLY for
-                # the span, and arguments are evaluated before response() can
-                # swallow anything - so a field a provider stopped sending
-                # would kill the turn rather than cost a span attribute.
+                # getattr: span-only reads; a field the provider drops costs nothing.
                 usage = {
                     "input": getattr(u, "input_tokens", None),
                     "output": getattr(u, "output_tokens", None),

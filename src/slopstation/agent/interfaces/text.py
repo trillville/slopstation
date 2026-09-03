@@ -166,15 +166,6 @@ class TextHandler(BaseHTTPRequestHandler):
         expected = "Bearer " + self.server.token
         return hmac.compare_digest(supplied, expected)
 
-    def do_GET(self):
-        if self.path != "/health":
-            self._json(404, {"ok": False, "error": "not found"})
-            return
-        if not self._authorized():
-            self._json(401, {"ok": False, "error": "unauthorized"})
-            return
-        self._json(200, {"ok": True})
-
     def do_POST(self):
         if self.path != "/v1/chat":
             self._json(404, {"ok": False, "error": "not found"})
@@ -199,8 +190,7 @@ class TextHandler(BaseHTTPRequestHandler):
             # `error` field to the caller, so the busy text reaches the app.
             self._json(503, {"ok": False, "error": str(e)})
         except Exception as e:
-            log = self.server.app.log
-            log.error("text_request_failed", err=str(e))
+            self.server.app.log.error("text_request_failed", err=str(e))
             self._json(500, {"ok": False, "error": "assistant request failed"})
 
 

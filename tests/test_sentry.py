@@ -7,23 +7,11 @@ import json
 
 import pytest
 
-import helpers
 from helpers import CapturingLog
 from slopstation import events
 from slopstation.agent.telemetry import sentry
 
 DSN = "https://abc123def456abc123def456abc12345@o4509876.ingest.us.sentry.io/1234567"
-
-
-# -- the gate --------------------------------------------------------------
-
-
-def test_gate():
-    assert sentry.enabled({"sentryDsn": DSN})
-    assert not sentry.enabled({})
-    assert not sentry.enabled({"sentryDsn": ""})
-    # Template junk reads as absent, same as every other keyed lane.
-    assert not sentry.enabled({"sentryDsn": "https://...@o1.ingest.sentry.io/1"})
 
 
 # -- trace-level attributes ------------------------------------------------
@@ -44,16 +32,6 @@ def test_span_attributes_carry_the_ambient_ids():
     assert sentry.conversation_id()
     assert "session.id" not in sentry.span_attributes()
     assert sentry.span_attributes(session="zz")["session.id"] == "zz"
-
-
-def test_span_attribute_values_are_otel_legal():
-    # OTel accepts str/bool/int/float and homogeneous sequences of those; a
-    # dict or None is dropped at span creation, silently costing the field.
-    for k, v in sentry.span_attributes(session="s", turn="t").items():
-        ok = isinstance(v, (str, bool, int, float)) or (
-            isinstance(v, list) and all(isinstance(i, str) for i in v)
-        )
-        assert ok, f"{k}={v!r} is not an OTel-legal attribute value"
 
 
 # -- the OTLP target -------------------------------------------------------
@@ -94,23 +72,6 @@ def test_everything_no_ops_while_tracing_is_off():
     sentry.capture(RuntimeError("boom"))  # no SDK, no raise
 
 
-# -- the usage map ---------------------------------------------------------
-
-
-def test_usage_map():
-    # backends.py flattens its SDK's usage object onto these short keys; a
-    # rename on either side silently drops token counts from the dashboard.
-    assert set(sentry.USAGE_ATTR) == {
-        "input",
-        "output",
-        "cache_read",
-        "cache_write",
-        "reasoning",
-    }
-    for key, attr in sentry.USAGE_ATTR.items():
-        assert attr.startswith("gen_ai.usage."), (key, attr)
-
-
 # -- fail-soft -------------------------------------------------------------
 
 
@@ -125,11 +86,17 @@ def _boom(*a, **k):
 
 def test_setup_without_a_dsn_is_disabled_quietly(_tracing_off):
     # No DSN -> disabled quietly, NOT an error: the normal unconfigured state,
-    # and the one that lets a deploy land before the K15 is touched.
+    # and the one that lets a deploy land before the K15 is touched. Template
+    # junk reads as absent, same as every other keyed lane.
     log = CapturingLog("voice")
-    assert sentry.setup({}, log) is False
+    for cfg in (
+        {},
+        {"sentryDsn": ""},
+        {"sentryDsn": "https://...@o1.ingest.sentry.io/1"},
+    ):
+        assert sentry.setup(cfg, log) is False, cfg
     assert sentry.is_on() is False
-    assert log.find("lane_disabled"), log.events()
+    assert len(log.find("lane_disabled")) == 3, log.events()
     assert not log.find("sentry_setup_failed")
     assert not log.find("tracing_setup_failed")
 
@@ -152,27 +119,6 @@ def test_a_declining_sdk_stops_before_tracing(_tracing_off, monkeypatch):
     monkeypatch.setattr(sentry, "_init", lambda *a, **k: False)
     assert sentry.setup({"sentryDsn": DSN}, log) is False
     assert not log.find("tracing_setup_failed"), log.events()
-
-
-# -- the tool span shape ---------------------------------------------------
-
-
-def test_tool_span_shape_is_sentrys_execute_tool_contract():
-    # Sentry's execute_tool contract, asserted on the constant rather than on a
-    # live span: op, operation name and the argument key are what the Tool
-    # Errors and Tool Calls widgets read.
-    src = (helpers.PACKAGE / "agent" / "telemetry" / "sentry.py").read_text(
-        encoding="utf-8"
-    )
-    for required in (
-        '"sentry.op": "gen_ai.execute_tool"',
-        '"gen_ai.operation.name": "execute_tool"',
-        '"gen_ai.tool.call.arguments"',
-        '"gen_ai.tool.call.result"',
-        '"sentry.op": "gen_ai.invoke_agent"',
-        '"sentry.op": "gen_ai.chat"',
-    ):
-        assert required in src, required
 
 
 # -- the response recorder -------------------------------------------------

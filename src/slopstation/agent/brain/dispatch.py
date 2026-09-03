@@ -31,9 +31,7 @@ Result = namedtuple("Result", "ok earcon detail")
 # wake-strip; None on lanes with no transcript - the chord, the REPL).
 # Passed explicitly, not via ContextVar: a ContextVar is copied at task
 # creation, so the gate setting it never reaches the assistant's tool
-# dispatch, a sibling task already running. A namedtuple so the pair swaps
-# atomically; a second utterance landing mid-dispatch re-points the
-# attribute, so consumers snapshot at operation START (test_turn drills it).
+# dispatch, a sibling task already running.
 Utterance = namedtuple("Utterance", "turn asked")
 
 
@@ -77,8 +75,8 @@ class Dispatch:
         self.log = log
         self.dry_run = dry_run
         # Fires at the top of end_session, while the TV is still on: the room
-        # ducker restores here, ~13 s before couch's teardown cuts TV power
-        # (2026-08-22). None on lanes with no ducker (the REPL, the bench).
+        # ducker restores here, before couch's teardown cuts TV power. None on
+        # lanes with no ducker (the REPL, the bench).
         self.on_end_session = on_end_session
         # See Utterance above; one Dispatch per session.
         self.utterance = Utterance(None, None)
@@ -133,8 +131,8 @@ class Dispatch:
         turn = self.utterance.turn  # snapshot at operation start
         # Before the exit, not after the voice session closes: the session
         # stays open for the idle timeout, by which time couch has powered the
-        # TV off and remote keys relay nothing (2026-08-22, session fe8302 -
-        # 15 points owed). Must not raise: this is a teardown.
+        # TV off and remote keys relay nothing. Must not raise: this is a
+        # teardown.
         if self.on_end_session is not None:
             try:
                 self.on_end_session()
@@ -142,7 +140,7 @@ class Dispatch:
                 self.log.warn("end_session_hook_failed", err=repr(e))
         if self.dry_run:
             return self._would("ssh exit")
-        # K15-side half of "teardown wins" (2026-08-21): the host Exit only
+        # K15-side half of "teardown wins": the host Exit only
         # stops an Enter that is RUNNING when it lands, so it loses to
         # couch.py's enter_redispatched rescue; the marker reaches that
         # process, which consumes it at every wait. Written BEFORE the ssh so
@@ -291,7 +289,7 @@ class Dispatch:
 
     # -- TV --------------------------------------------------------------------
 
-    # CAUTION, measured 2026-08-21: with audio on the eARC soundbar the TV acks
+    # CAUTION: with audio on the eARC soundbar the TV acks
     # every Ex-Link volume/mute frame and then refuses it on screen ("Not
     # Available"), so these four verbs move nothing the couch can hear. The
     # write path that works is remote keys over CEC (tv_remote.py).
@@ -314,7 +312,7 @@ class Dispatch:
 
     def volume_set(self, level: int) -> Result:
         """Absolute set, clamped to volumeMax so a misheard number cannot
-        blast the room. Also the mute-desync resync."""
+        blast the room."""
         vmax = int(self.voice["volumeMax"])
         clamped = max(0, min(vmax, int(level)))
         if clamped != int(level):

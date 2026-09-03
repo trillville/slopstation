@@ -15,6 +15,19 @@ def pytest_configure(config):
     from slopstation import config as cfg
 
     cfg._current = copy.deepcopy(helpers.CONFIG)
+    # The interpreters some tests spawn must import the same src this process
+    # does (pyproject's pythonpath), not the venv's editable install.
+    src = str(helpers.REPO / "src")
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        p for p in (src, os.environ.get("PYTHONPATH")) if p
+    )
+
+
+@pytest.fixture
+def log():
+    from helpers import CapturingLog
+
+    return CapturingLog("voice")
 
 
 @pytest.fixture(autouse=True)

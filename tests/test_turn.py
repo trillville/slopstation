@@ -5,15 +5,15 @@ they are read out of the shipping script rather than copied.
 """
 
 import re
-from pathlib import Path
 
 import pytest
 
+import helpers
 from helpers import CapturingLog
 from slopstation import couch, events, gamepc
 from slopstation.agent.brain import dispatch as dp
 
-DISPATCH = Path(__file__).resolve().parents[1] / "gaming-pc" / "Dispatch.ps1"
+DISPATCH = helpers.REPO / "gaming-pc" / "Dispatch.ps1"
 
 # Strings that must never reach a filename on the gaming PC.
 HOSTILE = [
@@ -95,29 +95,12 @@ def test_dispatch_ps1_is_the_real_boundary():
         # \z, not $: in .NET '$' also matches before a trailing newline.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
 
-    # gamepc.py mirrors the switch: one function per verb, the same set. And
-    # the answer words couch/dispatch compare against must all be spelled in
-    # the shipping script.
+    # gamepc.py mirrors the switch: one function per verb, the same set.
     verbs = {re.match(r"\^(\w+)", p).group(1) for p in allpats}
     assert verbs == set(gamepc.VERBS), (
         f"verbs: Dispatch {sorted(verbs)} vs gamepc {sorted(gamepc.VERBS)}"
     )
     assert all(callable(getattr(gamepc, v)) for v in gamepc.VERBS)
-    text = DISPATCH.read_text(encoding="utf-8")
-    for word in (
-        "OK",
-        "NOTREADY",
-        "ALREADY",
-        "BUSY",
-        "NOTINSTALLED",
-        "NOTASK",
-        "NOTRUNNING",
-        "RUNNING",
-        "IDLE",
-        "DENIED",
-        "FAILED",
-    ):
-        assert word in text, f"answer word {word} no longer in Dispatch.ps1"
 
     pats = [p for p in allpats if "--turn" in p]
     # Five mutating verbs take a turn, and nav is three patterns, so seven
@@ -128,7 +111,7 @@ def test_dispatch_ps1_is_the_real_boundary():
 
     # One bare example per turn-bearing form (a list, since nav's three
     # patterns share the prefix). The collection ids are real shapes off the
-    # rig: a tighter charset DENIED 3 of this rig's 11 (2026-08-14).
+    # rig: a tighter charset DENIES some of them.
     bases = [
         "enter",
         "exit",

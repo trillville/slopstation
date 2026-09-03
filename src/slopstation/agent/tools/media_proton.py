@@ -4,14 +4,15 @@ qBittorrent's listening port to it."""
 import datetime
 import os
 import re
-import threading
 from pathlib import Path
 from typing import Any
 
+from slopstation import events
 from slopstation.agent.tools.media_clients import (
     MediaConfigurationError,
     MediaError,
     _clean_text,
+    _parse_time,
 )
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
@@ -32,20 +33,24 @@ def default_proton_log_path():
     return Path(local_app_data) / "Proton" / "Proton VPN" / "Logs" / "client-logs.txt"
 
 
-def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
+def _no_state(state, path):
+    return {
+        "state": state,
+        "status": None,
+        "port": None,
+        "observed_at": None,
+        "age_s": None,
+        "path": str(path),
+    }
+
+
+def read_proton_port_state(path=None, now=None):
     """Read the latest state periodically emitted by Proton's Windows client."""
     source = Path(path) if path is not None else default_proton_log_path()
     backup = source.with_name(f"{source.stem}.1{source.suffix}")
     sources = [candidate for candidate in (backup, source) if candidate.is_file()]
     if not sources:
-        return {
-            "state": "missing",
-            "status": None,
-            "port": None,
-            "observed_at": None,
-            "age_s": None,
-            "path": str(source),
-        }
+        return _no_state("missing", source)
 
     latest: dict[str, Any] | None = None
     for candidate in sources:
@@ -54,13 +59,8 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
         except OSError as e:
             raise MediaError("Proton client log is unreadable") from e
         for match in PROTON_STATUS_RE.finditer(text):
-            try:
-                observed = datetime.datetime.fromisoformat(
-                    match.group("timestamp").replace("Z", "+00:00")
-                )
-            except ValueError:
-                continue
-            if latest is not None and observed < latest["observed"]:
+            observed = _parse_time(match.group("timestamp"))
+            if observed is None or (latest and observed < latest["observed"]):
                 continue
             port_match = PROTON_PORT_RE.search(match.group("detail"))
             latest = {
@@ -70,14 +70,7 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
                 "path": candidate,
             }
     if latest is None:
-        return {
-            "state": "unknown",
-            "status": None,
-            "port": None,
-            "observed_at": None,
-            "age_s": None,
-            "path": str(source),
-        }
+        return _no_state("unknown", source)
 
     current = now or datetime.datetime.now(datetime.UTC)
     if current.tzinfo is None:
@@ -85,7 +78,7 @@ def read_proton_port_state(path=None, now=None, max_age_s=PROTON_LOG_MAX_AGE_S):
     age_s = (current - latest["observed"]).total_seconds()
     status = latest["status"]
     port = latest["port"]
-    if age_s < -5 or age_s > max_age_s:
+    if age_s < -5 or age_s > PROTON_LOG_MAX_AGE_S:
         state = "stale"
     elif status in PROTON_ACTIVE_STATUSES and port is not None:
         state = "active"
@@ -112,14 +105,10 @@ class ProtonPortMonitor:
         self.path = Path(path) if path is not None else default_proton_log_path()
         self.poll_s = poll_s
         self.now = now
-        self._stop = threading.Event()
         self._last_failure = None
 
-    def inspect(self):
-        return read_proton_port_state(self.path, now=self.now)
-
     def reconcile_once(self):
-        source = self.inspect()
+        source = read_proton_port_state(self.path, now=self.now)
         result = {**source, "changed": False}
         if source["state"] == "missing":
             raise MediaError("Proton client log is missing")
@@ -128,11 +117,9 @@ class ProtonPortMonitor:
         if source["state"] == "stale":
             raise MediaError("Proton port-forwarding state is stale")
         if source["state"] != "active":
-            self._last_failure = None
             return result
         updated = self.client.set_listen_port(source["port"])
         result.update(updated)
-        self._last_failure = None
         if updated["changed"]:
             self.log(
                 "proton_port_synced",
@@ -143,20 +130,15 @@ class ProtonPortMonitor:
         return result
 
     def start(self):
-        threading.Thread(
-            target=self._run, daemon=True, name="proton-port-monitor"
-        ).start()
+        events.Ticker("proton-port-monitor", self.poll_s, self._tick).start()
 
-    def stop(self):
-        self._stop.set()
-
-    def _run(self):
-        while not self._stop.is_set():
-            try:
-                self.reconcile_once()
-            except Exception as e:
-                detail = _clean_text(e)
-                if detail != self._last_failure:
-                    self.log.error("proton_port_sync_failed", err=detail)
-                    self._last_failure = detail
-            self._stop.wait(self.poll_s)
+    def _tick(self):
+        try:
+            self.reconcile_once()
+            self._last_failure = None
+        except Exception as e:
+            detail = _clean_text(e)
+            # A client that stays down is one line, not one line per poll.
+            if detail != self._last_failure:
+                self.log.error("proton_port_sync_failed", err=detail)
+                self._last_failure = detail

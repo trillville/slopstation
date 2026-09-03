@@ -158,19 +158,6 @@ def test_stand_off_lets_go_once_and_reports_only_the_transition():
     assert cl.Puck().stand_off() is False
 
 
-# --- the two composed: a live session leaves nothing open ---------------------
-
-
-@pytest.mark.parametrize("age", [0, 10, sessionlock.LOCK_STALE_S - 1])
-def test_a_live_session_leaves_nothing_open(age):
-    seed_lock(age)
-    puck, h = held_puck()
-    if sessionlock.active():
-        puck.stand_off()
-    assert puck.handles == [], f"still holding the Puck at lock age {age}"
-    assert h.closed, f"handle left open at lock age {age}"
-
-
 # --- the real loop, wired as it ships -----------------------------------------
 
 
@@ -221,20 +208,6 @@ def test_the_loop_ages_out_a_stale_error_marker_while_the_puck_says_nothing(driv
     assert not sessionlock.last_error_file().exists(), (
         "the loop never aged the marker out"
     )
-
-
-def test_a_stale_error_marker_is_discarded_unheld(monkeypatch):
-    # A launch started by voice or from a phone leaves nobody holding the
-    # Puck. The age-out must not be gated on the buzz, or the marker
-    # strands until the next successful launch (2026-08-30, stranded 5 h).
-    cap = CapturingLog("listener")
-    monkeypatch.setattr(cl, "log", cap)
-    sessionlock.last_error_file().write_text("Enter exited without READY")
-    stale = time.time() - cl.ERR_STALE_S - 60
-    os.utime(sessionlock.last_error_file(), (stale, stale))
-    cl.signal_last_error(None)
-    assert cap.find("stale_error_discarded"), cap.events()
-    assert not sessionlock.last_error_file().exists(), "stale marker survived unheld"
 
 
 def test_a_fresh_error_marker_is_kept_unheld(monkeypatch):

@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from helpers import CapturingLog
-from slopstation import config
+from slopstation import config, statefile
 from slopstation.agent.tools import library, steamstore
 
 # appid -> (name, discount_pct, final_cents, formatted). The fake GetItems
@@ -220,8 +220,8 @@ def test_tag_map_is_keyed_and_cached(store, monkeypatch):
 
 def test_search_tags_match_loosely(keyed):
     # Tag matching ignores punctuation and case both ways ("Rogue-like"/"Co op"
-    # vs Steam's "Roguelike"/"Co-op"); an exact lookup dropped the tag and
-    # silently widened the search (2026-08-14).
+    # vs Steam's "Roguelike"/"Co-op"); an exact lookup would drop the tag and
+    # silently widen the search.
     steamstore.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
     assert keyed.search_params[-1].get("tags") == "1716,3843", keyed.search_params[-1]
     steamstore.fetch_store_search(term="x", tags=["Not A Real Tag"])
@@ -233,7 +233,9 @@ def test_hltb_fails_soft_then_hits_the_cache(store, monkeypatch):
     # even where howlongtobeatpy is installed.
     monkeypatch.setitem(sys.modules, "howlongtobeatpy", None)
     assert steamstore.fetch_hltb("Some Game With No Lib") is None
-    steamstore._save_facets({library.fuzzy_key("Hades"): {"hltb": {"main": 21}}})
+    statefile.write(
+        steamstore.hltb_cache_file(), {library.fuzzy_key("Hades"): {"main": 21}}
+    )
     assert steamstore.fetch_hltb("hades") == {"main": 21}  # cache hit, no import
 
 

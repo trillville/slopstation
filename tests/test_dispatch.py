@@ -85,15 +85,6 @@ def test_lock_arbiter():
     assert d.start_session().ok
 
 
-def test_live_start_spawns_couch(spawned):
-    seed_lock(None)
-    d, _ = harness()
-    r = d.start_session(appid=777)
-    # Positional, not tail-anchored: a turn id may follow the appid.
-    i = spawned[0].index("start")
-    assert r.ok and spawned[0][i : i + 2] == ["start", "777"], spawned
-
-
 def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     monkeypatch.setattr(time, "sleep", lambda s: None)  # the inter-step pause
     d, _ = harness()
@@ -108,9 +99,6 @@ def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
 
     sent.clear()
     assert d.mute_toggle().ok and sent == [tv.EXLINK_FRAMES["mute_toggle"]]
-
-    # duck/unduck left Dispatch on 2026-08-21: with eARC audio the TV refuses
-    # Ex-Link volume writes, so ducking is remote-key relay + readback.
 
 
 def test_a_serial_send_that_raises_is_a_fail_earcon(monkeypatch):
@@ -188,7 +176,7 @@ def test_end_session_on_an_idle_rig_is_a_failure(host):
 def test_end_session_restores_the_room_before_the_exit(host):
     # The room ducker restores HERE, before the exit: the voice session stays
     # open for the idle timeout, by which time couch has cut TV power and
-    # remote keys relay nothing (2026-08-22).
+    # remote keys relay nothing.
     seed_lock(10)
     order = []
     host(lambda cmd, **kw: order.append(f"ssh {cmd}") or "OK")
@@ -238,6 +226,7 @@ def test_play_game_session_live_ssh_outcomes_and_cold_start(monkeypatch, host, s
     seed_lock(None)  # cold: full couch launch
     d, _ = harness()
     r = d.play_game(777)
+    # Positional, not tail-anchored: a turn id may follow the appid.
     i = spawned[0].index("start")
     assert r.ok and spawned[0][i : i + 2] == ["start", "777"], spawned
 
@@ -294,7 +283,7 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     assert not r.ok and r.earcon == "busy", r
     assert "start one first" in r.detail, r
     # Mid-start (fresh lock) is a distinct busy from no-session: the reply must
-    # not tell the model to start what is already starting (2026-08-15).
+    # not tell the model to start what is already starting.
     seed_lock(10)
     r = d.nav("downloads")
     assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
@@ -311,7 +300,7 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
 
 def test_an_unregistered_task_says_so_on_every_verb_that_fires_one(monkeypatch, host):
     # The reply must name the task and the Register-ScheduledTask fix, not read
-    # as a broken verb (2026-08-14).
+    # as a broken verb.
     d, _ = harness()
     monkeypatch.setattr(library, "installed_name", lambda a: None)
     seed_lock(5)  # a live session, so play_game takes the ssh path

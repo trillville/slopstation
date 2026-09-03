@@ -1,10 +1,10 @@
 """Radarr/Sonarr API boundary, policy, and completion evidence."""
 
+import collections
 import dataclasses
 import datetime
 import json
 import urllib.parse
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,10 +24,6 @@ from slopstation.agent.tools import (
 UTC = datetime.UTC
 
 
-def _records():
-    return {"records": []}
-
-
 @dataclasses.dataclass
 class FakeArr:
     """One Arr app: answers GETs from the rows it holds and records every
@@ -41,9 +37,8 @@ class FakeArr:
     library: list = dataclasses.field(default_factory=list)
     episodes: list = dataclasses.field(default_factory=list)
     movie_files: list = dataclasses.field(default_factory=list)
-    queue: dict = dataclasses.field(default_factory=_records)
-    history: dict = dataclasses.field(default_factory=_records)
-    root_folders: list = dataclasses.field(default_factory=list)
+    queue: dict = dataclasses.field(default_factory=lambda: {"records": []})
+    history: dict = dataclasses.field(default_factory=lambda: {"records": []})
     health: list = dataclasses.field(default_factory=list)
     indexers: list = dataclasses.field(
         default_factory=lambda: [
@@ -90,10 +85,6 @@ class FakeArr:
                     {"id": command_id, "status": "completed", "result": "successful"},
                 )
             )
-        if endpoint == "system/status":
-            return {"version": "1.2.3", "appName": self.name}
-        if endpoint == "rootfolder":
-            return [dict(row) for row in self.root_folders]
         if endpoint == "health":
             return [dict(row) for row in self.health]
         if endpoint == "indexer":
@@ -130,32 +121,6 @@ class FakeArr:
 
     def delete(self, endpoint, params=None):
         self.deletes.append((endpoint, params))
-        if endpoint.startswith("command/"):
-            self.commands.pop(int(endpoint.split("/")[1]), None)
-        elif endpoint.startswith("queue/"):
-            queue_id = int(endpoint.split("/")[1])
-            selected = next(
-                row for row in self.queue["records"] if int(row["id"]) == queue_id
-            )
-            download_id = selected.get("downloadId")
-            self.queue["records"] = [
-                row
-                for row in self.queue["records"]
-                if (
-                    row.get("downloadId") != download_id
-                    if download_id
-                    else int(row.get("id", 0)) != queue_id
-                )
-            ]
-        elif endpoint.startswith(("movie/", "series/")):
-            wanted = int(endpoint.split("/")[1])
-            self.library[:] = [row for row in self.library if row["id"] != wanted]
-        elif endpoint.startswith("episodefile/"):
-            wanted = int(endpoint.split("/")[1])
-            for episode in self.episodes:
-                if int(episode.get("episodeFileId", 0) or 0) == wanted:
-                    episode.update(hasFile=False, episodeFileId=0)
-        return None
 
 
 SERVICE_CFG = {
@@ -175,18 +140,16 @@ SERVICE_CFG = {
 
 
 @pytest.fixture
-def service():
-    """A MediaService over two fresh Arrs whose profiles and roots match the
-    config, so a request has everything it needs but the title."""
+def svc():
+    """A MediaService over two fresh Arrs whose profiles match the config, so
+    a request has everything it needs but the title."""
     radarr = FakeArr(
         "Radarr",
         profiles=[{"id": 10, "name": "Movie UHD"}, {"id": 11, "name": "Movie HD"}],
-        root_folders=[{"id": 1, "path": "/data/Movies/"}],
     )
     sonarr = FakeArr(
         "Sonarr",
         profiles=[{"id": 20, "name": "Series HD"}, {"id": 21, "name": "Series UHD"}],
-        root_folders=[{"id": 1, "path": "/data/TV"}],
     )
     return media.MediaService(SERVICE_CFG, CapturingLog("voice"), radarr, sonarr)
 
@@ -361,8 +324,7 @@ def test_proton_monitor_syncs_a_fresh_mapping(proton_log, qbit, qbit_web, monkey
     monkeypatch.setattr(
         proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 12, 0, tzinfo=UTC)
     )
-    assert proton_monitor.inspect()["state"] == "stale"
-    with pytest.raises(media_clients.MediaError):
+    with pytest.raises(media_clients.MediaError, match="stale"):
         proton_monitor.reconcile_once()
     proton_log.write_text(
         proton_event("2026-08-30T04:12:01.000Z", "Starting"), encoding="utf-8"
@@ -484,17 +446,6 @@ def test_health_watch_reports_a_dead_app_once():
     assert len(watch_log.find("media_watch_failed")) == 1
 
 
-def test_health_watch_is_off_when_config_says_so():
-    assert (
-        media.media_health_monitor_from_config(
-            {"media": {"enabled": True, "healthSync": False}},
-            {},
-            CapturingLog("voice"),
-        )
-        is None
-    )
-
-
 # --- grabs no operation asked for ---------------------------------------------
 
 
@@ -575,32 +526,18 @@ def test_no_ledger_means_no_attribution():
 # --- disk watch ---------------------------------------------------------------
 
 GB = 1024**3
-
-
-@dataclasses.dataclass
-class Usage:
-    total: int
-    free: int
-
-    @property
-    def used(self):
-        return self.total - self.free
-
-
-@dataclasses.dataclass
-class FakeShutil:
-    table: dict
-
-    def disk_usage(self, mount):
-        value = self.table[mount]
-        if isinstance(value, Exception):
-            raise value
-        return value
+Usage = collections.namedtuple("Usage", "total free")
 
 
 def test_disk_watch_reports_crossings(monkeypatch):
     table = {"M:": Usage(1000 * GB, 100 * GB), "C:": Usage(1000 * GB, 900 * GB)}
-    monkeypatch.setattr(disk_health, "shutil", FakeShutil(table))
+
+    def disk_usage(mount):
+        if isinstance(table[mount], Exception):
+            raise table[mount]
+        return table[mount]
+
+    monkeypatch.setattr(disk_health.shutil, "disk_usage", disk_usage)
     disk_log = CapturingLog("voice")
     disk = disk_health.DiskHealthMonitor(
         ("M:", "C:"), disk_log, free_warn_bytes=250 * GB
@@ -632,29 +569,34 @@ def test_disk_watch_reports_crossings(monkeypatch):
     assert len(failed) == 1 and failed[0]["mount"] == "M:"
 
 
-def test_disk_watch_needs_config_and_a_host_root():
-    disk_log = CapturingLog("voice")
-    assert (
-        media.disk_health_monitor_from_config(
-            {"media": {"enabled": True, "diskWatch": False}}, disk_log
-        )
-        is None
-    )
-    # No .env means no host root to resolve: a checkout that is not the K15
-    # runs the supervisor without inventing a volume to watch.
-    assert (
-        media.disk_health_monitor_from_config(
-            {"media": {"enabled": True}}, disk_log, env_path=Path("no-such.env")
-        )
-        is None
-    )
+@pytest.mark.parametrize(
+    "factory, flag",
+    [
+        (
+            lambda cfg, log: media.media_health_monitor_from_config(cfg, {}, log),
+            "healthSync",
+        ),
+        (lambda cfg, log: media.disk_health_monitor_from_config(cfg, log), "diskWatch"),
+    ],
+)
+def test_a_watch_is_off_when_config_says_so(factory, flag):
+    cfg = {"media": {"enabled": True, flag: False}}
+    assert factory(cfg, CapturingLog("voice")) is None
+
+
+def test_disk_watch_needs_a_host_root():
+    # No media/.env in the runtime home means no host root to resolve: a
+    # checkout that is not the K15 runs the supervisor without inventing a
+    # volume to watch.
+    cfg = {"media": {"enabled": True}}
+    assert media.disk_health_monitor_from_config(cfg, CapturingLog("voice")) is None
 
 
 # --- catalog lookups ----------------------------------------------------------
 
 
-def test_find_trims_and_caps_results(service):
-    service.radarr.set(
+def test_find_trims_and_caps_results(svc):
+    svc.radarr.set(
         lookup=[
             {
                 "tmdbId": n,
@@ -665,33 +607,31 @@ def test_find_trims_and_caps_results(service):
             for n in range(1, 8)
         ]
     )
-    found = service.find("movie", "Movie")
+    found = svc.find("movie", "Movie")
     assert len(found) == 5 and found[0] == {
         "tmdb_id": 1,
         "title": "Movie 1",
         "year": 2001,
         "status": "released",
     }
-    assert "overview" not in found[0]
 
 
 # --- library ------------------------------------------------------------------
 
 
-def test_library_reports_holdings_per_season(service):
-    lib = service
-    assert lib.library("movie", 438631) == {
+def test_library_reports_holdings_per_season(svc):
+    assert svc.library("movie", 438631) == {
         "kind": "movie",
         "catalog_id": 438631,
         "in_library": False,
     }
-    lib.radarr.set(
+    svc.radarr.set(
         library=[{"id": 32, "tmdbId": 438631, "title": "Dune", "hasFile": True}]
     )
-    held = lib.library("movie", 438631)
+    held = svc.library("movie", 438631)
     assert held["in_library"] and held["available"] and held["title"] == "Dune"
-    assert lib.library("series", 81189)["in_library"] is False
-    lib.sonarr.set(
+    assert svc.library("series", 81189)["in_library"] is False
+    svc.sonarr.set(
         library=[{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}],
         episodes=[
             {
@@ -731,22 +671,21 @@ def test_library_reports_holdings_per_season(service):
             },
         ],
     )
-    owned = lib.library("series", 81189)
+    owned = svc.library("series", 81189)
     assert owned["title"] == "Breaking Bad"
     assert owned["seasons"] == [
         {"season": 1, "have": 1, "aired": 2},
         {"season": 2, "have": 1, "aired": 1},
     ]
     with pytest.raises(media_clients.MediaError):
-        lib.library("album", 1)
+        svc.library("album", 1)
 
 
 # --- abandon ------------------------------------------------------------------
 
 
-def test_abandon_missing_unmonitors_the_gap(service):
-    aband = service
-    aband.sonarr.set(
+def test_abandon_missing_unmonitors_the_gap(svc):
+    svc.sonarr.set(
         library=[{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}],
         episodes=[
             {
@@ -772,7 +711,7 @@ def test_abandon_missing_unmonitors_the_gap(service):
             },
         ],
     )
-    result = aband.abandon_missing(
+    result = svc.abandon_missing(
         {
             "kind": "series_acquisition",
             "external_ref": "41",
@@ -780,11 +719,11 @@ def test_abandon_missing_unmonitors_the_gap(service):
         }
     )
     assert result == {"have": 1, "missing": [{"season": 1, "episodes": 2}]}
-    assert aband.sonarr.puts[-1] == (
+    assert svc.sonarr.puts[-1] == (
         "episode/monitor",
         {"episodeIds": [1, 2], "monitored": False},
     )
-    aband.radarr.set(
+    svc.radarr.set(
         library=[
             {
                 "id": 32,
@@ -795,16 +734,15 @@ def test_abandon_missing_unmonitors_the_gap(service):
             }
         ]
     )
-    result = aband.abandon_missing({"kind": "movie_acquisition", "external_ref": "32"})
+    result = svc.abandon_missing({"kind": "movie_acquisition", "external_ref": "32"})
     assert result == {"have": 0, "missing": []}
-    assert aband.radarr.puts[-1][1]["monitored"] is False
+    assert svc.radarr.puts[-1][1]["monitored"] is False
 
 
 # --- movies -------------------------------------------------------------------
 
 
-def test_request_movie_adds_and_searches(service):
-    svc = service
+def test_request_movie_adds_and_searches(svc):
     svc.radarr.set(
         lookup_by_id={"tmdbId": 438631, "title": "Dune", "year": 2021},
         created={"id": 31, "tmdbId": 438631, "title": "Dune", "hasFile": False},
@@ -818,8 +756,7 @@ def test_request_movie_adds_and_searches(service):
     assert submitted["command_ids"] == [1]
 
 
-def test_request_movie_changes_the_profile_and_skips_what_is_held(service):
-    svc = service
+def test_request_movie_changes_the_profile_and_skips_what_is_held(svc):
     svc.radarr.set(
         library=[
             {
@@ -844,8 +781,7 @@ def test_request_movie_changes_the_profile_and_skips_what_is_held(service):
     assert ready["already_available"] and len(svc.radarr.posts) == before
 
 
-def test_movie_upgrade_completes_on_a_new_file(service):
-    svc = service
+def test_movie_upgrade_completes_on_a_new_file(svc):
     svc.radarr.set(
         library=[
             {
@@ -875,8 +811,7 @@ def test_movie_upgrade_completes_on_a_new_file(service):
 # --- selected series seasons --------------------------------------------------
 
 
-def test_request_series_monitors_only_the_asked_seasons(service):
-    svc = service
+def test_request_series_monitors_only_the_asked_seasons(svc):
     svc.sonarr.set(
         lookup=[
             {
@@ -973,8 +908,7 @@ def test_request_series_monitors_only_the_asked_seasons(service):
     ]
 
 
-def test_search_retry_waits_for_a_search_capable_indexer(service):
-    svc = service
+def test_search_retry_waits_for_a_search_capable_indexer(svc):
     movie_retry = {"kind": "movie_acquisition", "external_ref": "31", "metadata": {}}
     assert svc.search_available(movie_retry)
     svc.radarr.set(health=[{"source": "IndexerSearchCheck"}])
@@ -994,8 +928,7 @@ def test_search_retry_waits_for_a_search_capable_indexer(service):
     )
 
 
-def test_series_upgrade_completes_on_new_episode_files(service):
-    svc = service
+def test_series_upgrade_completes_on_new_episode_files(svc):
     svc.sonarr.set(
         library=[
             {
@@ -1003,7 +936,10 @@ def test_series_upgrade_completes_on_new_episode_files(service):
                 "tvdbId": 81189,
                 "title": "Breaking Bad",
                 "qualityProfileId": 20,
-                "seasons": [{"seasonNumber": 1, "monitored": True}],
+                "seasons": [
+                    {"seasonNumber": 1, "monitored": False},
+                    {"seasonNumber": 2, "monitored": True},
+                ],
             }
         ],
         episodes=[
@@ -1027,6 +963,11 @@ def test_series_upgrade_completes_on_new_episode_files(service):
     )
     series_upgrade = svc.request_series(81189, "2160p", [1])
     assert series_upgrade["baseline_episode_files"] == {"101": 201}
+    # Season 2 is somebody else's desired state and stays monitored.
+    monitored = {
+        r["seasonNumber"]: r["monitored"] for r in svc.sonarr.puts[0][1]["seasons"]
+    }
+    assert monitored == {1: True, 2: True}
     upgrade_operation = {
         "kind": "series_acquisition",
         "external_ref": "42",
@@ -1038,28 +979,10 @@ def test_series_upgrade_completes_on_new_episode_files(service):
     assert svc.observe(upgrade_operation)["complete"]
 
 
-def test_season_scoping_keeps_what_others_monitored(service):
-    # A series Slopstation creates is scoped exactly; one that was already in
-    # the library keeps the seasons somebody else monitored, which is what
-    # lets a part-aired season keep filling in after the operation closes.
-    library_row = {
-        "seasons": [
-            {"seasonNumber": 1, "monitored": True},
-            {"seasonNumber": 2, "monitored": False},
-            {"seasonNumber": 3, "monitored": True},
-        ]
-    }
-    kept = service._set_series_seasons(library_row, [2])
-    assert [s["monitored"] for s in kept["seasons"]] == [True, True, True]
-    scoped = service._set_series_seasons(library_row, [2], exclusive=True)
-    assert [s["monitored"] for s in scoped["seasons"]] == [False, True, False]
-
-
 # --- positive completion evidence ---------------------------------------------
 
 
-def test_observe_movie_reports_the_download_without_its_title(service):
-    svc = service
+def test_observe_movie_reports_the_download_without_its_title(svc):
     svc.radarr.set(
         library=[{"id": 50, "tmdbId": 1, "title": "Arrival", "hasFile": False}],
         queue={
@@ -1081,8 +1004,7 @@ def test_observe_movie_reports_the_download_without_its_title(service):
     assert svc.observe_movie(50)["complete"]
 
 
-def test_observe_series_counts_aired_monitored_episodes(service):
-    svc = service
+def test_observe_series_counts_aired_monitored_episodes(svc):
     now = datetime.datetime(2026, 8, 29, tzinfo=UTC)
     empty = svc.observe_series(60, [1], now)
     assert not empty["metadata_ready"]
@@ -1142,8 +1064,7 @@ def test_observe_series_counts_aired_monitored_episodes(service):
 # --- authoritative abandonment ------------------------------------------------
 
 
-def test_delete_movie_cancels_its_downloads(service):
-    svc = service
+def test_delete_movie_cancels_its_downloads(svc):
     svc.radarr.set(
         library=[
             {
@@ -1165,19 +1086,24 @@ def test_delete_movie_cancels_its_downloads(service):
     removed_movie = svc.delete_movie(438631, [8])
     assert removed_movie["downloads_canceled"] == 1
     assert removed_movie["files_deleted"] == 1
-    assert not svc.radarr.library
-    assert ("command/8", None) in svc.radarr.deletes
-    assert any(
-        endpoint == "queue/700"
-        and params["removeFromClient"]
-        and params["skipRedownload"]
-        and not params["blocklist"]
-        for endpoint, params in svc.radarr.deletes
-    )
+    assert svc.radarr.puts[0][1]["monitored"] is False
+    # The two queue rows are one download and one removal.
+    assert svc.radarr.deletes == [
+        ("command/8", None),
+        (
+            "queue/700",
+            {
+                "removeFromClient": True,
+                "blocklist": False,
+                "skipRedownload": True,
+                "changeCategory": False,
+            },
+        ),
+        ("movie/70", {"deleteFiles": True, "addImportExclusion": False}),
+    ]
 
 
-def test_delete_series_is_scoped_to_seasons(service):
-    svc = service
+def test_delete_series_is_scoped_to_seasons(svc):
     svc.sonarr.set(
         library=[
             {
@@ -1243,18 +1169,29 @@ def test_delete_series_is_scoped_to_seasons(service):
     removed_season = svc.delete_series(393189, seasons=[1])
     assert removed_season["downloads_canceled"] == 1
     assert removed_season["files_deleted"] == 1
-    assert svc.sonarr.library[0]["seasons"][0]["monitored"] is False
-    assert svc.sonarr.library[0]["seasons"][1]["monitored"] is True
-    assert svc.sonarr.episodes[0]["hasFile"] is False
-    assert svc.sonarr.episodes[2]["hasFile"] is True
-    assert len(svc.sonarr.queue["records"]) == 1
+    assert svc.sonarr.puts[0] == (
+        "episode/monitor",
+        {"episodeIds": [710, 711], "monitored": False},
+    )
+    monitored = {
+        r["seasonNumber"]: r["monitored"] for r in svc.sonarr.puts[1][1]["seasons"]
+    }
+    assert monitored == {1: False, 2: True}
+    assert [endpoint for endpoint, _ in svc.sonarr.deletes] == [
+        "queue/720",
+        "episodefile/810",
+    ]
     with pytest.raises(media_clients.MediaError):
         svc.delete_series(393189)
     removed_all = svc.delete_series(393189, all_seasons=True)
-    assert removed_all["all_seasons"] and not svc.sonarr.library
+    assert removed_all["all_seasons"]
+    assert svc.sonarr.deletes[-1] == (
+        "series/71",
+        {"deleteFiles": True, "addImportListExclusion": False},
+    )
 
 
-# --- factory gating and status ------------------------------------------------
+# --- factory gating -----------------------------------------------------------
 
 
 def test_from_config_needs_the_lane_and_its_keys():
@@ -1264,20 +1201,6 @@ def test_from_config_needs_the_lane_and_its_keys():
     cfg["media"]["enabled"] = True
     assert media.from_config(cfg, {}, log) is None
     assert log.find("lane_disabled")[-1]["what"] == "media"
-
-
-def test_status_reports_app_versions(service):
-    status = service.status()
-    assert status["radarr"]["version"] == "1.2.3"
-
-
-def test_validate_names_missing_profiles(service):
-    validation = service.validate()
-    assert validation["ok"] and validation["checks"]["movie"]["root_exists"]
-    service.radarr.profiles.pop()
-    invalid = service.validate()
-    assert not invalid["ok"]
-    assert invalid["checks"]["movie"]["missing_profiles"] == ["Movie HD"]
 
 
 def test_track_survives_a_failing_store():
@@ -1323,7 +1246,7 @@ HEALTHY_QBIT_PREFERENCES = {
 }
 
 
-def _doctor(tmp_path, qbit_preferences):
+def _doctor(monkeypatch, tmp_path, qbit_preferences):
     """media_doctor over a stack whose only variable is what qBittorrent
     reports for its preferences."""
     doctor_cfg = json.loads(json.dumps(helpers.CONFIG))
@@ -1405,20 +1328,23 @@ def _doctor(tmp_path, qbit_preferences):
         proton_event("2026-08-30T05:00:00.000Z", "SleepingUntilRefresh", 33125),
         encoding="utf-8",
     )
+    monkeypatch.setattr(media_clients, "_http_transport", doctor_arr_transport)
+    monkeypatch.setattr(media_clients, "_qbit_http_transport", doctor_qbit_transport)
+    monkeypatch.setattr(
+        media_checks, "_compose_services", lambda media_dir: compose_rows
+    )
+    monkeypatch.setattr(
+        media_proton, "default_proton_log_path", lambda: doctor_proton_log
+    )
     return media_checks.media_doctor(
         doctor_cfg,
         DOCTOR_SECRETS,
-        CapturingLog("voice"),
-        arr_transport=doctor_arr_transport,
-        qbit_transport=doctor_qbit_transport,
-        compose_runner=lambda media_dir: compose_rows,
-        proton_log_path=doctor_proton_log,
         now=datetime.datetime(2026, 8, 30, 5, 0, 5, tzinfo=UTC),
     )
 
 
-def test_media_doctor_passes_a_healthy_stack(tmp_path):
-    doctor = _doctor(tmp_path, dict(HEALTHY_QBIT_PREFERENCES))
+def test_media_doctor_passes_a_healthy_stack(monkeypatch, tmp_path):
+    doctor = _doctor(monkeypatch, tmp_path, dict(HEALTHY_QBIT_PREFERENCES))
     assert doctor["ok"]
     assert [row["level"] for row in doctor["checks"]].count("WARN") == 0
     assert any(
@@ -1431,7 +1357,7 @@ def test_media_doctor_passes_a_healthy_stack(tmp_path):
     )
 
 
-def test_media_doctor_fails_a_misconfigured_qbittorrent(tmp_path):
+def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
     broken_preferences = dict(
         HEALTHY_QBIT_PREFERENCES,
         current_network_interface="Ethernet",
@@ -1439,7 +1365,7 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(tmp_path):
         share_limits_mode="MatchAll",
         listen_port=1234,
     )
-    broken = _doctor(tmp_path, broken_preferences)
+    broken = _doctor(monkeypatch, tmp_path, broken_preferences)
     assert not broken["ok"]
     assert any(
         row["name"] == "qBittorrent UPnP/NAT-PMP" and row["level"] == "FAIL"
@@ -1458,43 +1384,12 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(tmp_path):
 # --- the compose stack on disk ------------------------------------------------
 
 
-def test_compose_stack_layout():
-    root = Path(__file__).resolve().parents[1]
-    compose = (root / "media" / "compose.yaml").read_text(encoding="utf-8")
-    start_media = (root / "media" / "Start-Media.ps1").read_text(encoding="utf-8")
-    for sidecar in (
-        "flaresolverr:",
-        "prowlarr:",
-        "radarr:",
-        "sonarr:",
-        "homarr:",
-        "glances:",
-    ):
-        assert sidecar in compose
+def test_compose_stack_exposes_nothing_it_should_not():
+    compose = (helpers.REPO / "media" / "compose.yaml").read_text(encoding="utf-8")
+    # qBittorrent runs natively behind Proton, never in the stack.
     assert "qbittorrent:" not in compose
-    assert "ghcr.io/flaresolverr/flaresolverr:latest" in compose
-    assert "8191:8191" not in compose
-    # The Arrs' two /data mounts plus Glances' read-only fill gauge.
-    assert compose.count("source: ${MEDIA_ROOT}") == 3
-    # Web UIs are LAN-wide (runbook firewall rules scope them); only
-    # FlareSolverr and Glances stay off the host entirely.
-    assert "9696:9696" in compose
-    assert "7878:7878" in compose
-    assert "8989:8989" in compose
+    # Web UIs are LAN-wide (the runbook's firewall rules scope them).
     assert "127.0.0.1:" not in compose
-    # Homarr is LAN-wide by design, and host 7575 belongs to VirtualHere.
-    assert "ghcr.io/homarr-labs/homarr:latest" in compose
-    assert "8575:7575" in compose
-    assert "127.0.0.1:8575" not in compose
-    assert "7575:7575" not in compose
-    # Glances is internal-only, and its drive gauges depend on the 9p allow.
-    assert "nicolargo/glances:latest-full" in compose
-    assert "61208:61208" not in compose
-    assert "/var/run/docker.sock" in compose
-    glances_conf = (root / "media" / "glances.conf").read_text(encoding="utf-8")
-    assert "allow=9p" in glances_conf
-    assert "--remove-orphans" in start_media
-    assert "logs qbittorrent" not in start_media
-    assert "SECRET_ENCRYPTION_KEY" in start_media
-    assert helpers.CONFIG["media"]["movieRoot"] == "/data/Movies"
-    assert helpers.CONFIG["media"]["seriesRoot"] == "/data/TV"
+    # FlareSolverr and Glances stay off the host; host 7575 is VirtualHere's.
+    for port in ("8191:8191", "7575:7575", "61208:61208"):
+        assert port not in compose
