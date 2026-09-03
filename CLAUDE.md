@@ -93,9 +93,10 @@ diagnosis - but nobody fixes it automatically.
   records the cp313 venv's transitives, and no other machine can produce it.
   The supervisor's install gate hashes `pyproject.toml` AND `constraints.txt`
   against a `deps-ok` sentinel in the venv, so a change to either installs
-  itself on the next deploy. Use `slopstation-refreeze`, never a
-  hand-rolled `pip freeze >`: that writes pins only and eats the header, and
-  PowerShell 5.1's `>` writes UTF-16.
+  itself on the next deploy. Regenerate it there with
+  `.venv\Scripts\pip freeze --exclude-editable | Out-File -Encoding ascii constraints.txt`
+  - not `>`, whose output under PowerShell 5.1 is UTF-16, which pip cannot
+  read.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored, and it sits at the repo root beside
   `secrets.json`, `state/` and `logs/` (see `paths.py`).

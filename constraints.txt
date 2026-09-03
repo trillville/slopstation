@@ -1,18 +1,3 @@
-# The K15 venv's constraints - as-built transitive versions, enforced at
-# install (the supervisor passes `-c constraints.txt`).
-#
-# Regenerate ON THE K15, from its venv:
-#   .venv\Scripts\slopstation-refreeze
-# Do not redirect `pip freeze` by hand: it writes pins only and would eat this
-# header, and PowerShell 5.1's `>` writes UTF-16, which is not a pins file.
-# The supervisor's install gate hashes pyproject.toml AND this file, so a
-# change to either installs itself on the next launch.
-# Frozen 2026-08-30 from the K15's cp313 venv. Freeze ONLY from there: a cp311
-# list misses audioop-lts (py>=3.13 only), and a cp313 pin has no wheel for an
-# older CI - which is why ci.yml runs 3.13 too.
-# semantic-conventions 0.65b0 is sdk 1.44.0's lockstep partner under its own
-# 0.x scheme.
-
 Markdown==3.10.3
 PyAudio==0.2.14
 PyYAML==6.0.3
@@ -76,7 +61,6 @@ propcache==0.5.2
 protobuf==6.33.6
 pydantic==2.13.4
 pydantic_core==2.46.4
-pyflakes==3.4.0
 pyloudnorm==0.2.0
 pypdf==6.16.1
 pyserial==3.5

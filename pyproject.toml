@@ -18,7 +18,8 @@ dependencies = [
   "pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.8.1",
   # Sentry's OTLP endpoint is HTTP-only (no gRPC), and pipecat's own tracing
   # example imports the gRPC exporter - pin http so it cannot resolve by
-  # accident.
+  # accident. (In constraints.txt, semantic-conventions 0.65b0 is sdk
+  # 1.44.0's lockstep partner under its own 0.x scheme.)
   "opentelemetry-exporter-otlp-proto-http==1.44.0",
   # Errors as Issues, plus OTLPIntegration's event linking (an exception lands
   # on the span it broke). NO [opentelemetry-otlp] extra: that pulls
@@ -67,7 +68,6 @@ slopstation-supervise = "slopstation.supervise:main"
 slopstation-listener = "slopstation.chord_listener:main"
 slopstation-voice = "slopstation.agent.voice_agent:cli"
 slopstation-doctor = "slopstation.doctor:main"
-slopstation-refreeze = "slopstation.refreeze:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
