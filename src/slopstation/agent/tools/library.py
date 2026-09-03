@@ -261,7 +261,7 @@ def ascii_only(s: str | None) -> str:
 
 def fuzzy_key(name: str | None) -> str:
     """Letters and digits only: rogue-like == Roguelike, 'co op' == Co-op,
-    and the facet-cache key."""
+    and the hltb-cache key."""
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 
