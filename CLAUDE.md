@@ -37,10 +37,10 @@ deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
     .venv\Scripts\mypy
 
 `tests/conftest.py` sets SLOPSTATION_ENV, a fresh `paths.HOME` per test (state,
-logs and markers move with it) and the config fixture, and - because pytest shares one process where the old runner
-gave each file its own - restores whatever a test rebinds. Patch inside a test
-or a fixture, never at module scope: module scope runs during collection,
-before any fixture, and leaks into the whole session.
+logs and markers move with it) and the config fixture. Nothing restores what a
+test changes: patch through `monkeypatch` inside a test or a fixture, never by
+assignment and never at module scope, which runs during collection and leaks
+into the whole session.
 
 Several rules here are tests: `test_event_names` (the frozen vocabulary - a new
 event is added there, a rename is a deliberate edit there), `test_imports`

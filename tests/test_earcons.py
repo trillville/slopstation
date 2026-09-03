@@ -63,30 +63,29 @@ def test_nothing_shouts():
     )
     loudest = max(r.values())
     assert loudest < 2000, f"something shouts: {loudest:.0f} rms"
-    print(
-        "OK - levels: close {close:.0f} < wake {wake:.0f}"
-        " < acks < announce {announce:.0f} rms, none above 2000".format(**r)
-    )
 
 
-def test_gain_knob():
+def test_gain_knob(monkeypatch):
     """voice.earconGain retunes volume from config; a silly value must clip,
     not wrap - int16 overflow turns a chime into a buzzsaw."""
+    # GAIN and the sample cache are module state every other test reads: put
+    # both back however this one ends, so a failure at gain 100 cannot leave
+    # clipped samples behind for test_specs.
+    monkeypatch.setattr(earcons, "GAIN", earcons.GAIN)
+    monkeypatch.setattr(earcons, "_cache", {})
     base = earcons.samples("wake").copy()
-    try:
-        earcons.set_gain(0.5)
-        half = earcons.samples("wake")
-        assert (
-            abs(
-                np.max(np.abs(half.astype(np.int32)))
-                - np.max(np.abs(base.astype(np.int32))) / 2
-            )
-            <= 2
-        ), "gain did not halve"
-        earcons.set_gain(100.0)
-        loud = earcons.samples("ok").astype(np.int32)
-        assert np.max(np.abs(loud)) <= 32767, "gain wrapped int16"
-        assert np.max(loud) > 32000 and np.min(loud) < -32000, "clip did not clip"
-    finally:
-        earcons.set_gain(1.0)
+    earcons.set_gain(0.5)
+    half = earcons.samples("wake")
+    assert (
+        abs(
+            np.max(np.abs(half.astype(np.int32)))
+            - np.max(np.abs(base.astype(np.int32))) / 2
+        )
+        <= 2
+    ), "gain did not halve"
+    earcons.set_gain(100.0)
+    loud = earcons.samples("ok").astype(np.int32)
+    assert np.max(np.abs(loud)) <= 32767, "gain wrapped int16"
+    assert np.max(loud) > 32000 and np.min(loud) < -32000, "clip did not clip"
+    earcons.set_gain(1.0)
     assert np.array_equal(earcons.samples("wake"), base), "gain reset must restore"

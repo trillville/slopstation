@@ -5,6 +5,9 @@ vol_set clamping must agree - every table entry is rebuilt from its
 
 import sys
 import time
+import types
+
+import pytest
 
 from slopstation import tv
 
@@ -21,32 +24,29 @@ SPECS = {
     "mute_toggle": (0x02, 0x00, 0x00, 0x00),
 }
 
+FRAME = "082202000000d4"  # any valid frame; the port never looks at it
 
-def test_exlink():
-    assert set(SPECS) == set(tv.EXLINK_FRAMES), (
-        f"table/spec drift: {set(SPECS) ^ set(tv.EXLINK_FRAMES)}"
-    )
-    for name, spec in SPECS.items():
-        built = tv.exlink_frame(*spec)
-        frozen = tv.EXLINK_FRAMES[name]
-        assert built == frozen, f"{name}: builder={built} literal={frozen}"
 
-    # Worksheet's own example: volume 20 -> checksum 0xC1.
-    assert tv.vol_set_frame(20) == "082201000014c1"
-    assert tv.vol_set_frame(0) == tv.exlink_frame(0x01, 0x00, 0x00, 0)
-    assert tv.vol_set_frame(-5) == tv.vol_set_frame(0)  # clamp low
-    assert tv.vol_set_frame(250) == tv.vol_set_frame(100)  # clamp high
+@pytest.fixture
+def port():
+    """The one COM port's script: `busy` opens raise SerialException before
+    one succeeds (None = every one), `answer` is the hex the TV reads back,
+    `opens` counts the attempts."""
+    return {"busy": 0, "answer": "030cf1", "opens": 0}
 
-    # COM contention: retry once after a settle, then propagate.
-    import types
 
-    calls = {"n": 0}
+@pytest.fixture
+def fake_serial(port, monkeypatch):
+    """A `serial` module for tv's lazy import, whose Serial follows `port`.
+    The contention settle does not sleep."""
+    fake = types.ModuleType("serial")
+    fake.SerialException = type("SerialException", (Exception,), {})
 
     class FakePort:
         def __init__(self, *a, **k):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise fake_serial.SerialException("busy")
+            port["opens"] += 1
+            if port["busy"] is None or port["opens"] <= port["busy"]:
+                raise fake.SerialException("busy")
 
         def __enter__(self):
             return self
@@ -58,47 +58,51 @@ def test_exlink():
             pass
 
         def read(self, n):
-            return bytes.fromhex("030cf1")
+            return bytes.fromhex(port["answer"])
 
-    fake_serial = types.ModuleType("serial")
-    fake_serial.SerialException = type("SerialException", (Exception,), {})
-    fake_serial.Serial = FakePort
-    sys.modules["serial"] = fake_serial
-    _real_sleep = time.sleep
-    time.sleep = lambda s: None
-    try:
-        assert tv.exlink_send_hex("082202000000d4", "COMX") == "030cf1"
-        assert calls["n"] == 2, "should have retried once"
-        calls["n"] = 0
-        FakePort.__init__ = lambda self, *a, **k: (_ for _ in ()).throw(
-            fake_serial.SerialException("always")
-        )
-        try:
-            tv.exlink_send_hex("082202000000d4", "COMX")
-            raise AssertionError("second failure must propagate")
-        except fake_serial.SerialException:
-            pass
+    fake.Serial = FakePort
+    monkeypatch.setitem(sys.modules, "serial", fake)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    return fake
 
-        # --- ack validation: 030cf1 or the command didn't land
-        FakePort.__init__ = lambda self, *a, **k: None
 
-        FakePort.read = lambda self, n: bytes.fromhex("030cff")  # NAK
-        try:
-            tv.exlink_send_hex("082202000000d4", "COMX")
-            raise AssertionError("NAK must raise ExlinkNak")
-        except tv.ExlinkNak:
-            pass
+def test_every_frozen_frame_rebuilds_from_its_spec():
+    assert set(SPECS) == set(tv.EXLINK_FRAMES), (
+        f"table/spec drift: {set(SPECS) ^ set(tv.EXLINK_FRAMES)}"
+    )
+    for name, spec in SPECS.items():
+        built = tv.exlink_frame(*spec)
+        frozen = tv.EXLINK_FRAMES[name]
+        assert built == frozen, f"{name}: builder={built} literal={frozen}"
 
-        FakePort.read = lambda self, n: b""  # TV silent/off
-        try:
-            tv.exlink_send_hex("082202000000d4", "COMX")
-            raise AssertionError("missing ack must raise ExlinkNak")
-        except tv.ExlinkNak:
-            pass
-    finally:
-        time.sleep = _real_sleep
-        del sys.modules["serial"]
 
+def test_vol_set_frame_checksum_and_clamping():
+    # Worksheet's own example: volume 20 -> checksum 0xC1.
+    assert tv.vol_set_frame(20) == "082201000014c1"
+    assert tv.vol_set_frame(0) == tv.exlink_frame(0x01, 0x00, 0x00, 0)
+    assert tv.vol_set_frame(-5) == tv.vol_set_frame(0)  # clamp low
+    assert tv.vol_set_frame(250) == tv.vol_set_frame(100)  # clamp high
+
+
+def test_com_contention_retries_once_after_a_settle_then_propagates(fake_serial, port):
+    port["busy"] = 1
+    assert tv.exlink_send_hex(FRAME, "COMX") == "030cf1"
+    assert port["opens"] == 2, "should have retried once"
+    port["opens"], port["busy"] = 0, None
+    with pytest.raises(fake_serial.SerialException):
+        tv.exlink_send_hex(FRAME, "COMX")  # second failure must propagate
+
+
+def test_ack_validation_030cf1_or_the_command_did_not_land(fake_serial, port):
+    port["answer"] = "030cff"  # NAK
+    with pytest.raises(tv.ExlinkNak):
+        tv.exlink_send_hex(FRAME, "COMX")
+    port["answer"] = ""  # TV silent/off
+    with pytest.raises(tv.ExlinkNak):
+        tv.exlink_send_hex(FRAME, "COMX")
+
+
+def test_every_frame_is_seven_bytes_and_its_checksum_zeroes_the_sum():
     for name, hexs in tv.EXLINK_FRAMES.items():
         b = bytes.fromhex(hexs)
         assert len(b) == 7, f"{name}: {len(b)} bytes"

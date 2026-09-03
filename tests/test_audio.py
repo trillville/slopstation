@@ -3,6 +3,9 @@ configured device that is merely absent. Fake device table, no PortAudio.
 """
 
 import sys
+import time
+
+import pytest
 
 from slopstation import logbook
 from slopstation.agent.speech import audio
@@ -11,13 +14,16 @@ VOICE = {"inputDeviceName": "ReSpeaker", "outputDeviceName": "ReSpeaker"}
 
 
 class FakePA:
-    """The two-line PyAudio surface resolve_device actually uses."""
+    """The two-line PyAudio surface resolve_device actually uses. The table is
+    copied at init, as PortAudio snapshots it: a device change must not show
+    through an instance that predates it."""
+
+    terminate_calls = 0
 
     def __init__(self, names):
-        self._d = [
+        self._d: list[dict] = [
             {"name": n, "maxInputChannels": 6, "maxOutputChannels": 2} for n in names
         ]
-        self.terminated = False
 
     def get_device_count(self):
         return len(self._d)
@@ -26,7 +32,7 @@ class FakePA:
         return self._d[i]
 
     def terminate(self):
-        self.terminated = True
+        self.terminate_calls += 1
 
 
 def test_no_fragment_is_the_system_default():
@@ -46,13 +52,14 @@ def test_present_device_resolves_to_its_index():
 
 def test_absent_device_raises_instead_of_defaulting():
     log = logbook.CapturingLog()
-    try:
+    # A silently resolved absent device is the bug.
+    with pytest.raises(audio.DeviceMissing) as e:
         audio.resolve_device(FakePA(["Realtek"]), "ReSpeaker", True, log=log)
-    except audio.DeviceMissing as e:
-        assert e.kind == "input" and e.wanted == "ReSpeaker", (e.kind, e.wanted)
-        assert log.find("audio_device_missing"), log.events()
-        return
-    raise AssertionError("absent device silently resolved - this is the bug")
+    assert e.value.kind == "input" and e.value.wanted == "ReSpeaker", (
+        e.value.kind,
+        e.value.wanted,
+    )
+    assert log.find("audio_device_missing"), log.events()
 
 
 def test_announcer_keeps_the_lenient_answer():
@@ -62,7 +69,7 @@ def test_announcer_keeps_the_lenient_answer():
     assert idx is None, idx
 
 
-def test_open_audio_waits_rather_than_binding_the_wrong_endpoint():
+def test_open_audio_waits_rather_than_binding_the_wrong_endpoint(monkeypatch):
     """Recovery that resolves onto the system default reports success and
     stays deaf (62 rounds, 5 min 10 s). open_audio must return the real
     device or keep waiting."""
@@ -86,12 +93,9 @@ def test_open_audio_waits_rather_than_binding_the_wrong_endpoint():
         if len(slept) == 3:  # the array comes back
             table.append("Echo Cancelling Speakerphone (reSpeaker Flex)")
 
-    real_build, real_sleep = audio.build_audio, audio.time.sleep
-    audio.build_audio, audio.time.sleep = fake_build, fake_sleep
-    try:
-        pa, input_idx, output_idx = audio.open_audio(VOICE, log=log)
-    finally:
-        audio.build_audio, audio.time.sleep = real_build, real_sleep
+    monkeypatch.setattr(audio, "build_audio", fake_build)
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    pa, input_idx, output_idx = audio.open_audio(VOICE, log=log)
 
     assert input_idx == 1, f"bound {input_idx} - must be the array, never None"
     assert output_idx == 1, output_idx
@@ -102,7 +106,7 @@ def test_open_audio_waits_rather_than_binding_the_wrong_endpoint():
     assert all(w["wanted"] == "ReSpeaker" for w in waits), waits
 
 
-def test_build_audio_terminates_the_instance_it_could_not_use():
+def test_build_audio_terminates_the_instance_it_could_not_use(monkeypatch):
     """open_audio retries every RETRY_S for the whole outage, so an instance
     stranded on the raise path leaks a handle per round."""
     made = []
@@ -114,20 +118,11 @@ def test_build_audio_terminates_the_instance_it_could_not_use():
             made.append(pa)
             return pa
 
-    real = sys.modules.get("pyaudio")
-    sys.modules["pyaudio"] = FakePyAudioModule
-    try:
-        for _ in range(3):
-            try:
-                audio.build_audio(VOICE)
-            except audio.DeviceMissing:
-                pass
-    finally:
-        if real is None:
-            del sys.modules["pyaudio"]
-        else:
-            sys.modules["pyaudio"] = real
+    monkeypatch.setitem(sys.modules, "pyaudio", FakePyAudioModule)
+    for _ in range(3):
+        with pytest.raises(audio.DeviceMissing):
+            audio.build_audio(VOICE)
 
     assert len(made) == 3, made
-    leaked = [pa for pa in made if not pa.terminated]
+    leaked = [pa for pa in made if not pa.terminate_calls]
     assert not leaked, f"{len(leaked)} PortAudio instance(s) leaked on the raise path"

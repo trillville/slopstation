@@ -2,14 +2,19 @@
 modes, the wake loop's event order, dry-run plumbing, --once, a crashing
 session. Every external seam stubbed (audio, wake model, pipeline, announcer,
 operations, steam, telemetry).
+
+The fakes record what main() built into class attributes; the `stubbed`
+fixture empties those per test, so each run starts from nothing built and
+nothing scripted.
 """
 
 import json
 import sys
 import threading
 
+import pytest
+
 import helpers
-from helpers import fresh_state
 from slopstation import config, events, logbook
 from slopstation.agent import voice_agent as va
 from slopstation.agent.speech import announce
@@ -134,9 +139,10 @@ class FakeProtonPortMonitor:
 
 class FakeSteam:
     available_answer = False
+    steamid = "7656"
 
     def __init__(self, secrets, log, machine_name=None):
-        self.steamid = "7656"
+        pass
 
     def available(self):
         return self.available_answer
@@ -167,46 +173,6 @@ class CtxLog(logbook.CapturingLog):
         self.records[-1]["_session"] = events.current().get("session")
 
 
-def stub_everything():
-    va.open_audio = lambda voice: ("PA", 0, 1)
-    va.rebuild_audio = lambda pa, voice, listener: ("PA2", 0, 1)
-    va.WakeListener = FakeListener
-    va.played = []
-    va.play_pcm = lambda pa, pcm, idx=None: va.played.append(len(pcm))
-    va.refresh_library_bg = lambda: None
-    va.prewarm_imports_bg = lambda provider: None
-    va.GrammarMatcher = lambda voice: "MATCHER"
-    va.TvDucker = FakeDucker
-    events.start_heartbeat = lambda lane, **kw: None
-    logbook.rotate = lambda: None
-    config.secrets = lambda: dict(SECRETS)
-    sentry.setup = lambda cfg, log: False
-    announce.Announcer = FakeAnnouncer
-    operations.OperationStore = FakeOperationStore
-    operations_monitors.SteamMonitor = FakeSteamMonitor
-    operations_monitors.MediaMonitor = FakeMediaMonitor
-    media.from_config = lambda cfg, secrets, log: (
-        "MEDIA" if cfg.get("media", {}).get("enabled") else None
-    )
-    media.proton_port_monitor_from_config = lambda cfg, secrets, log: (
-        FakeProtonPortMonitor(cfg["media"].get("pollS", 30))
-        if cfg.get("media", {}).get("enabled")
-        and cfg.get("media", {}).get("protonPortSync")
-        else None
-    )
-    steam_session.SteamSession = FakeSteam
-    FakeListener.wakes = []
-    FakeListener.built = []
-    FakeAnnouncer.made = []
-    FakeAnnouncer.submitted = []
-    FakeOperationStore.made = []
-    FakeSteamMonitor.made = []
-    FakeMediaMonitor.made = []
-    FakeProtonPortMonitor.made = []
-    FakeDucker.made = []
-    FakeSteam.available_answer = False
-
-
 def make_config(**top):
     cfg = json.loads(json.dumps(helpers.CONFIG))
     cfg["tvIp"] = None
@@ -216,75 +182,145 @@ def make_config(**top):
     return cfg
 
 
-def run(argv, cfg, session=None, setup=None):
-    """main() with the given argv after stub_everything() and `setup`;
-    returns (exit code or "ended", log, run_session calls)."""
-    stub_everything()
-    if setup:
-        setup()
-    config.use(cfg)
-    log = CtxLog("voice")
-    va.log = log
-    calls = []
+def media_config():
+    """Media on, with a poll interval the monitors must pick up."""
+    cfg = make_config()
+    cfg["media"]["enabled"] = True
+    cfg["media"]["pollS"] = 17
+    cfg["media"]["protonPortSync"] = True
+    return cfg
 
-    async def fake_session(
-        cfg,
-        secrets,
-        matcher,
-        dry_run,
-        input_idx,
-        output_idx,
-        capture=None,
-        operations=None,
-        ack=None,
-        steam=None,
-        media=None,
-        on_end_session=None,
+
+def one_wake():
+    """The listener's script: a single wake, then EndOfTest."""
+    return [(0.7, FakeCapture())]
+
+
+@pytest.fixture
+def stubbed(monkeypatch):
+    """Every external seam of main() replaced, and every fake's recorder
+    emptied."""
+    for cls in (
+        FakeAnnouncer,
+        FakeOperationStore,
+        FakeSteamMonitor,
+        FakeMediaMonitor,
+        FakeProtonPortMonitor,
+        FakeDucker,
     ):
-        calls.append(
-            dict(
-                dry_run=dry_run,
-                operations=operations,
-                steam=steam,
-                media=media,
-                capture=capture,
-                matcher=matcher,
-                on_end_session=on_end_session,
+        monkeypatch.setattr(cls, "made", [])
+    monkeypatch.setattr(FakeListener, "wakes", [])
+    monkeypatch.setattr(FakeListener, "built", [])
+    monkeypatch.setattr(FakeAnnouncer, "submitted", [])
+    monkeypatch.setattr(FakeSteam, "available_answer", False)
+    monkeypatch.setattr(va, "open_audio", lambda voice: ("PA", 0, 1))
+    monkeypatch.setattr(va, "rebuild_audio", lambda pa, voice, listener: ("PA2", 0, 1))
+    monkeypatch.setattr(va, "WakeListener", FakeListener)
+    monkeypatch.setattr(va, "play_pcm", lambda pa, pcm, idx=None: None)
+    monkeypatch.setattr(va, "refresh_library_bg", lambda: None)
+    monkeypatch.setattr(va, "prewarm_imports_bg", lambda provider: None)
+    monkeypatch.setattr(va, "GrammarMatcher", lambda voice: "MATCHER")
+    monkeypatch.setattr(va, "TvDucker", FakeDucker)
+    monkeypatch.setattr(events, "start_heartbeat", lambda lane, **kw: None)
+    monkeypatch.setattr(logbook, "rotate", lambda: None)
+    monkeypatch.setattr(config, "secrets", lambda: dict(SECRETS))
+    monkeypatch.setattr(sentry, "setup", lambda cfg, log: False)
+    monkeypatch.setattr(announce, "Announcer", FakeAnnouncer)
+    monkeypatch.setattr(operations, "OperationStore", FakeOperationStore)
+    monkeypatch.setattr(operations_monitors, "SteamMonitor", FakeSteamMonitor)
+    monkeypatch.setattr(operations_monitors, "MediaMonitor", FakeMediaMonitor)
+    monkeypatch.setattr(
+        media,
+        "from_config",
+        lambda cfg, secrets, log: (
+            "MEDIA" if cfg.get("media", {}).get("enabled") else None
+        ),
+    )
+    monkeypatch.setattr(
+        media,
+        "proton_port_monitor_from_config",
+        lambda cfg, secrets, log: (
+            FakeProtonPortMonitor(cfg["media"].get("pollS", 30))
+            if cfg.get("media", {}).get("enabled")
+            and cfg.get("media", {}).get("protonPortSync")
+            else None
+        ),
+    )
+    monkeypatch.setattr(steam_session, "SteamSession", FakeSteam)
+
+
+@pytest.fixture
+def run(monkeypatch, stubbed):
+    """main() with the given argv over the stubs; returns (exit code or
+    "ended", log, run_session calls). `wakes` scripts the listener and
+    `session` runs inside the faked run_session. config.use() is
+    process-wide, so the suite's config goes back afterwards."""
+    suite_cfg = config.current()
+
+    def run(argv, cfg, wakes=(), session=None):
+        FakeListener.wakes.extend(wakes)
+        config.use(cfg)
+        log = CtxLog("voice")
+        monkeypatch.setattr(va, "log", log)
+        calls = []
+
+        async def fake_session(
+            cfg,
+            secrets,
+            matcher,
+            dry_run,
+            input_idx,
+            output_idx,
+            capture=None,
+            operations=None,
+            ack=None,
+            steam=None,
+            media=None,
+            on_end_session=None,
+        ):
+            calls.append(
+                dict(
+                    dry_run=dry_run,
+                    operations=operations,
+                    steam=steam,
+                    media=media,
+                    capture=capture,
+                    matcher=matcher,
+                    on_end_session=on_end_session,
+                )
             )
-        )
-        if session is not None:
-            session()
+            if session is not None:
+                session()
 
-    va.run_session = fake_session
-    sys.argv = ["voice_agent.py"] + argv
-    try:
-        rc = va.main()
-    except EndOfTest:
-        rc = "ended"
-    return rc, log, calls
+        monkeypatch.setattr(va, "run_session", fake_session)
+        monkeypatch.setattr(sys, "argv", ["voice_agent.py"] + argv)
+        try:
+            rc = va.main()
+        except EndOfTest:
+            rc = "ended"
+        return rc, log, calls
+
+    yield run
+    config.use(suite_cfg)
 
 
-def test_agent():
-    # --- config invalid --------------------------------------------------------
+def test_a_missing_voice_key_fails_startup(run):
     cfg = make_config()
     del cfg["voice"]["wakeThreshold"]
     rc, log, _ = run(["--once"], cfg)
     assert rc == 1 and log.find("config_invalid")[0]["missing"] == ["wakeThreshold"]
 
-    # --- bench mode: --earcons ---------------------------------------------------
+
+def test_earcons_bench_plays_the_vocabulary_and_exits(run):
     rc, log, calls = run(["--earcons"], make_config())
     assert rc == 0 and "earcon_audition" in log.events()
     assert len(log.find("earcon_play")) == 6 and not calls
 
-    # --- full lanes, one dry-run session -----------------------------------------
-    fresh_state()
+
+def test_full_lanes_run_one_dry_session(run):
     cfg = make_config(tvIp="10.0.0.9")
     cfg["voice"]["duckSteps"] = 4
-    rc, log, calls = run(
-        ["--once", "--dry-run"],
-        cfg,
-        setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())),
-    )
+    rc, log, calls = run(["--once", "--dry-run"], cfg, wakes=one_wake())
     assert rc == 0, rc
     ev = log.events()
     ups = {r["what"] for r in log.find("lane_up")}
@@ -309,41 +345,34 @@ def test_agent():
     # end_session restores the room while the TV is still on (dispatch calls it)
     assert callable(calls[0]["on_end_session"])
 
-    # --- no Deepgram key: no session, fail earcon, capture released ----------------
+
+def test_no_deepgram_key_opens_no_session_and_releases_the_capture(monkeypatch, run):
     cap = FakeCapture()
-
-    def no_keys():
-        FakeListener.wakes.append((0.7, cap))
-        config.secrets = lambda: {}
-
-    rc, log, calls = run(["--once"], make_config(), setup=no_keys)
+    monkeypatch.setattr(config, "secrets", lambda: {})
+    rc, log, calls = run(["--once"], make_config(), wakes=[(0.7, cap)])
     assert rc == "ended" and not calls
     assert any(r["what"] == "stt" for r in log.find("lane_disabled"))
     assert "session_open" not in log.events() and cap.stopped == 1
 
-    # --- Steam online: monitor starts and reaches the session -----------------
-    def steam_online():
-        FakeSteam.available_answer = True
-        FakeListener.wakes.append((0.7, FakeCapture()))
 
-    rc, log, calls = run(["--once"], make_config(), setup=steam_online)
+def test_steam_online_starts_the_monitor_and_reaches_the_session(monkeypatch, run):
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
+    rc, log, calls = run(["--once"], make_config(), wakes=one_wake())
     assert FakeSteamMonitor.made and FakeSteamMonitor.made[0].started
     assert any(r["what"] == "operation_monitor" for r in log.find("lane_up"))
     assert calls[0]["steam"] is FakeSteamMonitor.made[0].steam
 
-    rc, log, calls = run(["--once", "--dry-run"], make_config(), setup=steam_online)
+
+def test_a_dry_run_keeps_live_steam_out_of_the_operation_lanes(monkeypatch, run):
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
+    rc, log, calls = run(["--once", "--dry-run"], make_config(), wakes=one_wake())
     assert not FakeSteamMonitor.made, "dry run must not observe live Steam operations"
     assert not FakeAnnouncer.made, "dry run must not deliver operation events"
     assert isinstance(calls[0]["steam"], FakeSteam)
 
-    # --- media configured: independent monitor + tools reach the session -----
-    cfg = make_config()
-    cfg["media"]["enabled"] = True
-    cfg["media"]["pollS"] = 17
-    cfg["media"]["protonPortSync"] = True
-    rc, log, calls = run(
-        ["--once"], cfg, setup=lambda: FakeListener.wakes.append((0.7, FakeCapture()))
-    )
+
+def test_media_configured_starts_its_monitors_and_reaches_the_session(run):
+    rc, log, calls = run(["--once"], media_config(), wakes=one_wake())
     assert FakeMediaMonitor.made and FakeMediaMonitor.made[0].started
     assert FakeMediaMonitor.made[0].poll_s == 17
     assert calls[0]["media"] == "MEDIA"
@@ -351,61 +380,48 @@ def test_agent():
     assert FakeProtonPortMonitor.made and FakeProtonPortMonitor.made[0].started
     assert FakeProtonPortMonitor.made[0].poll_s == 17
     assert any(r["what"] == "proton_port_sync" for r in log.find("lane_up"))
-    FakeProtonPortMonitor.made.clear()
-    FakeMediaMonitor.made.clear()
-    run(
-        ["--once", "--dry-run"],
-        cfg,
-        setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())),
-    )
+
+
+def test_a_dry_run_starts_no_media_monitor(run):
+    run(["--once", "--dry-run"], media_config(), wakes=one_wake())
     assert not any(m.started for m in FakeProtonPortMonitor.made), "vpn port"
     assert not any(m.started for m in FakeMediaMonitor.made), "authority search"
 
-    # --- ducking without tvIp -----------------------------------------------------
+
+def test_ducking_without_a_tv_ip_stays_off(run):
     cfg = make_config()
     cfg["voice"]["duckSteps"] = 6
-    rc, log, calls = run(
-        ["--once"], cfg, setup=lambda: FakeListener.wakes.append((0.7, FakeCapture()))
-    )
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
     assert any(r["setting"] == "duckSteps" for r in log.find("config_suspect"))
     assert not FakeDucker.made
 
-    # --- audio opens LAST -----------------------------------------------------
+
+def test_audio_opens_last(monkeypatch, run):
     # open_audio blocks until the configured device answers - forever on a
     # dead mic - so the monitors must already exist when it is called, or a
     # microphone failure takes the whole control plane down with it.
     at_audio = {}
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
 
-    def audio_last():
-        FakeSteam.available_answer = True
-        FakeListener.wakes.append((0.7, FakeCapture()))
+    def counting_open(voice):
+        at_audio["monitors"] = len(FakeSteamMonitor.made) + len(FakeMediaMonitor.made)
+        return ("PA", 0, 1)
 
-        def counting_open(voice):
-            at_audio["monitors"] = len(FakeSteamMonitor.made) + len(
-                FakeMediaMonitor.made
-            )
-            return ("PA", 0, 1)
-
-        va.open_audio = counting_open
-
+    monkeypatch.setattr(va, "open_audio", counting_open)
     cfg = make_config()
     cfg["media"] = {"enabled": True}
-    rc, log, calls = run(["--once"], cfg, setup=audio_last)
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
     assert at_audio["monitors"] == 2, (
         f"open_audio ran with {at_audio['monitors']} monitor(s) built - "
         "the control plane must be up before the mic wait"
     )
 
-    # --- a crashing session -------------------------------------------------------
+
+def test_a_crashing_session_closes_with_fail(run):
     def boom():
         raise RuntimeError("pipeline died")
 
-    rc, log, calls = run(
-        ["--once"],
-        make_config(),
-        session=boom,
-        setup=lambda: FakeListener.wakes.append((0.7, FakeCapture())),
-    )
+    rc, log, calls = run(["--once"], make_config(), wakes=one_wake(), session=boom)
     assert rc == 0
     assert "session_crashed" in log.events()
     assert log.find("session_close")[0]["ending"] == "fail"

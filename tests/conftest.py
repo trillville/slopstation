@@ -12,15 +12,10 @@ move with it, so no test writes beside a live lane or sees another's files.
 
 import json
 import os
-import subprocess
-import sys
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
-
-_MISSING = object()
 
 
 def pytest_configure(config):
@@ -53,29 +48,3 @@ def _fresh_home(tmp_path):
         yield
     finally:
         events._ctx.reset(token)
-
-
-# Files that still rebind module attributes directly, rather than through
-# monkeypatch, lean on this snapshot to put them back. It is being retired file
-# by file: SLOPSTATION_TEST_STRICT=1 turns it off, which is how a migrated file
-# proves it no longer needs it.
-@pytest.fixture(autouse=True)
-def _restore():
-    if os.environ.get("SLOPSTATION_TEST_STRICT"):
-        yield
-        return
-    mods = [
-        m
-        for name, m in list(sys.modules.items())
-        if name == "slopstation" or name.startswith("slopstation.")
-    ]
-    mods += [time, subprocess]
-    saved = [(m, dict(vars(m))) for m in mods]
-    try:
-        yield
-    finally:
-        for mod, snapshot in saved:
-            live = vars(mod)
-            for key, value in snapshot.items():
-                if live.get(key, _MISSING) is not value:
-                    live[key] = value

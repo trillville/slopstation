@@ -2,27 +2,16 @@
 Pins the list's shape; bench/probe_stt.py is the live counterpart.
 """
 
+import dataclasses
+
 import pytest
 
+from slopstation import logbook
 from slopstation.agent.speech import session_runtime
 from slopstation.agent.speech.grammar_gate import stt_confidence
 from slopstation.agent.tools import library, titles
 
 VOICE = {"keytermCount": 40}
-
-
-@pytest.fixture(autouse=True)
-def _fake_catalog():
-    """The catalog the vocabulary is built from, and the tag words as SteamSpy
-    writes them: title case, hyphens, generic head."""
-    real_load, real_terms = library.load, library.query_terms
-    library.load = lambda *a, **k: FAKE_INDEX
-    library.query_terms = lambda *a, **k: ["Action", "Rogue-like", "Mechs"]
-    try:
-        yield
-    finally:
-        library.load, library.query_terms = real_load, real_terms
-
 
 FAKE_INDEX = {
     "installed": [
@@ -43,9 +32,19 @@ FAKE_INDEX = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _fake_catalog(monkeypatch):
+    """The catalog the vocabulary is built from, and the tag words as SteamSpy
+    writes them: title case, hyphens, generic head."""
+    monkeypatch.setattr(library, "load", lambda *a, **k: FAKE_INDEX)
+    monkeypatch.setattr(
+        library, "query_terms", lambda *a, **k: ["Action", "Rogue-like", "Mechs"]
+    )
+
+
+@dataclasses.dataclass
 class Frame:
-    def __init__(self, result):
-        self.result = result
+    result: object
 
 
 def test_forms_teach_the_short_name_a_person_says():
@@ -90,20 +89,11 @@ def test_generic_english_does_not_take_a_slot():
     assert "mechs" in terms, "the mishear query_terms exists for was filtered out"
 
 
-def test_the_cap_is_announced_not_silent():
-    real = session_runtime.MAX_KEYTERMS
-    session_runtime.MAX_KEYTERMS = 3
-    try:
-        from slopstation import logbook
-
-        log = logbook.CapturingLog()
-        session_runtime.log, saved = log, session_runtime.log
-        try:
-            terms = session_runtime.stt_keyterms(VOICE, "hey jarvis")
-        finally:
-            session_runtime.log = saved
-    finally:
-        session_runtime.MAX_KEYTERMS = real
+def test_the_cap_is_announced_not_silent(monkeypatch):
+    log = logbook.CapturingLog()
+    monkeypatch.setattr(session_runtime, "MAX_KEYTERMS", 3)
+    monkeypatch.setattr(session_runtime, "log", log)
+    terms = session_runtime.stt_keyterms(VOICE, "hey jarvis")
     assert len(terms) == 3, terms
     capped = log.find("keyterms_capped")
     assert capped and capped[0]["dropped"] > 0, log.events()

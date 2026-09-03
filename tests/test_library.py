@@ -7,7 +7,6 @@ import subprocess
 from pathlib import Path
 
 import helpers
-from helpers import fresh_state
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.tools import library, titles
 
@@ -35,9 +34,10 @@ def ps_games():
 
 def test_library():
     helpers.wants("steam")
-    fresh_state()
+    # The index lands under this test's runtime home (conftest).
     assert library.refresh(local=True) == 0, (
-        "no local Steam - this test belongs to the gaming PC (run.py skips it elsewhere; --all forces it)"
+        "no local Steam - this test belongs to the gaming PC (helpers.wants skips it "
+        "elsewhere; SLOPSTATION_TEST_HAS=steam forces it)"
     )
     rows = library.load()["installed"]
     assert rows, "no installed games found"
