@@ -32,7 +32,7 @@ receivers:
       #   python -c "import events; print(events.LOG_DIR)"
       # k15-*.jsonl, so blind-suite runs writing test-*.jsonl never leave the
       # machine, and events.py's archive\ is out of the glob.
-      - C:/Users/minipc/Desktop/slopstation/k15/logs/k15-*.jsonl
+      - C:/Users/minipc/Desktop/slopstation/logs/k15-*.jsonl
     start_at: beginning
     storage: file_storage
     poll_interval: 10s
