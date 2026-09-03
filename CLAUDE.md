@@ -3,27 +3,6 @@
 Read `README.md` first — it describes the machines, the components, and how to
 run and deploy them. This file holds the process rules an agent session needs.
 
-## Non-negotiables
-
-- **Comments state constraints, not narration.** Keep them terse: the measured
-  number, the hardware quirk, the ordering that must hold. No rationale essays,
-  no debugging stories, no restating the code. A comment that would cause a bug
-  if deleted stays; one that only explains a past decision does not. A moved
-  function's comments move with it.
-- **Tests assert on events, never prose.** Event names are the interface —
-  dashboards group by them and alerts fire on them — so rewording a message
-  is free and renaming an event must break a test. `cglib.CapturingLog` is
-  the double; don't hand-roll one.
-- **Two lanes, one direction of dependency.** The chord lane is EVERY module
-  directly in `k15/`: load-bearing, runs on system python, and must stay
-  stdlib-only at import (`events.py` documents why; `test_lint` globs the
-  directory rather than keeping a list, so a new module is in the lane the
-  moment it lands). The agent lane in `k15/agent/` has its own venv and may
-  depend on chord-lane modules, never the reverse.
-- **Telemetry never costs a session.** Anything on an emit path is fail-soft
-  by construction — see `events.emit`'s positional-only signature for the
-  standard this has to meet.
-
 ## Working on the live system
 
 Don't assume which machine you are on — a session runs on the K15, on the
