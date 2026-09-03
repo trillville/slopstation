@@ -1,5 +1,5 @@
 # OpenTelemetry Collector - gaming PC log shipper. Same MSI and the same two
-# EDIT ME values as k15\otelcol\config.yaml.example, which carries the install
+# EDIT ME values as otelcol\config.yaml.example, which carries the install
 # notes; only the paths and the second source differ.
 #
 # Two streams: pc-*.jsonl is the milestones (structured, carries the turn id -

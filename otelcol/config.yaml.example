@@ -1,0 +1,104 @@
+# OpenTelemetry Collector - K15 log shipper: the daily JSONL events.py writes,
+# into Sentry Logs over OTLP.
+#
+# CONTRIB, not core: core has no filelog receiver.
+#
+#   INSTALL FIRST - the MSI owns the config path and the service does not
+#   exist until it has run. Then read the path back off the service; do not
+#   guess it, and it is NOT under ProgramData:
+#      Get-CimInstance Win32_Service -Filter "Name='otelcol-contrib'" | % PathName
+#   Measured 2026-09-03: "C:\Program Files\OpenTelemetry Collector\config.yaml".
+#   Copy this file over that one, from an ELEVATED shell, and write it as UTF-8
+#   with NO BOM - PowerShell 5.1's Set-Content -Encoding utf8 adds one, and the
+#   collector will not parse it.
+#   Restart-Service otelcol-contrib          (validates on load, so a bad edit
+#                                             fails here; why is in the Windows
+#                                             Application event log, and so is
+#                                             a rejected push)
+
+extensions:
+  # Read offsets on disk: a collector that was down backfills rather than
+  # skipping to the end.
+  file_storage:
+    # create_directory defaults to FALSE: without it the collector refuses to
+    # start when the directory is not already there.
+    create_directory: true
+    directory: C:\ProgramData\otelcol-contrib\storage
+
+receivers:
+  filelog/events:
+    include:
+      # EDIT ME. Print it, do not guess it, and use FORWARD slashes:
+      #   .venv\Scripts\python -c "from slopstation import events; print(events.LOG_DIR)"
+      # k15-*.jsonl, so test runs writing test-*.jsonl never leave the
+      # machine, and events.py's archive\ is out of the glob.
+      - C:/Users/minipc/Desktop/slopstation/logs/k15-*.jsonl
+    start_at: beginning
+    storage: file_storage
+    poll_interval: 10s
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.ts
+          layout_type: gotime
+          # The record's own UTC time, never the moment the file was read: a
+          # shipper that was down must not stamp its backlog "now".
+          layout: '2006-01-02T15:04:05.000Z07:00'
+        severity:
+          # info/warn/error are already stanza's own names (events.py owns that
+          # vocabulary, and there is no debug), so the default mapping is exact.
+          parse_from: attributes.level
+
+      # The message Sentry lists is the event NAME - what dashboards group by.
+      # copy, not move: `event` has to stay queryable as an attribute.
+      - type: copy
+        from: attributes.event
+        to: body
+
+      # Joins a line to the span it happened inside. Only the voice lane sets
+      # `trace` (telemetry/sentry.py); the guard keeps every other line from
+      # erroring.
+      - type: trace_parser
+        if: 'attributes["trace"] != nil'
+        trace_id:
+          parse_from: attributes.trace
+
+processors:
+  resource/k15:
+    attributes:
+      # What separates the two machines inside one Sentry project.
+      - key: service.name
+        value: k15
+        action: upsert
+  batch:
+    timeout: 10s
+
+exporters:
+  otlphttp/sentry:
+    # EDIT ME, both lines: Sentry project settings > Client Keys (DSN) >
+    # OpenTelemetry (OTLP) prints them ready to paste. logs_endpoint and not
+    # endpoint - traces come from the voice lane's own SDK, and the combined
+    # form would advertise a traces pipeline this collector does not have.
+    logs_endpoint: https://oORGID.ingest.us.sentry.io/api/PROJECTID/integration/otlp/v1/logs
+    headers:
+      x-sentry-auth: "sentry sentry_key=PUBLICKEY"
+    compression: gzip
+    encoding: proto
+    # A dead uplink costs telemetry and nothing else: nothing in either lane
+    # waits on this.
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs:
+      receivers: [filelog/events]
+      processors: [resource/k15, batch]
+      exporters: [otlphttp/sentry]
+  telemetry:
+    logs:
+      level: warn

@@ -2,7 +2,7 @@ name: cd
 
 # Pull-based by necessity: neither machine accepts inbound connections, so each
 # runs a self-hosted runner that polls GitHub outbound. Triggered by ci rather
-# than by push, so only a commit whose blind suite and mypy went green can
+# than by push, so only a commit whose test suite and mypy went green can
 # reach the machines. workflow_run runs are listed under the default branch and
 # do not appear in the commit's own check list - look for them under Actions.
 #
@@ -81,6 +81,7 @@ jobs:
       # so the copy that runs is the previous commit's - a broken deploy.py is
       # fixed by hand on the K15, like any deployer.
       - name: deploy and doctor
-        run: python "$env:SLOP_HOME\k15\deploy.py" --sha $env:SHA --wait-minutes $env:WAIT_MINUTES
+        run: |
+          & "$env:SLOP_HOME\.venv\Scripts\python.exe" -m slopstation.deploy --sha $env:SHA --wait-minutes $env:WAIT_MINUTES
         env:
           SLOP_HOME: ${{ vars.K15_CHECKOUT || 'C:\Users\minipc\Desktop\slopstation' }}

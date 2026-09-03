@@ -6,13 +6,10 @@ on:
   pull_request:
 
 jobs:
-  # The blind suite, exactly as the README documents it. windows-latest is
-  # required: the tests assume Windows paths and test_ps_parse shells to the
-  # real PowerShell parser. test_library and test_session_pipeline self-skip
-  # (no Steam, no audio devices on a runner).
-  # 3.13 because that is what the K15 runs. constraints.txt is frozen from
-  # that venv, so an older CI cannot resolve it - scipy 1.18.0 ships no
-  # cp311 wheel, which is how the mismatch surfaced.
+  # windows-latest is required: the tests assume Windows paths and
+  # test_ps_parse shells to the real PowerShell parser. The Steam and audio
+  # tests self-skip. 3.13 because that is what the K15 runs: constraints.txt
+  # is frozen from that venv, so an older interpreter cannot resolve it.
   tests:
     runs-on: windows-latest
     steps:
@@ -22,11 +19,21 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: |
-            k15/agent/requirements.txt
-            k15/agent/constraints.txt
-      - run: pip install -r k15/agent/requirements.txt -c k15/agent/constraints.txt
-      - run: python tests/run.py
-        working-directory: k15/agent
+            pyproject.toml
+            constraints.txt
+      - run: pip install -e ".[dev]" -c constraints.txt
+      - run: pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install "ruff>=0.16"
+      - run: ruff check .
+      - run: ruff format --check .
 
   types:
     runs-on: windows-latest
@@ -35,13 +42,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - run: pip install mypy==2.3.1
-      - name: chord lane
-        shell: bash
-        run: mypy k15/*.py
-      # A DIRECTORY, not a file list: mypy walks up past agent/__init__.py,
-      # adopts k15/ as the search root, and resolves the lane's sibling imports
-      # (cglib, events, gamepc) the way the runtime sys.path does. That is what
-      # MYPYPATH=.. bought before the package existed.
-      - name: agent lane
-        run: mypy k15/agent
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            constraints.txt
+      # The whole dependency set, not mypy alone: without the real third-party
+      # stubs every external call is Any and the check passes vacuously.
+      - run: pip install -e ".[dev]" -c constraints.txt
+      - run: mypy

@@ -1,0 +1,34 @@
+# smartd on the K15 - SMART for the USB-attached media drive.
+#
+# Copy to the install dir and register the service (both need Administrator):
+#   copy smartd.conf.example "%PROGRAMFILES%\smartmontools\bin\smartd.conf"
+#   "%PROGRAMFILES%\smartmontools\bin\smartd.exe" install
+#   Start-Service smartd
+#
+# The device number is Windows' physical disk number, NOT a stable id. Confirm
+# it before trusting this file, and again after any enclosure change:
+#   smartctl --scan
+#
+# -d sat   the ASMedia 174c:55aa bridge needs SCSI/ATA translation. Auto-detect
+#          finds it today; naming it means a firmware change fails loudly
+#          rather than silently monitoring nothing.
+# -a       all attributes, health, and the error log.
+# -o on    offline data collection; -S on attribute autosave.
+# -s       short test daily 02:00, long test the 1st of the month at 03:00. The
+#          long test reads all 14 TB and takes ~23 h at low priority, so it is
+#          monthly, not weekly.
+# -W       temperature: log a 2 degree move, warn at 50, critical at 55. The
+#          MG07's operating ceiling is 55.
+# -m <nomailer> -M exec   no SMTP anywhere; every warning runs the script,
+#          which emits one event that Alloy already ships.
+#
+# Append -M test for ONE restart to prove the alert chain end to end; a
+# service that is merely running proves nothing. Remove it afterwards.
+#
+# Quote the path ONLY if it contains a space. smartd splits the line on
+# whitespace before parsing -M, so a quoted path with no space in it never
+# reaches a second token and dies on 'missing closing quote'.
+#
+# EDIT THIS PATH. It must be the live checkout on the K15 - smartd runs with
+# system32 as its working directory, so a relative path silently never fires.
+/dev/pd1 -d sat -a -o on -S on -s (S/../.././02|L/../01/./03) -W 2,50,55 -m <nomailer> -M exec C:\Users\minipc\Desktop\slopstation\smart-alert.bat
