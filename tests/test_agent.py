@@ -11,6 +11,7 @@ nothing scripted.
 import json
 import sys
 import threading
+import time
 
 import pytest
 
@@ -311,7 +312,10 @@ def test_a_missing_voice_key_fails_startup(run):
     assert rc == 1 and log.find("config_invalid")[0]["missing"] == ["wakeThreshold"]
 
 
-def test_earcons_bench_plays_the_vocabulary_and_exits(run):
+def test_earcons_bench_plays_the_vocabulary_and_exits(run, monkeypatch):
+    monkeypatch.setattr(
+        time, "sleep", lambda s: None
+    )  # the bench paces each earcon by 0.7 s
     rc, log, calls = run(["--earcons"], make_config())
     assert rc == 0 and "earcon_audition" in log.events()
     assert len(log.find("earcon_play")) == 6 and not calls

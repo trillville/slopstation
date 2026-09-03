@@ -109,7 +109,7 @@ class TvDucker:
         probe=None,
         read=None,
         press=None,
-        pause=time.sleep,
+        pause=None,
     ):
         # to_pct (1-99) wins over steps: duck TO that percent of the pre-duck
         # level, so the drop scales with how loud the room is.
@@ -120,7 +120,7 @@ class TvDucker:
         self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
         self.read = read or (lambda: tv.tv_volume(tv_ip))
         self.press = press or self._ws_press(tv_ip)
-        self.pause = pause
+        self.pause = pause  # None: time.sleep, looked up at call time
         self.out = 0  # verified steps down, not yet restored
         self.expect = None  # the readback our last op left behind
 
@@ -137,7 +137,7 @@ class TvDucker:
             v = self.read()
             if v == target:
                 return v
-            self.pause(self.POLL_GAP_S)
+            (self.pause or time.sleep)(self.POLL_GAP_S)
         return self.read()
 
     def _drive(self, direction, now, target):

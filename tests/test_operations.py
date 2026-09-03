@@ -628,3 +628,4 @@ def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
             )
         )
     )
+    ann.stop()

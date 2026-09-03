@@ -238,5 +238,11 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=Fa
     threading.Thread(
         target=server.serve_forever, daemon=True, name="text-interface"
     ).start()
-    log("lane_up", what="text_interface", host=host, port=port, dry_run=dry_run or None)
+    log(
+        "lane_up",
+        what="text_interface",
+        host=host,
+        port=server.server_address[1],
+        dry_run=dry_run or None,
+    )
     return server

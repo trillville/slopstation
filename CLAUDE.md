@@ -74,6 +74,11 @@ older CI and the install fails.
 - PRs are SQUASH-merged. A push that races the user's merge loses - what
   lands is the head GitHub had cached, not the branch tip. Push, then let
   them merge; never force-push a PR that is theirs to land.
+- The live checkout never receives a commit. To ship something produced on
+  the K15 (a refreeze): `git switch -c <branch>` FIRST, commit, push,
+  `git switch main`, and `git status` must read "up to date with
+  origin/main". "Ahead by 1" means a commit landed on main, and the
+  fast-forward deployer refuses every merge until it is gone.
 
 Two properties of the K15 leg that change what a session may leave behind:
 

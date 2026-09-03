@@ -277,7 +277,8 @@ def refresh_meta(appids: list[int], limit: int = 200) -> dict:
             log("meta_fetched", appid=appid, n=i + 1, of=len(todo))
         except Exception as e:
             log.warn("meta_failed", appid=appid, err=str(e))
-        time.sleep(2.1)
+        if i < len(todo) - 1:
+            time.sleep(2.1)  # the rate limit is between items, not after the last
     return cache
 
 

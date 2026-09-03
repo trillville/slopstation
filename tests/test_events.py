@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 
 from slopstation import events, logbook, paths
@@ -180,38 +179,14 @@ def test_rollover_prunes_expired_daily_files(monkeypatch):
 # -- heartbeat: the signal absence is measured against ---------------------
 
 
-def _clock(stop, parked):
-    """events' `time`, with a sleep that parks the heartbeat thread for good
-    once `stop` is set (and says so on `parked`). start_heartbeat has no stop
-    of its own - its loop swallows everything but the sleep, and an exception
-    out of the sleep is pytest's unhandled-thread warning - so a thread left
-    ticking would keep writing into every later test's log directory."""
-
-    class Clock:
-        def __getattr__(self, name):
-            return getattr(time, name)
-
-        def sleep(self, seconds):
-            if stop.is_set():
-                parked.set()
-                threading.Event().wait()  # never returns; daemon, dies with us
-            time.sleep(seconds)
-
-    return Clock()
-
-
-def test_heartbeat(monkeypatch):
-    stop, parked = threading.Event(), threading.Event()
-    monkeypatch.setattr(events, "time", _clock(stop, parked))
+def test_heartbeat():
     beater = events.start_heartbeat("listener", interval_s=0.05)
     time.sleep(0.3)
     # Daemon, or a dead agent hangs on exit instead of dying cleanly.
-    assert beater.is_alive()
-    assert all(
-        t.daemon for t in threading.enumerate() if t.name.startswith("heartbeat-")
-    )
-    stop.set()
-    assert parked.wait(timeout=2), "the heartbeat thread did not stop"
+    assert beater.is_alive() and beater.daemon
+    beater.stop.set()
+    beater.join(timeout=2)
+    assert not beater.is_alive(), "the heartbeat thread did not stop"
     beats = [r for r in read(daily_files()[-1]) if r["event"] == "heartbeat"]
     assert len(beats) >= 3, f"only {len(beats)} beats in 0.3s at 50ms"
     assert beats[0]["lane"] == "listener"
