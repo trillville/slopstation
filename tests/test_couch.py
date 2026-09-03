@@ -6,6 +6,8 @@ import os
 import threading
 import time
 
+import pytest
+
 from helpers import fresh_state
 from slopstation import config, couch, gamepc, logbook, sessionlock, tv
 
@@ -22,67 +24,98 @@ CFG = {
 READY_TS = "2026-08-12T20:00:00"  # what a legacy marker answers
 
 
-def wire(script, default=None):
-    """Replace couch's seams. script = [(verb_prefix, reply-or-exception)],
-    consumed in order and verb-checked. default handles unbounded polls (the
-    READY wait is time-bound, not count-bound). Returns (log, exlink_calls)."""
-    log = logbook.CapturingLog("launch")
-    couch.log = log
-    sent = []
-
-    def fake_exlink(name, **kw):
-        sent.append(name)
-        log("exlink_send", cmd=name, **kw)  # event ORDER proves the one rule
-
-    def fake_ssh(cmd, timeout=15):
-        if script:
-            verb, reply = script.pop(0)
-            assert cmd.startswith(verb), f"expected {verb!r}, couch sent {cmd!r}"
-        elif default is not None:
-            reply = default(cmd)
-        else:
-            raise AssertionError(f"unscripted ssh call: {cmd!r}")
-        # BaseException, not Exception: KeyboardInterrupt is not an Exception,
-        # and the narrower check returned it as a status string.
-        if isinstance(reply, BaseException):
-            raise reply
-        return reply
-
-    couch.exlink = fake_exlink
-    gamepc.ssh = fake_ssh
-    couch.wol = lambda: log("wol_sent")
-    couch.wait_port = lambda *a, **kw: True
-    return log, sent
-
-
-def test_couch():
-    real_sleep = time.sleep
-    time.sleep = lambda s: None  # fast tests
+@pytest.fixture
+def rig(monkeypatch):
+    """The bench every launch runs on: CFG in place of config.json, no real
+    sleeping, and the windows shrunk so a timed-out wait ends in well under a
+    second. A case that needs a longer window sets it over this one."""
+    was = config.current()
     config.use(CFG)
-    couch.ENTER_ATTEMPTS = 2
-    couch.READY_WAIT_S = 0.3
-    couch.WATCH_POLL_S = 0
+    monkeypatch.setattr(time, "sleep", lambda s: None)  # fast tests
+    monkeypatch.setattr(couch, "ENTER_ATTEMPTS", 2)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 0.3)
+    monkeypatch.setattr(couch, "WATCH_POLL_S", 0)
+    yield
+    config.use(was)
 
-    # --- atomic acquire: two racers, one winner, both paths -------------------
-    for seed_age in (None, sessionlock.LOCK_STALE_S + 60):  # empty, then stale
-        for _ in range(25):
-            fresh_state(seed_age)
-            barrier, results = threading.Barrier(2), [None, None]
 
-            def racer(i, barrier=barrier, results=results):
-                barrier.wait()
-                results[i] = sessionlock.acquire(f"t{i} {i}")
+@pytest.fixture
+def wire(rig, monkeypatch):
+    """wire(script, default=None) replaces couch's seams. script =
+    [(verb_prefix, reply-or-exception)], consumed in order and verb-checked.
+    default handles unbounded polls (the READY wait is time-bound, not
+    count-bound). Returns (log, exlink_calls)."""
 
-            threads = [threading.Thread(target=racer, args=(i,)) for i in (0, 1)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-            # The loser must ANSWER busy, not crash: Windows raises a sharing
-            # violation, not FileExistsError. A crashed racer leaves None.
-            assert sorted(results) == [False, True], (seed_age, results)
+    def _wire(script, default=None):
+        log = logbook.CapturingLog("launch")
+        sent = []
 
-    # --- ownership: release refuses a successor's lock ------------------------
+        def fake_exlink(name, **kw):
+            sent.append(name)
+            log("exlink_send", cmd=name, **kw)  # event ORDER proves the one rule
+
+        def fake_ssh(cmd, timeout=15):
+            if script:
+                verb, reply = script.pop(0)
+                assert cmd.startswith(verb), f"expected {verb!r}, couch sent {cmd!r}"
+            elif default is not None:
+                reply = default(cmd)
+            else:
+                raise AssertionError(f"unscripted ssh call: {cmd!r}")
+            # BaseException, not Exception: KeyboardInterrupt is not an Exception,
+            # and the narrower check returned it as a status string.
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+
+        monkeypatch.setattr(couch, "log", log)
+        monkeypatch.setattr(couch, "exlink", fake_exlink)
+        monkeypatch.setattr(gamepc, "ssh", fake_ssh)
+        monkeypatch.setattr(couch, "wol", lambda: log("wol_sent"))
+        monkeypatch.setattr(couch, "wait_port", lambda *a, **kw: True)
+        return log, sent
+
+    return _wire
+
+
+@pytest.fixture
+def tv_rig(rig, monkeypatch):
+    """A rig with a tvIp: the set's own word is read, and the rescue's wait
+    for it is shrunk to drill size."""
+    config.use(dict(CFG, tvIp="tv"))
+    monkeypatch.setattr(couch, "TV_WAIT_S", 0.2)
+    monkeypatch.setattr(couch, "TV_POKE_S", 0.05)
+
+
+# --- atomic acquire: two racers, one winner, both paths -----------------------
+
+
+@pytest.mark.parametrize(
+    "seed_age", [None, sessionlock.LOCK_STALE_S + 60], ids=["empty", "stale"]
+)
+def test_acquire_has_exactly_one_winner(seed_age):
+    for _ in range(25):
+        fresh_state(seed_age)
+        barrier, results = threading.Barrier(2), [None, None]
+
+        def racer(i, barrier=barrier, results=results):
+            barrier.wait()
+            results[i] = sessionlock.acquire(f"t{i} {i}")
+
+        threads = [threading.Thread(target=racer, args=(i,)) for i in (0, 1)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        # The loser must ANSWER busy, not crash: Windows raises a sharing
+        # violation, not FileExistsError. A crashed racer leaves None.
+        assert sorted(results) == [False, True], (seed_age, results)
+
+
+# --- ownership: release refuses a successor's lock ----------------------------
+
+
+def test_release_refuses_a_successors_lock():
     fresh_state()
     assert sessionlock.acquire(f"ab12cd {os.getpid()}")
     assert sessionlock.release() and not sessionlock.lock_file().exists()
@@ -91,7 +124,11 @@ def test_couch():
     fresh_state(10, lock_content="1723500000.0")  # pre-note legacy
     assert sessionlock.release() and not sessionlock.lock_file().exists()
 
-    # --- happy path: ordering, the one rule, appid queue, lock lifecycle ------
+
+# --- happy path: ordering, the one rule, appid queue, lock lifecycle ----------
+
+
+def test_happy_path_switches_the_input_only_after_ready(wire):
     fresh_state()
     sessionlock.last_error_file().write_text("old failure")  # success must supersede it
     log, sent = wire(
@@ -126,7 +163,8 @@ def test_couch():
     assert not sessionlock.lock_file().exists(), "session end must release the lock"
     assert not sessionlock.last_error_file().exists(), "success must clear last_error"
 
-    # --- ALREADY is a degraded launch, not a clean one -----------------------
+
+def test_already_is_a_degraded_launch_not_a_clean_one(wire):
     # ALREADY = the appid was already up from an earlier session: Big Picture
     # on the TV, undrivable (2026-08-13, turn 14852d). Level, not event.
     fresh_state()
@@ -141,7 +179,11 @@ def test_couch():
     assert couch.start("777") == 0
     assert log.find("game_launch")[0]["level"] == "warn", log.records
 
-    # --- READY generation identity: verified / foreign / converge -------------
+
+# --- READY generation identity: verified / foreign / converge -----------------
+
+
+def test_a_marker_echoing_our_turn_is_verified_ready(wire):
     fresh_state()
     log, sent = wire(
         [
@@ -153,7 +195,8 @@ def test_couch():
     assert couch.start(turn="ab12cd") == 0
     assert log.find("host_ready")[0]["verified"] is True
 
-    # --- watch: a successor's turn in the marker means stand down -------------
+
+def test_a_foreign_marker_is_waited_out_and_warned_once(wire):
     fresh_state()
     log, sent = wire(
         [
@@ -171,6 +214,8 @@ def test_couch():
     switches = [r for r in log.find("exlink_send") if r["cmd"] == "hdmi4"]
     assert switches, "the launch must still complete once the marker is ours"
 
+
+def test_watch_stands_down_when_a_successors_turn_is_in_the_marker(wire):
     fresh_state()
     assert sessionlock.acquire(f"ab12cd {os.getpid()}")
     log, sent = wire([("status", "eeeeee")])  # marker changed identity
@@ -179,15 +224,19 @@ def test_couch():
     assert ended and ended[0]["reason"] == "superseded", ended
     assert not sent, "a superseded watcher must not drive the TV"
     assert sessionlock.lock_file().exists(), "the lock is the successor's to release"
-    sessionlock.lock_file().unlink()
 
-    # --- busy: fresh lock refuses before any side effect -----------------------
+
+# --- busy and stale locks -----------------------------------------------------
+
+
+def test_a_fresh_lock_refuses_before_any_side_effect(wire):
     fresh_state(10)
     log, sent = wire([])
     assert couch.start() == 1
     assert "launch_busy" in log.events() and not sent
 
-    # --- stale lock: recycled, then a failing Enter releases it ---------------
+
+def test_a_stale_lock_is_recycled_and_a_failing_enter_releases_it(wire):
     fresh_state(sessionlock.LOCK_STALE_S + 60)
     log, sent = wire([("enter", "FAILED:1"), ("enter", "FAILED:1")])
     assert couch.start() == 1
@@ -201,7 +250,8 @@ def test_couch():
     # the refusal is logged once per distinct answer, not per retry
     assert [r["answer"] for r in log.find("enter_refused")] == ["FAILED:1"], log.records
 
-    # --- READY never appears: same guarantees ---------------------------------
+
+def test_ready_never_appearing_gives_the_same_guarantees(wire):
     fresh_state()
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
@@ -212,23 +262,27 @@ def test_couch():
         and "READY" in sessionlock.last_error_file().read_text()
     )
 
-    # --- the TV-asleep rescue: a second power_on, and only ever one -----------
+
+# --- the TV-asleep rescue and the dead-Enter rescue ---------------------------
+
+
+def test_the_tv_asleep_rescue_resends_power_on_once(wire, monkeypatch):
     # Default retry threshold sits past the 0.3 s test READY wait; inside it
     # the re-send appears once, however many times the poll spins.
     fresh_state()
-    couch.WAKE_RETRY_S = 0.05
+    monkeypatch.setattr(couch, "WAKE_RETRY_S", 0.05)
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
     assert sent == ["power_on", "power_on", "power_off"], sent
     assert log.find("exlink_send")[1]["again"] is True, log.records
-    couch.WAKE_RETRY_S = 10  # leave no trap for the next case
 
-    # --- Enter dies mid-wait: detected, re-poked, re-dispatched ---------------
+
+def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypatch):
     # TV acks power_on, stays dark, Enter gives up, K15 polls a dead task for
     # 120 s (2026-08-13/16/19). Two (NOTREADY, IDLE) pairs prove death.
     fresh_state()
-    couch.ENTER_SETTLE_S = 0
-    couch.READY_WAIT_S = 5
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -251,9 +305,11 @@ def test_couch():
     assert log.find("exlink_send")[1]["again"] is True, log.records
     assert "hdmi4" in sent, "a rescued launch still switches the input"
 
-    # --- the retry dies too: fail NOW, do not sit out the window --------------
+
+def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
     fresh_state()
-    couch.READY_WAIT_S = 30  # long enough that only the raise ends it
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 30)  # only the raise may end it
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -281,10 +337,14 @@ def test_couch():
         and "READY" in sessionlock.last_error_file().read_text()
     )
 
-    # --- the write-then-exit race: one idle read is not death -----------------
-    # Enter writes the marker and THEN exits, so a lone (NOTREADY, IDLE) pair
-    # can be those two instants read in the wrong order.
+
+def test_one_idle_read_is_not_death(wire, monkeypatch):
+    # The write-then-exit race: Enter writes the marker and THEN exits, so a
+    # lone (NOTREADY, IDLE) pair can be those two instants read in the wrong
+    # order.
     fresh_state()
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -300,29 +360,32 @@ def test_couch():
     assert log.find("host_ready")[0]["verified"] is True
     assert sent.count("power_on") == 1, f"no rescue was needed: {sent}"
 
-    # --- a PC that predates the verb: no information is not death -------------
-    # enterstate answers DENIED on an un-deployed gaming PC; an ssh blip
-    # raises. Both must leave the old timeout behaviour unchanged.
-    # short window: must time out, not be rescued
-    couch.READY_WAIT_S = 0.3
-    for label, reply in (("DENIED", "DENIED"), ("blip", RuntimeError("blip"))):
-        fresh_state()
-        log, sent = wire(
-            [("enter", "OK")],
-            default=lambda cmd, r=reply: (
-                r if cmd.startswith("enterstate") else "NOTREADY"
-            ),
-        )
-        assert couch.start() == 1
-        ev = log.events()
-        assert "enter_died" not in ev and "enter_redispatched" not in ev, (label, ev)
-        assert "launch_failed" in ev, (label, ev)
-        assert sent == ["power_on", "power_off"], (label, sent)
-        assert not sessionlock.lock_file().exists(), label
-    couch.ENTER_SETTLE_S = 10  # leave no trap for the next case
-    couch.READY_WAIT_S = 0.3
 
-    # --- Ctrl-C in the launch console is not an Exception ----------------------
+@pytest.mark.parametrize(
+    "reply", ["DENIED", RuntimeError("blip")], ids=["denied", "blip"]
+)
+def test_no_enterstate_information_is_not_death(wire, monkeypatch, reply):
+    # A PC that predates the verb: enterstate answers DENIED on an un-deployed
+    # gaming PC; an ssh blip raises. Both must leave the old timeout behaviour
+    # unchanged - the short window must time out, not be rescued.
+    fresh_state()
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    log, sent = wire(
+        [("enter", "OK")],
+        default=lambda cmd: reply if cmd.startswith("enterstate") else "NOTREADY",
+    )
+    assert couch.start() == 1
+    ev = log.events()
+    assert "enter_died" not in ev and "enter_redispatched" not in ev, ev
+    assert "launch_failed" in ev, ev
+    assert sent == ["power_on", "power_off"], sent
+    assert not sessionlock.lock_file().exists()
+
+
+# --- aborts: Ctrl-C and the voice cancel --------------------------------------
+
+
+def test_ctrl_c_in_the_launch_console_is_an_abort(wire):
     # KeyboardInterrupt is a BaseException, so `except Exception` missed it: no
     # terminal event, no buzz, lock left to staleness (2026-08-16, turn b43b74).
     fresh_state()
@@ -338,11 +401,12 @@ def test_couch():
     )
     assert sent == ["power_on", "power_off"], f"abort restores power, not input: {sent}"
 
-    # --- voice cancel: end_session's marker aborts the launch ------------------
+
+def test_the_voice_cancel_marker_aborts_the_launch(wire, monkeypatch):
     # ssh `exit` only stops a RUNNING Enter, so it raced the redispatch rescue
     # (2026-08-21, turn 0b785e). The marker reaches THIS process.
     fresh_state()
-    couch.READY_WAIT_S = 5  # only the cancel may end this wait
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)  # only the cancel may end this wait
 
     def cancel_on_first_poll(cmd):
         if cmd.startswith("exit"):
@@ -377,11 +441,13 @@ def test_couch():
     # The voice teardown that left the TV lit for the night (2026-08-23 b540b9).
     assert sent == ["power_on", "power_off"], f"cancel restores power: {sent}"
 
-    # --- cancel beats the rescue: no redispatch over a teardown ----------------
+
+def test_a_cancel_beats_the_rescue(wire, monkeypatch):
     # Cancel lands as the death is proven, too late for the loop-top check; the
     # idle_seen branch must catch it before the re-poke and the second Enter.
     fresh_state()
-    couch.ENTER_SETTLE_S = 0
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
     reads = {"n": 0}
 
     def die_then_cancel(cmd):
@@ -404,12 +470,12 @@ def test_couch():
     assert (
         not sessionlock.lock_file().exists() and not sessionlock.cancel_file().exists()
     )
-    couch.ENTER_SETTLE_S = 10
 
-    # --- a stale cancel is void: it predates this launch -----------------------
+
+def test_a_stale_cancel_is_void(wire):
+    # It predates this launch: nobody consumed it, and it is not our intent.
     fresh_state()
-    couch.READY_WAIT_S = 0.3
-    sessionlock.cancel_file().write_text("ffffff")  # nobody consumed it; not our intent
+    sessionlock.cancel_file().write_text("ffffff")
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -421,18 +487,19 @@ def test_couch():
     assert "launch_aborted" not in log.events(), log.events()
     assert "host_ready" in log.events()
 
-    # --- TV evidence: rides the READY wait, gates only the rescue --------------
-    real_tv_state = tv.tv_power_state
-    config.use(dict(CFG, tvIp="tv"))
-    couch.TV_WAIT_S = 0.2
-    couch.TV_POKE_S = 0.05
 
-    # A set that keeps answering standby is refusing: Enter still goes out at
-    # once, but the rescue won't redispatch into the dark and the fail names it.
+# --- TV evidence: rides the READY wait, gates only the rescue -----------------
+
+
+def test_a_set_that_keeps_answering_standby_is_refusing(wire, tv_rig, monkeypatch):
+    # Enter still goes out at once, but the rescue won't redispatch into the
+    # dark and the fail names it.
     fresh_state()
-    couch.ENTER_SETTLE_S = 0
-    couch.READY_WAIT_S = 5
-    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: "standby"
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
+    monkeypatch.setattr(
+        tv, "tv_power_state", lambda ip, timeout=2.0, raw=False: "standby"
+    )
     log, sent = wire(
         [("enter", "OK")],
         default=lambda cmd: "IDLE" if cmd.startswith("enterstate") else "NOTREADY",
@@ -449,13 +516,18 @@ def test_couch():
     )
     assert not sessionlock.lock_file().exists()
 
+
+def test_the_evidence_rides_the_ready_wait(wire, tv_rig, monkeypatch):
     # The healthy shape: Enter first, the set flips on mid-wait, launch lands.
     fresh_state()
-    couch.ENTER_SETTLE_S = 10
-    couch.READY_WAIT_S = 5
-    couch.TV_POKE_S = 10  # real seconds - no poke inside a drill
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
+    monkeypatch.setattr(couch, "TV_POKE_S", 10)  # real seconds - no poke inside a drill
     seq = ["standby", "standby", "standby"]  # first pop = launch_start read
-    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: seq.pop(0) if seq else "on"
+    monkeypatch.setattr(
+        tv,
+        "tv_power_state",
+        lambda ip, timeout=2.0, raw=False: seq.pop(0) if seq else "on",
+    )
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -473,10 +545,15 @@ def test_couch():
     )
     assert "hdmi4" in sent and sent.count("power_on") == 1, sent
 
+
+def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
+    wire, tv_rig, monkeypatch
+):
     # Enter dies but the set HAD answered on: the rescue redispatches at once.
     fresh_state()
-    couch.ENTER_SETTLE_S = 0
-    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: "on"
+    monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
+    monkeypatch.setattr(tv, "tv_power_state", lambda ip, timeout=2.0, raw=False: "on")
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -494,23 +571,26 @@ def test_couch():
     assert "tv_on" in ev and "enter_died" in ev and "enter_redispatched" in ev, ev
     assert log.find("host_ready")[0]["verified"] is True
 
+
+def test_a_set_found_on_stays_on(wire, tv_rig, monkeypatch):
     # A set the viewer already had on is not the launch's to switch off: its
     # power_on was a no-op there, and the restore would end someone's show.
     fresh_state()
-    couch.ENTER_SETTLE_S = 10
-    couch.READY_WAIT_S = 0.3
+    monkeypatch.setattr(tv, "tv_power_state", lambda ip, timeout=2.0, raw=False: "on")
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
     assert "launch_failed" in log.events()
     assert sent == ["power_on"], f"a set found on stays on: {sent}"
     assert not sessionlock.lock_file().exists()
-    couch.READY_WAIT_S = 5  # leave no trap for the next case
 
-    # A set that cannot be READ is not a refused one: stand down to the legacy
-    # blind path.
+
+def test_a_set_that_cannot_be_read_stands_down_to_the_blind_path(
+    wire, tv_rig, monkeypatch
+):
+    # A set that cannot be READ is not a refused one.
     fresh_state()
-    couch.ENTER_SETTLE_S = 10
-    tv.tv_power_state = lambda ip, timeout=2.0, raw=False: None
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
+    monkeypatch.setattr(tv, "tv_power_state", lambda ip, timeout=2.0, raw=False: None)
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -528,14 +608,16 @@ def test_couch():
     # unreachable set would look identical to a rig with no tvIp.
     assert log.find("launch_start")[0]["tv"] == "unreachable"
 
-    # No tvIp: the gate must not exist - not a read, not a field.
+
+def test_no_tvip_means_no_gate(wire, monkeypatch):
+    # The gate must not exist - not a read, not a field.
     fresh_state()
+    monkeypatch.setattr(couch, "READY_WAIT_S", 5)
 
     def boom(ip, timeout=2.0, raw=False):
         raise AssertionError("no tvIp - the launch must never read the TV")
 
-    tv.tv_power_state = boom
-    config.use(CFG)
+    monkeypatch.setattr(tv, "tv_power_state", boom)
     log, sent = wire(
         [
             ("enter", "OK"),
@@ -545,9 +627,12 @@ def test_couch():
     )
     assert couch.start(turn="ab12cd") == 0
     assert "tv" not in log.find("launch_start")[0], log.find("launch_start")
-    tv.tv_power_state = real_tv_state
 
-    # --- watch: blips forgiven, a run of failures dies honestly ---------------
+
+# --- watch: blips forgiven, a run of failures dies honestly -------------------
+
+
+def test_watch_forgives_blips_and_dies_on_a_run_of_failures(wire):
     fresh_state()
     assert sessionlock.acquire(f"ab12cd {os.getpid()}")
     log, sent = wire(
@@ -567,13 +652,19 @@ def test_couch():
     assert "exit_dispatched" in log.events()
     assert sent == ["power_off"] and not sessionlock.lock_file().exists()
 
-    # --- reconcile: resume live, clear dead (TV untouched), ride out errors ---
+
+# --- reconcile: resume live, clear dead (TV untouched), ride out errors -------
+
+
+def test_reconcile_resumes_a_live_session(wire):
     fresh_state(60, lock_content="ffffff 99999")  # dead owner's note
     log, sent = wire([("status", READY_TS), ("status", "NOTREADY")])
     assert couch.reconcile() == 0
     assert "reconcile_resumed" in log.events() and "session_idle" in log.events()
     assert sent == ["power_off"] and not sessionlock.lock_file().exists()
 
+
+def test_reconcile_clears_a_dead_session_without_touching_the_tv(wire):
     fresh_state(60)
     log, sent = wire([("status", "NOTREADY")])
     assert couch.reconcile() == 0
@@ -581,6 +672,8 @@ def test_couch():
     assert not sent, "a dead session's reconcile must not drive the TV"
     assert not sessionlock.lock_file().exists()
 
+
+def test_reconcile_clears_an_unreachable_host(wire):
     fresh_state(60)
     log, sent = wire(
         [
@@ -594,19 +687,21 @@ def test_couch():
     assert log.find("reconcile_cleared")[0]["reason"] == "unreachable"
     assert not sessionlock.lock_file().exists()
 
+
+def test_reconcile_with_no_lock_does_nothing(wire):
     fresh_state(None)
     log, sent = wire([])
     assert couch.reconcile() == 0 and not sent  # no lock: nothing to do
 
-    time.sleep = real_sleep
-    # --- a config doctor would FAIL is refused before the lock and the TV ------
+
+# --- a config doctor would FAIL is refused before the lock and the TV ---------
+
+
+def test_an_invalid_config_is_refused_before_the_lock_and_the_tv(wire):
     fresh_state()
     log, sent = wire([])
     config.use({k: v for k, v in CFG.items() if k != "gamingPcMac"})
-    try:
-        assert couch.start() == 2
-    finally:
-        config.use(CFG)
+    assert couch.start() == 2
     inv = log.find("config_invalid")
     assert inv and inv[0]["missing"] == ["gamingPcMac"], inv
     assert not sent and "launch_start" not in log.events()

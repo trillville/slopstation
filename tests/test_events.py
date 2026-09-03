@@ -3,19 +3,25 @@ context, the secret scrubber, daily rollover, and fail-soft.
 """
 
 import json
+import os
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
+import threading
+import time
 
 from slopstation import events, logbook, paths
 
-WORKER_SRC = """import pathlib, sys
-from slopstation import events, paths
-paths.logs = lambda: pathlib.Path(sys.argv[1])
-events._last_day = None
+# One emitter process; SLOPSTATION_HOME in its environment points it at the
+# test's own tree.
+WORKER_SRC = """import sys
+from slopstation import events
+# Wait for the lock as long as it takes: this proves the lock makes the
+# seek+write pair atomic. Production caps the wait at LOCK_WAIT_S and then
+# writes unlocked - a lost line beats a blocked lane - which on a loaded CI
+# runner is exactly what lost lines here.
+events.LOCK_WAIT_S = 30
 for _ in range(120):
-    events.emit('supervisor', 'restart', what=sys.argv[2], code=-1)
+    events.emit('supervisor', 'restart', what=sys.argv[1], code=-1)
 """
 
 
@@ -27,13 +33,15 @@ def read(path):
     ]
 
 
-def test_events():
-    tmp = Path(tempfile.mkdtemp())
-    paths.logs = lambda: tmp
+def daily_files():
+    """This test's daily files, oldest first."""
+    return sorted(paths.logs().glob("test-*.jsonl"))
 
-    events._last_day = None
 
-    # -- the record shape ------------------------------------------------------
+# -- the record shape ------------------------------------------------------
+
+
+def test_record_shape():
     r = events.emit("voice", "wake", score=0.71)
     assert r["lane"] == "voice" and r["event"] == "wake" and r["score"] == 0.71
     assert r["level"] == "info" and r["service"] == "k15"
@@ -41,18 +49,24 @@ def test_events():
     # env auto-detects as test, so nothing here reads as production traffic.
     assert r["env"] == "test", f"env={r['env']} - auto-detection missed the suite"
 
-    files = list(tmp.glob("*.jsonl"))
+    files = list(paths.logs().glob("*.jsonl"))
     assert len(files) == 1, files
     assert files[0].name.startswith("test-"), (
         f"{files[0].name} - test events must not land in the shipped file"
     )
     assert read(files[0])[0]["event"] == "wake"
 
+
+def test_none_is_absence_not_a_value():
     # None is absence, not a value: an inapplicable field must not emit null.
     r = events.emit("launch", "host_ready", status="READY", appid=None)
     assert "appid" not in r and r["status"] == "READY"
 
-    # -- levels ----------------------------------------------------------------
+
+# -- levels ----------------------------------------------------------------
+
+
+def test_levels():
     # level is positional-only, so it is passed positionally, as logbook.Logger does.
     r = events.emit("launch", "launch_failed", events.ERROR, err="boom")
     assert r["level"] == "error"
@@ -63,7 +77,11 @@ def test_events():
         "info is the default and should not shout"
     )
 
-    # -- a caller field may be named ANYTHING ----------------------------------
+
+# -- a caller field may be named ANYTHING ----------------------------------
+
+
+def test_a_caller_field_may_be_named_anything():
     # A colliding caller kwarg raises TypeError at argument BINDING, before any
     # try/except inside emit - hence positional-only parameters, emitter keys
     # winning, and the caller's value kept under f_*.
@@ -93,7 +111,11 @@ def test_events():
         log(f"collide_{name}", **{name: "X"})
     assert len(log.records) == 14, log.records
 
-    # -- correlation context ---------------------------------------------------
+
+# -- correlation context ---------------------------------------------------
+
+
+def test_correlation_context():
     tok = events.context(turn="9f2c1a", session="3b7e")
     r = events.emit("voice", "gate_match", intent="PlayGame")
     assert r["turn"] == "9f2c1a" and r["session"] == "3b7e"
@@ -105,8 +127,14 @@ def test_events():
     events.reset(tok)
     assert "turn" not in events.emit("voice", "wake")
 
-    # -- the scrubber ----------------------------------------------------------
-    events._redactions = {"sk-ant-supersecretvalue123", "dg_realkeyvalue4567890"}
+
+# -- the scrubber ----------------------------------------------------------
+
+
+def test_scrubber(monkeypatch):
+    monkeypatch.setattr(
+        events, "_redactions", {"sk-ant-supersecretvalue123", "dg_realkeyvalue4567890"}
+    )
     r = events.emit("voice", "lane_up", note="using sk-ant-supersecretvalue123 now")
     assert "supersecret" not in json.dumps(r), r
     assert "***" in r["note"]
@@ -115,54 +143,84 @@ def test_events():
     assert r["apiKey"] == "***" and r["token"] == "***", r
     # The human line crosses the same boundary - consoles get screenshotted.
     assert "supersecret" not in events.human("x", note="sk-ant-supersecretvalue123")
-    events._redactions = None
 
-    # -- fail-soft -------------------------------------------------------------
+
+# -- fail-soft -------------------------------------------------------------
+
+
+def test_an_unwritable_log_dir_loses_the_write_not_the_event(monkeypatch, tmp_path):
     # Unwritable dir (parent is a file) must not raise.
-    blocker = tmp / "blocker"
+    blocker = tmp_path / "blocker"
     blocker.write_text("", encoding="utf-8")
-    paths.logs = lambda: blocker / "sub"
-
-    events._last_day = None
+    monkeypatch.setattr(paths, "logs", lambda: blocker / "sub")
+    monkeypatch.setattr(events, "_last_day", None)  # the mkdir is the day's first
     assert events.emit("voice", "wake") is not None  # record built, write lost
+
+
+def test_an_unserializable_value_costs_the_field_not_the_event():
     # An unserializable value costs the field's fidelity, never the event.
-    paths.logs = lambda: tmp
-    events._last_day = None
     r = events.emit("voice", "wake", weird=object())
-    assert r is not None and isinstance(read(tmp / files[0].name)[-1]["weird"], str)
+    assert r is not None and isinstance(read(daily_files()[-1])[-1]["weird"], str)
 
-    # -- rollover + retention --------------------------------------------------
-    old = tmp / "test-20200101.jsonl"
+
+# -- rollover + retention --------------------------------------------------
+
+
+def test_rollover_prunes_expired_daily_files(monkeypatch):
+    paths.logs().mkdir()
+    old = paths.logs() / "test-20200101.jsonl"
     old.write_text('{"event":"ancient"}\n', encoding="utf-8")
-    import os
-    import time
-
     stale = time.time() - (events.TTL_DAYS + 1) * 86400
     os.utime(old, (stale, stale))
-    events._last_day = None  # force a rollover pass
+    monkeypatch.setattr(events, "_last_day", None)  # force a rollover pass
     events.emit("voice", "wake")
     assert not old.exists(), "expired daily file survived the rollover prune"
 
-    # -- heartbeat: the signal absence is measured against ---------------------
-    events._last_day = None
-    events.start_heartbeat("listener", interval_s=0.05)
+
+# -- heartbeat: the signal absence is measured against ---------------------
+
+
+def _clock(stop, parked):
+    """events' `time`, with a sleep that parks the heartbeat thread for good
+    once `stop` is set (and says so on `parked`). start_heartbeat has no stop
+    of its own - its loop swallows everything but the sleep, and an exception
+    out of the sleep is pytest's unhandled-thread warning - so a thread left
+    ticking would keep writing into every later test's log directory."""
+
+    class Clock:
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def sleep(self, seconds):
+            if stop.is_set():
+                parked.set()
+                threading.Event().wait()  # never returns; daemon, dies with us
+            time.sleep(seconds)
+
+    return Clock()
+
+
+def test_heartbeat(monkeypatch):
+    stop, parked = threading.Event(), threading.Event()
+    monkeypatch.setattr(events, "time", _clock(stop, parked))
+    beater = events.start_heartbeat("listener", interval_s=0.05)
     time.sleep(0.3)
-    beats = [
-        r
-        for r in read(sorted(tmp.glob("test-*.jsonl"))[-1])
-        if r["event"] == "heartbeat"
-    ]
+    # Daemon, or a dead agent hangs on exit instead of dying cleanly.
+    assert beater.is_alive()
+    assert all(
+        t.daemon for t in threading.enumerate() if t.name.startswith("heartbeat-")
+    )
+    stop.set()
+    assert parked.wait(timeout=2), "the heartbeat thread did not stop"
+    beats = [r for r in read(daily_files()[-1]) if r["event"] == "heartbeat"]
     assert len(beats) >= 3, f"only {len(beats)} beats in 0.3s at 50ms"
     assert beats[0]["lane"] == "listener"
-    # Daemon, or a dead agent hangs on exit instead of dying cleanly.
-    assert all(
-        t.daemon
-        for t in __import__("threading").enumerate()
-        if t.name.startswith("heartbeat-")
-    )
 
-    # -- the CLI smart-alert.bat calls -----------------------------------------
-    events._last_day = None
+
+# -- the CLI smart-alert.bat calls -----------------------------------------
+
+
+def test_cli():
     assert (
         events._cli(
             [
@@ -177,29 +235,32 @@ def test_events():
         )
         == 0
     )
-    # By event, not [-1]: the 50 ms heartbeat above is still ticking into the
-    # same file, so the CLI's line is not reliably the last one.
-    rec = [
-        r for r in read(sorted(tmp.glob("test-*.jsonl"))[-1]) if r["event"] == "restart"
-    ][-1]
+    # By event, not [-1]: the lookup does not care what else lands in the file.
+    rec = [r for r in read(daily_files()[-1]) if r["event"] == "restart"][-1]
     assert rec["level"] == "warn"
     assert rec["code"] == 3, f"cmd.exe text must land as a number, got {rec['code']!r}"
     assert events._cli(["nonsense"]) == 2, "a bad CLI call must not pretend to work"
 
-    # -- concurrent emitters keep every line -----------------------------------
+
+# -- concurrent emitters keep every line -----------------------------------
+
+
+def test_concurrent_emitters_keep_every_line(tmp_path):
     # Windows appends by seek-then-write, so two processes racing for the
     # same offset silently overwrite one another. A reload emits while the
     # supervisor it just bounced also emits: that is where this was found.
-    race = Path(tempfile.mkdtemp())
+    race = tmp_path / "race"
+    race.mkdir()
     worker = race / "emit_worker.py"
     worker.write_text(WORKER_SRC, encoding="utf-8")
+    env = dict(os.environ, SLOPSTATION_HOME=str(race))
     procs = [
-        subprocess.Popen([sys.executable, str(worker), str(race), "w" * 8])
+        subprocess.Popen([sys.executable, str(worker), "w" * 8], env=env)
         for _ in range(6)
     ]
     for proc in procs:
         proc.wait()
-    written = list(race.glob("*.jsonl"))
+    written = list((race / "logs").glob("*.jsonl"))
     assert len(written) == 1, written
     lines = [
         line
@@ -210,7 +271,11 @@ def test_events():
         json.loads(line)  # a torn line raises here
     assert len(lines) == 720, f"lost {720 - len(lines)} lines to the race"
 
-    # -- the shared test double keeps the production shape ---------------------
+
+# -- the shared test double keeps the production shape ---------------------
+
+
+def test_capturing_log_keeps_the_production_shape():
     cap = logbook.CapturingLog("voice")
     cap("wake", score=0.5)
     cap.warn("earcon_failed", err="x")

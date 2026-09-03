@@ -6,8 +6,8 @@ test module imported first would emit records labelled prod. pytest_configure
 runs after this file is imported and before any test module is collected,
 which is the window that needs.
 
-Log and state paths go to tempdirs so no test writes beside a live lane,
-whether or not it remembered to ask.
+Every test gets a fresh runtime home (paths.HOME): state, logs and markers
+move with it, so no test writes beside a live lane or sees another's files.
 """
 
 import json
@@ -20,8 +20,6 @@ from pathlib import Path
 
 import pytest
 
-from slopstation import paths
-
 _MISSING = object()
 
 
@@ -32,51 +30,52 @@ def pytest_configure(config):
 def _configure():
     os.environ.setdefault("SLOPSTATION_ENV", "test")
     import helpers
-    from slopstation import config
+    from slopstation import config, paths
 
     paths.HOME = Path(tempfile.mkdtemp(prefix="slopstation-test-home-"))
     config.use(json.loads(json.dumps(helpers.CONFIG)))
 
 
-# The suite predates pytest: tests rebind module attributes directly - state
-# files, module functions, sentry's _on flag - rather than through monkeypatch,
-# and each file used to run in its own interpreter. Snapshotting the package
-# wholesale is the one restore that does not depend on every test remembering
-# to clean up; files can move onto monkeypatch individually.
 @pytest.fixture(autouse=True)
-def _isolate():
-    """Restore every slopstation module attribute the test changed, and clear
-    the ambient correlation context - `turn` and `session` are inherited, so
-    one test's ids would show up in the next one's events."""
-    from slopstation import events
+def _fresh_home(tmp_path):
+    """A fresh runtime home per test, and a clean correlation context: `turn`
+    and `session` are inherited, so one test's ids would show up in the next
+    one's events."""
+    from slopstation import events, paths
 
+    paths.HOME = tmp_path
+    paths.state().mkdir()
+    # The rollover guard skips the log directory's mkdir when the day has not
+    # changed, so the new home would never get one.
+    events._last_day = None
+    token = events._ctx.set({})
+    try:
+        yield
+    finally:
+        events._ctx.reset(token)
+
+
+# Files that still rebind module attributes directly, rather than through
+# monkeypatch, lean on this snapshot to put them back. It is being retired file
+# by file: SLOPSTATION_TEST_STRICT=1 turns it off, which is how a migrated file
+# proves it no longer needs it.
+@pytest.fixture(autouse=True)
+def _restore():
+    if os.environ.get("SLOPSTATION_TEST_STRICT"):
+        yield
+        return
     mods = [
         m
         for name, m in list(sys.modules.items())
         if name == "slopstation" or name.startswith("slopstation.")
     ]
-    # Plus the stdlib functions the suite fakes: `doctor.subprocess` is the
-    # global module, so patching .run through it patches it for every later
-    # test.
     mods += [time, subprocess]
     saved = [(m, dict(vars(m))) for m in mods]
-    token = events._ctx.set({})
-    # A fresh home per test - state, logs, markers - so nothing leaks between
-    # tests and doctor's "has anything been written today" row reads an empty
-    # log directory. _last_day with it, or the rollover guard skips the mkdir
-    # and the new directory is never created.
-    paths.HOME = Path(tempfile.mkdtemp(prefix="slopstation-test-home-"))
-    paths.state().mkdir()
-    events._last_day = None
     try:
         yield
     finally:
-        events._ctx.reset(token)
         for mod, snapshot in saved:
             live = vars(mod)
-            # Restore what changed; leave what the test ADDED, since a lazily
-            # imported submodule binds itself onto its parent package here and
-            # removing that would break the next import of it.
             for key, value in snapshot.items():
                 if live.get(key, _MISSING) is not value:
                     live[key] = value

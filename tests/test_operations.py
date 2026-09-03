@@ -1,12 +1,15 @@
 """Durable operation state, Steam reconciliation, and delivery."""
 
 import contextlib
+import dataclasses
 import io
 import threading
 import time
+from typing import Any
+
+import pytest
 
 import helpers
-from helpers import fresh_state
 from slopstation import logbook, paths
 from slopstation.agent.speech import announce
 from slopstation.agent.tools import operations, operations_monitors
@@ -28,10 +31,21 @@ def wait_for(predicate, timeout=2):
     return False
 
 
-class FakeSteam:
-    def __init__(self):
-        self.online = True
-        self.downloads = []
+class _Double:
+    """A test double whose knobs are turned by name; a typo is a failure, not
+    a new attribute."""
+
+    def set(self, **fields):
+        for name, value in fields.items():
+            getattr(self, name)
+            setattr(self, name, value)
+        return self
+
+
+@dataclasses.dataclass
+class FakeSteam(_Double):
+    online: bool = True
+    downloads: list = dataclasses.field(default_factory=list)
 
     def client_online(self):
         return self.online
@@ -40,21 +54,37 @@ class FakeSteam:
         return list(self.downloads)
 
 
-class FakeMedia:
-    def __init__(self):
-        self.result = {
+WAITING = {
+    "complete": False,
+    "progress": {
+        "phase": "waiting_for_match",
+        "episodes": 80,
+        "total_episodes": 91,
+        "percent": 88,
+    },
+    "detail": "no acceptable episode release is available yet",
+}
+
+
+@dataclasses.dataclass
+class FakeMedia(_Double):
+    result: dict = dataclasses.field(
+        default_factory=lambda: {
             "complete": False,
             "progress": {"percent": 20},
             "detail": "1 of 5 aired episodes are ready",
         }
-        self.error = None
-        self.search_ready = False
-        self.search_available_now = True
-        self.retry_command_ids = [88]
-        self.retry_error = None
-        self.retries = []
-        self.abandoned = []
-        self.abandon_result = {"have": 80, "missing": [{"season": 1, "episodes": 11}]}
+    )
+    error: Any = None
+    search_ready: bool = False
+    search_available_now: bool = True
+    retry_command_ids: list = dataclasses.field(default_factory=lambda: [88])
+    retry_error: Any = None
+    retries: list = dataclasses.field(default_factory=list)
+    abandoned: list = dataclasses.field(default_factory=list)
+    abandon_result: dict = dataclasses.field(
+        default_factory=lambda: {"have": 80, "missing": [{"season": 1, "episodes": 11}]}
+    )
 
     def dispatch_pending_series_search(self, operation):
         if self.search_ready and bool(
@@ -82,24 +112,44 @@ class FakeMedia:
         return dict(self.abandon_result)
 
 
-def test_operations():
-    fresh_state()
-    log = logbook.CapturingLog("voice")
-    terminal = []
-    store = operations.OperationStore(log, on_terminal=terminal.append)
+@pytest.fixture
+def log():
+    return logbook.CapturingLog("voice")
 
-    operation = store.track_steam_install(
+
+def _stardew(store):
+    """The Steam install the store tests share: queued by one turn, then
+    confirmed running by a second request for the same game."""
+    queued = store.track_steam_install(
         413150, "Stardew Valley", turn="4c1d0e", verified=False
     )
-    assert operation["state"] == operations.QUEUED
     same = store.track_steam_install(
         413150, "Stardew Valley", turn="another", verified=True
     )
+    return queued, same
+
+
+def _movie(store, ref, title, catalog_id, command_id, **metadata):
+    return store.track_external(
+        "movie_acquisition",
+        "radarr",
+        ref,
+        title,
+        metadata={"catalog_id": catalog_id, "command_ids": [command_id], **metadata},
+    )
+
+
+def test_store_tracks_and_reloads(log):
+    store = operations.OperationStore(log)
+    operation, same = _stardew(store)
+    assert operation["state"] == operations.QUEUED
     assert same["id"] == operation["id"] and same["state"] == operations.RUNNING
     assert same["last_observed"] and log.find("operation_observed")
     reloaded = operations.OperationStore(log)
     assert reloaded.get(operation["id"])["turn"] == "4c1d0e"
 
+
+def test_store_serialises_on_the_file(log):
     # Separate stores are what the agent and the CLIs actually hold, so the
     # load/mutate/write pair has to serialise on the file, not per instance.
     shared = paths.state() / "concurrent.json"
@@ -130,45 +180,53 @@ def test_operations():
     assert not failures, failures[:3]
     assert len(writers[0].all()) == 100, len(writers[0].all())
 
+
+def test_steam_monitor_needs_install_proof(log):
+    terminal = []
+    store = operations.OperationStore(log, on_terminal=terminal.append)
+    operation, _ = _stardew(store)
     steam = FakeSteam()
     installed = set()
     monitor = operations_monitors.SteamMonitor(
         store, steam, log, installed_probe=lambda: installed
     )
-    steam.downloads = [
-        {
-            "appid": 413150,
-            "name": "Stardew Valley",
-            "percent": 25,
-            "paused": False,
-            "queue": 0,
-        }
-    ]
+    steam.set(
+        downloads=[
+            {
+                "appid": 413150,
+                "name": "Stardew Valley",
+                "percent": 25,
+                "paused": False,
+                "queue": 0,
+            }
+        ]
+    )
     assert monitor.reconcile_once() == 1
     observed = store.get(operation["id"])
     assert observed["state"] == operations.RUNNING
     assert observed["progress"]["percent"] == 25
 
-    steam.online = False
+    steam.set(online=False)
     monitor.reconcile_once()
     assert store.get(operation["id"])["state"] == operations.UNKNOWN
     assert not terminal and not store.pending_announcements()
 
-    steam.online = True
-    steam.downloads = []
+    steam.set(online=True, downloads=[])
     monitor.reconcile_once()
     assert store.get(operation["id"])["state"] == operations.UNKNOWN
     assert not terminal, "absence without install proof became terminal"
 
-    steam.downloads = [
-        {
-            "appid": 413150,
-            "name": "Stardew Valley",
-            "percent": 100,
-            "paused": False,
-            "queue": 0,
-        }
-    ]
+    steam.set(
+        downloads=[
+            {
+                "appid": 413150,
+                "name": "Stardew Valley",
+                "percent": 100,
+                "paused": False,
+                "queue": 0,
+            }
+        ]
+    )
     monitor.reconcile_once()
     assert store.get(operation["id"])["state"] == operations.RUNNING
     assert not terminal, "100% bytes without install proof became terminal"
@@ -188,18 +246,22 @@ def test_operations():
     heard = store.get(operation["id"])
     assert not heard["announcement_pending"] and heard["delivered"]
 
+
+def test_cancel_is_refused_for_steam_installs(log):
+    store = operations.OperationStore(log)
     other = store.track_steam_install(570, "Dota 2", verified=True)
     ok, detail = store.cancel(other["id"])
     assert not ok and "not supported" in detail
     assert store.get(other["id"])["state"] == operations.RUNNING
     assert store.for_assistant("active")[0]["state"] in operations.ACTIVE
 
+
+def test_media_monitor_observes_a_series_acquisition(log):
     # The second authority justifies generic creation, but keeps its concrete
     # observation semantics in MediaMonitor.
-    fresh_state()
-    media_terminal = []
-    media_store = operations.OperationStore(log, on_terminal=media_terminal.append)
-    media_op = media_store.track_external(
+    terminal = []
+    store = operations.OperationStore(log, on_terminal=terminal.append)
+    media_op = store.track_external(
         "series_acquisition",
         "sonarr",
         "41",
@@ -213,7 +275,7 @@ def test_operations():
             "seasons": [2],
         },
     )
-    reused = media_store.track_external(
+    reused = store.track_external(
         "series_acquisition",
         "sonarr",
         "41",
@@ -230,321 +292,330 @@ def test_operations():
     assert reused["id"] == media_op["id"]
     assert reused["metadata"]["preset"] == "2160p"
     fake_media = FakeMedia()
-    media_monitor = operations_monitors.MediaMonitor(media_store, fake_media, log)
-    assert media_monitor.reconcile_once() == 1
-    assert media_store.get(media_op["id"])["progress"]["percent"] == 20
-    assert media_store.get(media_op["id"])["metadata"]["search_pending"]
-    fake_media.search_ready = True
-    media_monitor.reconcile_once()
-    assert "search_pending" not in media_store.get(media_op["id"])["metadata"]
-    assert media_store.get(media_op["id"])["metadata"]["command_ids"] == [77]
-    fake_media.error = RuntimeError("offline")
-    media_monitor.reconcile_once()
-    assert media_store.get(media_op["id"])["state"] == operations.UNKNOWN
-    assert not media_terminal
-    fake_media.error = None
-    fake_media.result = {
-        "complete": True,
-        "progress": {"percent": 100},
-        "detail": "5 of 5 aired episodes are ready",
-    }
-    media_monitor.reconcile_once()
-    media_done = media_store.get(media_op["id"])
+    monitor = operations_monitors.MediaMonitor(store, fake_media, log)
+    assert monitor.reconcile_once() == 1
+    assert store.get(media_op["id"])["progress"]["percent"] == 20
+    assert store.get(media_op["id"])["metadata"]["search_pending"]
+    fake_media.set(search_ready=True)
+    monitor.reconcile_once()
+    assert "search_pending" not in store.get(media_op["id"])["metadata"]
+    assert store.get(media_op["id"])["metadata"]["command_ids"] == [77]
+    fake_media.set(error=RuntimeError("offline"))
+    monitor.reconcile_once()
+    assert store.get(media_op["id"])["state"] == operations.UNKNOWN
+    assert not terminal
+    fake_media.set(
+        error=None,
+        result={
+            "complete": True,
+            "progress": {"percent": 100},
+            "detail": "5 of 5 aired episodes are ready",
+        },
+    )
+    monitor.reconcile_once()
+    media_done = store.get(media_op["id"])
     assert media_done["state"] == operations.SUCCEEDED
     assert media_done["summary"] == (
         "The requested episodes of Breaking Bad are ready to watch."
     )
-    assert len(media_terminal) == 1
-    media_monitor.reconcile_once()
-    assert len(media_terminal) == 1
-    ok, detail = media_store.cancel(media_op["id"])
+    assert len(terminal) == 1
+    monitor.reconcile_once()
+    assert len(terminal) == 1
+    ok, detail = store.cancel(media_op["id"])
     assert not ok and "already succeeded" in detail
 
-    phase_op = media_store.track_external(
-        "movie_acquisition",
-        "radarr",
-        "51",
-        "Arrival",
-        metadata={"catalog_id": 329865, "command_ids": [9]},
+
+def test_media_monitor_notifies_once_per_phase(log):
+    store = operations.OperationStore(log)
+    fake_media = FakeMedia()
+    monitor = operations_monitors.MediaMonitor(store, fake_media, log)
+    phase_op = _movie(store, "51", "Arrival", 329865, 9)
+    fake_media.set(
+        result={
+            "complete": False,
+            "progress": {"phase": "searching"},
+            "detail": "Radarr is searching",
+        }
     )
-    fake_media.result = {
-        "complete": False,
-        "progress": {"phase": "searching"},
-        "detail": "Radarr is searching",
-    }
-    media_monitor.reconcile_once()
-    fake_media.result = {
-        "complete": False,
-        "progress": {"phase": "waiting_for_match"},
-        "detail": "no acceptable release yet",
-    }
-    media_monitor.reconcile_once()
-    assert len(media_store.pending_notifications()) == 1
-    assert media_store.pending_notifications()[0]["key"] == "waiting_for_match"
-    assert "search_retry_pending" not in media_store.get(phase_op["id"])["metadata"]
-    fake_media.result = {
-        "complete": False,
-        "progress": {"phase": "downloading", "percent": 2},
-        "detail": "download is 2% complete",
-    }
-    media_monitor.reconcile_once()
-    assert {row["key"] for row in media_store.pending_notifications()} == {
+    monitor.reconcile_once()
+    fake_media.set(
+        result={
+            "complete": False,
+            "progress": {"phase": "waiting_for_match"},
+            "detail": "no acceptable release yet",
+        }
+    )
+    monitor.reconcile_once()
+    assert len(store.pending_notifications()) == 1
+    assert store.pending_notifications()[0]["key"] == "waiting_for_match"
+    assert "search_retry_pending" not in store.get(phase_op["id"])["metadata"]
+    fake_media.set(
+        result={
+            "complete": False,
+            "progress": {"phase": "downloading", "percent": 2},
+            "detail": "download is 2% complete",
+        }
+    )
+    monitor.reconcile_once()
+    assert {row["key"] for row in store.pending_notifications()} == {
         "waiting_for_match",
         "download_started",
     }
-    media_monitor.reconcile_once()
-    assert len(media_store.pending_notifications()) == 2
+    monitor.reconcile_once()
+    assert len(store.pending_notifications()) == 2
 
-    fresh_state()
-    retry_store = operations.OperationStore(log)
-    retry_op = retry_store.track_external(
-        "movie_acquisition",
-        "radarr",
-        "61",
-        "Heat",
-        metadata={"catalog_id": 949, "command_ids": [10]},
-    )
-    retry_store.observe(
+
+def test_search_retry_backs_off_then_gives_up(log):
+    store = operations.OperationStore(log)
+    retry_op = _movie(store, "61", "Heat", 949, 10)
+    store.observe(
         retry_op["id"],
         operations.RUNNING,
         {"phase": "searching"},
         "Radarr is searching",
     )
-    retry_media = FakeMedia()
-    retry_media.search_available_now = False
-    retry_media.result = {
-        "complete": False,
-        "progress": {"phase": "waiting_for_match"},
-        "detail": "no acceptable release yet",
-    }
-    retry_monitor = operations_monitors.MediaMonitor(retry_store, retry_media, log)
+    retry_media = FakeMedia(
+        search_available_now=False,
+        result={
+            "complete": False,
+            "progress": {"phase": "waiting_for_match"},
+            "detail": "no acceptable release yet",
+        },
+    )
+    retry_monitor = operations_monitors.MediaMonitor(store, retry_media, log)
     retry_monitor.reconcile_once(now=1000)
-    scheduled = retry_store.get(retry_op["id"])
+    scheduled = store.get(retry_op["id"])
     assert scheduled["metadata"]["search_retry_pending"]
     assert scheduled["metadata"]["search_retry_after"] == 1300
     assert not retry_media.retries
 
-    retry_media.search_available_now = True
-    operations_monitors.MediaMonitor(retry_store, retry_media, log).reconcile_once(
-        now=1299
-    )
+    retry_media.set(search_available_now=True)
+    operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1299)
     assert not retry_media.retries
-    operations_monitors.MediaMonitor(retry_store, retry_media, log).reconcile_once(
-        now=1300
-    )
-    retried = retry_store.get(retry_op["id"])
+    operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1300)
+    retried = store.get(retry_op["id"])
     assert retry_media.retries == [retry_op["id"]]
     assert retried["metadata"]["search_retry_count"] == 1
     assert retried["metadata"]["command_ids"] == [88]
     assert "search_retry_pending" not in retried["metadata"]
 
-    retry_store.update_metadata(
+    store.update_metadata(
         retry_op["id"],
         {"search_retry_count": 3},
         remove=("search_retry_pending", "search_retry_after"),
     )
-    retry_store.observe(
+    store.observe(
         retry_op["id"],
         operations.RUNNING,
         {"phase": "searching"},
         "Radarr is searching",
     )
-    retry_media.search_available_now = False
+    retry_media.set(search_available_now=False)
     retry_monitor.reconcile_once(now=2000)
-    exhausted = retry_store.get(retry_op["id"])["metadata"]
+    exhausted = store.get(retry_op["id"])["metadata"]
     assert exhausted["search_retry_exhausted"]
     assert "search_retry_pending" not in exhausted
 
-    failed_op = retry_store.track_external(
-        "movie_acquisition",
-        "radarr",
+
+def test_failed_search_retry_backs_off_longer(log):
+    store = operations.OperationStore(log)
+    failed_op = _movie(
+        store,
         "62",
         "Collateral",
-        metadata={
-            "catalog_id": 1538,
-            "command_ids": [11],
-            "search_retry_pending": True,
-            "search_retry_after": 2000,
-        },
+        1538,
+        11,
+        search_retry_pending=True,
+        search_retry_after=2000,
     )
-    retry_store.observe(
+    store.observe(
         failed_op["id"], operations.RUNNING, {"phase": "waiting_for_match"}, "waiting"
     )
-    retry_media.search_available_now = True
-    retry_media.retry_error = RuntimeError("search submit failed")
-    retry_monitor.reconcile_once(now=2000)
-    failed = retry_store.get(failed_op["id"])
+    retry_media = FakeMedia(
+        result={
+            "complete": False,
+            "progress": {"phase": "waiting_for_match"},
+            "detail": "no acceptable release yet",
+        },
+        retry_error=RuntimeError("search submit failed"),
+    )
+    operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=2000)
+    failed = store.get(failed_op["id"])
     assert failed["state"] == operations.UNKNOWN
     assert failed["metadata"]["search_retry_count"] == 1
     assert failed["metadata"]["search_retry_after"] == 3800
     assert failed["metadata"]["search_retry_pending"]
 
+
+def test_cli_lists_operations(log):
+    store = operations.OperationStore(log)
+    retry_op = _movie(store, "61", "Heat", 949, 10)
     with contextlib.redirect_stdout(io.StringIO()) as stdout:
         assert operations.main(["list"]) == 0
     assert retry_op["id"] in stdout.getvalue()
 
-    fresh_state()
-    give_store = operations.OperationStore(log)
-    give_media = FakeMedia()
-    waiting = {
-        "complete": False,
-        "progress": {
-            "phase": "waiting_for_match",
-            "episodes": 80,
-            "total_episodes": 91,
-            "percent": 88,
-        },
-        "detail": "no acceptable episode release is available yet",
-    }
-    give_media.result = dict(waiting)
-    give_op = give_store.track_external(
+
+def test_waiting_series_is_abandoned_after_a_day(log):
+    store = operations.OperationStore(log)
+    give_media = FakeMedia(result=dict(WAITING))
+    give_op = store.track_external(
         "series_acquisition",
         "sonarr",
         "71",
         "Rick and Morty",
         metadata={"catalog_id": 275274, "seasons": None},
     )
-    give_monitor = operations_monitors.MediaMonitor(give_store, give_media, log)
+    give_monitor = operations_monitors.MediaMonitor(store, give_media, log)
     give_monitor.reconcile_once(now=5000)
-    assert give_store.get(give_op["id"])["metadata"]["waiting_since"] == 5000
+    assert store.get(give_op["id"])["metadata"]["waiting_since"] == 5000
     assert not give_media.abandoned
     # The heads-up speaks while the user still has context: what is missing
     # and that the close is coming.
     heads_up = [
         item
-        for item in give_store.pending_notifications()
+        for item in store.pending_notifications()
         if item["operation_id"] == give_op["id"]
     ]
     assert len(heads_up) == 1 and heads_up[0]["key"] == "waiting_for_match"
     assert "11" in heads_up[0]["summary"]
-    give_media.result = {
-        "complete": False,
-        "progress": {"phase": "downloading", "total_episodes": 91},
-        "detail": "download is active",
-    }
+    give_media.set(
+        result={
+            "complete": False,
+            "progress": {"phase": "downloading", "total_episodes": 91},
+            "detail": "download is active",
+        }
+    )
     give_monitor.reconcile_once(now=6000)  # a grab resets the clock
-    assert "waiting_since" not in give_store.get(give_op["id"])["metadata"]
-    give_media.result = dict(waiting)
+    assert "waiting_since" not in store.get(give_op["id"])["metadata"]
+    give_media.set(result=dict(WAITING))
     give_monitor.reconcile_once(now=7000)
     give_monitor.reconcile_once(now=7000 + 24 * 3600 - 1)
     assert not give_media.abandoned
-    assert give_store.get(give_op["id"])["state"] == operations.RUNNING
+    assert store.get(give_op["id"])["state"] == operations.RUNNING
     give_monitor.reconcile_once(now=7000 + 24 * 3600)
-    closed = give_store.get(give_op["id"])
+    closed = store.get(give_op["id"])
     assert give_media.abandoned == [give_op["id"]]
     assert closed["state"] == operations.SUCCEEDED
     # The close is silent - the heads-up already said it was coming.
     assert not closed["announcement_pending"]
     assert "season 1" in closed["summary"]
 
-    unaired = give_store.track_external(
+
+def test_unaired_season_waits_indefinitely(log):
+    store = operations.OperationStore(log)
+    give_media = FakeMedia(
+        result={
+            "complete": False,
+            "progress": {
+                "phase": "waiting_for_match",
+                "episodes": 0,
+                "total_episodes": 0,
+                "percent": 0,
+            },
+            "detail": "no requested monitored episodes have aired yet",
+        }
+    )
+    unaired = store.track_external(
         "series_acquisition",
         "sonarr",
         "72",
         "Andor",
         metadata={"catalog_id": 393189, "seasons": [2]},
     )
-    give_media.result = {
-        "complete": False,
-        "progress": {
-            "phase": "waiting_for_match",
-            "episodes": 0,
-            "total_episodes": 0,
-            "percent": 0,
-        },
-        "detail": "no requested monitored episodes have aired yet",
-    }
+    give_monitor = operations_monitors.MediaMonitor(store, give_media, log)
     give_monitor.reconcile_once(now=8000)
     give_monitor.reconcile_once(now=8000 + 48 * 3600)
-    fresh = give_store.get(unaired["id"])
+    fresh = store.get(unaired["id"])
     assert fresh["state"] == operations.RUNNING
     assert "waiting_since" not in fresh["metadata"]
-    assert give_media.abandoned == [give_op["id"]]
+    assert not give_media.abandoned
     # Pre-air waiting is not "couldn't find": no heads-up either.
     assert not [
         item
-        for item in give_store.pending_notifications()
+        for item in store.pending_notifications()
         if item["operation_id"] == unaired["id"]
     ]
 
-    empty = give_store.track_external(
+
+def test_empty_movie_wait_fails_silently(log):
+    store = operations.OperationStore(log)
+    give_media = FakeMedia(
+        result={
+            "complete": False,
+            "progress": {"phase": "waiting_for_match", "percent": 0},
+            "detail": "no acceptable movie release is available yet",
+        },
+        abandon_result={"have": 0, "missing": []},
+    )
+    empty = store.track_external(
         "movie_acquisition",
         "radarr",
         "73",
         "Obscure Film",
         metadata={"catalog_id": 999},
     )
-    give_media.result = {
-        "complete": False,
-        "progress": {"phase": "waiting_for_match", "percent": 0},
-        "detail": "no acceptable movie release is available yet",
-    }
-    give_media.abandon_result = {"have": 0, "missing": []}
+    give_monitor = operations_monitors.MediaMonitor(store, give_media, log)
     give_monitor.reconcile_once(now=9000)
-    give_store.update_metadata(
+    store.update_metadata(
         empty["id"],
         {"search_retry_pending": True, "search_retry_after": 9000 + 200 * 3600},
     )
     give_monitor.reconcile_once(now=9000 + 48 * 3600)  # retry gate holds
-    assert give_store.get(empty["id"])["state"] == operations.RUNNING
-    give_store.update_metadata(
+    assert store.get(empty["id"])["state"] == operations.RUNNING
+    store.update_metadata(
         empty["id"], remove=("search_retry_pending", "search_retry_after")
     )
     give_monitor.reconcile_once(now=9000 + 96 * 3600)
-    failed_empty = give_store.get(empty["id"])
+    failed_empty = store.get(empty["id"])
     assert failed_empty["state"] == operations.FAILED
     assert not failed_empty["announcement_pending"]
     assert failed_empty["summary"].startswith("No acceptable release")
 
-    fresh_state()
-    canceled_store = operations.OperationStore(log)
-    canceled_op = canceled_store.track_external(
+
+def test_unmonitored_request_is_canceled(log):
+    store = operations.OperationStore(log)
+    canceled_op = store.track_external(
         "series_acquisition",
         "sonarr",
         "71",
         "Andor",
         metadata={"catalog_id": 393189, "seasons": [1]},
     )
-    canceled_media = FakeMedia()
-    canceled_media.result = {
-        "complete": False,
-        "canceled": True,
-        "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
-        "detail": "requested episodes are unmonitored",
-    }
-    operations_monitors.MediaMonitor(
-        canceled_store, canceled_media, log
-    ).reconcile_once()
-    assert canceled_store.get(canceled_op["id"])["state"] == operations.CANCELED
-
-    fresh_state()
-    delivery_log = logbook.CapturingLog("voice")
-    delivery_store = operations.OperationStore(delivery_log)
-    voice = dict(helpers.CONFIG["voice"])
-    ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, delivery_log)
-    ann.store = delivery_store
-    delivery_store.on_terminal = ann.submit
-    announce.synth = lambda *a, **kw: b"speech"
-    ann._play = lambda pcm: False
-    pending = delivery_store.track_steam_install(
-        20, "Team Fortress Classic", verified=True
+    canceled_media = FakeMedia(
+        result={
+            "complete": False,
+            "canceled": True,
+            "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
+            "detail": "requested episodes are unmonitored",
+        }
     )
-    delivery_store.observe(
+    operations_monitors.MediaMonitor(store, canceled_media, log).reconcile_once()
+    assert store.get(canceled_op["id"])["state"] == operations.CANCELED
+
+
+def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
+    voice = dict(helpers.CONFIG["voice"])
+    ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    store = operations.OperationStore(
+        log, on_terminal=ann.submit, on_notification=ann.submit_notification
+    )
+    monkeypatch.setattr(ann, "store", store)
+    monkeypatch.setattr(announce, "synth", lambda *a, **kw: b"speech")
+    monkeypatch.setattr(ann, "_play", lambda pcm: False)
+    pending = store.track_steam_install(20, "Team Fortress Classic", verified=True)
+    store.observe(
         pending["id"], operations.SUCCEEDED, {"percent": 100}, "fully installed"
     )
-    assert wait_for(lambda: bool(delivery_log.find("announce_cut_short")))
-    assert delivery_store.get(pending["id"])["announcement_pending"]
+    assert wait_for(lambda: bool(log.find("announce_cut_short")))
+    assert store.get(pending["id"])["announcement_pending"]
     assert not ann.follow_up.is_set()
 
-    ann._play = lambda pcm: True
-    ann.submit(delivery_store.get(pending["id"]))
-    assert wait_for(
-        lambda: not delivery_store.get(pending["id"])["announcement_pending"]
-    )
+    monkeypatch.setattr(ann, "_play", lambda pcm: True)
+    ann.submit(store.get(pending["id"]))
+    assert wait_for(lambda: not store.get(pending["id"])["announcement_pending"])
     assert ann.follow_up.is_set()
-    assert len(delivery_log.find("operation_announced")) == 1
-    delivery_store.on_notification = ann.submit_notification
-    delivery_store.notify(
+    assert len(log.find("operation_announced")) == 1
+    store.notify(
         pending["id"],
         "download_started",
         "Team Fortress Classic has started downloading.",
@@ -553,7 +624,7 @@ def test_operations():
         lambda: (
             not any(
                 row["operation_id"] == pending["id"]
-                for row in delivery_store.pending_notifications()
+                for row in store.pending_notifications()
             )
         )
     )

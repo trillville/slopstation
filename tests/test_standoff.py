@@ -7,6 +7,7 @@ chord lane goes deaf until someone deletes a file.
 
 import os
 import time
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -14,32 +15,42 @@ from helpers import fresh_state
 from slopstation import chord_listener as cl
 from slopstation import events, logbook, sessionlock
 
-_real_sleep = time.sleep
-_real_poll = cl.STANDOFF_POLL_S
-_real_fail_check = cl.FAIL_CHECK_S
-
 
 @pytest.fixture(autouse=True)
-def _no_startup_side_effects():
+def _no_startup_side_effects(monkeypatch):
     """main()'s two startup side effects belong to running the lane, not to
     exercising its loop. A fixture, not module scope: at module scope this ran
     during collection and stubbed the real start_heartbeat out from under
     every other test in the session."""
-    real_rotate, real_beat = logbook.rotate, events.start_heartbeat
-    logbook.rotate = lambda *a, **k: None
-    events.start_heartbeat = lambda *a, **k: None
-    try:
-        yield
-    finally:
-        logbook.rotate, events.start_heartbeat = real_rotate, real_beat
+    monkeypatch.setattr(logbook, "rotate", lambda *a, **k: None)
+    monkeypatch.setattr(events, "start_heartbeat", lambda *a, **k: None)
 
 
 class FakeHandle:
-    def __init__(self):
-        self.closed = False
+    """A hid handle whose only behaviour is counting its close() calls."""
+
+    closes = 0
 
     def close(self):
-        self.closed = True
+        self.closes += 1
+
+    @property
+    def closed(self):
+        return self.closes > 0
+
+
+class FakeDevice(FakeHandle):
+    """What hid.device() hands the loop: opens, goes non-blocking, and never
+    has an input report to give."""
+
+    def open_path(self, path):
+        pass
+
+    def set_nonblocking(self, v):
+        pass
+
+    def read(self, n):
+        return []
 
 
 def held_puck():
@@ -56,67 +67,69 @@ class Stop(Exception):
     """Not OSError/ValueError - the loop's own handler must not swallow it."""
 
 
+@dataclass
 class FakeHid:
     """Stands in for the hid module, recording every enumerate() so a test can
     assert the listener never LOOKED at the device."""
 
-    def __init__(self, interfaces=3):
-        self.enumerations = 0
-        self.opened = []
-        self.interfaces = interfaces
+    interfaces: int = 3
+    enumerations: int = 0
+    opened: list = field(default_factory=list)
 
     def enumerate(self, vid, pid):
         self.enumerations += 1
         return [{"path": f"p{i}".encode()} for i in range(self.interfaces)]
 
     def device(self):
-        h = FakeHandle()
-        h.open_path = lambda path: None
-        h.set_nonblocking = lambda v: None
-        h.read = lambda n: []  # never any input reports
+        h = FakeDevice()
         self.opened.append(h)
         return h
 
 
-def drive(lock_age_s, stop_after, session_starts_at=None, error_age_s=None):
-    """Run main()'s loop, counting sleeps. Returns (captured log, fake hid).
+@pytest.fixture
+def drive(monkeypatch):
+    """drive(lock_age_s, stop_after, session_starts_at=None, error_age_s=None)
+    runs main()'s loop, counting sleeps. Returns (captured log, fake hid).
     lock_age_s seeds the lock; session_starts_at makes one appear mid-loop, so
     the standoff transition is exercised, not just the steady states.
     error_age_s seeds a failure marker of that age - FakeHid never returns a
     report, so this is the Puck sitting untouched."""
-    fresh_state(lock_age_s)
-    if error_age_s is not None:
-        sessionlock.last_error_file().write_text("Enter exited without READY")
-        when = time.time() - error_age_s
-        os.utime(sessionlock.last_error_file(), (when, when))
-    cap = logbook.CapturingLog("listener")
-    fake = FakeHid()
-    ticks = [0]
 
-    def fake_sleep(_s):
-        ticks[0] += 1
-        if session_starts_at is not None and ticks[0] == session_starts_at:
-            fresh_state(0)  # a launch just took the lock
-        if ticks[0] >= stop_after:
-            raise Stop()
+    def _drive(lock_age_s, stop_after, session_starts_at=None, error_age_s=None):
+        fresh_state(lock_age_s)
+        if error_age_s is not None:
+            sessionlock.last_error_file().write_text("Enter exited without READY")
+            when = time.time() - error_age_s
+            os.utime(sessionlock.last_error_file(), (when, when))
+        cap = logbook.CapturingLog("listener")
+        fake = FakeHid()
+        ticks = [0]
 
-    cl.log, cl.hid, cl.time.sleep = cap, fake, fake_sleep
-    # Check the lock every pass: fake_sleep advances no real clock, and this
-    # is about the transition, not the poll rate.
-    cl.STANDOFF_POLL_S = cl.FAIL_CHECK_S = 0
-    try:
-        cl.main()
-    except Stop:
-        pass
-    finally:
-        cl.time.sleep, cl.STANDOFF_POLL_S = _real_sleep, _real_poll
-        cl.FAIL_CHECK_S = _real_fail_check
-    return cap, fake
+        def fake_sleep(_s):
+            ticks[0] += 1
+            if session_starts_at is not None and ticks[0] == session_starts_at:
+                fresh_state(0)  # a launch just took the lock
+            if ticks[0] >= stop_after:
+                raise Stop()
+
+        monkeypatch.setattr(cl, "log", cap)
+        monkeypatch.setattr(cl, "hid", fake)
+        monkeypatch.setattr(time, "sleep", fake_sleep)
+        # Check the lock every pass: fake_sleep advances no real clock, and this
+        # is about the transition, not the poll rate.
+        monkeypatch.setattr(cl, "STANDOFF_POLL_S", 0)
+        monkeypatch.setattr(cl, "FAIL_CHECK_S", 0)
+        with pytest.raises(Stop):
+            cl.main()
+        return cap, fake
+
+    return _drive
 
 
-def test_standoff():
+# --- session_active: the arbiter the standoff rides on ------------------------
 
-    # --- session_active: the arbiter the standoff rides on -------------------
+
+def test_active_reads_a_fresh_lock_as_spoken_for_and_a_stale_one_as_free():
     fresh_state(None)
     assert sessionlock.active() is False, "no lock must read as free"
 
@@ -130,7 +143,11 @@ def test_standoff():
     fresh_state(sessionlock.LOCK_STALE_S + 5)
     assert sessionlock.active() is False, "a stale lock must read as free"
 
-    # --- stand_off: lets go once, reports only the transition ----------------
+
+# --- stand_off: lets go once, reports only the transition ---------------------
+
+
+def test_stand_off_lets_go_once_and_reports_only_the_transition():
     puck, h = held_puck()
     assert puck.stand_off() is True, "first call must let go"
     assert h.closed, "the handle was not actually closed"
@@ -140,16 +157,24 @@ def test_standoff():
     # A Puck that never held anything is already standing off.
     assert cl.Puck().stand_off() is False
 
-    # --- the two composed: a live session leaves nothing open ----------------
-    for age in (0, 10, sessionlock.LOCK_STALE_S - 1):
-        fresh_state(age)
-        puck, h = held_puck()
-        if sessionlock.active():
-            puck.stand_off()
-        assert puck.handles == [], f"still holding the Puck at lock age {age}"
-        assert h.closed, f"handle left open at lock age {age}"
 
-    # --- the real loop, wired as it ships ------------------------------------
+# --- the two composed: a live session leaves nothing open ---------------------
+
+
+@pytest.mark.parametrize("age", [0, 10, sessionlock.LOCK_STALE_S - 1])
+def test_a_live_session_leaves_nothing_open(age):
+    fresh_state(age)
+    puck, h = held_puck()
+    if sessionlock.active():
+        puck.stand_off()
+    assert puck.handles == [], f"still holding the Puck at lock age {age}"
+    assert h.closed, f"handle left open at lock age {age}"
+
+
+# --- the real loop, wired as it ships -----------------------------------------
+
+
+def test_a_session_that_owns_the_puck_is_never_enumerated(drive):
     # A session already owns the Puck: the listener must not enumerate HID.
     cap, fake = drive(lock_age_s=10, stop_after=6)
     assert fake.enumerations == 0, "stood off but still went looking for the Puck"
@@ -158,15 +183,21 @@ def test_standoff():
         "held nothing - a transition must not be logged, or a session spams it"
     )
 
+
+def test_an_idle_listener_opens_and_listens(drive):
     # Idle: no lock, so it opens and listens like always.
     cap, fake = drive(lock_age_s=None, stop_after=6)
     assert fake.enumerations >= 1, "idle listener never opened the Puck"
     assert cap.events()[0] == "puck_present", cap.events()
 
+
+def test_a_stale_lock_is_not_a_session(drive):
     # A stale lock is NOT a session - the listener must come back.
     cap, fake = drive(lock_age_s=sessionlock.LOCK_STALE_S + 5, stop_after=6)
     assert fake.enumerations >= 1, "a stale lock left the chord lane deaf"
 
+
+def test_the_transition_stands_off_once_and_never_reopens(drive):
     # THE transition: listening, then a launch takes the lock mid-loop.
     cap, fake = drive(lock_age_s=None, stop_after=14, session_starts_at=4)
     ev = cap.events()
@@ -180,6 +211,8 @@ def test_standoff():
         f"logged the transition {ev.count('puck_standoff')}x"
     )
 
+
+def test_the_loop_ages_out_a_stale_error_marker_while_the_puck_says_nothing(drive):
     # The loop itself must reach the age-out while the Puck says nothing:
     # FakeHid never returns a report, which is the state a voice- or
     # phone-started launch fails in.
@@ -188,12 +221,15 @@ def test_standoff():
     assert not sessionlock.last_error_file().exists(), (
         "the loop never aged the marker out"
     )
+
+
+def test_a_stale_error_marker_is_discarded_unheld(monkeypatch):
     # A launch started by voice or from a phone leaves nobody holding the
     # Puck. The age-out must not be gated on the buzz, or the marker
     # strands until the next successful launch (2026-08-30, stranded 5 h).
     fresh_state()
     cap = logbook.CapturingLog("listener")
-    cl.log = cap
+    monkeypatch.setattr(cl, "log", cap)
     sessionlock.last_error_file().write_text("Enter exited without READY")
     stale = time.time() - cl.ERR_STALE_S - 60
     os.utime(sessionlock.last_error_file(), (stale, stale))
@@ -201,9 +237,13 @@ def test_standoff():
     assert cap.find("stale_error_discarded"), cap.events()
     assert not sessionlock.last_error_file().exists(), "stale marker survived unheld"
 
+
+def test_a_fresh_error_marker_is_kept_unheld(monkeypatch):
     # Fresh and unheld: kept, so the next hand on the Puck still feels it.
+    fresh_state()
+    cap = logbook.CapturingLog("listener")
+    monkeypatch.setattr(cl, "log", cap)
     sessionlock.last_error_file().write_text("Enter exited without READY")
-    cap.records.clear()
     cl.signal_last_error(None)
     assert not cap.events(), cap.events()
     assert sessionlock.last_error_file().exists(), "fresh marker discarded unheld"

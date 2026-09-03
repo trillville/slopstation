@@ -29,22 +29,29 @@ def no_dangling_tail(msgs):
     return not any(b.get("type") == "tool_use" for b in last["content"])
 
 
-def test_carry():
-    # Orphaned tool result at the head -> trimmed away.
+def test_orphaned_tool_result_at_the_head_is_trimmed():
     m = _trim_carry([TOOL_RES, A, U, A])
     assert first_is_plain_user(m), m
 
+
+def test_dangling_tool_use_at_the_tail_is_dropped():
     # Assistant tool_call with no result at the tail -> dropped.
     m = _trim_carry([U, A, U, A_TOOL])
     assert no_dangling_tail(m) and first_is_plain_user(m), m
 
+
+def test_whole_exchanges_pass_through_unchanged():
     whole = [U, A_TOOL, TOOL_RES, A]
     assert _trim_carry(whole) == whole
 
+
+def test_all_orphan_slice_collapses_to_empty():
     # All-orphan slice collapses to empty, not a crash.
     assert _trim_carry([TOOL_RES, A_TOOL]) == []
     assert _trim_carry([]) == []
 
+
+def test_sliced_window_of_tool_turns_is_whole():
     # Two tool turns + a plain turn, sliced to 8.
     convo = [U, A_TOOL, TOOL_RES, A, U, A_TOOL, TOOL_RES, A, U, A]
     m = _trim_carry(convo[-8:])
