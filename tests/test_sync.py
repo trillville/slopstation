@@ -6,162 +6,180 @@ mocked; no network.
 
 import threading
 import time
+import types
+
+import pytest
 
 from slopstation import config, logbook
 from slopstation.agent.tools import library, steamstore
 
+KEYLESS = {"steamApiKey": "dg_...", "steamId64": ""}
+KEYED = {"steamApiKey": "X" * 40, "steamId64": "7656119"}
 
-def reset(monkey):
-    for k in ("installed", "owned", "meta", "deals", "collections"):
-        monkey[k] = 0
-    library._sync_lock = threading.Lock()
+NOTHING = {"installed": 0, "owned": 0, "meta": 0, "deals": 0, "collections": 0}
 
 
-def test_sync():
-    real_refresh = library.refresh
-    calls = {"installed": 0, "owned": 0, "meta": 0, "deals": 0, "collections": 0}
-    state = {"index": {}, "refresh_rc": 0}
+def stamp(age_s=0):
+    """An index timestamp age_s seconds old, in the form _iso_age parses."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - age_s))
+
+
+@pytest.fixture
+def layers(monkeypatch):
+    """Every layer fn mocked to count into `calls`; `state` is what the loads
+    answer (index, meta_cache, deals) and what layer 1 returns (refresh_rc).
+    No Steam key, and deals fresh, so nothing beyond layers 1+1b runs until a
+    test turns a knob."""
+    calls = dict(NOTHING)
+    state = {
+        "index": {},
+        "meta_cache": {},
+        "deals": {"refreshed": stamp()},  # fresh by default -> deals skipped
+        "refresh_rc": 0,
+    }
+
+    def hit(layer):
+        calls[layer] += 1
 
     # refresh returns 0 on success (PC awake); sync gates collections on it.
     def mock_refresh(**k):
-        calls["installed"] += 1
+        hit("installed")
         return state["refresh_rc"]
 
-    library.refresh = mock_refresh
-    library.refresh_collections = lambda: calls.__setitem__(
-        "collections", calls["collections"] + 1
-    )
-    library.refresh_owned = lambda: calls.__setitem__("owned", calls["owned"] + 1)
-    library.refresh_meta = lambda appids, limit=200: calls.__setitem__(
-        "meta", calls["meta"] + 1
-    )
+    monkeypatch.setattr(library, "refresh", mock_refresh)
+    monkeypatch.setattr(library, "refresh_collections", lambda: hit("collections"))
+    monkeypatch.setattr(library, "refresh_owned", lambda: hit("owned"))
+    monkeypatch.setattr(library, "refresh_meta", lambda appids, limit=200: hit("meta"))
     # Layer 4: deals is keyless and MUST be mocked here or sync() hits the store.
-    steamstore.refresh_deals = lambda: calls.__setitem__("deals", calls["deals"] + 1)
-    steamstore.load_deals = lambda: state["deals"]
-    library.load = lambda: state["index"]
-    library.load_meta = lambda: state["meta_cache"]
-    state["meta_cache"] = {}
-    fresh = time.strftime("%Y-%m-%dT%H:%M:%S")
-    old = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 7 * 3600))
-    state["deals"] = {"refreshed": fresh}  # fresh by default -> deals skipped
+    monkeypatch.setattr(steamstore, "refresh_deals", lambda: hit("deals"))
+    monkeypatch.setattr(steamstore, "load_deals", lambda: state["deals"])
+    monkeypatch.setattr(library, "load", lambda: state["index"])
+    monkeypatch.setattr(library, "load_meta", lambda: state["meta_cache"])
+    # A lock of this test's own, so a stacked-crawl test cannot inherit one.
+    monkeypatch.setattr(library, "_sync_lock", threading.Lock())
+    monkeypatch.setattr(config, "secrets", lambda: dict(KEYLESS))
+    return types.SimpleNamespace(calls=calls, state=state)
 
-    # --- no Steam key: layers 1+4 only (deals fresh here -> skipped) ----------
-    config.secrets = lambda: {"steamApiKey": "dg_...", "steamId64": ""}
-    reset(calls)
-    state["index"] = {"installed": [{"appid": 1}]}
-    library.sync()
-    assert calls == {
-        "installed": 1,
-        "owned": 0,
-        "meta": 0,
-        "deals": 0,
-        "collections": 1,
-    }, calls
 
-    # --- deals stale, NO key: still refreshes (GetWishlist/specials keyless) --
-    reset(calls)
-    state["deals"] = {}  # no stamp -> stale
-    state["index"] = {"installed": [{"appid": 1}]}
+@pytest.fixture
+def keyed(layers, monkeypatch):
+    """The same layers with a Steam key and id on file."""
+    monkeypatch.setattr(config, "secrets", lambda: dict(KEYED))
+    return layers
+
+
+def test_no_key_runs_layers_1_and_4_only(layers):
+    # deals fresh here -> skipped
+    layers.state["index"] = {"installed": [{"appid": 1}]}
     library.sync()
-    assert calls == {
+    assert layers.calls == {**NOTHING, "installed": 1, "collections": 1}, layers.calls
+
+
+def test_deals_stale_refreshes_without_a_key(layers):
+    # GetWishlist/specials are keyless.
+    layers.state["deals"] = {}  # no stamp -> stale
+    layers.state["index"] = {"installed": [{"appid": 1}]}
+    library.sync()
+    assert layers.calls == {
+        **NOTHING,
         "installed": 1,
-        "owned": 0,
-        "meta": 0,
         "deals": 1,
         "collections": 1,
-    }, calls
-    state["deals"] = {"refreshed": fresh}
+    }, layers.calls
 
-    # --- key present, owned stale (no timestamp) -> all three -----------------
-    config.secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
-    reset(calls)
-    state["index"] = {"installed": [{"appid": 1}], "owned": {"2": {}}}
-    state["meta_cache"] = {}  # nothing cached -> meta runs
+
+def test_key_and_stale_owned_run_all_three(keyed):
+    # owned has no timestamp -> stale
+    keyed.state["index"] = {"installed": [{"appid": 1}], "owned": {"2": {}}}
+    keyed.state["meta_cache"] = {}  # nothing cached -> meta runs
     library.sync()
-    assert calls == {
+    assert keyed.calls == {
+        **NOTHING,
         "installed": 1,
         "owned": 1,
         "meta": 1,
-        "deals": 0,
         "collections": 1,
-    }, calls
+    }, keyed.calls
 
-    # --- owned fresh (<6h) -> skip owned; all meta cached -> skip meta --------
-    reset(calls)
-    state["index"] = {
+
+def test_owned_fresh_and_meta_cached_skip_both(keyed):
+    keyed.state["index"] = {
         "installed": [{"appid": 1}],
         "owned": {"2": {}},
-        "ownedRefreshed": fresh,
+        "ownedRefreshed": stamp(),  # <6h -> skip owned
     }
-    state["meta_cache"] = {"1": {}, "2": {}}  # both known appids cached
+    keyed.state["meta_cache"] = {"1": {}, "2": {}}  # both known appids cached
     library.sync()
-    assert calls == {
-        "installed": 1,
-        "owned": 0,
-        "meta": 0,
-        "deals": 0,
-        "collections": 1,
-    }, calls
+    assert keyed.calls == {**NOTHING, "installed": 1, "collections": 1}, keyed.calls
 
-    # --- owned stale (>6h) -> refresh owned -----------------------------------
-    reset(calls)
-    state["index"] = {"installed": [{"appid": 1}], "owned": {}, "ownedRefreshed": old}
-    state["meta_cache"] = {"1": {}}
+
+def test_owned_stale_refreshes_owned(keyed):
+    keyed.state["index"] = {
+        "installed": [{"appid": 1}],
+        "owned": {},
+        "ownedRefreshed": stamp(7 * 3600),  # >6h
+    }
+    keyed.state["meta_cache"] = {"1": {}}
     library.sync()
-    assert calls["owned"] == 1, calls
+    assert keyed.calls["owned"] == 1, keyed.calls
 
-    # --- deals stale (>6h) -> refresh deals -----------------------------------
-    reset(calls)
-    state["deals"] = {"refreshed": old}
-    state["index"] = {"installed": [{"appid": 1}]}
+
+def test_deals_stale_refreshes_deals(keyed):
+    keyed.state["deals"] = {"refreshed": stamp(7 * 3600)}  # >6h
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
     library.sync()
-    assert calls["deals"] == 1, calls
-    state["deals"] = {"refreshed": fresh}
+    assert keyed.calls["deals"] == 1, keyed.calls
 
-    # --- PC asleep (refresh != 0) -> collections is SKIPPED (the gate) --------
-    # Both need the PC awake; don't spend a second ssh timeout here.
-    reset(calls)
-    state["refresh_rc"] = 1
-    state["index"] = {"installed": []}
+
+def test_pc_asleep_skips_collections(keyed):
+    # The gate: both need the PC awake; don't spend a second ssh timeout here.
+    keyed.state["refresh_rc"] = 1
+    keyed.state["index"] = {"installed": []}
     library.sync()
-    assert calls["installed"] == 1 and calls["collections"] == 0, calls
-    state["refresh_rc"] = 0
+    assert keyed.calls["installed"] == 1 and keyed.calls["collections"] == 0, (
+        keyed.calls
+    )
 
-    # --- non-reentrant: a second sync while one runs is a no-op --------------
-    reset(calls)
-    state["index"] = {"installed": [{"appid": 1}]}
-    state["meta_cache"] = {"1": {}}
-    config.secrets = lambda: {"steamApiKey": "X" * 40, "steamId64": "7656119"}
+
+def test_second_sync_while_one_runs_is_a_noop(keyed, monkeypatch):
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+    keyed.state["meta_cache"] = {"1": {}}
     barrier = threading.Event()
 
     def slow_refresh(**k):
-        calls["installed"] += 1
+        keyed.calls["installed"] += 1
         barrier.wait(2)  # hold the lock
 
-    library.refresh = slow_refresh
+    monkeypatch.setattr(library, "refresh", slow_refresh)
     t = threading.Thread(target=library.sync)
     t.start()
-    time.sleep(0.2)  # let it acquire the lock
-    library.sync()  # must no-op immediately
-    assert calls["installed"] == 1, "second sync should not have entered"
-    barrier.set()
-    t.join()
+    try:
+        time.sleep(0.2)  # let it acquire the lock
+        library.sync()  # must no-op immediately
+        assert keyed.calls["installed"] == 1, "second sync should not have entered"
+    finally:
+        # Let the first sync finish while the layers are still mocked.
+        barrier.set()
+        t.join()
 
-    # --- the events: refresh says sync_done / sync_skipped on the library lane --
-    from helpers import fresh_state
 
-    fresh_state()
-    library.log = logbook.CapturingLog("library")
-    library.fetch_installed_ssh = lambda: [
-        {"appid": 1, "name": "G", "state": 4, "size": 1, "lastPlayed": 0}
-    ]
-    assert real_refresh() == 0
-    assert library.log.find("sync_done")[0]["layer"] == "installed"
+def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
+    """The events: the real layer 1 says sync_done / sync_skipped on the
+    library lane."""
+    log = logbook.CapturingLog("library")
+    monkeypatch.setattr(library, "log", log)
+    monkeypatch.setattr(
+        library,
+        "fetch_installed_ssh",
+        lambda: [{"appid": 1, "name": "G", "state": 4, "size": 1, "lastPlayed": 0}],
+    )
+    assert library.refresh() == 0
+    assert log.find("sync_done")[0]["layer"] == "installed"
 
     def asleep():
         raise OSError("ssh: connect timed out")
 
-    library.fetch_installed_ssh = asleep
-    assert real_refresh() == 1
-    skipped = library.log.find("sync_skipped")[0]
+    monkeypatch.setattr(library, "fetch_installed_ssh", asleep)
+    assert library.refresh() == 1
+    skipped = log.find("sync_skipped")[0]
     assert skipped["layer"] == "installed" and skipped["level"] == "warn"

@@ -5,9 +5,11 @@ the ENTIRE pre-roll, only then live mic audio.
 """
 
 import asyncio
+import dataclasses
 import threading
 import time
-from pathlib import Path
+
+import pytest
 
 import helpers
 from slopstation import logbook
@@ -21,13 +23,13 @@ from slopstation.agent.speech.preroll import (
 )
 
 
+@dataclasses.dataclass
 class FakeStream:
     """PyAudio-shaped: read(n_samples) returns n*2 bytes, chunk k patterned."""
 
-    def __init__(self, fail_after=None):
-        self.n = 0
-        self.fail_after = fail_after
-        self.closed = False
+    fail_after: int | None = None
+    n: int = 0
+    closes: int = 0
 
     def read(self, n, exception_on_overflow=True):
         if self.fail_after is not None and self.n >= self.fail_after:
@@ -40,7 +42,17 @@ class FakeStream:
         pass
 
     def close(self):
-        self.closed = True
+        self.closes += 1
+
+
+def bare_listener(**attrs):
+    """A WakeListener without __init__ - no PortAudio, no model download; the
+    class defaults cover the tuning knobs. `attrs` is what the test wires in."""
+    from slopstation.agent.speech import audio
+
+    lst = audio.WakeListener.__new__(audio.WakeListener)
+    vars(lst).update(attrs)
+    return lst
 
 
 def test_capture_orders_and_stops():
@@ -53,7 +65,7 @@ def test_capture_orders_and_stops():
     assert len(pcm) > 2 * CHUNK_BYTES, "pump added nothing"
     assert pcm[2 * CHUNK_BYTES : 3 * CHUNK_BYTES] == bytes([1]) * CHUNK_BYTES
     assert pcm[3 * CHUNK_BYTES : 4 * CHUNK_BYTES] == bytes([2]) * CHUNK_BYTES
-    assert stream.closed, "stop() must close the wake stream"
+    assert stream.closes, "stop() must close the wake stream"
     assert cap.stop() is pcm, "stop() must be idempotent"
 
 
@@ -94,14 +106,10 @@ def test_dead_wake_stream_surfaces_original_error():
         def open(self, **kw):
             return DeadStream()
 
-    lst = audio.WakeListener.__new__(audio.WakeListener)
-    lst.pa = FakePA()
-    lst.device_index = None
-    try:
+    lst = bare_listener(pa=FakePA(), device_index=None)
+    with pytest.raises(OSError) as e:
         lst.wait_for_wake_capture(0.5)
-        raise AssertionError("dead stream must raise")
-    except OSError as e:
-        assert "Unanticipated" in str(e), f"original error was replaced: {e}"
+    assert "Unanticipated" in str(e.value), f"original error was replaced: {e.value}"
 
     audio.close_stream_quietly(DeadStream())  # must not raise
 
@@ -117,8 +125,7 @@ def test_zombie_stream_trips_silence_watchdog():
     NOISY_AT = 10  # one real chunk mid-run resets the count
 
     class ZombieStream:
-        def __init__(self):
-            self.n = 0
+        n = 0
 
         def read(self, n, exception_on_overflow=True):
             self.n += 1
@@ -138,20 +145,15 @@ def test_zombie_stream_trips_silence_watchdog():
         def predict(self, chunk, **kw):
             return {"hey_jarvis": 0.0}
 
-    lst = audio.WakeListener.__new__(audio.WakeListener)
-    lst.np = np
-    lst.model = FakeModel()
+    lst = bare_listener(np=np, model=FakeModel())
     stream = ZombieStream()
-    try:
+    with pytest.raises(OSError, match="zeros"):
         lst._listen(stream, 0.5, None, None)
-        raise AssertionError("zombie stream must raise")
-    except OSError as e:
-        assert "zeros" in str(e), f"wrong error: {e}"
     want = NOISY_AT + audio.WakeListener.SILENT_CHUNKS
     assert stream.n == want, f"tripped after {stream.n} chunks, want {want}"
 
 
-def test_near_miss_reports_one_event_per_run_with_its_peak():
+def test_near_miss_reports_one_event_per_run_with_its_peak(monkeypatch):
     """Recall's only trace: a wake word that does not fire emits nothing.
     One event per contiguous run above the floor, carrying that run's peak."""
     import numpy as np
@@ -171,9 +173,8 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
     ]  # crosses
 
     class ScriptedModel:
-        def __init__(self):
-            self.i = 0
-            self.reset_calls = 0
+        i = 0
+        reset_calls = 0
 
         def predict(self, chunk, **kw):
             self.i += 1
@@ -186,18 +187,11 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
         def read(self, n, exception_on_overflow=True):
             return b"\x01\x00" * n  # non-zero: watchdog stays quiet
 
-    lst = audio.WakeListener.__new__(audio.WakeListener)
-    lst.np = np
-    lst.model = ScriptedModel()
-    lst.near_miss_factor = 0.2
-
-    real_log = audio.log
-    audio.log = logbook.CapturingLog()
-    try:
-        score, peak = lst._listen(LiveStream(), 0.5, None, None)
-        misses = audio.log.find("wake_near_miss")
-    finally:
-        audio.log = real_log
+    lst = bare_listener(np=np, model=ScriptedModel(), near_miss_factor=0.2)
+    log = logbook.CapturingLog()
+    monkeypatch.setattr(audio, "log", log)
+    score, peak = lst._listen(LiveStream(), 0.5, None, None)
+    misses = log.find("wake_near_miss")
 
     assert (score, peak) == (0.55, 0.55), (score, peak)
     assert len(misses) == 2, f"want one event per run, got {len(misses)}"
@@ -206,39 +200,34 @@ def test_near_miss_reports_one_event_per_run_with_its_peak():
     assert lst.model.reset_calls == 1, lst.model.reset_calls
 
 
-def test_clip_dump_writes_prunes_and_never_raises():
+def test_clip_dump_writes_prunes_and_never_raises(monkeypatch, tmp_path):
     """The false-activation corpus openWakeWord's verifier trains negatives
     on. Capped (writes on every fire) and fail-soft (a session is building)."""
-    import tempfile
     import wave
 
     from slopstation.agent.speech import audio
 
     ring = [b"\x01\x00" * CHUNK_SAMPLES] * 3
-    tmp = Path(tempfile.mkdtemp())
-    real_dir, real_log = audio.clips_dir(), audio.log
-    audio.clips_dir = lambda: tmp / "wake"
-    audio.log = logbook.CapturingLog()
-    try:
-        for i in range(5):
-            audio.dump_clip(ring, 0.20 + i / 100, keep=3)
-        kept = sorted(audio.clips_dir().glob("wake-*.wav"))
-        written = audio.log.find("wake_clip")
+    log = logbook.CapturingLog()
+    monkeypatch.setattr(audio, "log", log)
+    # clips_dir() lives under this test's own logs/, so nothing to re-point.
+    for i in range(5):
+        audio.dump_clip(ring, 0.20 + i / 100, keep=3)
+    kept = sorted(audio.clips_dir().glob("wake-*.wav"))
+    written = log.find("wake_clip")
 
-        # keep=0 is the off switch: not even the directory.
-        audio.clips_dir = lambda: tmp / "off"
-        audio.dump_clip(ring, 0.5, keep=0)
-        off_made = (tmp / "off").exists()
+    # keep=0 is the off switch: not even the directory.
+    monkeypatch.setattr(audio, "clips_dir", lambda: tmp_path / "off")
+    audio.dump_clip(ring, 0.5, keep=0)
+    off_made = (tmp_path / "off").exists()
 
-        # Fail-soft: a CLIPS_DIR that cannot be created (here, under a file)
-        # logs and returns, never raises into the wake path.
-        blocker = tmp / "blocker"
-        blocker.write_bytes(b"")
-        audio.clips_dir = lambda: blocker / "wake"
-        audio.dump_clip(ring, 0.5, keep=3)
-        failures = audio.log.find("wake_clip_failed")
-    finally:
-        audio.clips_dir, audio.log = (lambda: real_dir), real_log
+    # Fail-soft: a CLIPS_DIR that cannot be created (here, under a file)
+    # logs and returns, never raises into the wake path.
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"")
+    monkeypatch.setattr(audio, "clips_dir", lambda: blocker / "wake")
+    audio.dump_clip(ring, 0.5, keep=3)
+    failures = log.find("wake_clip_failed")
 
     assert len(written) == 5, f"5 fires must log 5 clips, got {len(written)}"
     assert len(kept) == 3, f"keep=3 must prune to 3, got {len(kept)}"
@@ -263,16 +252,22 @@ def test_wake_chime_waits_for_the_end_of_speech():
     def chunk(level):
         return np.full(CHUNK_SAMPLES, level, np.int16).tobytes()
 
+    fired = []
+
     def watcher():
-        """_watch's state without a thread or a stream."""
+        """_watch's state without a thread or a stream; the chime lands in
+        `fired`."""
         cap = WakeCapture.__new__(WakeCapture)
-        cap._t0, cap._quiet, cap._peak = time.monotonic(), 0, 0.0
-        cap._chime_deadline = True
+        vars(cap).update(
+            _t0=time.monotonic(),
+            _quiet=0,
+            _peak=0.0,
+            _chime_deadline=True,
+            _on_quiet=lambda: fired.append(time.monotonic()),
+        )
         return cap
 
-    fired = []
     cap = watcher()
-    cap._on_quiet = lambda: fired.append(time.monotonic())
     for _ in range(12):  # ~1 s of talking
         cap._watch(chunk(8000))
     time.sleep(0.05)  # the callback runs on its own thread
@@ -289,7 +284,6 @@ def test_wake_chime_waits_for_the_end_of_speech():
 
     # Room too loud to hear a gap (TV up): chime anyway rather than never.
     late = watcher()
-    late._on_quiet = lambda: fired.append(time.monotonic())
     late._t0 -= WakeCapture.CHIME_BY_S
     late._watch(chunk(8000))
     time.sleep(0.05)
@@ -299,7 +293,6 @@ def test_wake_chime_waits_for_the_end_of_speech():
     # one-breath command still being spoken (the pump outlives the old stop
     # point by the whole setup) - but a real gap still chimes.
     held = watcher()
-    held._on_quiet = lambda: fired.append(time.monotonic())
     held._t0 -= WakeCapture.CHIME_BY_S
     held.disarm_deadline()
     for _ in range(12):  # still talking, past the deadline
@@ -335,18 +328,18 @@ def test_wake_ack_is_claimed_exactly_once():
     assert WakeAck().age() == float("inf"), "unclaimed must not read as 'just chimed'"
 
 
-def test_feeder_chunking():
+def test_feeder_chunking(monkeypatch):
     feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
-    feeder.pcm = b"\xaa" * (CHUNK_BYTES * 2 + 100)
+    monkeypatch.setattr(feeder, "pcm", b"\xaa" * (CHUNK_BYTES * 2 + 100))
     frames = feeder._frames()
     assert [len(f.audio) for f in frames] == [CHUNK_BYTES, CHUNK_BYTES, 100]
     assert all(f.sample_rate == 16000 and f.num_channels == 1 for f in frames)
     assert b"".join(f.audio for f in frames) == feeder.pcm
-    feeder.pcm = b""
+    monkeypatch.setattr(feeder, "pcm", b"")
     assert feeder._frames() == []
 
 
-async def test_feeder_stops_capture_at_startframe():
+async def test_feeder_stops_capture_at_startframe(monkeypatch):
     """The capture must survive until StartFrame: pipecat 1.8 runs the Flux
     connect during setup, and words spoken there exist only if the wake
     stream is still pumping when setup runs."""
@@ -356,7 +349,7 @@ async def test_feeder_stops_capture_at_startframe():
     feeder = PrerollFeeder(logbook.CapturingLog("preroll"))
     marker = b"\xbb" * CHUNK_BYTES
     capture = WakeCapture(FakeStream(), [marker])
-    feeder.capture = capture
+    monkeypatch.setattr(feeder, "capture", capture)
     pushed = []
 
     async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
@@ -365,22 +358,18 @@ async def test_feeder_stops_capture_at_startframe():
     async def base_noop(self, frame, direction):
         pass  # StartFrame bookkeeping needs a live pipeline
 
-    feeder.push_frame = fake_push
-    orig = FrameProcessor.process_frame
-    FrameProcessor.process_frame = base_noop
-    try:
-        await feeder.process_frame(
-            InputAudioRawFrame(
-                audio=b"\x00" * CHUNK_BYTES, sample_rate=SAMPLE_RATE, num_channels=1
-            ),
-            FrameDirection.DOWNSTREAM,
-        )
-        assert feeder.capture is capture and capture._pcm is None, (
-            "the capture must keep pumping until StartFrame"
-        )
-        await feeder.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
-    finally:
-        FrameProcessor.process_frame = orig
+    monkeypatch.setattr(feeder, "push_frame", fake_push)
+    monkeypatch.setattr(FrameProcessor, "process_frame", base_noop)
+    await feeder.process_frame(
+        InputAudioRawFrame(
+            audio=b"\x00" * CHUNK_BYTES, sample_rate=SAMPLE_RATE, num_channels=1
+        ),
+        FrameDirection.DOWNSTREAM,
+    )
+    assert feeder.capture is capture and capture._pcm is None, (
+        "the capture must keep pumping until StartFrame"
+    )
+    await feeder.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
     assert capture._pcm is not None, "StartFrame must stop the capture"
     fed = [
         f
@@ -391,15 +380,15 @@ async def test_feeder_stops_capture_at_startframe():
     assert feeder.capture is None and feeder.pcm == b""
 
 
-async def test_pipeline_ordering():
-    # LocalAudioTransport opens PortAudio's default devices for real - the
-    # one test here a deviceless machine (CI) cannot run.
-    helpers.wants("audio")
+async def test_pipeline_ordering(monkeypatch):
     """A live worker delivers StartFrame, then the whole pre-roll, then live
     mic frames - strictly in that order. The pre-roll comes from a REAL
     WakeCapture handed over live, so this also drills the 1.8 overlap: the
     wake stream stays open while the transport opens its own stream on the
     same mic during setup."""
+    # LocalAudioTransport opens PortAudio's default devices for real - the
+    # one test here a deviceless machine (CI) cannot run.
+    helpers.wants("audio")
     import pyaudio
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
     from pipecat.pipeline.pipeline import Pipeline
@@ -411,17 +400,15 @@ async def test_pipeline_ordering():
     )
     from pipecat.workers.runner import WorkerRunner
 
-    class Collector(FrameProcessor):
-        def __init__(self):
-            super().__init__()
-            self.events = []
+    events = []
 
+    class Collector(FrameProcessor):
         async def process_frame(self, frame, direction):
             await super().process_frame(frame, direction)
             if isinstance(frame, StartFrame):
-                self.events.append(("start", b""))
+                events.append(("start", b""))
             elif isinstance(frame, InputAudioRawFrame):
-                self.events.append(("audio", frame.audio))
+                events.append(("audio", frame.audio))
             await self.push_frame(frame, direction)
 
     marker = b"".join(bytes([0xA0 + i]) * CHUNK_BYTES for i in range(4))
@@ -434,11 +421,14 @@ async def test_pipeline_ordering():
         input=True,
         frames_per_buffer=CHUNK_SAMPLES,
     )
-    feeder.capture = WakeCapture(
-        wake_stream,
-        [marker[i : i + CHUNK_BYTES] for i in range(0, len(marker), CHUNK_BYTES)],
+    monkeypatch.setattr(
+        feeder,
+        "capture",
+        WakeCapture(
+            wake_stream,
+            [marker[i : i + CHUNK_BYTES] for i in range(0, len(marker), CHUNK_BYTES)],
+        ),
     )
-    collector = Collector()
 
     transport = LocalAudioTransport(
         LocalAudioTransportParams(
@@ -449,7 +439,7 @@ async def test_pipeline_ordering():
         )
     )
     worker = PipelineWorker(
-        Pipeline([transport.input(), feeder, collector, transport.output()]),
+        Pipeline([transport.input(), feeder, Collector(), transport.output()]),
         params=PipelineParams(audio_in_sample_rate=16000, audio_out_sample_rate=16000),
         enable_rtvi=False,
         idle_timeout_secs=20,
@@ -465,9 +455,9 @@ async def test_pipeline_ordering():
     finally:
         pa.terminate()
 
-    kinds = [k for k, _ in collector.events]
+    kinds = [k for k, _ in events]
     assert kinds and kinds[0] == "start", f"first event was {kinds[:3]}"
-    audio = [a for k, a in collector.events if k == "audio"]
+    audio = [a for k, a in events if k == "audio"]
     assert len(audio) > 4, "no mic frames followed the pre-roll seed"
     assert b"".join(audio[:4]) == marker, (
         "pre-roll must arrive complete and first, before any live mic frame"

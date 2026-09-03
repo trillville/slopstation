@@ -2,7 +2,27 @@
 negatives that must fall through to the assistant lane.
 """
 
-from slopstation.agent.speech.grammar_gate import GrammarMatcher, strip_wake
+import asyncio
+import time
+
+import pytest
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    EndWorkerFrame,
+    ErrorFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection
+
+from slopstation import logbook
+from slopstation.agent.speech import earcons
+from slopstation.agent.speech.grammar_gate import (
+    GrammarGate,
+    GrammarMatcher,
+    strip_wake,
+)
+from slopstation.agent.speech.preroll import WakeAck
 
 VOICE_CFG = {
     "inputs": {
@@ -159,92 +179,25 @@ STRIP_JOIN = [
 ]
 
 
-def test_grammar():
-    m = GrammarMatcher(VOICE_CFG)
-    failures = []
-    for text, want_intent, want_slots in TABLE:
-        got = m.match(text)
-        if want_intent is None:
-            if got is not None:
-                failures.append(f"'{text}': expected NO match, got {got}")
-            continue
-        if got is None:
-            failures.append(f"'{text}': expected {want_intent}, got no match")
-            continue
-        intent, slots = got
-        if intent != want_intent:
-            failures.append(f"'{text}': expected {want_intent}, got {intent}")
-            continue
-        for k, v in want_slots.items():
-            got_v = slots.get(k)
-            if isinstance(v, (int, float)):
-                ok = got_v is not None and float(got_v) == float(v)
-            else:
-                ok = str(got_v).lower() == str(v).lower()
-            if not ok:
-                failures.append(f"'{text}': slot {k}={got_v!r}, want {v!r}")
+@pytest.fixture
+def matcher():
+    return GrammarMatcher(VOICE_CFG)
 
-    for text, want in STRIP:
-        got = strip_wake(text)
-        if got != want:
-            failures.append(f"strip '{text}': got {got!r}, want {want!r}")
-    for text, want in STRIP_ALFRED:
-        got = strip_wake(text, "alfred")
-        if got != want:
-            failures.append(f"strip '{text}': got {got!r}, want {want!r}")
 
-    for text, anchor, want in STRIP_JOIN:
-        got = strip_wake(text, anchor)
-        if got != want:
-            failures.append(f"strip[{anchor}] '{text}': got {got!r}, want {want!r}")
-    # Strip output must still match the grammar.
-    stripped = strip_wake("hey jarvis volume up")
-    if m.match(stripped) is None or m.match(stripped)[0] != "VolumeUp":
-        failures.append(f"stripped {stripped!r} no longer matches VolumeUp")
+@pytest.fixture
+def drive(matcher, monkeypatch):
+    """Feed frames to a fresh gate with push_frame stubbed; returns the
+    EndWorkerFrames it pushed, its log, and the gate."""
 
-    # is_busy: an assistant turn in flight defers the idle timeout, but a hung
-    # turn expires after ASSISTANT_WAIT_S so it can't pin the session open.
-    import time as _t
-
-    from slopstation.agent.speech.grammar_gate import GrammarGate
-
-    g = GrammarGate(m, None, lambda s: None)
-    if g.is_busy():
-        failures.append("fresh gate must not be busy")
-    g._assistant_pending = _t.time()
-    if not g.is_busy():
-        failures.append("assistant turn in flight must defer idle")
-    g._assistant_pending = _t.time() - (GrammarGate.ASSISTANT_WAIT_S + 1)
-    if g.is_busy():
-        failures.append("expired assistant turn must not pin the session")
-
-    # The stop_listening tool ARMS the gate; the session ends only once the
-    # goodbye is spoken, since the tool runs before the model has said a word.
-    import asyncio
-
-    from pipecat.frames.frames import (
-        BotStoppedSpeakingFrame,
-        EndWorkerFrame,
-        ErrorFrame,
-        UserStartedSpeakingFrame,
-        UserStoppedSpeakingFrame,
-    )
-    from pipecat.processors.frame_processor import FrameDirection
-
-    from slopstation import logbook
-    from slopstation.agent.speech.preroll import WakeAck
-
-    def drive(frames, arm, ack=None):
-        """Feed frames to a fresh gate with push_frame stubbed; return the
-        EndWorkerFrames it pushed, its log, and the gate."""
+    def _drive(frames, arm, ack=None):
         glog = logbook.CapturingLog("voice")
-        gate = GrammarGate(m, None, glog, ack=ack)
+        gate = GrammarGate(matcher, None, glog, ack=ack)
         pushed = []
 
         async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
             pushed.append(frame)
 
-        gate.push_frame = fake_push
+        monkeypatch.setattr(gate, "push_frame", fake_push)
 
         async def run():
             if arm:
@@ -255,47 +208,114 @@ def test_grammar():
         asyncio.run(run())
         return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog, gate
 
+    return _drive
+
+
+@pytest.mark.parametrize(
+    "text,want_intent,want_slots", TABLE, ids=[t[0] for t in TABLE]
+)
+def test_utterance_maps_to_intent_and_slots(matcher, text, want_intent, want_slots):
+    got = matcher.match(text)
+    if want_intent is None:
+        assert got is None, f"'{text}': expected NO match, got {got}"
+        return
+    assert got is not None, f"'{text}': expected {want_intent}, got no match"
+    intent, slots = got
+    assert intent == want_intent, f"'{text}': expected {want_intent}, got {intent}"
+    for k, v in want_slots.items():
+        got_v = slots.get(k)
+        if isinstance(v, (int, float)):
+            ok = got_v is not None and float(got_v) == float(v)
+        else:
+            ok = str(got_v).lower() == str(v).lower()
+        assert ok, f"'{text}': slot {k}={got_v!r}, want {v!r}"
+
+
+@pytest.mark.parametrize("text,want", STRIP, ids=[t[0] for t in STRIP])
+def test_strip_wake_removes_the_jarvis_prefix(text, want):
+    assert strip_wake(text) == want
+
+
+@pytest.mark.parametrize("text,want", STRIP_ALFRED, ids=[t[0] for t in STRIP_ALFRED])
+def test_strip_wake_joins_a_split_alfred(text, want):
+    assert strip_wake(text, "alfred") == want
+
+
+@pytest.mark.parametrize(
+    "text,anchor,want", STRIP_JOIN, ids=[f"{t[1]}:{t[0]}" for t in STRIP_JOIN]
+)
+def test_strip_wake_two_token_join(text, anchor, want):
+    assert strip_wake(text, anchor) == want
+
+
+def test_stripped_transcript_still_matches_the_grammar(matcher):
+    stripped = strip_wake("hey jarvis volume up")
+    got = matcher.match(stripped)
+    assert got is not None and got[0] == "VolumeUp", (
+        f"stripped {stripped!r} no longer matches VolumeUp"
+    )
+
+
+def test_is_busy_defers_idle_until_the_assistant_turn_expires(matcher, monkeypatch):
+    """An assistant turn in flight defers the idle timeout, but a hung turn
+    expires after ASSISTANT_WAIT_S so it can't pin the session open."""
+    g = GrammarGate(matcher, None, lambda s: None)
+    assert not g.is_busy(), "fresh gate must not be busy"
+    monkeypatch.setattr(g, "_assistant_pending", time.time())
+    assert g.is_busy(), "assistant turn in flight must defer idle"
+    monkeypatch.setattr(
+        g, "_assistant_pending", time.time() - (GrammarGate.ASSISTANT_WAIT_S + 1)
+    )
+    assert not g.is_busy(), "expired assistant turn must not pin the session"
+
+
+# The stop_listening tool ARMS the gate; the session ends only once the
+# goodbye is spoken, since the tool runs before the model has said a word.
+
+
+def test_an_armed_stop_ends_the_session_once_the_goodbye_is_spoken(drive):
     ended, glog, _ = drive([BotStoppedSpeakingFrame()], arm=True)
-    if len(ended) != 1:
-        failures.append(
-            f"an armed stop must end the session exactly once, got {len(ended)}"
-        )
-    if "session_stop_requested" not in glog.events():
-        failures.append("arming the stop must log session_stop_requested")
+    assert len(ended) == 1, (
+        f"an armed stop must end the session exactly once, got {len(ended)}"
+    )
+    assert "session_stop_requested" in glog.events(), (
+        "arming the stop must log session_stop_requested"
+    )
+
+
+def test_an_ordinary_answer_does_not_end_the_session(drive):
     ended, _, _ = drive([BotStoppedSpeakingFrame()], arm=False)
-    if ended:
-        failures.append("finishing an ordinary answer must not end the session")
+    assert not ended, "finishing an ordinary answer must not end the session"
+
+
+def test_a_failed_answer_still_honours_an_armed_stop(drive):
     # The goodbye can die between the model and the speaker; the ask stands.
     ended, _, _ = drive([ErrorFrame(error="synthetic tts failure")], arm=True)
-    if len(ended) != 1:
-        failures.append("a failed answer must still honour an armed stop")
+    assert len(ended) == 1, "a failed answer must still honour an armed stop"
 
-    # Turn edges (the resolver's real frames): busy mid-turn defers the idle
-    # handler, the stop claims the chime, and the flag EXPIRES - a Flux socket
-    # that dies mid-turn never sends the stop edge and must not pin the
-    # session open.
+
+def test_turn_edges_defer_idle_claim_the_chime_and_expire(drive, monkeypatch):
+    """Turn edges (the resolver's real frames): busy mid-turn defers the idle
+    handler, the stop claims the chime, and the flag EXPIRES - a Flux socket
+    that dies mid-turn never sends the stop edge and must not pin the
+    session open."""
     ack = WakeAck()
     _, _, gate = drive([UserStartedSpeakingFrame()], arm=False, ack=ack)
-    if not gate.is_busy():
-        failures.append("an open user turn must read as mid-turn")
-    gate._speaking = _t.time() - (GrammarGate.SPEAKING_WAIT_S + 1)
-    if gate.is_busy():
-        failures.append("a lost stop edge must not pin the session open")
+    assert gate.is_busy(), "an open user turn must read as mid-turn"
+    monkeypatch.setattr(
+        gate, "_speaking", time.time() - (GrammarGate.SPEAKING_WAIT_S + 1)
+    )
+    assert not gate.is_busy(), "a lost stop edge must not pin the session open"
     _, _, gate = drive(
         [UserStartedSpeakingFrame(), UserStoppedSpeakingFrame()], arm=False, ack=ack
     )
-    if gate.is_busy():
-        failures.append("a closed user turn must not read as mid-turn")
-    if ack.claim():
-        failures.append("the turn stop must claim the wake chime")
+    assert not gate.is_busy(), "a closed user turn must not read as mid-turn"
+    assert not ack.claim(), "the turn stop must claim the wake chime"
 
-    # An assistant turn is silent while it works: the only sounds are the
-    # answer itself and, on error, the fail earcon.
-    from slopstation.agent.speech import earcons
 
-    if "think" in earcons.SPECS:
-        failures.append("the think earcon is back - it was removed on purpose")
-
-    for f in failures:
-        print("FAIL", f)
-    assert not failures, f"{len(failures)} grammar failures"
+def test_the_think_earcon_stays_removed():
+    """An assistant turn is silent while it works: the only sounds are the
+    answer itself and, on error, the fail earcon."""
+    assert "think" not in earcons.SPECS, (
+        "the think earcon is back - it was removed on purpose"
+    )

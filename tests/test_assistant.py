@@ -1,13 +1,21 @@
 """Catalog + system prompt from a fixture index, tool-impl
 validation, pipecat/anthropic constructions with dummy keys, and a tolerant
 live metadata fetch.
+
+The catalog is the fixture index written under the runtime home conftest gives
+each test, so every tool reads the same library.json and the session lock
+lives beside it.
 """
 
+import asyncio
+import inspect
+import os
 import re
 import time
-from pathlib import Path
+import types
 
-from helpers import fresh_state
+import pytest
+
 from slopstation import logbook, sessionlock, statefile
 from slopstation.agent.brain import assistant, backends
 from slopstation.agent.brain.dispatch import Dispatch
@@ -26,6 +34,52 @@ CFG_MIN = {
     },
 }
 
+# Server-side search on, with a location the providers pass through.
+VOICE_ON = {
+    **CFG_MIN["voice"],
+    "assistantWebSearch": True,
+    "location": {"city": "Portland", "region": "", "country": "US", "timezone": ""},
+}
+
+INSTALLED = 892970  # Valheim: installed and played
+OWNED_ONLY = 413150  # Stardew Valley: owned, never installed
+UNKNOWN = 999999999  # in neither layer of the index
+
+INDEX = {
+    "refreshed": "2026-08-22T00:00:00",
+    "installed": [
+        {
+            "appid": INSTALLED,
+            "name": "Valheim",
+            "state": 4,
+            "size": 1,
+            "lastPlayed": 1700000000,
+        },
+        {
+            "appid": 1245620,
+            "name": "ELDEN RING",
+            "state": 4,
+            "size": 1,
+            "lastPlayed": 0,
+        },
+    ],
+    "owned": {
+        str(INSTALLED): {
+            "hours": 12.0,
+            "hours2w": 0,
+            "last": 1700000000,
+            "name": "Valheim",
+        },
+        str(OWNED_ONLY): {
+            "hours": 3.0,
+            "hours2w": 0,
+            "last": 0,
+            "name": "Stardew Valley",
+        },
+    },
+    "collections": [{"name": "Co-op", "id": "uc-abc"}],
+}
+
 
 def flat(text):
     """Prose with its line breaks collapsed, so an assertion is about the
@@ -34,54 +88,211 @@ def flat(text):
     return re.sub(r"\s+", " ", str(text).replace(r"\n", " "))
 
 
-def test_assistant():
-    log = logbook.CapturingLog("assistant")
-    fresh_state()
-    statefile.write(
-        library.library_file(),
-        {
-            "refreshed": "2026-08-22T00:00:00",
-            "installed": [
-                {
-                    "appid": 892970,
-                    "name": "Valheim",
-                    "state": 4,
-                    "size": 1,
-                    "lastPlayed": 1700000000,
-                },
-                {
-                    "appid": 1245620,
-                    "name": "ELDEN RING",
-                    "state": 4,
-                    "size": 1,
-                    "lastPlayed": 0,
-                },
-            ],
-            "owned": {
-                "892970": {
-                    "hours": 12.0,
-                    "hours2w": 0,
-                    "last": 1700000000,
-                    "name": "Valheim",
-                },
-                "413150": {
-                    "hours": 3.0,
-                    "hours2w": 0,
-                    "last": 0,
-                    "name": "Stardew Valley",
-                },
-            },
-            "collections": [{"name": "Co-op", "id": "uc-abc"}],
-        },
+def boom(_):
+    raise ValueError("kaboom")
+
+
+def recording_nav(seen):
+    """A Dispatch.nav double: records (kind, arg), answers ok."""
+
+    def nav(kind, arg=None):
+        seen.append((kind, arg))
+        return types.SimpleNamespace(ok=True, detail="showing")
+
+    return nav
+
+
+class FakeOperations:
+    def __init__(self):
+        self.tracked = []
+        self.acknowledged = None
+        self.active_rows = []
+        self.observed = []
+        self.delivered = []
+
+    def track_steam_install(self, appid, title, turn=None, verified=False):
+        self.tracked.append((appid, title, turn, verified))
+        return {"id": "op-test"}
+
+    def track_external(
+        self,
+        kind,
+        authority,
+        external_ref,
+        title,
+        turn=None,
+        detail="",
+        metadata=None,
+    ):
+        self.tracked.append(
+            (kind, authority, external_ref, title, turn, detail, metadata)
+        )
+        return {"id": "op-media"}
+
+    def for_assistant(self, scope, acknowledge=False):
+        self.acknowledged = acknowledge
+        return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
+
+    def observe(self, operation_id, state, progress, detail):
+        self.observed.append((operation_id, state, progress, detail))
+        return {
+            "id": operation_id,
+            "state": state,
+            "progress": progress,
+            "detail": detail,
+        }
+
+    def active(self, kind=None):
+        return [r for r in self.active_rows if kind is None or r.get("kind") == kind]
+
+    def mark_delivered(self, operation_id):
+        self.delivered.append(operation_id)
+
+
+class FakeMedia:
+    def __init__(self):
+        self.requests = []
+
+    def find(self, kind, query):
+        return [{"tmdb_id": 438631, "title": "Dune", "year": 2021}]
+
+    def library(self, kind, catalog_id):
+        self.requests.append(("library", kind, catalog_id))
+        return {
+            "kind": kind,
+            "catalog_id": catalog_id,
+            "in_library": True,
+            "title": "Breaking Bad" if kind == "series" else "Dune",
+            "year": 2008 if kind == "series" else 2021,
+            "seasons": [{"season": 2, "have": 13, "aired": 13}],
+        }
+
+    def request_movie(self, tmdb_id, preset):
+        self.requests.append(("movie", tmdb_id, preset))
+        return {
+            "ok": True,
+            "kind": "movie_acquisition",
+            "authority": "radarr",
+            "external_ref": "31",
+            "title": "Dune",
+            "catalog_id": tmdb_id,
+            "preset": preset,
+            "profile": "Movie HD",
+            "already_available": False,
+        }
+
+    def request_series(self, tvdb_id, preset, seasons):
+        self.requests.append(("series", tvdb_id, preset, seasons))
+        return {
+            "ok": True,
+            "kind": "series_acquisition",
+            "authority": "sonarr",
+            "external_ref": "41",
+            "title": "Breaking Bad",
+            "catalog_id": tvdb_id,
+            "preset": preset,
+            "profile": "Series HD",
+            "seasons": seasons,
+            "already_available": False,
+        }
+
+    def delete_movie(self, tmdb_id, command_ids):
+        self.requests.append(("delete_movie", tmdb_id, command_ids))
+        return {"ok": True, "title": "Dune", "removed": True}
+
+    def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
+        self.requests.append(
+            ("delete_series", tvdb_id, seasons, all_seasons, command_ids)
+        )
+        return {"ok": True, "title": "Breaking Bad", "removed": True}
+
+
+class RaisingSteam:
+    """A revoked token: available() still says yes, then every call raises."""
+
+    def available(self):
+        return True
+
+    def install(self, a):
+        raise RuntimeError("token revoked")
+
+    def download_status(self):
+        raise RuntimeError("token revoked")
+
+
+@pytest.fixture
+def log():
+    return logbook.CapturingLog("assistant")
+
+
+@pytest.fixture
+def catalog():
+    """The fixture index, written under this test's runtime home."""
+    statefile.write(library.library_file(), INDEX)
+    return library.load()
+
+
+@pytest.fixture
+def dispatch(catalog, log):
+    """A dry-run Dispatch over the fixture catalog."""
+    return Dispatch(CFG_MIN, log, dry_run=True)
+
+
+@pytest.fixture
+def live_dispatch(catalog, log):
+    """A live Dispatch: the tools take their real path, against the fakes."""
+    return Dispatch(CFG_MIN, log, dry_run=False)
+
+
+@pytest.fixture
+def impls(dispatch, log):
+    """The base tool set: no operations store, no steam, no media."""
+    return assistant.tool_impls(dispatch, log)
+
+
+@pytest.fixture
+def fake_operations():
+    return FakeOperations()
+
+
+@pytest.fixture
+def fake_media():
+    return FakeMedia()
+
+
+@pytest.fixture
+def fake_steam():
+    """An enrolled account session whose install queues silently."""
+    return types.SimpleNamespace(
+        available=lambda: True,
+        install=lambda a: {"ok": True, "detail": "queued"},
+        download_status=lambda: [],
     )
-    d = Dispatch(CFG_MIN, log, dry_run=True)
-    impls = assistant.tool_impls(d, log)
 
-    rows = library.load()["installed"]
-    real_appid = rows[0]["appid"]
 
+@pytest.fixture
+def media_impls(dispatch, log, fake_operations, fake_media):
+    """Dry-run tools with the operations store and the media boundary."""
+    return assistant.tool_impls(
+        dispatch, log, operations=fake_operations, media=fake_media
+    )
+
+
+@pytest.fixture
+def live_media(live_dispatch, log, fake_operations, fake_media):
+    """Live tools over the media fakes, inside utterance fa1100."""
+    live_dispatch.begin_utterance("fa1100", "get dune in 1080p")
+    return assistant.tool_impls(
+        live_dispatch, log, operations=fake_operations, media=fake_media
+    )
+
+
+# -- the system prompt ---------------------------------------------------------
+
+
+def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     si = assistant.system_instruction(CFG_MIN)
-    assert "CATALOG" in si and str(real_appid) in si
+    assert "CATALOG" in si and str(INSTALLED) in si
     # Mishear-repair: the model must know its input is STT, not typed text.
     assert "speech-to-text" in flat(si) and "mishears" in flat(si)
     assert "find_media" in si and "Never guess an id" in si
@@ -103,194 +314,122 @@ def test_assistant():
     n_tokens = len(si) // 4
     assert 500 < n_tokens < 30000, n_tokens
 
-    r = impls["launch_game"]({"appid": 999999999})
+
+# -- the base tools ------------------------------------------------------------
+
+
+def test_launch_game_refuses_an_appid_outside_the_catalog(impls):
+    r = impls["launch_game"]({"appid": UNKNOWN})
     assert not r["ok"] and "not in the catalog" in r["error"]
-    r = impls["launch_game"]({"appid": real_appid})
+    r = impls["launch_game"]({"appid": INSTALLED})
     assert r["ok"] and "dry-run" in r["detail"], r
 
+
+def test_control_routes_actions_and_refuses_the_malformed(impls):
     assert impls["control"]({"action": "volume_up"})["ok"]
     assert impls["control"]({"action": "set_volume", "level": 30})["ok"]
     assert not impls["control"]({"action": "self_destruct"})["ok"]
     r = impls["control"]({"action": "set_volume"})  # no level -> refused
     assert not r["ok"] and "level" in r["error"]
+
+
+def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
     # stop_listening with nothing to stop (REPL, probes): refused, not faked.
     r = impls["stop_listening"]({})
     assert not r["ok"] and "nothing is listening" in r["error"], r
     stops = []
-    simpls = assistant.tool_impls(d, log, on_stop_listening=lambda: stops.append(1))
+    simpls = assistant.tool_impls(
+        dispatch, log, on_stop_listening=lambda: stops.append(1)
+    )
     r = simpls["stop_listening"]({})
     assert r["ok"] and stops == [1], (r, stops)
+
+
+def test_now_playing_reports_whether_the_rig_is_busy(impls):
     # now_playing answers both halves: what the PC runs, and whether the rig is
     # busy. Mid-launch the PC says 0, and only session_active stops that
     # reading as idle (2026-08-21, turn 0b785e).
-    import os
-    import tempfile
-    import time as _time
-
-    lock = Path(tempfile.mkdtemp()) / "session.lock"
-    sessionlock.lock_file = lambda: lock
     r = impls["get_now_playing"]({})
     assert r["ok"]  # dry-run path
     assert r["session_active"] is False, r
     sessionlock.lock_file().write_text("x")  # a launch owns the rig
     r = impls["get_now_playing"]({})
     assert r["ok"] and r["session_active"] is True, r
-    old = _time.time() - sessionlock.LOCK_STALE_S - 60  # stale = free, same as ever
+    old = time.time() - sessionlock.LOCK_STALE_S - 60  # stale = free, same as ever
     os.utime(sessionlock.lock_file(), (old, old))
     assert impls["get_now_playing"]({})["session_active"] is False
-    r = impls["get_game_details"]({"appid": real_appid})
-    assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
 
-    class FakeOperations:
-        def __init__(self):
-            self.tracked = []
-            self.acknowledged = None
-            self.active_rows = []
-            self.observed = []
-            self.delivered = []
 
-        def track_steam_install(self, appid, title, turn=None, verified=False):
-            self.tracked.append((appid, title, turn, verified))
-            return {"id": "op-test"}
+def test_game_details_names_installed_and_owned_only_games(impls):
+    r = impls["get_game_details"]({"appid": INSTALLED})
+    assert r["ok"] and r["name"] == "Valheim" and r["installed"]
+    # Owned-but-not-installed must still come back named.
+    r = impls["get_game_details"]({"appid": OWNED_ONLY})
+    assert r["ok"] and r["name"] and not r["installed"], r
 
-        def track_external(
-            self,
-            kind,
-            authority,
-            external_ref,
-            title,
-            turn=None,
-            detail="",
-            metadata=None,
-        ):
-            self.tracked.append(
-                (kind, authority, external_ref, title, turn, detail, metadata)
-            )
-            return {"id": "op-media"}
 
-        def for_assistant(self, scope, acknowledge=False):
-            self.acknowledged = acknowledge
-            return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
+# -- the operations ledger -----------------------------------------------------
 
-        def observe(self, operation_id, state, progress, detail):
-            self.observed.append((operation_id, state, progress, detail))
-            return {
-                "id": operation_id,
-                "state": state,
-                "progress": progress,
-                "detail": detail,
-            }
 
-        def active(self, kind=None):
-            return [
-                r for r in self.active_rows if kind is None or r.get("kind") == kind
-            ]
-
-        def mark_delivered(self, operation_id):
-            self.delivered.append(operation_id)
-
-    fake_operations = FakeOperations()
-    oimpls = assistant.tool_impls(d, log, operations=fake_operations)
+def test_list_operations_acknowledges_only_on_a_live_recent_read(
+    dispatch, live_dispatch, log, impls, fake_operations
+):
+    oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
     assert "list_operations" not in impls and "list_operations" in oimpls
     r = oimpls["list_operations"]({"scope": "active"})
     assert r["ok"] and r["operations"][0]["state"] == "RUNNING"
     assert fake_operations.acknowledged is False
     assert oimpls["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is False  # a dry run eats no bulletin
-    live_ops = assistant.tool_impls(
-        Dispatch(CFG_MIN, log, dry_run=False), log, operations=fake_operations
-    )
+    live_ops = assistant.tool_impls(live_dispatch, log, operations=fake_operations)
     assert live_ops["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is True
     assert not oimpls["list_operations"]({"scope": "nope"})["ok"]
 
-    class FakeMedia:
-        def __init__(self):
-            self.requests = []
 
-        def find(self, kind, query):
-            return [{"tmdb_id": 438631, "title": "Dune", "year": 2021}]
+def test_function_schemas_render_only_the_tools_present(
+    dispatch, log, impls, fake_operations, media_impls
+):
+    assert len(assistant.function_schemas(impls)) == 10  # no operations store
+    oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
+    assert len(assistant.function_schemas(oimpls)) == 11
+    assert len(assistant.function_schemas(media_impls)) == 16
 
-        def library(self, kind, catalog_id):
-            self.requests.append(("library", kind, catalog_id))
-            return {
-                "kind": kind,
-                "catalog_id": catalog_id,
-                "in_library": True,
-                "title": "Breaking Bad" if kind == "series" else "Dune",
-                "year": 2008 if kind == "series" else 2021,
-                "seasons": [{"season": 2, "have": 13, "aired": 13}],
-            }
 
-        def request_movie(self, tmdb_id, preset):
-            self.requests.append(("movie", tmdb_id, preset))
-            return {
-                "ok": True,
-                "kind": "movie_acquisition",
-                "authority": "radarr",
-                "external_ref": "31",
-                "title": "Dune",
-                "catalog_id": tmdb_id,
-                "preset": preset,
-                "profile": "Movie HD",
-                "already_available": False,
-            }
+# -- the media tools -----------------------------------------------------------
 
-        def request_series(self, tvdb_id, preset, seasons):
-            self.requests.append(("series", tvdb_id, preset, seasons))
-            return {
-                "ok": True,
-                "kind": "series_acquisition",
-                "authority": "sonarr",
-                "external_ref": "41",
-                "title": "Breaking Bad",
-                "catalog_id": tvdb_id,
-                "preset": preset,
-                "profile": "Series HD",
-                "seasons": seasons,
-                "already_available": False,
-            }
 
-        def delete_movie(self, tmdb_id, command_ids):
-            self.requests.append(("delete_movie", tmdb_id, command_ids))
-            return {"ok": True, "title": "Dune", "removed": True}
-
-        def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
-            self.requests.append(
-                ("delete_series", tvdb_id, seasons, all_seasons, command_ids)
-            )
-            return {"ok": True, "title": "Breaking Bad", "removed": True}
-
-    fake_media = FakeMedia()
-    mimpls = assistant.tool_impls(d, log, operations=fake_operations, media=fake_media)
+def test_media_tools_answer_find_and_library(media_impls, fake_media):
     assert {
         "find_media",
         "media_library",
         "request_movie",
         "request_series",
         "delete_media",
-    } <= set(mimpls)
+    } <= set(media_impls)
     assert (
-        mimpls["find_media"]({"kind": "movie", "query": "Dune"})["candidates"][0][
+        media_impls["find_media"]({"kind": "movie", "query": "Dune"})["candidates"][0][
             "tmdb_id"
         ]
         == 438631
     )
-    held = mimpls["media_library"]({"kind": "series", "catalog_id": 81189})
+    held = media_impls["media_library"]({"kind": "series", "catalog_id": 81189})
     assert held["ok"] and held["seasons"][0]["have"] == 13
     assert fake_media.requests[-1] == ("library", "series", 81189)
-    fake_media.requests.clear()
-    preview = mimpls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
+
+
+def test_request_movie_previews_dry_and_tracks_the_turn_live(
+    media_impls, live_media, fake_media, fake_operations
+):
+    preview = media_impls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
     assert preview["dry_run"] and not fake_media.requests
-    live_dispatch = Dispatch(CFG_MIN, log, dry_run=False)
-    live_dispatch.begin_utterance("fa1100", "get dune in 1080p")
-    live_media = assistant.tool_impls(
-        live_dispatch, log, operations=fake_operations, media=fake_media
-    )
     requested = live_media["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
     assert requested["operation_id"] == "op-media"
     assert fake_media.requests[-1] == ("movie", 438631, "1080p")
     assert fake_operations.tracked[-1][4] == "fa1100"
+
+
+def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operations):
     series_requested = live_media["request_series"]({"tvdb_id": 81189, "seasons": [2]})
     assert series_requested["operation_id"] == "op-media"
     assert series_requested["all_seasons"] is False
@@ -324,14 +463,9 @@ def test_assistant():
         tool for tool in assistant.anthropic_tools() if tool["name"] == "request_series"
     )
     assert "all_seasons" in series_schema["input_schema"]["properties"]
-    fake_operations.active_rows = [
-        {
-            "id": "op-andor",
-            "kind": "series_acquisition",
-            "progress": {"phase": "downloading"},
-            "metadata": {"catalog_id": 81189, "seasons": [2], "command_ids": [77]},
-        }
-    ]
+
+
+def test_delete_media_validates_its_scope(live_media):
     for bad in ([], [0], [-1], [True], "2", 2, [2, "3"], (2,)):
         assert (
             "positive integers"
@@ -342,6 +476,20 @@ def test_assistant():
     assert (
         "integer"
         in live_media["delete_media"]({"kind": "movie", "catalog_id": "dune"})["error"]
+    )
+
+
+def test_delete_media_needs_a_confirmation_from_a_later_turn(
+    monkeypatch, live_dispatch, live_media, fake_media, fake_operations, log
+):
+    # A download of the very season is in flight: the delete cancels it too.
+    fake_operations.active_rows.append(
+        {
+            "id": "op-andor",
+            "kind": "series_acquisition",
+            "progress": {"phase": "downloading"},
+            "metadata": {"catalog_id": 81189, "seasons": [2], "command_ids": [77]},
+        }
     )
     ask = {"kind": "series", "catalog_id": 81189, "seasons": [2]}
     asked = live_media["delete_media"](dict(ask))
@@ -354,106 +502,88 @@ def test_assistant():
     deleted = live_media["delete_media"](dict(ask))
     assert deleted["ok"]
     # a question the user declined must not stay armed
-    assistant.ASK_TTL_S, ttl = -1, assistant.ASK_TTL_S
+    monkeypatch.setattr(assistant, "ASK_TTL_S", -1)
     live_media["delete_media"](dict(ask))
     live_dispatch.begin_utterance("fa1102", "later")
     assert not live_media["delete_media"](dict(ask))["ok"]
-    assistant.ASK_TTL_S = ttl
     assert ("delete_series", 81189, [2], False, [77]) in fake_media.requests
     assert deleted["operations_canceled"] == ["op-andor"]
     assert fake_operations.observed[-1][1] == "CANCELED"
     assert fake_operations.delivered == ["op-andor"]
-    assert len(assistant.function_schemas(mimpls)) == 16
-    # Owned-but-not-installed must still come back named.
-    inst_ids = {row["appid"] for row in rows}
-    owned_only = [
-        a
-        for a, o in library.load().get("owned", {}).items()
-        if int(a) not in inst_ids and o.get("name")
-    ]
-    if owned_only:
-        r = impls["get_game_details"]({"appid": int(owned_only[0])})
-        assert r["ok"] and r["name"] and not r["installed"], r
 
-    # --- data lane: list_games / search_store routing + the kill switch ------
+
+# -- data lane: list_games / search_store routing + the kill switch ------------
+
+
+def test_list_games_and_search_store_refuse_a_bad_ask(impls):
     assert "list_games" in impls and "search_store" in impls
     r = impls["list_games"]({"source": "nope"})
     assert not r["ok"] and "unknown source" in r["error"], r
     r = impls["list_games"]({"source": "downloading"})  # no account session here
     assert not r["ok"] and "enrolled" in r["error"], r
+    r = impls["search_store"]({})  # neither term nor tags
+    assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
+
+
+def test_install_game_is_always_offered_and_tracks_the_turn(
+    dispatch, live_dispatch, log, impls, fake_steam, fake_operations
+):
     # install_game is offered with or without the account session: without one
     # it navigates to the game page so the controller can finish the job.
     assert "install_game" in impls
-    import types
-
-    fake_steam = types.SimpleNamespace(
-        available=lambda: True,
-        install=lambda a: {"ok": True, "detail": "queued"},
-        download_status=lambda: [],
-    )
-    with_steam = assistant.tool_impls(d, log, steam=fake_steam)
-    rr = with_steam["install_game"]({"appid": 999999999})
+    with_steam = assistant.tool_impls(dispatch, log, steam=fake_steam)
+    rr = with_steam["install_game"]({"appid": UNKNOWN})
     assert not rr["ok"] and "not in the catalog" in rr["error"], rr
-    if owned_only:
-        live_dispatch.begin_utterance("4c1d0e", "install stardew valley")
-        tracked = assistant.tool_impls(
-            live_dispatch, log, steam=fake_steam, operations=fake_operations
-        )
-        rr = tracked["install_game"]({"appid": int(owned_only[0])})
-        assert rr["ok"] and rr["operation_id"] == "op-test", rr
-        assert fake_operations.tracked[-1][2] == "4c1d0e"
-    r = impls["search_store"]({})  # neither term nor tags
-    assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
+    live_dispatch.begin_utterance("4c1d0e", "install stardew valley")
+    tracked = assistant.tool_impls(
+        live_dispatch, log, steam=fake_steam, operations=fake_operations
+    )
+    rr = tracked["install_game"]({"appid": OWNED_ONLY})
+    assert rr["ok"] and rr["operation_id"] == "op-test", rr
+    assert fake_operations.tracked[-1][2] == "4c1d0e"
+
+
+def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
+    dispatch, log
+):
     # steamDataTools off -> the two store tools vanish from impls AND schemas,
     # so the model stops seeing them, not just calling them.
-    gated = assistant.tool_impls(d, log, voice={"steamDataTools": False})
+    gated = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
     # Ten base tools minus the two store ones the kill switch drops.
     assert len(assistant.function_schemas(gated)) == 8, len(
         assistant.function_schemas(gated)
     )
-    assert len(assistant.function_schemas(oimpls)) == 11
 
-    # --- fail-soft: an impl that RAISES must return an error, never propagate -
+
+# -- fail-soft: an impl that RAISES must return an error, never propagate ------
+
+
+def test_a_dead_token_falls_through_to_the_tv_path(
+    monkeypatch, dispatch, live_dispatch, log, fake_steam
+):
     # A revoked token still has available()==True, then the steam call raises;
     # the tool must answer, not break the turn.
-    class RaisingSteam:
-        def available(self):
-            return True
-
-        def install(self, a):
-            raise RuntimeError("token revoked")
-
-        def download_status(self):
-            raise RuntimeError("token revoked")
-
     rimpls = assistant.tool_impls(live_dispatch, log, steam=RaisingSteam())
-    _isn, _nav = library.installed_name, live_dispatch.nav
-    library.installed_name = lambda a: None  # not installed -> steam.install
+    monkeypatch.setattr(library, "installed_name", lambda a: None)  # -> steam.install
     navd = []
-    live_dispatch.nav = lambda kind, arg=None: (
-        navd.append((kind, arg)),
-        types.SimpleNamespace(ok=True, detail="showing"),
-    )[1]
-    inst = rimpls["install_game"]({"appid": real_appid})
-    assert assistant.tool_impls(d, log, steam=fake_steam)["install_game"](
-        {"appid": real_appid}
+    monkeypatch.setattr(live_dispatch, "nav", recording_nav(navd))
+    inst = rimpls["install_game"]({"appid": INSTALLED})
+    assert assistant.tool_impls(dispatch, log, steam=fake_steam)["install_game"](
+        {"appid": INSTALLED}
     )["dry_run"]
-    library.installed_name, live_dispatch.nav = _isn, _nav
     # A dead token must not end the request: it falls through to the TV path.
     assert inst["ok"] and "press Install" in inst["detail"], inst
-    assert navd == [("details", real_appid)], navd
+    assert navd == [("details", INSTALLED)], navd
     dl = rimpls["list_games"]({"source": "downloading"})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())
+
+
+def test_a_raising_impl_still_answers_through_result_callback():
     # function_schemas backstop: a handler whose impl raises still calls
     # result_callback with an error instead of leaving the turn hung.
-    import asyncio as _a
-
-    def boom(_):
-        raise ValueError("kaboom")
-
     sch = assistant.function_schemas({"get_now_playing": boom})[0]
     got = []
 
@@ -463,9 +593,11 @@ def test_assistant():
         async def result_callback(self, out):
             got.append(out)
 
-    _a.run(sch.handler(P()))
+    asyncio.run(sch.handler(P()))
     assert got and got[0]["ok"] is False, got
 
+
+def test_an_acknowledgment_is_spoken_without_a_second_llm_turn():
     spoken = []
     receipt_result = []
     receipt_schema = assistant.function_schemas(
@@ -492,12 +624,16 @@ def test_assistant():
         await receipt_schema.handler(ReceiptParams())
         await receipt_result[0][1].on_context_updated()
 
-    _a.run(exercise_receipt())
+    asyncio.run(exercise_receipt())
     assert receipt_result[0][1].run_llm is False
     assert spoken[0].text == "Requested Andor, season 1, in 2160p."
     assert spoken[0].append_to_context is True
 
-    # --- every tool call is RECORDED, including the ones that raise ----------
+
+# -- every tool call is RECORDED, including the ones that raise ----------------
+
+
+def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
     # A tool-calling llm span traces as output:null, so function_schemas is the
     # one place that emits which tool ran with what args.
     tlog = logbook.CapturingLog("voice")
@@ -506,7 +642,7 @@ def test_assistant():
     def spy(kind, query, status=None):
         calls["n"] += 1
 
-    _saved_span, assistant.sentry.tool_span = assistant.sentry.tool_span, spy
+    monkeypatch.setattr(assistant.sentry, "tool_span", spy)
     schemas = assistant.function_schemas(
         {
             "get_now_playing": lambda a: {"ok": True, "game": "Hades"},
@@ -522,8 +658,7 @@ def test_assistant():
             pass
 
     for s in schemas:
-        _a.run(s.handler(P2()))
-    assistant.sentry.tool_span = _saved_span
+        asyncio.run(s.handler(P2()))
     # Order follows TOOL_DEFS, not the impls dict, so key by tool name.
     rec = {r["tool"]: r for r in tlog.records if r.get("event") == "tool_call"}
     assert set(rec) == {"get_now_playing", "launch_game"}, rec  # the raiser too
@@ -534,70 +669,96 @@ def test_assistant():
     # log=None (REPL/bench/tests) stays quiet rather than crashing.
     assistant.function_schemas({"get_now_playing": boom})[0]
 
-    # --- nav tool: target->kind remap + catalog guard ------------------------
+
+# -- nav tool: target->kind remap + catalog guard ------------------------------
+
+
+def test_nav_remaps_targets_and_guards_the_catalog(monkeypatch, dispatch, log):
     seen = []
-    d.nav = lambda kind, arg=None: (
-        seen.append((kind, arg)),
-        types.SimpleNamespace(ok=True, detail="showing"),
-    )[1]
-    navimpls = assistant.tool_impls(d, log)
-    assert navimpls["nav"]({"target": "game_page", "appid": real_appid})["ok"]
-    assert navimpls["nav"]({"target": "store_page", "appid": real_appid})["ok"]
+    monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
+    navimpls = assistant.tool_impls(dispatch, log)
+    assert navimpls["nav"]({"target": "game_page", "appid": INSTALLED})["ok"]
+    assert navimpls["nav"]({"target": "store_page", "appid": INSTALLED})["ok"]
     assert navimpls["nav"]({"target": "downloads"})["ok"]
     assert seen == [
-        ("details", real_appid),
-        ("store", real_appid),
+        ("details", INSTALLED),
+        ("store", INSTALLED),
         ("downloads", None),
     ], seen
     assert not navimpls["nav"]({"target": "bogus"})["ok"]
     # An unowned appid: the library page is refused, the store page is not -
     # with the install dialog needing a button press, that IS the install path
     # (2026-08-14).
-    assert not navimpls["nav"]({"target": "game_page", "appid": 999999999})["ok"]
+    assert not navimpls["nav"]({"target": "game_page", "appid": UNKNOWN})["ok"]
     assert navimpls["nav"]({"target": "store_page", "appid": 1478500})["ok"]
     assert seen[-1] == ("store", 1478500), seen[-1]
     assert not navimpls["nav"]({"target": "store_page", "appid": 0})["ok"]
 
+
+def test_nav_resolves_a_collection_by_name_and_lists_them_on_a_miss(
+    monkeypatch, dispatch, log
+):
     # Collections by name, with the miss handing back the real list (STT turns
     # "mech" into "neck", 2026-08-14).
-    _load = library.load
-    library.load = lambda: {
-        "collections": [{"name": "mech", "id": "uc-m1"}, {"name": "RPG", "id": "uc-r1"}]
-    }
+    seen = []
+    monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
+    monkeypatch.setattr(
+        library,
+        "load",
+        lambda: {
+            "collections": [
+                {"name": "mech", "id": "uc-m1"},
+                {"name": "RPG", "id": "uc-r1"},
+            ]
+        },
+    )
+    navimpls = assistant.tool_impls(dispatch, log)
     r = navimpls["nav"]({"target": "collection", "collection": "mech"})
     assert r["ok"] and seen[-1] == ("collection", "uc-m1"), (r, seen[-1])
     r = navimpls["nav"]({"target": "collection", "collection": "neck"})
     assert not r["ok"] and set(r["collections"]) == {"mech", "RPG"}, r
-    library.load = _load
 
-    # --- list_games routing + get_game_details hltb-fallback, fetchers mocked -
-    saved = (
-        steamstore.load_deals,
-        steamstore.fetch_trending,
-        steamstore.fetch_recently_played,
-        steamstore.store_items,
-        steamstore.fetch_hltb,
+
+# -- list_games routing + get_game_details hltb-fallback, fetchers mocked ------
+
+
+def test_list_games_routes_each_source_to_its_fetcher(monkeypatch, impls):
+    monkeypatch.setattr(
+        steamstore,
+        "load_deals",
+        lambda: {
+            "specials": [{"appid": 1, "name": "S"}],
+            "wishlist_on_sale": [{"appid": 2, "name": "W"}],
+        },
     )
-    steamstore.load_deals = lambda: {
-        "specials": [{"appid": 1, "name": "S"}],
-        "wishlist_on_sale": [{"appid": 2, "name": "W"}],
-    }
-    steamstore.fetch_trending = lambda: [{"appid": 3, "name": "T", "rank": 1}]
-    steamstore.fetch_recently_played = lambda: [
-        {"appid": 4, "name": "R", "hours2w": 2.0}
-    ]
-    fresh = assistant.tool_impls(d, log)
-    assert fresh["list_games"]({"source": "specials"})["games"][0]["name"] == "S"
+    monkeypatch.setattr(
+        steamstore, "fetch_trending", lambda: [{"appid": 3, "name": "T", "rank": 1}]
+    )
+    monkeypatch.setattr(
+        steamstore,
+        "fetch_recently_played",
+        lambda: [{"appid": 4, "name": "R", "hours2w": 2.0}],
+    )
+    assert impls["list_games"]({"source": "specials"})["games"][0]["name"] == "S"
     assert (
-        fresh["list_games"]({"source": "wishlist_on_sale"})["games"][0]["name"] == "W"
+        impls["list_games"]({"source": "wishlist_on_sale"})["games"][0]["name"] == "W"
     )
-    assert fresh["list_games"]({"source": "trending"})["games"][0]["name"] == "T"
-    assert fresh["list_games"]({"source": "recently_played"})["games"][0]["name"] == "R"
+    assert impls["list_games"]({"source": "trending"})["games"][0]["name"] == "T"
+    assert impls["list_games"]({"source": "recently_played"})["games"][0]["name"] == "R"
+
+
+def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls):
     # hltb for a game with no catalog name resolves the name from the store.
     hltb_calls = []
-    steamstore.store_items = lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}}
-    steamstore.fetch_hltb = lambda name: hltb_calls.append(name) or {"main": 20}
-    r = fresh["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
+    monkeypatch.setattr(
+        steamstore,
+        "store_items",
+        lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}},
+    )
+    monkeypatch.setattr(
+        steamstore, "fetch_hltb", lambda name: hltb_calls.append(name) or {"main": 20}
+    )
+    r = impls["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
     assert (
         r["ok"]
         and r.get("hltb") == {"main": 20}
@@ -605,19 +766,17 @@ def test_assistant():
     ), r
     # Every facet ask resolves a missing name, not just hltb: nameless review
     # payloads made the model match results to titles from memory (2026-08-15).
-    _fr = steamstore.fetch_reviews
-    steamstore.fetch_reviews = lambda a: {"desc": "Very Positive"}
-    r = fresh["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
+    monkeypatch.setattr(
+        steamstore, "fetch_reviews", lambda a: {"desc": "Very Positive"}
+    )
+    r = impls["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
     assert r["ok"] and r["name"] == "Some Unowned Game", r
-    steamstore.fetch_reviews = _fr
-    (
-        steamstore.load_deals,
-        steamstore.fetch_trending,
-        steamstore.fetch_recently_played,
-        steamstore.store_items,
-        steamstore.fetch_hltb,
-    ) = saved
 
+
+# -- the tool defs, per provider -----------------------------------------------
+
+
+def test_tool_defs_render_flat_for_both_providers(catalog):
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
     names = {n for n, *_ in assistant.TOOL_DEFS}
     assert {t["name"] for t in at} == names
@@ -635,24 +794,22 @@ def test_assistant():
     # Closing the mic must never read as ending the session on the TV - spelled
     # out in both places the model reads.
     assert "NOT end_session" in flat(assistant.TOOL_DEFS)
+    si = assistant.system_instruction(CFG_MIN)
     assert "never end the gaming session for them" in flat(si)
     assert set(backends.BACKENDS) == {"anthropic", "openai"}
     assert backends.BACKENDS["anthropic"].key == "anthropicApiKey"
     assert backends.BACKENDS["openai"].key == "openaiApiKey"
 
+
+def test_server_side_search_follows_the_knob(catalog):
     # Server-side search: knob off -> absent everywhere; knob on -> each
     # provider's native entry next to, not instead of, the tools.
     voice_off = CFG_MIN["voice"]
     assert assistant.server_tools(voice_off, "anthropic") == []
     assert assistant.server_tools(voice_off, "openai") == []
-    assert "search the web" not in flat(si)
-    voice_on = {
-        **voice_off,
-        "assistantWebSearch": True,
-        "location": {"city": "Portland", "region": "", "country": "US", "timezone": ""},
-    }
-    (aw,) = assistant.server_tools(voice_on, "anthropic")
-    (ow,) = assistant.server_tools(voice_on, "openai")
+    assert "search the web" not in flat(assistant.system_instruction(CFG_MIN))
+    (aw,) = assistant.server_tools(VOICE_ON, "anthropic")
+    (ow,) = assistant.server_tools(VOICE_ON, "openai")
     assert aw["type"] == "web_search_20250305" and aw["max_uses"] == 2
     assert ow["type"] == "web_search" and ow["search_context_size"] == "low"
     assert (
@@ -661,21 +818,21 @@ def test_assistant():
         == {"type": "approximate", "city": "Portland", "country": "US"}
     )
     bare = {
-        **voice_on,
+        **VOICE_ON,
         "location": {"city": "", "region": "", "country": "", "timezone": ""},
     }
     assert "user_location" not in assistant.server_tools(bare, "openai")[0]
-    si_on = assistant.system_instruction({**CFG_MIN, "voice": voice_on})
+    si_on = assistant.system_instruction({**CFG_MIN, "voice": VOICE_ON})
     # Spoken-register guardrails: no citations in TTS, no narrating search.
     assert "search the web" in flat(si_on) and "NO citations" in flat(si_on)
     assert "Never announce or offer to search" in flat(si_on)
 
+
+def test_anthropic_backend_resumes_a_paused_turn(monkeypatch):
     # pause_turn: the partial assistant content is re-sent as-is and the text
     # accumulates - the API's documented contract.
-    import types
-
     b = backends.AnthropicBackend(
-        {"anthropicApiKey": "x" * 24}, "claude-haiku-4-5", voice=voice_on
+        {"anthropicApiKey": "x" * 24}, "claude-haiku-4-5", voice=VOICE_ON
     )
     script = [
         types.SimpleNamespace(
@@ -693,10 +850,14 @@ def test_assistant():
         ),
     ]
     calls = []
-    b.client = types.SimpleNamespace(
-        messages=types.SimpleNamespace(
-            create=lambda **kw: (calls.append(kw), script.pop(0))[1]
-        )
+    monkeypatch.setattr(
+        b,
+        "client",
+        types.SimpleNamespace(
+            messages=types.SimpleNamespace(
+                create=lambda **kw: (calls.append(kw), script.pop(0))[1]
+            )
+        ),
     )
     out = b.turn("sys", "when did the dlc ship", {})
     assert out == "Checking. June 2026.", out
@@ -704,11 +865,16 @@ def test_assistant():
     assert calls[0]["tools"][-1]["type"] == "web_search_20250305"
     assert calls[1]["messages"][-1]["role"] == "assistant"  # partial re-sent
 
-    # Pipecat constructions with dummy keys, through the PRODUCTION _make_llm:
-    # a local copy can pass a dict for `reasoning`, which only live inference
-    # rejects.
+
+# -- pipecat constructions with dummy keys -------------------------------------
+
+
+def test_make_llm_builds_both_providers_from_dummy_keys(catalog, impls):
+    # Through the PRODUCTION _make_llm: a local copy can pass a dict for
+    # `reasoning`, which only live inference rejects.
     schemas = assistant.function_schemas(impls)
     assert len(schemas) == 10  # operations are absent without a store
+    from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMContextAggregatorPair,
@@ -717,6 +883,7 @@ def test_assistant():
 
     from slopstation.agent.speech import session_runtime
 
+    si = assistant.system_instruction(CFG_MIN)
     ctx = LLMContext(messages=[], tools=schemas)
     ua, aa = LLMContextAggregatorPair(ctx)
     dummy = {"anthropicApiKey": "x" * 24, "openaiApiKey": "x" * 24}
@@ -746,18 +913,17 @@ def test_assistant():
     assert ua and aa and llm_a and llm_o and tts
     # Native tools ride ToolsSchema.custom_tools through the OpenAI Responses
     # adapter verbatim, after the function tools.
-    from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-
     ts = ToolsSchema(
         standard_tools=schemas,
-        custom_tools={AdapterType.OPENAI: assistant.server_tools(voice_on, "openai")},
+        custom_tools={AdapterType.OPENAI: assistant.server_tools(VOICE_ON, "openai")},
     )
     rendered = llm_o.get_llm_adapter().to_provider_tools_format(ts)
     assert [t["name"] for t in rendered[:-1]] == [s.name for s in schemas]
     assert rendered[-1]["type"] == "web_search"
     assert LLMContext(messages=[], tools=ts)
-    # OpenAIBackend must default to a REAL reasoning effort, not disable it.
-    import inspect
 
+
+def test_openai_backend_defaults_to_a_real_reasoning_effort():
+    # OpenAIBackend must default to a REAL reasoning effort, not disable it.
     eff = inspect.signature(backends.OpenAIBackend.__init__).parameters["effort"]
     assert eff.default not in (None, "none"), f"effort defaults to {eff.default!r}"

@@ -59,12 +59,12 @@ def parse_all():
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     errors = [ln for ln in lines if "|" in ln]
     parsed = [ln for ln in lines if ln.startswith("PARSED ")]
-    for e in errors:
-        print("  PARSE ERROR", e)
     assert parsed, f"parser run produced no summary: {r.stderr[:400]}"
     n = int(parsed[0].split()[1])
     assert n >= 11, f"only {n} scripts parsed - path bug, not a real pass"
-    assert not errors, f"{len(errors)} parse error(s) in gaming-pc/*.ps1"
+    assert not errors, (
+        f"{len(errors)} parse error(s) in gaming-pc/*.ps1:\n" + "\n".join(errors)
+    )
     return n
 
 

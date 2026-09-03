@@ -9,19 +9,23 @@ score here alongside good live trials is the test's limit, not the model's.
 
 import json
 import subprocess
-import tempfile
 import wave
-from pathlib import Path
 
 import numpy as np
+import pytest
 
+import helpers
 from slopstation import paths
 from slopstation.agent.speech.audio import WakeListener, wake_phrase
 
+CHUNK = WakeListener.CHUNK
 
-def deployed_model():
-    """config.example.json is the fallback so a fresh checkout still runs."""
-    for path in (paths.HOME / "config.json", paths.HOME / "config.example.json"):
+
+@pytest.fixture
+def model():
+    """The configured wake model: config.json under the runtime home, then
+    config.example.json at the repo root so a fresh checkout still runs."""
+    for path in (paths.config_file(), helpers.REPO / "config.example.json"):
         try:
             return json.loads(path.read_text(encoding="utf-8-sig"))["voice"][
                 "wakeModel"
@@ -31,20 +35,15 @@ def deployed_model():
     return "hey_jarvis_v0.1"
 
 
-MODEL = deployed_model()
-# audio.wake_phrase, the production derivation: the filename IS the phrase, so
-# an off-convention model name breaks here loudly.
-PHRASE = wake_phrase(MODEL)
-VOICE_CFG = {"wakeModel": MODEL}
-CHUNK = WakeListener.CHUNK
-
-CASES = [
-    ("Microsoft David Desktop", PHRASE, True),
-    ("Microsoft Zira Desktop", PHRASE, True),
-    ("Microsoft David Desktop", "hello world", False),
-    ("Microsoft Zira Desktop", "what time is it", False),
-    ("Microsoft David Desktop", "start the session now please", False),
-]
+def cases(phrase):
+    """(SAPI voice, text, is the wake phrase)."""
+    return [
+        ("Microsoft David Desktop", phrase, True),
+        ("Microsoft Zira Desktop", phrase, True),
+        ("Microsoft David Desktop", "hello world", False),
+        ("Microsoft Zira Desktop", "what time is it", False),
+        ("Microsoft David Desktop", "start the session now please", False),
+    ]
 
 
 def synth(voice, text, path):
@@ -75,12 +74,14 @@ def max_score(listener, path):
     return best
 
 
-def test_wake():
-    listener = WakeListener(None, VOICE_CFG, None)  # model only; no mic
-    tmp = Path(tempfile.mkdtemp())
+def test_wake(model, tmp_path):
+    # audio.wake_phrase, the production derivation: the filename IS the
+    # phrase, so an off-convention model name breaks here loudly.
+    phrase = wake_phrase(model)
+    listener = WakeListener(None, {"wakeModel": model}, None)  # model only; no mic
     pos, neg = [], []
-    for i, (voice, text, is_wake) in enumerate(CASES):
-        p = tmp / f"case{i}.wav"
+    for i, (voice, text, is_wake) in enumerate(cases(phrase)):
+        p = tmp_path / f"case{i}.wav"
         synth(voice, text, p)
         s = max_score(listener, p)
         (pos if is_wake else neg).append(s)

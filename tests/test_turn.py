@@ -7,7 +7,10 @@ they are read out of the shipping script rather than copied.
 import re
 from pathlib import Path
 
-from slopstation import couch, events, gamepc
+import pytest
+
+from slopstation import couch, events, gamepc, logbook
+from slopstation.agent.brain import dispatch as dp
 
 DISPATCH = Path(__file__).resolve().parents[1] / "gaming-pc" / "Dispatch.ps1"
 
@@ -59,22 +62,30 @@ def compile_ps(pattern):
     return re.compile(pattern.replace(r"\z", r"\Z"))
 
 
-def test_turn():
+@pytest.fixture
+def wire(monkeypatch):
+    """gamepc.ssh replaced: every command lands on the list, the PC says OK."""
+    sent = []
+    monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: sent.append(cmd) or "OK")
+    return sent
 
-    # -- minting ---------------------------------------------------------------
+
+def test_minting_is_collision_free_and_self_valid():
     ids = {events.new_turn() for _ in range(2000)}
     assert len(ids) > 1990, f"only {len(ids)} unique in 2000 - collision-prone"
     assert all(events.valid_turn(i) for i in ids), "minted an id we would reject"
     assert all(re.fullmatch(r"[0-9a-f]{6}", i) for i in ids)
 
-    # -- validation ------------------------------------------------------------
+
+def test_validation_rejects_every_hostile_shape():
     for bad in HOSTILE:
         assert not events.valid_turn(bad), f"valid_turn accepted {bad!r}"
     assert not events.valid_turn(None) and not events.valid_turn(123)
     for good in ("0", "9f2c1a", "abcdef12"):
         assert events.valid_turn(good), good
 
-    # -- Dispatch.ps1 is the real boundary -------------------------------------
+
+def test_dispatch_ps1_is_the_real_boundary():
     # 13 patterns across 11 verbs: nav alone is three (front-page/library,
     # game-page with an appid, collection), so this counts patterns, not verbs.
     allpats = dispatch_patterns()
@@ -143,83 +154,72 @@ def test_turn():
                     f"{p} MATCHED hostile turn {bad!r} on {base!r} - path traversal reachable"
                 )
 
-    # -- the wire: uncorrelated beats refused ----------------------------------
-    sent = []
-    real_ssh = gamepc.ssh
-    gamepc.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
-    try:
-        tok = events.context(turn="9f2c1a")
-        gamepc.ssh_intent("enter")
-        assert sent[-1] == "enter --turn 9f2c1a", sent[-1]
-        events.reset(tok)
 
-        # A malformed id must not go on the wire: Dispatch fails closed, so a
-        # telemetry bug would become a launch outage.
-        tok = events.context(turn="../../evil")
-        gamepc.ssh_intent("enter")
-        assert sent[-1] == "enter", f"malformed turn reached the wire: {sent[-1]!r}"
-        events.reset(tok)
+def test_the_wire_carries_a_valid_turn_and_refuses_an_uncorrelated_beat(wire):
+    tok = events.context(turn="9f2c1a")
+    gamepc.ssh_intent("enter")
+    assert wire[-1] == "enter --turn 9f2c1a", wire[-1]
+    events.reset(tok)
 
-        gamepc.ssh_intent("exit")
-        assert sent[-1] == "exit", sent[-1]
+    # A malformed id must not go on the wire: Dispatch fails closed, so a
+    # telemetry bug would become a launch outage.
+    tok = events.context(turn="../../evil")
+    gamepc.ssh_intent("enter")
+    assert wire[-1] == "enter", f"malformed turn reached the wire: {wire[-1]!r}"
+    events.reset(tok)
 
-        # -- the task boundary -------------------------------------------------
-        # A ContextVar is copied into a task when that task is CREATED, so a
-        # turn minted in a running frame processor cannot reach the assistant's
-        # tool-dispatch task. Explicit-with-no-ambient must still tag the wire.
-        gamepc.ssh_intent("exit", turn="4c1d0e")
-        assert sent[-1] == "exit --turn 4c1d0e", (
-            f"explicit turn lost when ambient is empty: {sent[-1]!r}"
-        )
+    gamepc.ssh_intent("exit")
+    assert wire[-1] == "exit", wire[-1]
 
-        # Explicit beats a stale ambient value rather than losing to it.
-        tok = events.context(turn="9f2c1a")
-        gamepc.ssh_intent("exit", turn="4c1d0e")
-        assert sent[-1] == "exit --turn 4c1d0e", sent[-1]
-        events.reset(tok)
+    # -- the task boundary -------------------------------------------------
+    # A ContextVar is copied into a task when that task is CREATED, so a
+    # turn minted in a running frame processor cannot reach the assistant's
+    # tool-dispatch task. Explicit-with-no-ambient must still tag the wire.
+    gamepc.ssh_intent("exit", turn="4c1d0e")
+    assert wire[-1] == "exit --turn 4c1d0e", (
+        f"explicit turn lost when ambient is empty: {wire[-1]!r}"
+    )
 
-        # A hostile explicit id is still dropped - the parameter is no bypass.
-        gamepc.ssh_intent("exit", turn="../../evil")
-        assert sent[-1] == "exit", f"explicit turn bypassed validation: {sent[-1]!r}"
-    finally:
-        gamepc.ssh = real_ssh
+    # Explicit beats a stale ambient value rather than losing to it.
+    tok = events.context(turn="9f2c1a")
+    gamepc.ssh_intent("exit", turn="4c1d0e")
+    assert wire[-1] == "exit --turn 4c1d0e", wire[-1]
+    events.reset(tok)
 
-    # -- Dispatch hands the id over without the ContextVar ----------------------
+    # A hostile explicit id is still dropped - the parameter is no bypass.
+    gamepc.ssh_intent("exit", turn="../../evil")
+    assert wire[-1] == "exit", f"explicit turn bypassed validation: {wire[-1]!r}"
+
+
+def test_dispatch_hands_the_id_over_without_the_contextvar(wire, monkeypatch):
     # With no ambient turn, a Dispatch that was told the turn must still tag
     # both machine-crossing verbs - what GrammarGate does when it mints the id.
-    from slopstation import logbook
-    from slopstation.agent.brain import dispatch as dp
+    d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, logbook.CapturingLog("d"))
+    assert d.utterance == dp.Utterance(None, None), (
+        "a fresh Dispatch must not carry a stale utterance"
+    )
+    d.begin_utterance("4c1d0e", "end the session")  # the gate's one write
+    d.end_session()
+    assert wire[-1] == "exit --turn 4c1d0e", (
+        f"voice-driven exit reached the PC uncorrelated: {wire[-1]!r}"
+    )
 
-    sent.clear()
-    gamepc.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
-    try:
-        d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, logbook.CapturingLog("d"))
-        assert d.utterance == dp.Utterance(None, None), (
-            "a fresh Dispatch must not carry a stale utterance"
-        )
-        d.begin_utterance("4c1d0e", "end the session")  # the gate's one write
-        d.end_session()
-        assert sent[-1] == "exit --turn 4c1d0e", (
-            f"voice-driven exit reached the PC uncorrelated: {sent[-1]!r}"
-        )
+    # A second utterance lands while the first's dispatch is on the wire;
+    # consumers snapshot at operation start, so the re-point can't reach it.
+    def ssh_mid_flight(cmd, **kw):
+        wire.append(cmd)
+        d.begin_utterance("bbbbbb", "never mind")  # barge-in mid-ssh
+        return "OK"
 
-        # A second utterance lands while the first's dispatch is on the wire;
-        # consumers snapshot at operation start, so the re-point can't reach it.
-        def ssh_mid_flight(cmd, **kw):
-            sent.append(cmd)
-            d.begin_utterance("bbbbbb", "never mind")  # barge-in mid-ssh
-            return "OK"
+    d.begin_utterance("aaaaaa", "end the session")
+    monkeypatch.setattr(gamepc, "ssh", ssh_mid_flight)
+    d.end_session()
+    assert wire[-1] == "exit --turn aaaaaa", (
+        f"a mid-flight utterance re-labeled an in-flight action: {wire[-1]!r}"
+    )
 
-        d.begin_utterance("aaaaaa", "end the session")
-        gamepc.ssh = ssh_mid_flight
-        d.end_session()
-        assert sent[-1] == "exit --turn aaaaaa", (
-            f"a mid-flight utterance re-labeled an in-flight action: {sent[-1]!r}"
-        )
-    finally:
-        gamepc.ssh = real_ssh
 
-    # -- couch.py CLI ----------------------------------------------------------
+def test_couch_cli_takes_the_turn_off_argv():
     argv = ["start", "12345", "--turn", "9f2c1a"]
     assert couch.take_turn(argv) == "9f2c1a" and argv == ["start", "12345"]
     argv = ["start", "--turn", "9f2c1a", "12345"]
