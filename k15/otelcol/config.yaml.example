@@ -3,7 +3,14 @@
 #
 # CONTRIB, not core: core has no filelog receiver.
 #
-#   copy k15\otelcol\config.yaml.example C:\ProgramData\otelcol-contrib\config.yaml
+#   INSTALL FIRST - the MSI owns the config path and the service does not
+#   exist until it has run. Then read the path back off the service; do not
+#   guess it, and it is NOT under ProgramData:
+#      Get-CimInstance Win32_Service -Filter "Name='otelcol-contrib'" | % PathName
+#   Measured 2026-09-03: "C:\Program Files\OpenTelemetry Collector\config.yaml".
+#   Copy this file over that one, from an ELEVATED shell, and write it as UTF-8
+#   with NO BOM - PowerShell 5.1's Set-Content -Encoding utf8 adds one, and the
+#   collector will not parse it.
 #   Restart-Service otelcol-contrib          (validates on load, so a bad edit
 #                                             fails here; why is in the Windows
 #                                             Application event log, and so is
@@ -13,6 +20,9 @@ extensions:
   # Read offsets on disk: a collector that was down backfills rather than
   # skipping to the end.
   file_storage:
+    # create_directory defaults to FALSE: without it the collector refuses to
+    # start when the directory is not already there.
+    create_directory: true
     directory: C:\ProgramData\otelcol-contrib\storage
 
 receivers:

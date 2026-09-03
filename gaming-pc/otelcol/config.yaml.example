@@ -13,6 +13,9 @@
 
 extensions:
   file_storage:
+    # create_directory defaults to FALSE: without it the collector refuses to
+    # start when the directory is not already there.
+    create_directory: true
     directory: C:\ProgramData\otelcol-contrib\storage
 
 receivers:
