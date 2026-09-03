@@ -61,12 +61,10 @@ dev = [
 ]
 
 [project.scripts]
-# Both lanes, or reload them onto new code. The startup shortcut runs this.
+# What the two scheduled tasks run (Setup-K15-Tasks.ps1) ...
+slopstation-lane = "slopstation.supervise:lane_main"
+# ... and what Start-Slopstation.bat runs to start or reload them.
 slopstation-start = "slopstation.supervise:start"
-# One lane, restarted forever, in this console.
-slopstation-supervise = "slopstation.supervise:main"
-slopstation-listener = "slopstation.chord_listener:main"
-slopstation-voice = "slopstation.agent.voice_agent:cli"
 slopstation-doctor = "slopstation.doctor:main"
 
 [tool.setuptools.packages.find]

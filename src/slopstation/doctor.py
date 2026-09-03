@@ -113,15 +113,28 @@ def _process_row(name, lane, up, down, down_hint, undetected_hint=""):
     """One 'is this lane's python running' row. A probe that itself fails is
     reported as that, and reads as not running."""
     try:
-        running = bool(supervise.pids()[lane])
+        task = supervise.query(lane)
     except Exception as e:
-        report(WARN, name, f"could not detect ({e})", undetected_hint)
+        report(WARN, name, f"could not query the task ({e})", undetected_hint)
         return False
-    if running:
+    if task is None:
+        report(
+            WARN,
+            name,
+            f"task {supervise.TASKS[lane]} not registered",
+            "run Setup-K15-Tasks.ps1",
+        )
+        return False
+    if task.get("Status") == "Running":
         report(PASS, name, up)
-    else:
-        report(WARN, name, down, down_hint)
-    return running
+        return True
+    report(
+        WARN,
+        name,
+        f"{down} (task {task.get('Status')}, last result {task.get('Last Result')})",
+        down_hint,
+    )
+    return False
 
 
 def check_listener():
@@ -130,7 +143,7 @@ def check_listener():
         "listener",
         "running (owns the Puck - haptic check skipped)",
         "NOT running - the chord is deaf",
-        "run Start-Slopstation.bat (or it's mid-restart; re-check in 10s)",
+        "run Start-Slopstation.bat (a crashed lane is back within seconds)",
         "assuming not running",
     )
 
@@ -960,7 +973,7 @@ def check_operations():
         return
     # The agent probe is outside the parse: its failure is not a bad ledger.
     try:
-        paused = active and not supervise.pids()["voice"]
+        paused = active and not supervise.running("voice")
     except Exception as e:
         report(
             WARN,
@@ -986,7 +999,7 @@ def check_voice_agent():
         "voice",
         "running (wake word armed)",
         "not running - wake word deaf (chord unaffected)",
-        "run Start-Slopstation.bat or the startup shortcut",
+        "run Start-Slopstation.bat",
     )
 
 

@@ -59,8 +59,9 @@ older CI and the install fails.
 
 ## Deploying
 
-- K15: `git pull`, then `Start-Slopstation.bat` (reloads both lanes on current
-  code).
+- K15: `git pull`, then `Start-Slopstation.bat` (ends and re-runs both lane
+  tasks on current code). From a NORMAL window, never an elevated one: an
+  elevated lane cannot be seen or stopped from the window the deployer uses.
 - Gaming PC: `gaming-pc\Deploy.ps1` from a checkout on the PC — never
   hand-copy; it ships the set atomically and stamps `build-id`, which
   `doctor.py` compares (`ssh gamepc version`) to catch skew.
@@ -100,9 +101,9 @@ diagnosis - but nobody fixes it automatically.
 - **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
   the K15; the file is gitignored, and it sits at the repo root beside
   `secrets.json`, `state/` and `logs/` (see `paths.py`).
-- **A deploy that MOVES the startup `.bat` or renames an entry point.** The
-  supervisor relaunches its lane by module path; a rename lands code that the
-  running supervisor is not launching, and `deploy.py` waits out its whole
-  budget and fails. The fix is one `Start-Slopstation.bat` on the K15.
-- **Scheduled tasks** on the gaming PC, and the runtime pieces `Deploy.ps1`
-  warns about but never touches (`vhui64.exe`, the DisplayMagician `.lnk`s).
+- **Scheduled tasks**, on both machines. The K15's two lane tasks point at
+  `.venv\Scripts\slopstation-lane.exe` by absolute path, so moving the
+  checkout or renaming that entry point means re-running
+  `Setup-K15-Tasks.ps1` there. The gaming PC's tasks, and the runtime pieces
+  `Deploy.ps1` warns about but never touches (`vhui64.exe`, the
+  DisplayMagician `.lnk`s), are the same kind of hand step.

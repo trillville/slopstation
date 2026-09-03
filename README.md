@@ -175,8 +175,17 @@ correlation suffix; every other command returns `DENIED`.
    .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
    ```
 
-6. Run `Start-Slopstation.bat`, and put a shortcut to it in `shell:startup`.
-   Later launches reinstall by themselves whenever the pins change.
+6. Register the two lanes as scheduled tasks, then start them - both from a
+   normal (not administrator) window, since an elevated lane cannot be
+   stopped from the normal window the deployer uses:
+
+   ```powershell
+   .\Setup-K15-Tasks.ps1
+   .\Start-Slopstation.bat
+   ```
+
+   The tasks start at logon; a crashed lane is back ten seconds later, and
+   each launch reinstalls by itself whenever the pins change.
 7. If TV volume ducking is enabled, run
    `.venv\Scripts\python -m slopstation.agent.tools.tv_remote pair`
    and accept the TV prompt.
@@ -290,10 +299,10 @@ git pull
 .venv\Scripts\slopstation-doctor
 ```
 
-`Start-Slopstation.bat` starts missing supervisors or reloads only their child agents.
-It does not replace an active couch-session watch loop, and it does not start
-the optional media Compose stack. Docker Desktop restores those containers
-independently after their initial setup.
+`Start-Slopstation.bat` starts a lane task that is down and ends-and-reruns one
+that is up. It does not replace an active couch-session watch loop, and it
+does not start the optional media Compose stack. Docker Desktop restores those
+containers independently after their initial setup.
 
 Useful commands:
 
@@ -338,13 +347,23 @@ monitor every minute, so a dead lane pages without the shipper's help.
 Use the repository’s `sentry` skill for remote diagnosis; it documents the
 attribute model and the event vocabulary.
 
-## Tests
+## Development
+
+One venv at the checkout root, created by the bootstrap above. The three
+checks CI runs:
 
 ```powershell
 .venv\Scripts\pytest
 .venv\Scripts\ruff check .
 .venv\Scripts\mypy
 ```
+
+A change reaches the K15 through `cd` after it merges: the deployer
+fast-forwards the live checkout, ends and re-runs each lane's task, and runs
+the doctor. Anything that touches the lanes' lifecycle is accepted by a
+watched `workflow_dispatch` of that workflow, with the lane consoles in view.
+On the K15 itself, always work from a normal window: a lane started elevated
+is invisible to a normal one.
 
 Hardware-bound Steam and audio tests skip themselves when the machine lacks
 what they need: a local Steam install for the library tests, and
