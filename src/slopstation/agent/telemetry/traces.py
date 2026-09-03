@@ -8,12 +8,12 @@ prunes anything older than TTL_DAYS.
 import json
 import time
 
-from slopstation import cglib
+from slopstation import logbook, sessionlock
 
-DIR = cglib.STATE / "traces"
+DIR = sessionlock.STATE / "traces"
 TTL_DAYS = 14
 
-log = cglib.make_log("traces")
+log = logbook.logger("traces")
 
 
 def _jsonable(o):

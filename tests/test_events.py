@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from slopstation import cglib, events
+from slopstation import events, logbook
 
 WORKER_SRC = """import pathlib, sys
 from slopstation import events
@@ -53,7 +53,7 @@ def test_events():
     assert "appid" not in r and r["status"] == "READY"
 
     # -- levels ----------------------------------------------------------------
-    # level is positional-only, so it is passed positionally, as cglib._Log does.
+    # level is positional-only, so it is passed positionally, as logbook.Logger does.
     r = events.emit("launch", "launch_failed", events.ERROR, err="boom")
     assert r["level"] == "error"
     assert events.human("launch_failed", events.ERROR, err="boom").startswith(
@@ -67,7 +67,7 @@ def test_events():
     # A colliding caller kwarg raises TypeError at argument BINDING, before any
     # try/except inside emit - hence positional-only parameters, emitter keys
     # winning, and the caller's value kept under f_*.
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
     for name in (
         "ts",
         "level",
@@ -211,7 +211,7 @@ def test_events():
     assert len(lines) == 720, f"lost {720 - len(lines)} lines to the race"
 
     # -- the shared test double keeps the production shape ---------------------
-    cap = cglib.CapturingLog("voice")
+    cap = logbook.CapturingLog("voice")
     cap("wake", score=0.5)
     cap.warn("earcon_failed", err="x")
     cap.error("pipeline_error", err="y")

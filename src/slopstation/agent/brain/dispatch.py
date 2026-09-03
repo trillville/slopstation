@@ -15,7 +15,7 @@ import sys
 import time
 from collections import namedtuple
 
-from slopstation import cglib, events, gamepc, tv
+from slopstation import events, gamepc, sessionlock, tv
 from slopstation.agent.tools import library
 
 # gamepc is reached through the MODULE, never `from gamepc import ...`: a
@@ -109,8 +109,8 @@ class Dispatch:
 
     def start_session(self, appid: int | str | None = None) -> Result:
         """Advisory busy check; the real arbiter is couch.py's acquire_lock."""
-        age = cglib.lock_age()
-        if cglib.session_active(age):
+        age = sessionlock.age()
+        if sessionlock.active(age):
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))  # type: ignore[arg-type] # active implies aged
             return _busy("a session is already active or starting")
         what = f"couch.py start{f' {appid}' if appid else ''}"
@@ -148,9 +148,9 @@ class Dispatch:
         # process, which consumes it at every wait. Written BEFORE the ssh so
         # the K15 side stops even if the exit never gets through.
         cancelled = False
-        if cglib.session_active():
+        if sessionlock.active():
             try:
-                cglib.CANCEL.write_text(turn or "")
+                sessionlock.CANCEL.write_text(turn or "")
                 cancelled = True
             except OSError:
                 pass  # the host-side exit still runs
@@ -184,7 +184,7 @@ class Dispatch:
     def play_game(self, appid: int | str) -> Result:
         """Session live -> direct host launch (OK/ALREADY/BUSY/NOTREADY).
         No session -> full couch launch, game queued for after READY."""
-        if not cglib.session_active():
+        if not sessionlock.active():
             return self.start_session(appid)
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
@@ -269,7 +269,7 @@ class Dispatch:
             # start_session is fire-and-forget (Popen), so "start a session
             # and open X" chains into nav while couch.py is still coming up:
             # a fresh lock means starting, not absent.
-            if cglib.session_active():
+            if sessionlock.active():
                 return _busy("the session is still starting - try again in a moment")
             return _busy("there's no session to navigate - start one first")
         if out.startswith("NOTASK:"):
@@ -336,7 +336,7 @@ class Dispatch:
         if cmd is None:
             return _fail(f"there is no input called '{spoken_name}'")
         if cmd == self.cfg["tvGamingCmd"]:
-            if not cglib.session_active():
+            if not sessionlock.active():
                 # Lock check first: no ssh timeout against a sleeping PC.
                 self.log("input_starts_session", input=cmd)
                 return self.start_session()

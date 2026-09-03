@@ -11,11 +11,11 @@ import time
 import wave
 from pathlib import Path
 
-from slopstation import cglib, paths
+from slopstation import logbook, paths
 from slopstation.agent.speech import earcons
 from slopstation.agent.speech.preroll import WakeCapture
 
-log = cglib.make_log("voice")
+log = logbook.logger("voice")
 
 RETRY_S = 5  # device-wait poll interval
 WAIT_QUIET_S = 30  # re-log an ongoing wait this often

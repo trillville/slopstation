@@ -98,7 +98,7 @@ diagnosis - but nobody fixes it automatically.
   `.venv\Scripts\pip freeze --exclude-editable | Out-File -Encoding ascii constraints.txt`
   - not `>`, whose output under PowerShell 5.1 is UTF-16, which pip cannot
   read.
-- **`config.json` keys.** Growing `cglib.REQUIRED_CONFIG` needs a hand edit on
+- **`config.json` keys.** Growing `config.REQUIRED` needs a hand edit on
   the K15; the file is gitignored, and it sits at the repo root beside
   `secrets.json`, `state/` and `logs/` (see `paths.py`).
 - **Scheduled tasks**, on both machines. The K15's two lane tasks point at

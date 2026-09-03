@@ -18,7 +18,7 @@ import json
 import sys
 import time
 
-from slopstation import cglib
+from slopstation import config, logbook, statefile
 
 API = "https://api.steampowered.com"
 LOGIN = "https://login.steampowered.com"  # the transfer-login host
@@ -36,7 +36,7 @@ UA = (
 # EAuthTokenPlatformType - WebBrowser is 2; MobileApp (3) is the flagged one.
 PLATFORM_WEBBROWSER = 2
 
-log = cglib.make_log("steam")
+log = logbook.logger("steam")
 
 
 def _jwt_exp(token):
@@ -67,7 +67,7 @@ class SteamSession:
         self._sess = None
 
     def available(self):
-        return bool(cglib.real_key(self._refresh) and self.steamid.isdigit())
+        return bool(config.real_key(self._refresh) and self.steamid.isdigit())
 
     # -- HTTP seams (tests swap these to feed canned JSON) --------------------
 
@@ -133,7 +133,7 @@ class SteamSession:
     def access_token(self):
         """A ~24h access token, minted from the refresh token and cached until
         just before it expires. Raises if there is no refresh token."""
-        if not cglib.real_key(self._refresh):
+        if not config.real_key(self._refresh):
             raise RuntimeError(
                 "no Steam refresh token - run: python -m slopstation.agent.tools.steam_session enroll"
             )
@@ -213,7 +213,7 @@ class SteamSession:
     def token_expiry(self):
         """Unix seconds the REFRESH token dies (0 if none/unreadable). doctor
         warns as it nears; only a re-scan fixes it."""
-        return _jwt_exp(self._refresh) if cglib.real_key(self._refresh) else 0
+        return _jwt_exp(self._refresh) if config.real_key(self._refresh) else 0
 
     # -- ClientComm -----------------------------------------------------------
 
@@ -433,7 +433,7 @@ class SteamSession:
     def _persist_refresh(self, refresh):
         """Write the token into secrets.json, preserving everything else. The
         value is a credential - never log it."""
-        path = cglib.SECRETS
+        path = config.SECRETS
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except OSError:  # no file yet - a fresh rig
@@ -447,7 +447,7 @@ class SteamSession:
             )
             raise SystemExit(1) from None
         data["steamRefreshToken"] = refresh
-        cglib.write_json(path, data, indent=2)
+        statefile.write(path, data, indent=2)
         self._refresh = refresh
         self._access = None
         self.log("enrolled", steamid=self.steamid)
@@ -468,7 +468,7 @@ def _print_qr(text):
 
 
 def _cli(argv):
-    secrets = cglib.load_secrets()
+    secrets = config.secrets()
     s = SteamSession(secrets)
     cmd = argv[0] if argv else "status"
     if cmd == "enroll":

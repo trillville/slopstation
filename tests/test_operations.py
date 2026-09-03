@@ -7,7 +7,7 @@ import time
 
 import helpers
 from helpers import fresh_state
-from slopstation import cglib
+from slopstation import logbook, sessionlock
 from slopstation.agent.speech import announce
 from slopstation.agent.tools import operations, operations_monitors
 
@@ -84,7 +84,7 @@ class FakeMedia:
 
 def test_operations():
     fresh_state()
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
     terminal = []
     store = operations.OperationStore(log, on_terminal=terminal.append)
 
@@ -102,7 +102,7 @@ def test_operations():
 
     # Separate stores are what the agent and the CLIs actually hold, so the
     # load/mutate/write pair has to serialise on the file, not per instance.
-    shared = cglib.STATE / "concurrent.json"
+    shared = sessionlock.STATE / "concurrent.json"
     writers = [operations.OperationStore(log, path=shared) for _ in range(4)]
     failures, reading = [], threading.Event()
     threads = [
@@ -518,7 +518,7 @@ def test_operations():
     assert canceled_store.get(canceled_op["id"])["state"] == operations.CANCELED
 
     fresh_state()
-    delivery_log = cglib.CapturingLog("voice")
+    delivery_log = logbook.CapturingLog("voice")
     delivery_store = operations.OperationStore(delivery_log)
     voice = dict(helpers.CONFIG["voice"])
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, delivery_log)

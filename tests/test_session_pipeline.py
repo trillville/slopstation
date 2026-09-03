@@ -8,7 +8,7 @@ Brief tones will be audible.
 import asyncio
 
 import helpers
-from slopstation import cglib
+from slopstation import config, logbook
 from slopstation.agent.brain.dispatch import Dispatch
 from slopstation.agent.speech.grammar_gate import GrammarGate, GrammarMatcher
 from slopstation.agent.speech.preroll import WakeAck
@@ -35,9 +35,9 @@ async def run():
     from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
     from pipecat.workers.runner import WorkerRunner
 
-    log = cglib.CapturingLog("voice", echo=True)
+    log = logbook.CapturingLog("voice", echo=True)
 
-    cfg = cglib.load_config()
+    cfg = config.load()
     # assistant_enabled with no LLM stage: the no-match line exercises the
     # real handoff, then dead-ends at the output transport.
     gate = GrammarGate(

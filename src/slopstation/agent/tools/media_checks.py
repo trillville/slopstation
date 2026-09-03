@@ -10,7 +10,7 @@ media.managedIndexers, which the operator wrote.
 import json
 import subprocess
 
-from slopstation import cglib, paths
+from slopstation import config, paths
 from slopstation.agent.tools.media_clients import (
     ArrClient,
     MediaConfigurationError,
@@ -537,7 +537,7 @@ def media_doctor(
         ("Radarr", "radarrApiKey", "radarrUrl"),
         ("Sonarr", "sonarrApiKey", "sonarrUrl"),
     ):
-        if not cglib.real_key(secrets.get(key)):
+        if not config.real_key(secrets.get(key)):
             report.add("FAIL", f"{name} API", f"{key} is missing")
             continue
         try:
@@ -551,7 +551,7 @@ def media_doctor(
     if "Sonarr" in clients:
         _check_arr(report, "series", clients["Sonarr"], media_cfg)
 
-    if cglib.real_key(secrets.get("prowlarrApiKey")):
+    if config.real_key(secrets.get("prowlarrApiKey")):
         try:
             prowlarr = ArrClient(
                 "Prowlarr",

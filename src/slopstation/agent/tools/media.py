@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from slopstation import cglib, paths
+from slopstation import config, logbook, paths
 from slopstation.agent.tools.disk_health import (
     DISK_POLL_S,
     FREE_WARN_BYTES,
@@ -1119,7 +1119,7 @@ def media_health_monitor_from_config(
     missing = [
         name
         for name in ("radarrApiKey", "sonarrApiKey")
-        if not cglib.real_key(secrets.get(name))
+        if not config.real_key(secrets.get(name))
     ]
     if missing:
         log.warn(
@@ -1201,7 +1201,7 @@ def from_config(cfg, secrets, log, transport=None):
     missing = [
         name
         for name in ("radarrApiKey", "sonarrApiKey")
-        if not cglib.real_key(secrets.get(name))
+        if not config.real_key(secrets.get(name))
     ]
     if missing:
         log.warn(
@@ -1279,9 +1279,9 @@ def main(argv=None):
     delete_series.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
 
-    log = cglib.make_log("voice")
-    cfg = cglib.config()
-    secrets = cglib.load_secrets()
+    log = logbook.logger("voice")
+    cfg = config.current()
+    secrets = config.secrets()
     try:
         if args.command == "doctor":
             result = media_doctor(cfg, secrets, log)

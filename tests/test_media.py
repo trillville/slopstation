@@ -7,7 +7,7 @@ import urllib.parse
 from pathlib import Path
 
 import helpers
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.tools import (
     disk_health,
     media,
@@ -159,7 +159,7 @@ def service():
     ]
     radarr.root_folders = [{"id": 1, "path": "/data/Movies/"}]
     sonarr.root_folders = [{"id": 1, "path": "/data/TV"}]
-    return media.MediaService(cfg, cglib.CapturingLog("voice"), radarr, sonarr)
+    return media.MediaService(cfg, logbook.CapturingLog("voice"), radarr, sonarr)
 
 
 def test_media():
@@ -260,7 +260,7 @@ def test_media():
     assert source["state"] == "active" and source["port"] == 39733
     qbit_preferences["listen_port"] = 33125
     proton_monitor = media_proton.ProtonPortMonitor(
-        qbit, cglib.CapturingLog("voice"), path=proton_log, now=proton_now
+        qbit, logbook.CapturingLog("voice"), path=proton_log, now=proton_now
     )
     synced = proton_monitor.reconcile_once()
     assert synced["changed"] and synced["previous_port"] == 33125
@@ -355,7 +355,7 @@ def test_media():
             },
         ]
     }
-    watch_log = cglib.CapturingLog("voice")
+    watch_log = logbook.CapturingLog("voice")
     watch = media_health.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
 
     watch.reconcile_once()
@@ -514,7 +514,7 @@ def test_media():
     real_shutil = disk_health.shutil
     disk_health.shutil = FakeShutil(table)
     try:
-        disk_log = cglib.CapturingLog("voice")
+        disk_log = logbook.CapturingLog("voice")
         disk = disk_health.DiskHealthMonitor(
             ("M:", "C:"), disk_log, free_warn_bytes=250 * GB
         )
@@ -1080,7 +1080,7 @@ def test_media():
 
     # --- factory gating and status ------------------------------------------
     cfg = json.loads(json.dumps(helpers.CONFIG))
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
     assert media.from_config(cfg, {}, log) is None
     cfg["media"]["enabled"] = True
     assert media.from_config(cfg, {}, log) is None
@@ -1107,7 +1107,7 @@ def test_media():
     }
 
     class FailingStore:
-        log = cglib.CapturingLog("voice")
+        log = logbook.CapturingLog("voice")
 
         def track_external(self, *args, **kwargs):
             raise OSError("disk unavailable")
@@ -1214,7 +1214,7 @@ def test_media():
     doctor = media_checks.media_doctor(
         doctor_cfg,
         doctor_secrets,
-        cglib.CapturingLog("voice"),
+        logbook.CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,
         compose_runner=lambda media_dir: compose_rows,
@@ -1243,7 +1243,7 @@ def test_media():
     broken = media_checks.media_doctor(
         doctor_cfg,
         doctor_secrets,
-        cglib.CapturingLog("voice"),
+        logbook.CapturingLog("voice"),
         arr_transport=doctor_arr_transport,
         qbit_transport=doctor_qbit_transport,
         compose_runner=lambda media_dir: compose_rows,

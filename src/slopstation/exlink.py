@@ -8,7 +8,7 @@ Frames come from tv.py, the COM port from config.json.
 
 import sys
 
-from slopstation import cglib, events, tv
+from slopstation import config, events, tv
 
 
 def _emit(cmd, ack=None, err=None, **extra):
@@ -23,7 +23,7 @@ def _emit(cmd, ack=None, err=None, **extra):
 
 
 def main(argv):
-    port = cglib.config()["tvComPort"]
+    port = config.current()["tvComPort"]
     if len(argv) == 2 and argv[0] == "vol_set" and argv[1].isdigit():
         level = int(argv[1])
         if level > 100:

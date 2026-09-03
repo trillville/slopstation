@@ -187,13 +187,13 @@ def test_turn():
     # -- Dispatch hands the id over without the ContextVar ----------------------
     # With no ambient turn, a Dispatch that was told the turn must still tag
     # both machine-crossing verbs - what GrammarGate does when it mints the id.
-    from slopstation import cglib
+    from slopstation import logbook
     from slopstation.agent.brain import dispatch as dp
 
     sent.clear()
     gamepc.ssh = lambda cmd, **kw: sent.append(cmd) or "OK"
     try:
-        d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, cglib.CapturingLog("d"))
+        d = dp.Dispatch({"tvComPort": "COMX", "voice": {}}, logbook.CapturingLog("d"))
         assert d.utterance == dp.Utterance(None, None), (
             "a fresh Dispatch must not carry a stale utterance"
         )

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from helpers import fresh_state
-from slopstation import cglib
+from slopstation import logbook, sessionlock, statefile
 from slopstation.agent.brain import assistant, backends
 from slopstation.agent.brain.dispatch import Dispatch
 from slopstation.agent.tools import library, steamstore
@@ -35,9 +35,9 @@ def flat(text):
 
 
 def test_assistant():
-    log = cglib.CapturingLog("assistant")
+    log = logbook.CapturingLog("assistant")
     fresh_state()
-    cglib.write_json(
+    statefile.write(
         library.LIBRARY,
         {
             "refreshed": "2026-08-22T00:00:00",
@@ -127,15 +127,15 @@ def test_assistant():
     import tempfile
     import time as _time
 
-    cglib.LOCK = Path(tempfile.mkdtemp()) / "session.lock"
+    sessionlock.LOCK = Path(tempfile.mkdtemp()) / "session.lock"
     r = impls["get_now_playing"]({})
     assert r["ok"]  # dry-run path
     assert r["session_active"] is False, r
-    cglib.LOCK.write_text("x")  # a launch owns the rig
+    sessionlock.LOCK.write_text("x")  # a launch owns the rig
     r = impls["get_now_playing"]({})
     assert r["ok"] and r["session_active"] is True, r
-    old = _time.time() - cglib.LOCK_STALE_S - 60  # stale = free, same as ever
-    os.utime(cglib.LOCK, (old, old))
+    old = _time.time() - sessionlock.LOCK_STALE_S - 60  # stale = free, same as ever
+    os.utime(sessionlock.LOCK, (old, old))
     assert impls["get_now_playing"]({})["session_active"] is False
     r = impls["get_game_details"]({"appid": real_appid})
     assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]
@@ -499,7 +499,7 @@ def test_assistant():
     # --- every tool call is RECORDED, including the ones that raise ----------
     # A tool-calling llm span traces as output:null, so function_schemas is the
     # one place that emits which tool ran with what args.
-    tlog = cglib.CapturingLog("voice")
+    tlog = logbook.CapturingLog("voice")
     calls = {"n": 0}
 
     def spy(kind, query, status=None):

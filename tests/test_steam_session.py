@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from slopstation import cglib
+from slopstation import config, logbook
 from slopstation.agent.tools import steam_session as ss
 
 
@@ -26,7 +26,7 @@ def make_jwt(exp):
 
 
 def test_steam_session():
-    log = cglib.CapturingLog("steam")
+    log = logbook.CapturingLog("steam")
     refresh = make_jwt(time.time() + 200 * 86400)  # ~200-day refresh token
     s = ss.SteamSession({"steamId64": "76561190000", "steamRefreshToken": refresh}, log)
 
@@ -300,9 +300,9 @@ def test_steam_session():
     tmp.write_text(
         json.dumps({"deepgramApiKey": "keep-me", "steamId64": "76561190000"})
     )
-    cglib.SECRETS = tmp
+    config.SECRETS = tmp
     ss._print_qr = lambda text: None  # no console spam
-    log2 = cglib.CapturingLog("steam")
+    log2 = logbook.CapturingLog("steam")
     s2 = ss.SteamSession({"steamId64": "76561190000", "steamRefreshToken": None}, log2)
     s2._post = fake_post
     assert s2.enroll() == 0

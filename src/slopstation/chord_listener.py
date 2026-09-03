@@ -4,7 +4,7 @@ import time
 
 import hid
 
-from slopstation import cglib, checkin, events, haptics
+from slopstation import checkin, events, haptics, logbook, sessionlock
 from slopstation.haptics import PID, RID_INPUT, VID
 
 BTN_BYTE = 4
@@ -24,7 +24,7 @@ PARTIAL_COOLDOWN_S = 10.0
 ERR_STALE_S = 600  # failures older than this are history, not news
 STANDOFF_POLL_S = 0.5  # how often to ask the lock whether the Puck is spoken for
 
-log = cglib.make_log("listener")
+log = logbook.logger("listener")
 
 
 def buzz(dev, pattern, what):
@@ -48,21 +48,21 @@ def signal_last_error(dev):
     controller, so a buzz-gated discard would strand the marker until the next
     successful launch (2026-08-30, stranded 5 h)."""
     try:
-        age = time.time() - cglib.LAST_ERROR.stat().st_mtime
+        age = time.time() - sessionlock.LAST_ERROR.stat().st_mtime
     except OSError:
         return
     if age > ERR_STALE_S:
-        cglib.LAST_ERROR.unlink(missing_ok=True)
+        sessionlock.LAST_ERROR.unlink(missing_ok=True)
         log("stale_error_discarded", age_s=round(age))
         return
     if dev is None:
         return  # nobody is holding it; keep for retry
     if buzz(dev, haptics.PATTERN_FAIL, "fail"):
         try:
-            reason = cglib.LAST_ERROR.read_text().strip()
+            reason = sessionlock.LAST_ERROR.read_text().strip()
         except OSError:
             reason = "?"
-        cglib.LAST_ERROR.unlink(missing_ok=True)
+        sessionlock.LAST_ERROR.unlink(missing_ok=True)
         log("launch_failure_signaled", reason=reason)
 
 
@@ -127,7 +127,7 @@ class Puck:
 
 
 def main():
-    cglib.rotate_log()
+    logbook.rotate()
     # Liveness for the load-bearing lane; a deaf chord is only discovered from
     # the couch. A thread rather than a check in the read loop: the loop can
     # block in hid.read or the 3 s stand-by sleep, and a heartbeat that stopped
@@ -155,7 +155,7 @@ def main():
         # claim.
         if time.time() - last_session_check >= STANDOFF_POLL_S:
             last_session_check = time.time()
-            standoff = cglib.session_active()
+            standoff = sessionlock.active()
         if standoff:
             if puck.stand_off():
                 log("puck_standoff", reason="session_lock")
@@ -182,11 +182,11 @@ def main():
             if len(r) > BTN_BYTE and (r[BTN_BYTE] & CHORD) == CHORD:
                 held = held or time.time()
                 if time.time() - held >= HOLD_S:
-                    age = cglib.lock_age()
+                    age = sessionlock.age()
                     # Backstop, not the main gate - the standoff above
                     # normally catches a fresh lock first. Covers a launch
                     # started inside that window, which couch.py would refuse.
-                    if cglib.session_active(age):
+                    if sessionlock.active(age):
                         if time.time() - last_busy >= BUSY_COOLDOWN_S:
                             log("chord_busy", lock_age_s=round(age or 0))
                             buzz(puck.active, haptics.PATTERN_BUSY, "busy")

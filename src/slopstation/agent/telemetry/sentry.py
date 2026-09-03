@@ -37,7 +37,7 @@ import json
 import logging
 import random
 
-from slopstation import cglib, events
+from slopstation import config, events
 from slopstation.agent.telemetry import genai
 
 # One Sentry project takes both machines and every lane, so this is what
@@ -56,7 +56,7 @@ def is_on():
 def enabled(cfg):
     """A real DSN in config.json. Template junk reads as absent, the same rule
     as every other keyed lane."""
-    return cglib.real_key(cfg.get("sentryDsn"))
+    return config.real_key(cfg.get("sentryDsn"))
 
 
 def otlp_target(dsn):

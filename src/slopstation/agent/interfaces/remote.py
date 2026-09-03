@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from slopstation import cglib
+from slopstation import config
 
 MAX_BODY = 64 * 1024
 # claude.ai gives a tool call 300 s and progress notifications do not extend
@@ -348,7 +348,7 @@ def start(cfg, secrets, log):
     if not remote_cfg.get("enabled"):
         return None
     token = secrets.get("remoteInterfaceToken")
-    if not cglib.real_key(token):
+    if not config.real_key(token):
         log.warn(
             "lane_disabled",
             what="remote_interface",
@@ -357,7 +357,7 @@ def start(cfg, secrets, log):
         return None
     text_cfg = cfg.get("textInterface") or {}
     inner_token = secrets.get("textInterfaceToken")
-    if not (text_cfg.get("enabled") and cglib.real_key(inner_token)):
+    if not (text_cfg.get("enabled") and config.real_key(inner_token)):
         log.warn(
             "lane_disabled",
             what="remote_interface",

@@ -18,20 +18,22 @@ import re
 import sys
 import time
 
-from slopstation import cglib
+from slopstation import config, logbook, sessionlock, statefile
 from slopstation.agent.tools import library
 
 # The lane is a log attribute: store events ship as "library" (test_event_names
 # pins the set).
-log = cglib.make_log("library")
+log = logbook.logger("library")
 
 STORE = "https://store.steampowered.com"
 API = "https://api.steampowered.com"
 
-DEALS = cglib.STATE / "deals.json"  # wishlist-on-sale + specials snapshot
+DEALS = sessionlock.STATE / "deals.json"  # wishlist-on-sale + specials snapshot
 DEALS_MAX_AGE_S = 6 * 3600  # prices move at sale boundaries
-FACET_CACHE = cglib.STATE / "facet-cache.json"  # per-game how-long-to-beat (stable)
-TAGMAP = cglib.STATE / "store-tags.json"  # {tag_name_lower: tagid}, weekly
+FACET_CACHE = (
+    sessionlock.STATE / "facet-cache.json"
+)  # per-game how-long-to-beat (stable)
+TAGMAP = sessionlock.STATE / "store-tags.json"  # {tag_name_lower: tagid}, weekly
 TAGMAP_MAX_AGE_S = 7 * 24 * 3600
 
 
@@ -57,7 +59,7 @@ def _cc() -> str:
     """Country code for prices, from voice.location.country (defaults US)."""
     try:
         return (
-            cglib.config().get("voice", {}).get("location", {}).get("country") or "US"
+            config.current().get("voice", {}).get("location", {}).get("country") or "US"
         ).upper()
     except Exception:
         return "US"
@@ -174,11 +176,11 @@ def _tag_map():
     except OSError:  # missing or a stat race -> refetch
         fresh = False
     if fresh:
-        cached = cglib.load_json(TAGMAP, None)
+        cached = statefile.load(TAGMAP, None)
         if cached is not None:
             return cached
-    s = cglib.load_secrets()
-    if not cglib.real_key(s.get("steamApiKey")):
+    s = config.secrets()
+    if not config.real_key(s.get("steamApiKey")):
         return {}
     d = _get(
         f"{API}/IStoreService/GetTagList/v1/",
@@ -191,7 +193,7 @@ def _tag_map():
         if t.get("name") and t.get("tagid")
     }
     if out:
-        cglib.write_json(TAGMAP, out, indent=1)
+        statefile.write(TAGMAP, out, indent=1)
     return out
 
 
@@ -324,21 +326,21 @@ def fetch_hltb(name: str) -> dict | None:
 
 
 def _load_facets():
-    return cglib.load_json(FACET_CACHE, {})
+    return statefile.load(FACET_CACHE, {})
 
 
 def _save_facets(cache):
-    cglib.write_json(FACET_CACHE, cache, indent=1)
+    statefile.write(FACET_CACHE, cache, indent=1)
 
 
 def load_deals() -> dict:
-    return cglib.load_json(DEALS, {})
+    return statefile.load(DEALS, {})
 
 
 def refresh_deals() -> int:
     """Precompute the feed answers into state/deals.json, read by list_games
     and the assistant. The wishlist half needs the key; specials is keyless."""
-    s = cglib.load_secrets()
+    s = config.secrets()
     steamid = str(s.get("steamId64", ""))
     specials = fetch_specials()
     wishlist = fetch_wishlist_on_sale(steamid) if steamid.isdigit() else []
@@ -350,7 +352,7 @@ def refresh_deals() -> int:
     deals = {"refreshed": time.strftime("%Y-%m-%dT%H:%M:%S"), "specials": specials}
     if steamid.isdigit():
         deals["wishlist_on_sale"] = wishlist
-    cglib.write_json(DEALS, deals, indent=1)
+    statefile.write(DEALS, deals, indent=1)
     log("deals_synced", specials=len(specials), wishlist=len(wishlist))
     return 0
 

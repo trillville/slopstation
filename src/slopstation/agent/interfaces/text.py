@@ -9,7 +9,7 @@ import uuid
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from slopstation import cglib
+from slopstation import config
 from slopstation.agent.brain import assistant, backends
 from slopstation.agent.brain.dispatch import Dispatch
 from slopstation.agent.telemetry import traces
@@ -209,7 +209,7 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=Fa
     if not text_cfg.get("enabled"):
         return None
     token = secrets.get("textInterfaceToken")
-    if not cglib.real_key(token):
+    if not config.real_key(token):
         log.warn(
             "lane_disabled",
             what="text_interface",
@@ -218,7 +218,7 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=Fa
         return None
     provider = cfg["voice"]["assistantProvider"]
     key = assistant.PROVIDER_KEY[provider]
-    if not cglib.real_key(secrets.get(key)):
+    if not config.real_key(secrets.get(key)):
         log.warn(
             "lane_disabled",
             what="text_interface",

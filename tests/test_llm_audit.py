@@ -9,7 +9,7 @@ pipeline. Fakes only - no network, no keys.
 import asyncio
 import types
 
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.brain import llm_audit
 
 
@@ -78,7 +78,7 @@ async def drain(stream):
 
 
 def test_llm_audit():
-    log = cglib.CapturingLog("audit")
+    log = logbook.CapturingLog("audit")
 
     # -- the tee is transparent -----------------------------------------------
     evs = [
@@ -118,7 +118,7 @@ def test_llm_audit():
             ]
         )
     )
-    log2 = cglib.CapturingLog("audit")
+    log2 = logbook.CapturingLog("audit")
     llm_audit.install(svc2, log2)
     asyncio.run(drain(asyncio.run(svc2._client.responses.create(stream=True))))
     hits = [r for r in log2.records if r["event"] == "web_search"]
@@ -130,7 +130,7 @@ def test_llm_audit():
             [ev("response.output_item.done", search_item("f", kind="file_search_call"))]
         )
     )
-    log3 = cglib.CapturingLog("audit")
+    log3 = logbook.CapturingLog("audit")
     llm_audit.install(svc3, log3)
     asyncio.run(drain(asyncio.run(svc3._client.responses.create(stream=True))))
     assert [r["kind"] for r in log3.records if r["event"] == "web_search"] == [

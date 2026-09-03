@@ -4,7 +4,7 @@ takeover, and the debt that self-heals a failed restore.
 
 import time
 
-from slopstation import cglib
+from slopstation import logbook
 from slopstation.agent.tools import tv_remote
 
 
@@ -41,7 +41,7 @@ class FakeRoom:
 
 def ducker(steps=10, room=None, **kw):
     room = room or FakeRoom()
-    log = cglib.CapturingLog("voice")
+    log = logbook.CapturingLog("voice")
     dk = tv_remote.TvDucker(
         steps,
         "192.0.2.1",

@@ -11,7 +11,7 @@ import json
 import time
 from collections.abc import Callable
 
-from slopstation import cglib
+from slopstation import config
 from slopstation.agent.brain import assistant, llm_audit
 from slopstation.agent.telemetry import sentry, traces
 
@@ -243,7 +243,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
         print(f"unknown provider '{provider}' - one of {list(BACKENDS)}")
         return 2
     keyname = assistant.PROVIDER_KEY[provider]
-    if not cglib.real_key(secrets.get(keyname)):
+    if not config.real_key(secrets.get(keyname)):
         print(f"{keyname} is a placeholder - add it to secrets.json for {provider}")
         return 1
 

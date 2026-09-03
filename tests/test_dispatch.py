@@ -6,11 +6,7 @@ gaming input, serial retry, ssh outcomes.
 import time
 
 from helpers import fresh_state
-from slopstation import (
-    cglib,
-    gamepc,  # the ssh seam - dispatch reaches it via the module
-    tv,
-)
+from slopstation import gamepc, logbook, sessionlock, tv  # gamepc: the ssh seam
 from slopstation.agent.brain import dispatch as dp
 
 CFG = {
@@ -26,7 +22,7 @@ CFG = {
 
 class Harness:
     def __init__(self, dry_run=False):
-        self.log = cglib.CapturingLog("dispatch")
+        self.log = logbook.CapturingLog("dispatch")
         self.d = dp.Dispatch(CFG, self.log, dry_run=dry_run)
 
 
@@ -132,7 +128,7 @@ def test_dispatch():
     gamepc.ssh = lambda cmd, **kw: "OK"
     h = Harness()
     assert h.d.end_session().ok
-    assert cglib.CANCEL.exists(), "a busy rig's end must leave the marker"
+    assert sessionlock.CANCEL.exists(), "a busy rig's end must leave the marker"
     assert "end_session_dispatched" in h.log.events()
     fresh_state(10)
     gamepc.ssh = lambda cmd, **kw: "FAILED:1"
@@ -141,13 +137,13 @@ def test_dispatch():
     gamepc.ssh = ssh_down
     h = Harness()
     r = h.d.end_session()
-    assert r.ok and cglib.CANCEL.exists(), r
+    assert r.ok and sessionlock.CANCEL.exists(), r
     assert "end_session_dispatched" in h.log.events()
     # Idle rig: nothing to cancel, so an unreachable PC is a real failure.
     fresh_state(None)
     r = Harness().d.end_session()
     assert not r.ok and r.earcon == "fail"
-    assert not cglib.CANCEL.exists(), "an idle rig's end must not leave a marker"
+    assert not sessionlock.CANCEL.exists(), "an idle rig's end must not leave a marker"
 
     # The room ducker restores HERE, before the exit: the voice session stays
     # open for the idle timeout, by which time couch has cut TV power and

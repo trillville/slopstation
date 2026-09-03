@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import subprocess
 
-from slopstation import cglib, events
+from slopstation import config, events
 
 
 def ssh(cmd: str, timeout: float = 15) -> str:
@@ -19,7 +19,7 @@ def ssh(cmd: str, timeout: float = 15) -> str:
     state - otherwise the READY poll reads 'ssh: connect ... timed out' as
     READY, and watch() never detects sleep."""
     r = subprocess.run(
-        ["ssh", cglib.config()["sshHost"], cmd],
+        ["ssh", config.current()["sshHost"], cmd],
         capture_output=True,
         text=True,
         timeout=timeout,

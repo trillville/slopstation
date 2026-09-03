@@ -30,7 +30,7 @@ import sys
 import threading
 import time
 
-from slopstation import cglib, checkin, events
+from slopstation import checkin, config, events, logbook
 from slopstation.agent.speech import earcons
 from slopstation.agent.speech.audio import (
     WakeListener,
@@ -46,7 +46,7 @@ from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import library
 from slopstation.agent.tools.tv_remote import TvDucker
 
-log = cglib.make_log("voice")
+log = logbook.logger("voice")
 
 
 def refresh_library_bg():
@@ -251,27 +251,27 @@ def main():
         list_devices()
         return 0
 
-    cfg = cglib.config()
+    cfg = config.current()
     voice = cfg["voice"]
-    missing = cglib.missing_config(cfg, voice=True)
+    missing = config.missing(cfg, voice=True)
     if missing:
         log.error("config_invalid", missing=missing)
         return 1
-    secrets = cglib.load_secrets()
+    secrets = config.secrets()
     earcons.set_gain(voice.get("earconGain", 1.0))
 
     rc = bench_mode(args, cfg, secrets)
     if rc is not None:
         return rc
 
-    cglib.rotate_log()
-    stt_live = cglib.real_key(secrets.get("deepgramApiKey"))
+    logbook.rotate()
+    stt_live = config.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
         log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
     from slopstation.agent.brain.assistant import PROVIDER_KEY
 
     brain_key = PROVIDER_KEY.get(voice["assistantProvider"])
-    brain_live = bool(brain_key and cglib.real_key(secrets.get(brain_key)))
+    brain_live = bool(brain_key and config.real_key(secrets.get(brain_key)))
     warn_config(voice)
 
     # Grammar built once: a YAML typo fails here, not per-wake.

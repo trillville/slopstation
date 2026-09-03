@@ -10,11 +10,11 @@ this module is cheap.
 import time
 from typing import Any
 
-from slopstation import cglib
+from slopstation import config, logbook
 from slopstation.agent.telemetry import sentry, traces
 from slopstation.agent.tools import library, titles
 
-log = cglib.make_log("voice")
+log = logbook.logger("voice")
 
 
 # Deepgram documents two ceilings: "up to 100 terms" and 500 tokens across all
@@ -405,7 +405,7 @@ class Session:
         dispatcher = Dispatch(
             cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
         )
-        assistant_live = cglib.real_key(secrets.get(PROVIDER_KEY[self.provider]))
+        assistant_live = config.real_key(secrets.get(PROVIDER_KEY[self.provider]))
         gate = GrammarGate(
             self.matcher,
             dispatcher,

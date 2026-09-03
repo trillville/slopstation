@@ -231,13 +231,13 @@ def test_grammar():
     )
     from pipecat.processors.frame_processor import FrameDirection
 
-    from slopstation import cglib
+    from slopstation import logbook
     from slopstation.agent.speech.preroll import WakeAck
 
     def drive(frames, arm, ack=None):
         """Feed frames to a fresh gate with push_frame stubbed; return the
         EndWorkerFrames it pushed, its log, and the gate."""
-        glog = cglib.CapturingLog("voice")
+        glog = logbook.CapturingLog("voice")
         gate = GrammarGate(m, None, glog, ack=ack)
         pushed = []
 
