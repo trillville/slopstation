@@ -18,7 +18,7 @@ import re
 import sys
 import time
 
-from slopstation import config, logbook, sessionlock, statefile
+from slopstation import config, logbook, paths, statefile
 from slopstation.agent.tools import library
 
 # The lane is a log attribute: store events ship as "library" (test_event_names
@@ -28,12 +28,25 @@ log = logbook.logger("library")
 STORE = "https://store.steampowered.com"
 API = "https://api.steampowered.com"
 
-DEALS = sessionlock.STATE / "deals.json"  # wishlist-on-sale + specials snapshot
+
+# wishlist-on-sale + specials snapshot
+def deals_file():
+    return paths.state("deals.json")
+
+
 DEALS_MAX_AGE_S = 6 * 3600  # prices move at sale boundaries
-FACET_CACHE = (
-    sessionlock.STATE / "facet-cache.json"
-)  # per-game how-long-to-beat (stable)
-TAGMAP = sessionlock.STATE / "store-tags.json"  # {tag_name_lower: tagid}, weekly
+
+
+# per-game how-long-to-beat (stable)
+def facet_cache_file():
+    return paths.state("facet-cache.json")
+
+
+# {tag_name_lower: tagid}, weekly
+def tagmap_file():
+    return paths.state("store-tags.json")
+
+
 TAGMAP_MAX_AGE_S = 7 * 24 * 3600
 
 
@@ -172,11 +185,11 @@ def _tag_map():
     """{tag_name_lower: tagid} for turning a spoken genre into a search filter.
     Cached weekly; GetTagList needs the key, else {} and search goes term-only."""
     try:
-        fresh = time.time() - TAGMAP.stat().st_mtime < TAGMAP_MAX_AGE_S
+        fresh = time.time() - tagmap_file().stat().st_mtime < TAGMAP_MAX_AGE_S
     except OSError:  # missing or a stat race -> refetch
         fresh = False
     if fresh:
-        cached = statefile.load(TAGMAP, None)
+        cached = statefile.load(tagmap_file(), None)
         if cached is not None:
             return cached
     s = config.secrets()
@@ -193,7 +206,7 @@ def _tag_map():
         if t.get("name") and t.get("tagid")
     }
     if out:
-        statefile.write(TAGMAP, out, indent=1)
+        statefile.write(tagmap_file(), out, indent=1)
     return out
 
 
@@ -326,15 +339,15 @@ def fetch_hltb(name: str) -> dict | None:
 
 
 def _load_facets():
-    return statefile.load(FACET_CACHE, {})
+    return statefile.load(facet_cache_file(), {})
 
 
 def _save_facets(cache):
-    statefile.write(FACET_CACHE, cache, indent=1)
+    statefile.write(facet_cache_file(), cache, indent=1)
 
 
 def load_deals() -> dict:
-    return statefile.load(DEALS, {})
+    return statefile.load(deals_file(), {})
 
 
 def refresh_deals() -> int:
@@ -352,7 +365,7 @@ def refresh_deals() -> int:
     deals = {"refreshed": time.strftime("%Y-%m-%dT%H:%M:%S"), "specials": specials}
     if steamid.isdigit():
         deals["wishlist_on_sale"] = wishlist
-    statefile.write(DEALS, deals, indent=1)
+    statefile.write(deals_file(), deals, indent=1)
     log("deals_synced", specials=len(specials), wishlist=len(wishlist))
     return 0
 

@@ -38,7 +38,7 @@ def test_assistant():
     log = logbook.CapturingLog("assistant")
     fresh_state()
     statefile.write(
-        library.LIBRARY,
+        library.library_file(),
         {
             "refreshed": "2026-08-22T00:00:00",
             "installed": [
@@ -127,15 +127,16 @@ def test_assistant():
     import tempfile
     import time as _time
 
-    sessionlock.LOCK = Path(tempfile.mkdtemp()) / "session.lock"
+    lock = Path(tempfile.mkdtemp()) / "session.lock"
+    sessionlock.lock_file = lambda: lock
     r = impls["get_now_playing"]({})
     assert r["ok"]  # dry-run path
     assert r["session_active"] is False, r
-    sessionlock.LOCK.write_text("x")  # a launch owns the rig
+    sessionlock.lock_file().write_text("x")  # a launch owns the rig
     r = impls["get_now_playing"]({})
     assert r["ok"] and r["session_active"] is True, r
     old = _time.time() - sessionlock.LOCK_STALE_S - 60  # stale = free, same as ever
-    os.utime(sessionlock.LOCK, (old, old))
+    os.utime(sessionlock.lock_file(), (old, old))
     assert impls["get_now_playing"]({})["session_active"] is False
     r = impls["get_game_details"]({"appid": real_appid})
     assert r["ok"] and r["name"] == rows[0]["name"] and r["installed"]

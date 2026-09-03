@@ -18,7 +18,7 @@ class Block:  # stands in for an SDK content block
 
 def test_traces():
     tmp = Path(tempfile.mkdtemp())
-    traces.DIR = tmp
+    traces.directory = lambda: tmp
 
     # Empty conversation -> no file.
     traces.save("voice", [])
@@ -47,5 +47,5 @@ def test_traces():
     # Fail-soft: unwritable DIR (parent is a file) must not raise.
     blocker = tmp / "blocker"
     blocker.write_text("", encoding="utf-8")
-    traces.DIR = blocker / "sub"
+    traces.directory = lambda: blocker / "sub"
     traces.save("voice", msgs)

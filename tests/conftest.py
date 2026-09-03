@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from slopstation import paths
+
 _MISSING = object()
 
 
@@ -30,14 +32,9 @@ def pytest_configure(config):
 def _configure():
     os.environ.setdefault("SLOPSTATION_ENV", "test")
     import helpers
-    from slopstation import config, sessionlock
+    from slopstation import config
 
-    # Before any module that derives its state paths from sessionlock.STATE is
-    # imported.
-    sessionlock.STATE = Path(tempfile.mkdtemp(prefix="slopstation-test-state-"))
-    sessionlock.LOCK = sessionlock.STATE / "session.lock"
-    sessionlock.LAST_ERROR = sessionlock.STATE / "last_error"
-    sessionlock.CANCEL = sessionlock.STATE / "cancel"
+    paths.HOME = Path(tempfile.mkdtemp(prefix="slopstation-test-home-"))
     config.use(json.loads(json.dumps(helpers.CONFIG)))
 
 
@@ -64,10 +61,12 @@ def _isolate():
     mods += [time, subprocess]
     saved = [(m, dict(vars(m))) for m in mods]
     token = events._ctx.set({})
-    # A fresh log directory per test: doctor's "has anything been written
-    # today" row reads an empty one. _last_day with it, or the rollover guard
-    # skips the mkdir and the new directory is never created.
-    events.LOG_DIR = Path(tempfile.mkdtemp(prefix="slopstation-test-logs-"))
+    # A fresh home per test - state, logs, markers - so nothing leaks between
+    # tests and doctor's "has anything been written today" row reads an empty
+    # log directory. _last_day with it, or the rollover guard skips the mkdir
+    # and the new directory is never created.
+    paths.HOME = Path(tempfile.mkdtemp(prefix="slopstation-test-home-"))
+    paths.state().mkdir()
     events._last_day = None
     try:
         yield

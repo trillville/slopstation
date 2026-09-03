@@ -448,7 +448,7 @@ def check_session_state():
             f"stale ({age:.0f}s)",
             "harmless - next launch or reconcile recycles it",
         )
-    err = sessionlock.LAST_ERROR
+    err = sessionlock.last_error_file()
     try:
         report(
             WARN,
@@ -596,7 +596,7 @@ def check_venv(cfg):
 
 
 def check_voice_library():
-    lib = sessionlock.STATE / "library.json"
+    lib = paths.state() / "library.json"
     try:
         data = json.loads(lib.read_text(encoding="utf-8"))
         age_h = (time.time() - lib.stat().st_mtime) / 3600
@@ -623,7 +623,7 @@ def check_voice_library():
 
     # Deals precompute: the agent refreshes ~6h, so stale means the store sync
     # is failing. WARN past 24h; absent is silent (fills on first sync).
-    deals = sessionlock.STATE / "deals.json"
+    deals = paths.state() / "deals.json"
     if deals.exists():
         age_h = (time.time() - deals.stat().st_mtime) / 3600
         if age_h > 24:
@@ -790,7 +790,7 @@ def _owned_seasons():
     owned: dict = {}
     try:
         rows = json.loads(
-            (sessionlock.STATE / "operations.json").read_text(encoding="utf-8")
+            (paths.state() / "operations.json").read_text(encoding="utf-8")
         )
         for row in rows if isinstance(rows, list) else ():
             if (
@@ -953,7 +953,7 @@ def check_remote(cfg):
 
 
 def check_operations():
-    operations_file = sessionlock.STATE / "operations.json"
+    operations_file = paths.state() / "operations.json"
     if not operations_file.exists():
         report(PASS, "operations", "no operations recorded")
         return
@@ -1105,8 +1105,8 @@ def check_telemetry():
     try:
         stale = [
             f.name
-            for f in list(events.LOG_DIR.glob("*.jsonl"))
-            + list((events.LOG_DIR / events.ARCHIVE_NAME).glob("*.jsonl"))
+            for f in list(paths.logs().glob("*.jsonl"))
+            + list((paths.logs() / events.ARCHIVE_NAME).glob("*.jsonl"))
             if time.time() - f.stat().st_mtime > events.TTL_DAYS * 86400
         ]
         if stale:

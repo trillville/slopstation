@@ -14,7 +14,7 @@ import serial
 
 import helpers
 from helpers import fresh_state
-from slopstation import config, doctor, gamepc, sessionlock, statefile, supervise
+from slopstation import config, doctor, gamepc, paths, sessionlock, statefile, supervise
 
 
 class _Serial:
@@ -133,7 +133,7 @@ def test_doctor(monkeypatch):
     assert levels()["session lock"] == "PASS" and levels()["last_error"] == "PASS"
     rows.clear()
     fresh_state(lock_age_s=10)
-    sessionlock.LAST_ERROR.write_text("boom")
+    sessionlock.last_error_file().write_text("boom")
     doctor.check_session_state()
     assert levels()["session lock"] == "PASS" and levels()["last_error"] == "WARN"
     rows.clear()
@@ -165,7 +165,7 @@ def test_doctor(monkeypatch):
     assert levels()["media"] == "PASS"
     rows.clear()
     statefile.write(
-        sessionlock.STATE / "operations.json",
+        paths.state() / "operations.json",
         [{"id": "op-test", "state": "UNKNOWN", "announcement_pending": False}],
     )
     doctor.check_operations()
@@ -234,7 +234,7 @@ def test_doctor(monkeypatch):
     }
     doctor._arr_get = lambda url, key, path, params=None, timeout=4: wanted
     statefile.write(
-        sessionlock.STATE / "operations.json",
+        paths.state() / "operations.json",
         [
             {
                 "kind": "series_acquisition",
@@ -252,7 +252,7 @@ def test_doctor(monkeypatch):
     # A whole-series operation (seasons: null) accounts for every season of
     # it, so with both series owned nothing is left armed.
     statefile.write(
-        sessionlock.STATE / "operations.json",
+        paths.state() / "operations.json",
         [
             {
                 "kind": "series_acquisition",

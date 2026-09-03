@@ -48,21 +48,21 @@ def signal_last_error(dev):
     controller, so a buzz-gated discard would strand the marker until the next
     successful launch (2026-08-30, stranded 5 h)."""
     try:
-        age = time.time() - sessionlock.LAST_ERROR.stat().st_mtime
+        age = time.time() - sessionlock.last_error_file().stat().st_mtime
     except OSError:
         return
     if age > ERR_STALE_S:
-        sessionlock.LAST_ERROR.unlink(missing_ok=True)
+        sessionlock.last_error_file().unlink(missing_ok=True)
         log("stale_error_discarded", age_s=round(age))
         return
     if dev is None:
         return  # nobody is holding it; keep for retry
     if buzz(dev, haptics.PATTERN_FAIL, "fail"):
         try:
-            reason = sessionlock.LAST_ERROR.read_text().strip()
+            reason = sessionlock.last_error_file().read_text().strip()
         except OSError:
             reason = "?"
-        sessionlock.LAST_ERROR.unlink(missing_ok=True)
+        sessionlock.last_error_file().unlink(missing_ok=True)
         log("launch_failure_signaled", reason=reason)
 
 

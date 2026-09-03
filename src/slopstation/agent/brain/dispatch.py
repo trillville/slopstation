@@ -150,7 +150,7 @@ class Dispatch:
         cancelled = False
         if sessionlock.active():
             try:
-                sessionlock.CANCEL.write_text(turn or "")
+                sessionlock.cancel_file().write_text(turn or "")
                 cancelled = True
             except OSError:
                 pass  # the host-side exit still runs

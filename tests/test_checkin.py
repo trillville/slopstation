@@ -5,7 +5,7 @@ payload, and the fail-soft rules that keep a lane alive when Sentry is not.
 import json
 import time
 
-from slopstation import checkin, events
+from slopstation import checkin, events, paths
 
 DSN = "https://abc123def456abc123def456abc12345@o4509876.ingest.us.sentry.io/1234567"
 
@@ -89,7 +89,7 @@ def test_checkin():
     real_send, checkin.send = checkin.send, fake_send
     events.ENV = "prod"  # env=test would refuse to start at all
     day = time.strftime("%Y%m%d")
-    stream = events.LOG_DIR / f"k15-{day}.jsonl"
+    stream = paths.logs() / f"k15-{day}.jsonl"
 
     def records():
         try:

@@ -8,9 +8,13 @@ prunes anything older than TTL_DAYS.
 import json
 import time
 
-from slopstation import logbook, sessionlock
+from slopstation import logbook, paths
 
-DIR = sessionlock.STATE / "traces"
+
+def directory():
+    return paths.state("traces")
+
+
 TTL_DAYS = 14
 
 log = logbook.logger("traces")
@@ -32,8 +36,8 @@ def save(kind, messages, meta=None, stem=None):
     if not messages:
         return
     try:
-        DIR.mkdir(parents=True, exist_ok=True)
-        path = DIR / f"{stem or time.strftime('%Y%m%d-%H%M%S')}-{kind}.json"
+        directory().mkdir(parents=True, exist_ok=True)
+        path = directory() / f"{stem or time.strftime('%Y%m%d-%H%M%S')}-{kind}.json"
         doc = dict(
             meta or {},
             kind=kind,
@@ -42,7 +46,7 @@ def save(kind, messages, meta=None, stem=None):
         )
         path.write_text(json.dumps(doc, indent=1, default=_jsonable), encoding="utf-8")
         cutoff = time.time() - TTL_DAYS * 86400
-        expired = [f for f in DIR.glob("*.json") if f.stat().st_mtime < cutoff]
+        expired = [f for f in directory().glob("*.json") if f.stat().st_mtime < cutoff]
         for f in expired:
             try:
                 f.unlink()

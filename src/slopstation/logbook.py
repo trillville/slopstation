@@ -19,10 +19,10 @@ def rotate(max_bytes: int = 5_000_000) -> None:
     """Two-generation rotation: couch.log -> couch.log.1 past the cap. Called
     at K15 boot (reconcile) and listener startup. Writers open-append-close
     per line, so a lost rename just rotates on the next call."""
-    logf = paths.HOME / "couch.log"
+    logf = paths.couch_log()
     try:
         if logf.stat().st_size > max_bytes:
-            os.replace(logf, paths.HOME / "couch.log.1")
+            os.replace(logf, logf.with_name(logf.name + ".1"))
     except OSError:
         pass
 
@@ -33,7 +33,6 @@ class Logger:
 
     def __init__(self, lane: str) -> None:
         self.lane = lane
-        self._logf = paths.HOME / "couch.log"
 
     def _write(self, level: str, event: str, fields: dict) -> None:
         # The whole body is guarded, not just the I/O: every log call funnels
@@ -51,7 +50,7 @@ class Logger:
                 pass  # windowless task: stdout is None or a dead pipe
             if events.ENV != "test":
                 try:
-                    with self._logf.open("a", encoding="utf-8") as f:
+                    with paths.couch_log().open("a", encoding="utf-8") as f:
                         f.write(line + "\n")
                 except OSError:
                     pass

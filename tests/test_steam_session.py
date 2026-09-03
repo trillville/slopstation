@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from slopstation import config, logbook
+from slopstation import logbook, paths
 from slopstation.agent.tools import steam_session as ss
 
 
@@ -300,7 +300,7 @@ def test_steam_session():
     tmp.write_text(
         json.dumps({"deepgramApiKey": "keep-me", "steamId64": "76561190000"})
     )
-    config.SECRETS = tmp
+    paths.secrets_file = lambda: tmp
     ss._print_qr = lambda text: None  # no console spam
     log2 = logbook.CapturingLog("steam")
     s2 = ss.SteamSession({"steamId64": "76561190000", "steamRefreshToken": None}, log2)

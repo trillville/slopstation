@@ -6,9 +6,13 @@ import time
 import uuid
 from typing import Any
 
-from slopstation import config, logbook, sessionlock, statefile
+from slopstation import config, logbook, paths, statefile
 
-OPERATIONS_FILE = sessionlock.STATE / "operations.json"
+
+def operations_file():
+    return paths.state("operations.json")
+
+
 POLL_S = 30
 
 QUEUED = "QUEUED"
@@ -47,7 +51,7 @@ class OperationStore:
         self.log = log
         self.on_terminal = on_terminal
         self.on_notification = on_notification
-        self.path = path or OPERATIONS_FILE
+        self.path = path or operations_file()
 
     def _load(self):
         rows = statefile.load(self.path, [])

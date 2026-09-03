@@ -27,7 +27,7 @@ import time
 from ctypes import wintypes
 from pathlib import Path
 
-from slopstation import logbook, paths, sessionlock
+from slopstation import logbook, paths
 
 # What each lane runs. Module invocations, not paths: the package is installed.
 LANES = {
@@ -273,7 +273,7 @@ def _first_launch_this_boot() -> bool:
     """True once per boot. The marker holds the boot's epoch; a launch that
     reads the same boot back is the scheduler restarting a crashed lane, not a
     boot."""
-    marker = sessionlock.STATE / "listener.boot"
+    marker = paths.state() / "listener.boot"
     boot = round(time.time() - _uptime_s())
     try:
         if abs(int(marker.read_text()) - boot) < 30:

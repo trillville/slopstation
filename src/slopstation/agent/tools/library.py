@@ -30,9 +30,12 @@ import threading
 import time
 from pathlib import Path
 
-from slopstation import config, logbook, sessionlock, statefile
+from slopstation import config, logbook, paths, statefile
 
-LIBRARY = sessionlock.STATE / "library.json"
+
+def library_file():
+    return paths.state("library.json")
+
 
 log = logbook.logger("library")
 
@@ -94,7 +97,7 @@ def fetch_installed_local() -> list[dict]:
 
 
 def load() -> dict:
-    return statefile.load(LIBRARY, {})
+    return statefile.load(library_file(), {})
 
 
 def installed_name(appid: int) -> str | None:
@@ -121,7 +124,7 @@ class Catalog:
 
 
 def save(index: dict) -> None:
-    statefile.write(LIBRARY, index)
+    statefile.write(library_file(), index)
 
 
 def refresh(local: bool = False) -> int:
@@ -180,7 +183,11 @@ def show() -> int:
 
 # --- layers 2-3: owned/playtime + metadata ------------------------------------
 
-META_CACHE = sessionlock.STATE / "metadata-cache.json"
+
+def meta_cache_file():
+    return paths.state("metadata-cache.json")
+
+
 _CTRL = {28: "full", 18: "partial"}  # Steam category ids
 
 
@@ -250,11 +257,11 @@ def fetch_meta_one(appid: int) -> dict:
 
 
 def load_meta() -> dict:
-    return statefile.load(META_CACHE, {})
+    return statefile.load(meta_cache_file(), {})
 
 
 def _save_meta(cache: dict) -> None:
-    statefile.write(META_CACHE, cache)
+    statefile.write(meta_cache_file(), cache)
 
 
 def refresh_meta(appids: list[int], limit: int = 200) -> dict:

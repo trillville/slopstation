@@ -15,7 +15,7 @@ from slopstation import events, paths
 
 def load() -> dict:
     """The raw file read; current() is what runtime code calls."""
-    return json.loads((paths.HOME / "config.json").read_text(encoding="utf-8-sig"))
+    return json.loads(paths.config_file().read_text(encoding="utf-8-sig"))
 
 
 _current = None
@@ -81,15 +81,14 @@ def missing(cfg: dict, voice: bool = False) -> list[str]:
     return [k for k in REQUIRED if k not in cfg]
 
 
-SECRETS = paths.HOME / "secrets.json"
-
-
 def secrets() -> dict:
-    """secrets.json as a dict. Reads SECRETS at call time (tests re-point it)."""
+    """secrets.json as a dict. Reads paths.secrets_file() at call time (tests re-point it)."""
     try:
-        return events.load_secrets(SECRETS)
+        return events.load_secrets(paths.secrets_file())
     except ValueError:
-        print(f"[config] {SECRETS.name} is malformed - all keyed lanes disabled")
+        print(
+            f"[config] {paths.secrets_file().name} is malformed - all keyed lanes disabled"
+        )
         return {}
 
 

@@ -34,10 +34,9 @@ from typing import Any, TypeGuard
 
 from slopstation import paths
 
-LOG_DIR = paths.HOME / "logs"
 TTL_DAYS = 14
-# Subdirectory NAME, not a path: the test suite monkeypatches LOG_DIR, and a
-# module-level LOG_DIR / "archive" would freeze the real path at import time
+# Subdirectory NAME, not a path: the test suite monkeypatches paths.logs(), and a
+# module-level paths.logs() / "archive" would freeze the real path at import time
 # and let a test write into the live log directory.
 ARCHIVE_NAME = "archive"
 ARCHIVE_DAYS = 2  # out of the shipper's glob; see _prune
@@ -190,7 +189,7 @@ _last_day = None
 
 def _path(day: str) -> pathlib.Path:
     stem = "test" if ENV == "test" else SERVICE
-    return LOG_DIR / f"{stem}-{day}.jsonl"
+    return paths.logs() / f"{stem}-{day}.jsonl"
 
 
 def _prune() -> None:
@@ -206,20 +205,20 @@ def _prune() -> None:
     holds open is safe: Windows lets the rename through and the handle
     follows."""
     now = time.time()
-    archive = LOG_DIR / ARCHIVE_NAME
+    archive = paths.logs() / ARCHIVE_NAME
     try:
         archive.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
     try:
         # No rglob: archive/ is not re-scanned, so nothing moves twice.
-        for f in LOG_DIR.glob("*.jsonl"):
+        for f in paths.logs().glob("*.jsonl"):
             try:
                 if f.stat().st_mtime < now - ARCHIVE_DAYS * 86400:
                     f.replace(archive / f.name)
             except OSError:
                 pass  # locked or vanished: next rollover
-        for f in list(LOG_DIR.glob("*.jsonl")) + list(archive.glob("*.jsonl")):
+        for f in list(paths.logs().glob("*.jsonl")) + list(archive.glob("*.jsonl")):
             try:
                 if f.stat().st_mtime < now - TTL_DAYS * 86400:
                     f.unlink()
@@ -307,7 +306,7 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
 
     try:
         if day != _last_day:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            paths.logs().mkdir(parents=True, exist_ok=True)
             _prune()
             _last_day = day
         _append(_path(day), json.dumps(rec, default=str, ensure_ascii=False))

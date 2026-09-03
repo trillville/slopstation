@@ -23,7 +23,7 @@ CLI (lane=manual):
 import sys
 import time
 
-from slopstation import config, events, sessionlock, tv
+from slopstation import config, events, paths, tv
 
 KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
 
@@ -39,7 +39,7 @@ class TvRemote:
         self.name = name
         self.key_delay = key_delay
         self.timeout = timeout
-        self.token = sessionlock.STATE / "tv-ws-token.txt"
+        self.token = paths.state() / "tv-ws-token.txt"
 
     def press(self, direction, n):
         """Send n volume keys. Raises on a dead/unpaired connection."""
