@@ -9,7 +9,6 @@ import types
 
 import pytest
 
-from helpers import fresh_state
 from slopstation import supervise
 
 
@@ -77,7 +76,6 @@ def test_a_process_in_the_job_takes_its_children_with_it():
 
 
 def test_lane_installs_then_runs_and_restarts_a_crash(monkeypatch, tmp_path):
-    fresh_state()
     calls = _lane_seams(monkeypatch, tmp_path, lane_code=3)
 
     def backoff(_s):
@@ -91,7 +89,6 @@ def test_lane_installs_then_runs_and_restarts_a_crash(monkeypatch, tmp_path):
 
 
 def test_lane_ends_with_a_clean_exit(monkeypatch, tmp_path):
-    fresh_state()
     (tmp_path / "deps-ok").write_text("digest")
     calls = _lane_seams(monkeypatch, tmp_path, lane_code=0)
     assert supervise.lane("voice", ["--once"]) == 0
@@ -99,7 +96,6 @@ def test_lane_ends_with_a_clean_exit(monkeypatch, tmp_path):
 
 
 def test_listener_reconciles_once_per_boot(monkeypatch):
-    fresh_state()
     monkeypatch.setattr(supervise, "_uptime_s", lambda: 1000.0)
     assert supervise._first_launch_this_boot() is True
     assert supervise._first_launch_this_boot() is False  # a restart, same boot

@@ -100,12 +100,8 @@ class WakeCapture:
             threading.Thread(target=fn, daemon=True).start()
 
     def disarm_deadline(self) -> None:
-        """Retire the CHIME_BY_S fallback; quiet detection stays armed. Called
-        at the pipeline handoff: the pump runs on through the whole setup
-        (the Flux connect), where a one-breath command is
-        still mid-word at 1.5 s - the deadline would beep over it. Past the
-        handoff, quiet detection and the gate's final-transcript backstop own
-        the chime."""
+        """Retire the CHIME_BY_S fallback at the pipeline handoff; quiet
+        detection and the gate's transcript backstop own the chime from here."""
         self._chime_deadline = False
 
     def _pump(self) -> None:
@@ -132,6 +128,16 @@ class WakeCapture:
         return self._pcm
 
 
+def _frames(pcm: bytes) -> list:
+    """The PCM as input frames on the wake loop's 80 ms hop."""
+    return [
+        InputAudioRawFrame(
+            audio=pcm[i : i + CHUNK_BYTES], sample_rate=SAMPLE_RATE, num_channels=1
+        )
+        for i in range(0, len(pcm), CHUNK_BYTES)
+    ]
+
+
 class PrerollFeeder(FrameProcessor):
     """Replays wake-capture PCM ahead of live mic audio. The capture is handed
     over LIVE and stopped here on StartFrame (see the module docstring); the
@@ -143,27 +149,14 @@ class PrerollFeeder(FrameProcessor):
         super().__init__()
         self._log = log
         self.capture = None  # WakeCapture, stopped on StartFrame
-        self.pcm = b""  # or pre-stopped PCM (tests)
-
-    def _frames(self) -> list:
-        return [
-            InputAudioRawFrame(
-                audio=self.pcm[i : i + CHUNK_BYTES],
-                sample_rate=SAMPLE_RATE,
-                num_channels=1,
-            )
-            for i in range(0, len(self.pcm), CHUNK_BYTES)
-        ]
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
-        if isinstance(frame, StartFrame):
-            if self.capture is not None:
-                self.pcm = self.capture.stop()
-                self.capture = None
-            if self.pcm:
-                self._log("preroll_fed", audio_s=round(len(self.pcm) / BYTES_PER_S, 1))
-                for f in self._frames():
+        if isinstance(frame, StartFrame) and self.capture is not None:
+            pcm = self.capture.stop()
+            self.capture = None
+            if pcm:
+                self._log("preroll_fed", audio_s=round(len(pcm) / BYTES_PER_S, 1))
+                for f in _frames(pcm):
                     await self.push_frame(f)
-                self.pcm = b""

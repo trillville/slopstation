@@ -9,11 +9,12 @@ import base64
 import re
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+import helpers
+
+ROOT = helpers.REPO
 PC = ROOT / "gaming-pc"
 MEDIA_START = ROOT / "media" / "Start-Media.ps1"
 DISPATCH = PC / "Dispatch.ps1"
@@ -47,10 +48,7 @@ def parse_all():
         "-EncodedCommand",
         enc,
     ]
-    # 2-3s in CI, 0.8s locally - but a runner stalled powershell's start past
-    # the timeout once (2026-08-31), which failed the suite and SKIPPED that
-    # commit's deploy. Retry once: a cold-start stall does not repeat, and a
-    # real hang still trips twice and fails.
+    # Retry once: a cold-start stall does not repeat; a real hang trips twice.
     for attempt in (1, 2):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -147,10 +145,8 @@ def test_ps_parse():
 
     # 4. Set-Turn after the guards, before the task start: every early
     # `break` (a refusal) precedes it, and Start-CgTask follows it.
-    arms = verb_arms(dispatch)
-    assert len(arms) == 13, f"expected 13 verb arms, got {len(arms)}"
-    ordered = 0
-    for pat, code in arms:
+    # test_turn owns the arm counts.
+    for pat, code in verb_arms(dispatch):
         st = next(
             (i for i, ln in enumerate(code) if re.search(r"\bSet-Turn\b", ln)), None
         )
@@ -168,9 +164,6 @@ def test_ps_parse():
         assert not late, (
             f"a refusal (break) after Set-Turn in arm {pat}: a refused verb would stamp the turn"
         )
-        ordered += 1
-    # enter, exit, launch, nav x3, stop
-    assert ordered == 7, f"expected 7 turn-bearing task arms, got {ordered}"
 
     # 5. Emitter-owned keys: Dispatch's Write-Event == common's Write-CgEvent.
     a, b = owned(dispatch, "Write-Event"), owned(common, "Write-CgEvent")

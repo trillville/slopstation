@@ -32,12 +32,12 @@ PC_DYNAMIC = {
 
 # Python call shapes. Group 'name' is the event; the scan then reads the
 # argument list that follows for `key=` tokens and dict-literal keys.
-#   log("x" ...) / self.log("x") / self._log("x") / .warn .error .info
+#   log("x" ...) / self._log("x") / any.dotted.path.log("x") / .warn .error
 #   events.emit("lane", "x" ...) / emit(lane_var, "x" ...)   (the CLI, heartbeat)
 #   emit("x" ...)   (a local bound to log or log.warn)
 _PY = [
     re.compile(
-        r"(?:(?<![\w.])log|self\.log|self\._log)(?:\.(?:warn|error|info))?"
+        r"(?<![\w.])(?:[\w.]+\.)?_?log(?:\.(?:warn|error))?"
         r"\(\s*\"(?P<name>[a-z][a-z0-9_]*)\""
     ),
     re.compile(

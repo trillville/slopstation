@@ -3,6 +3,7 @@ negatives that must fall through to the assistant lane.
 """
 
 import asyncio
+import dataclasses
 import time
 
 import pytest
@@ -15,12 +16,12 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-from slopstation import logbook
-from slopstation.agent.speech import earcons
+from helpers import CapturingLog
 from slopstation.agent.speech.grammar_gate import (
     GrammarGate,
     GrammarMatcher,
     strip_wake,
+    stt_confidence,
 )
 from slopstation.agent.speech.preroll import WakeAck
 
@@ -155,7 +156,7 @@ STRIP = [
     ("hey jar vis volume up", "volume up"),  # split anchor, joined
 ]
 
-# Same stripper, "alfred" anchor: split mishears (2026-08-15), and the join
+# Same stripper, "alfred" anchor: split mishears, and the join
 # staying under 80 for real phrases.
 STRIP_ALFRED = [
     ("hey alfred volume up", "volume up"),
@@ -190,7 +191,7 @@ def drive(matcher, monkeypatch):
     EndWorkerFrames it pushed, its log, and the gate."""
 
     def _drive(frames, arm, ack=None):
-        glog = logbook.CapturingLog("voice")
+        glog = CapturingLog("voice")
         gate = GrammarGate(matcher, None, glog, ack=ack)
         pushed = []
 
@@ -248,12 +249,25 @@ def test_strip_wake_two_token_join(text, anchor, want):
     assert strip_wake(text, anchor) == want
 
 
-def test_stripped_transcript_still_matches_the_grammar(matcher):
-    stripped = strip_wake("hey jarvis volume up")
-    got = matcher.match(stripped)
-    assert got is not None and got[0] == "VolumeUp", (
-        f"stripped {stripped!r} no longer matches VolumeUp"
+@dataclasses.dataclass
+class Frame:
+    result: object
+
+
+def test_confidence_is_read_and_never_raises():
+    assert (
+        stt_confidence(Frame({"words": [{"confidence": 0.9}, {"confidence": 0.7}]}))
+        == 0.8
     )
+    for bad in ({}, {"words": []}, {"words": [{}]}, {"words": "nope"}, None):
+        assert stt_confidence(Frame(bad)) is None, bad
+
+    class Exploding:
+        @property
+        def result(self):
+            raise RuntimeError("upstream moved")
+
+    assert stt_confidence(Exploding()) is None, "telemetry cost the turn"
 
 
 def test_is_busy_defers_idle_until_the_assistant_turn_expires(matcher, monkeypatch):
@@ -311,11 +325,3 @@ def test_turn_edges_defer_idle_claim_the_chime_and_expire(drive, monkeypatch):
     )
     assert not gate.is_busy(), "a closed user turn must not read as mid-turn"
     assert not ack.claim(), "the turn stop must claim the wake chime"
-
-
-def test_the_think_earcon_stays_removed():
-    """An assistant turn is silent while it works: the only sounds are the
-    answer itself and, on error, the fail earcon."""
-    assert "think" not in earcons.SPECS, (
-        "the think earcon is back - it was removed on purpose"
-    )

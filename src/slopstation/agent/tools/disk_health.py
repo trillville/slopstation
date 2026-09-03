@@ -6,8 +6,8 @@ same event stream through `events.py emit`.
 """
 
 import shutil
-import threading
 
+from slopstation import events
 from slopstation.agent.tools.media_clients import _clean_text
 
 DISK_POLL_S = 300
@@ -30,22 +30,11 @@ class DiskHealthMonitor:
         self.log = log
         self.poll_s = poll_s
         self.free_warn_bytes = free_warn_bytes
-        self._stop = threading.Event()
         self._low = set()
         self._last_failure = {}
 
     def start(self):
-        threading.Thread(
-            target=self._run, daemon=True, name="disk-health-monitor"
-        ).start()
-
-    def stop(self):
-        self._stop.set()
-
-    def _run(self):
-        while not self._stop.is_set():
-            self.reconcile_once()
-            self._stop.wait(self.poll_s)
+        events.Ticker("disk-health-monitor", self.poll_s, self.reconcile_once).start()
 
     def reconcile_once(self):
         for mount in self.mounts:
@@ -75,7 +64,7 @@ class DiskHealthMonitor:
                 )
                 self._low.add(mount)
         elif mount in self._low:
-            self.log.info(
+            self.log(
                 "disk_space_cleared", mount=mount, free_gb=free_gb, pct_free=pct_free
             )
             self._low.discard(mount)

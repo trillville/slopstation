@@ -11,248 +11,29 @@ import time
 from typing import Any
 
 from slopstation import config, logbook
+from slopstation.agent.speech import keyterms
 from slopstation.agent.telemetry import sentry, traces
 from slopstation.agent.tools import library, titles
 
 log = logbook.logger("voice")
 
 
-# Deepgram documents two ceilings: "up to 100 terms" and 500 tokens across all
-# of them. 2026-08-15 measured the count half - 100 connect, 110 get HTTP 400
-# at the websocket handshake, and over it every session fails to open. The
-# token half is not close (2026-08-29: ~200 words over 93 terms), so count
-# binds first. Weights are not a lever: Flux ignores a ":2.0" suffix silently
-# and boosts the literal string.
-MAX_KEYTERMS = 100
-
-# Tag/genre slots - the jargon half of the vocabulary. Deepgram's own guidance
-# is 20-50 terms and no generic words.
-QUERY_TERM_SLOTS = 30
-
-# Ordinary English, in spoken_form. Flux gets these right unprompted, so a slot
-# spent here is a slot not spent on a coined word it does get wrong. Steam's
-# tag head is almost nothing else: 21 of the top 30 for a 40-game library
-# (2026-08-29).
-GENERIC_TERMS = frozenset(
-    {
-        "2d",
-        "3d",
-        "action",
-        "adventure",
-        "anime",
-        "arcade",
-        "atmospheric",
-        "base building",
-        "beautiful",
-        "building",
-        "casual",
-        "character customization",
-        "choices matter",
-        "cinematic",
-        "city builder",
-        "classic",
-        "colorful",
-        "combat",
-        "comedy",
-        "competitive",
-        "crafting",
-        "cute",
-        "dark",
-        "dark fantasy",
-        "difficult",
-        "driving",
-        "dungeon crawler",
-        "early access",
-        "economy",
-        "education",
-        "epic",
-        "exploration",
-        "family friendly",
-        "fantasy",
-        "fast paced",
-        "female protagonist",
-        "fighting",
-        "first person",
-        "flight",
-        "free to play",
-        "funny",
-        "future",
-        "gore",
-        "grand strategy",
-        "great soundtrack",
-        "historical",
-        "horror",
-        "indie",
-        "local co op",
-        "loot",
-        "magic",
-        "management",
-        "massively multiplayer",
-        "mature",
-        "medieval",
-        "military",
-        "mining",
-        "modern",
-        "multiplayer",
-        "music",
-        "mystery",
-        "mythology",
-        "nature",
-        "nudity",
-        "online",
-        "online co op",
-        "open world",
-        "physics",
-        "platformer",
-        "point click",
-        "political",
-        "psychological",
-        "puzzle",
-        "racing",
-        "realistic",
-        "relaxing",
-        "replay value",
-        "resource management",
-        "retro",
-        "romance",
-        "sandbox",
-        "sci fi",
-        "science",
-        "sexual content",
-        "shooter",
-        "short",
-        "silly",
-        "simulation",
-        "singleplayer",
-        "software",
-        "space",
-        "sports",
-        "stealth",
-        "story",
-        "story rich",
-        "strategy",
-        "survival",
-        "tactical",
-        "third person",
-        "trading",
-        "turn based strategy",
-        "turn based tactics",
-        "underwater",
-        "utilities",
-        "violent",
-        "war",
-        "zombies",
-    }
-)
-
-
-def _dedupe(terms):
-    seen, out = set(), []
-    for t in terms:
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
-
-
-def query_keyterms(limit=QUERY_TERM_SLOTS):
-    """The words used to ask ABOUT games, in the form Flux emits them: every
-    term goes through spoken_form, never SteamSpy's punctuation ('rogue-like',
-    'souls-like', 'co-op')."""
-    return [
-        t
-        for t in _dedupe(titles.spoken_form(x) for x in library.query_terms(None))
-        if t not in GENERIC_TERMS
-    ][:limit]
-
-
-def load_titles(count, rows=None):
-    """Installed titles by recency, spelled as Steam writes them."""
-    if rows is None:
-        rows = library.load().get("installed", [])
-    rows = sorted(rows, key=lambda r: r.get("lastPlayed", 0), reverse=True)
-    return [
-        r["name"]
-        for r in rows
-        if r.get("name") and r.get("appid") not in library.NOT_GAMES
-    ][:count]
-
-
-def stt_keyterms(voice, wake_phrase, catalog=None):
-    """Everything Flux is told to expect, in the form it will hear it:
-    titles, collection names, tag/genre words.
-
-    Order is the budget policy - the cap truncates the tail, and titles come
-    first because they carry every observed launch while collection names and
-    query words carry none (30 days to 2026-08-29). The 162
-    owned-but-uninstalled titles do not fit, which is why keyterm_forms covers
-    'hades' off Hades II rather than the list carrying plain Hades. Truncation
-    is logged out loud - a silently short list reads as full coverage."""
-    catalog = catalog or library.Catalog.load()
-    terms = [wake_phrase]
-    for name in load_titles(voice["keytermCount"], catalog.installed):
-        terms += titles.keyterm_forms(name)
-    terms += [
-        titles.spoken_form(c["name"]) for c in catalog.collections if c.get("name")
-    ]
-    terms += query_keyterms()
-
-    out = _dedupe(terms)
-    if len(out) > MAX_KEYTERMS:
-        log.warn(
-            "keyterms_capped",
-            kept=MAX_KEYTERMS,
-            dropped=len(out) - MAX_KEYTERMS,
-            first_dropped=out[MAX_KEYTERMS],
-        )
-        out = out[:MAX_KEYTERMS]
-    return out
-
-
 CARRY: dict[str, Any] = {"messages": [], "t": 0.0}  # cross-session context
 
 
 def _trim_carry(messages):
-    """Carry only whole tool exchanges: the Anthropic API 400s on a
-    tool_result without its tool_use. Drop from the front until a plain user
-    turn, and drop a trailing assistant-with-tool_calls that has no result."""
-
-    def is_plain_user(m):
-        return (
-            isinstance(m, dict)
-            and m.get("role") == "user"
-            and "tool_call_id" not in m
-            and "tool_use_id" not in m
-        )
-
-    def has_tool_calls(m):
-        return isinstance(m, dict) and (
-            m.get("tool_calls")
-            or m.get("role") == "assistant"
-            and isinstance(m.get("content"), list)
-            and any(
-                isinstance(b, dict) and b.get("type") == "tool_use"
-                for b in m["content"]
-            )
-        )
-
+    """Carry only whole tool exchanges: a tool result without its call is a
+    400 from the provider. Drop from the front until a plain user turn, and
+    drop a trailing assistant turn whose tool calls have no results."""
     msgs = list(messages)
-    while msgs and not is_plain_user(msgs[0]):
+    while msgs and msgs[0].get("role") != "user":
         msgs.pop(0)
-    if msgs and has_tool_calls(msgs[-1]):
+    if msgs and msgs[-1].get("tool_calls"):
         msgs.pop()
     return msgs
 
 
 def _make_tts(voice, secrets):
-    if voice.get("ttsLocal"):
-        try:
-            from pipecat.services.kokoro.tts import KokoroTTSService
-
-            log("tts_selected", engine="kokoro", local=True)
-            return KokoroTTSService()
-        except Exception as e:
-            log.warn("tts_fallback", wanted="kokoro", using="aura-2", err=str(e))
     from pipecat.services.deepgram.tts import DeepgramTTSService
 
     return DeepgramTTSService(
@@ -358,16 +139,16 @@ class Session:
 
         cfg, secrets, voice = self.cfg, self.secrets, self.voice
         catalog = library.Catalog.load()
-        game_terms = load_titles(voice["keytermCount"], catalog.installed)
+        game_terms = keyterms.load_titles(voice["keytermCount"], catalog.installed)
         # Keyterm-boosted so the pre-roll wake phrase transcribes canonically
         # and strip_wake matches.
         wake_phrase = _wake_phrase(voice["wakeModel"])
-        keyterms = stt_keyterms(voice, wake_phrase, catalog)
+        terms = keyterms.stt_keyterms(voice, wake_phrase, catalog)
         log(
             "stt_vocabulary",
-            terms=len(keyterms),
+            terms=len(terms),
             titles=len(game_terms),
-            headroom=MAX_KEYTERMS - len(keyterms),
+            headroom=keyterms.MAX_KEYTERMS - len(terms),
         )
 
         transport = LocalAudioTransport(
@@ -398,7 +179,7 @@ class Session:
                     else None
                 ),
                 numerals=True,
-                keyterm=keyterms,
+                keyterm=terms,
             ),
         )
 
@@ -429,15 +210,8 @@ class Session:
         # Flux only PROPOSES turn edges since pipecat 1.8, and its stop
         # proposal is a queued ControlFrame - resolved downstream of a gate
         # whose queue blocks on dispatch, a stale stop can land after the next
-        # turn's start. This resolver sits upstream of the gate, is never
-        # blocked, and turns proposals into the real UserStarted/Stopped
-        # frames every consumer keys on (the gate, idle reset, turn tracking)
-        # in arrival order - in BOTH pipelines. It also sees every transcript
-        # before the gate can swallow it, which its stop strategy waits on.
-        #
-        # enable_interruptions=True is 1.7's LIVE behavior: Flux broadcast an
-        # interruption on every talk-over and the output transport honored it,
-        # cutting the answer. False = answers play through talk-over.
+        # turn's start. enable_interruptions=True cuts the answer on talk-over;
+        # False lets it play through.
         turns = UserTurnProcessor(
             user_turn_strategies=ExternalUserTurnStrategies(enable_interruptions=True)
         )
@@ -616,34 +390,3 @@ class Session:
         traces.save("voice", msgs, {"provider": self.provider, "dry_run": self.dry_run})
         CARRY["messages"] = _trim_carry(msgs[-8:])
         CARRY["t"] = time.time()
-
-
-async def run_session(
-    cfg,
-    secrets,
-    matcher,
-    dry_run,
-    input_idx,
-    output_idx,
-    capture=None,
-    operations=None,
-    ack=None,
-    steam=None,
-    media=None,
-    on_end_session=None,
-):
-    """voice_agent's entry: one Session, run to its end."""
-    await Session(
-        cfg,
-        secrets,
-        matcher,
-        dry_run,
-        input_idx,
-        output_idx,
-        capture=capture,
-        operations=operations,
-        ack=ack,
-        steam=steam,
-        media=media,
-        on_end_session=on_end_session,
-    ).run()

@@ -1,12 +1,12 @@
-"""Durable correlation and observation for externally-owned work."""
+"""Durable correlation and observation for externally-owned work. The CLI
+lives in operations_monitors; `python -m slopstation.agent.tools.operations`
+still reaches it."""
 
-import argparse
-import json
 import time
 import uuid
 from typing import Any
 
-from slopstation import config, logbook, paths, statefile
+from slopstation import paths, statefile
 
 
 def operations_file():
@@ -47,11 +47,11 @@ def _summary(operation, state):
 class OperationStore:
     """One K15-owned JSON ledger; external systems remain authoritative."""
 
-    def __init__(self, log, on_terminal=None, on_notification=None, path=None):
+    def __init__(self, log, on_terminal=None, on_notification=None):
         self.log = log
         self.on_terminal = on_terminal
         self.on_notification = on_notification
-        self.path = path or operations_file()
+        self.path = operations_file()
 
     def _load(self):
         rows = statefile.load(self.path, [])
@@ -334,23 +334,6 @@ class OperationStore:
                     return True
         return False
 
-    def cancel(self, operation_id):
-        operation = self.get(operation_id)
-        if operation is None:
-            return False, f"no operation named {operation_id}"
-        if operation.get("state") in TERMINAL:
-            return False, f"{operation_id} is already {operation['state'].lower()}"
-        self.log(
-            "operation_cancel_refused",
-            operation=operation_id,
-            authority=operation.get("authority"),
-        )
-        authority = str(operation.get("authority", "external authority")).title()
-        return False, (
-            f"{authority} cancellation is not supported; "
-            "the operation was left unchanged"
-        )
-
     def for_assistant(self, scope="active", limit=10, acknowledge=False):
         rows = self.active() if scope == "active" else self.recent(limit)
         if acknowledge:
@@ -462,135 +445,7 @@ def record_deleted(store, rows, result=None):
     return result
 
 
-def _line(operation):
-    progress = operation.get("progress") or {}
-    phase = progress.get("phase")
-    pct = (
-        progress.get("download_percent")
-        if phase == "downloading"
-        else progress.get("percent")
-    )
-    suffix = f" ({pct}%)" if pct is not None else ""
-    if phase:
-        suffix = f" [{phase}]" + suffix
-    return (
-        f"{operation['id']} {operation['state']} {operation['kind']} "
-        f"{operation['title']}{suffix}"
-    )
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description="Inspect durable operations")
-    sub = parser.add_subparsers(dest="command", required=True)
-    ls = sub.add_parser("list")
-    ls.add_argument("--active", action="store_true")
-    show = sub.add_parser("show")
-    show.add_argument("operation")
-    sub.add_parser("reconcile")
-    cancel = sub.add_parser("cancel")
-    cancel.add_argument("operation")
-    abandon = sub.add_parser("abandon")
-    abandon.add_argument("operation")
-    abandon.add_argument("--execute", action="store_true")
-    args = parser.parse_args(argv)
-
-    log = logbook.logger("voice")
-    store = OperationStore(log)
-    # Lazy: operations_monitors imports this module, so a top-level import here
-    # would be a cycle.
-    from slopstation.agent.tools import operations_monitors
-
-    if args.command == "list":
-        rows = store.active() if args.active else store.recent(50)
-        if not rows:
-            print("no operations")
-        for operation in rows:
-            print(_line(operation))
-        return 0
-    if args.command == "show":
-        operation = store.get(args.operation)
-        if operation is None:
-            print(f"no operation named {args.operation}")
-            return 1
-        print(json.dumps(operation, indent=2))
-        return 0
-    if args.command == "cancel":
-        # No authority here supports cancellation, so cancel() always refuses
-        # and this exit is unconditional.
-        _, detail = store.cancel(args.operation)
-        print(detail)
-        return 1
-    if args.command == "abandon":
-        operation = store.get(args.operation)
-        if operation is None:
-            print(f"no operation named {args.operation}")
-            return 1
-        if operation.get("state") in TERMINAL:
-            print(f"{args.operation} is already {operation['state'].lower()}")
-            return 1
-        if operation.get("kind") not in operations_monitors.MediaMonitor.KINDS:
-            print("only Radarr and Sonarr operations support clean abandonment")
-            return 1
-        if not args.execute:
-            print("nothing deleted; repeat with --execute")
-            return 2
-        cfg = config.current()
-        secrets = config.secrets()
-        from slopstation.agent.tools import media
-
-        service = media.from_config(cfg, secrets, log)
-        if service is None:
-            print("media is disabled or its configuration/API keys are incomplete")
-            return 1
-        metadata = operation.get("metadata") or {}
-        command_ids = metadata.get("command_ids") or []
-        try:
-            if operation["kind"] == "movie_acquisition":
-                result = service.delete_movie(metadata["catalog_id"], command_ids)
-            else:
-                seasons = metadata.get("seasons")
-                result = service.delete_series(
-                    metadata["catalog_id"],
-                    seasons=seasons,
-                    all_seasons=seasons is None,
-                    command_ids=command_ids,
-                )
-            record_deleted(store, [operation])
-        except Exception as e:
-            print(f"abandon failed; operation left active: {e}")
-            return 1
-        print(result["detail"])
-        return 0
-
-    cfg = config.current()
-    secrets = config.secrets()
-    counts = []
-    from slopstation.agent.tools import steam_session
-
-    steam = steam_session.SteamSession(
-        secrets, log, machine_name=cfg.get("steamMachineName")
-    )
-    if steam.available():
-        monitor: operations_monitors.Monitor = operations_monitors.SteamMonitor(
-            store, steam, log
-        )
-        counts.append(("Steam", monitor.reconcile_once()))
-    from slopstation.agent.tools import media
-
-    service = media.from_config(cfg, secrets, log)
-    if service is not None:
-        monitor = operations_monitors.MediaMonitor(store, service, log)
-        counts.append(("media", monitor.reconcile_once()))
-    if not counts:
-        print("no external operation authorities are configured")
-        return 1
-    print(
-        "; ".join(
-            f"reconciled {count} active {name} operation(s)" for name, count in counts
-        )
-    )
-    return 0
-
-
 if __name__ == "__main__":
+    from slopstation.agent.tools.operations_monitors import main
+
     raise SystemExit(main())

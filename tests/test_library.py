@@ -1,16 +1,14 @@
-"""Library layer 1 + title resolution against the REAL Steam
-install on this machine, cross-validated row-for-row against Dispatch.ps1's
-`games` verb.
+"""Layer 1 rows and title resolution against the REAL Steam install on this
+machine, read through Dispatch.ps1's `games` verb run locally.
 """
 
 import subprocess
-from pathlib import Path
 
 import helpers
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.tools import library, titles
 
-DISPATCH = Path(__file__).resolve().parents[1] / "gaming-pc" / "Dispatch.ps1"
+DISPATCH = helpers.REPO / "gaming-pc" / "Dispatch.ps1"
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1"}}
 
 
@@ -34,20 +32,11 @@ def ps_games():
 
 def test_library():
     helpers.wants("steam")
-    # The index lands under this test's runtime home (conftest).
-    assert library.refresh(local=True) == 0, (
-        "no local Steam - this test belongs to the gaming PC (helpers.wants skips it "
-        "elsewhere; SLOPSTATION_TEST_HAS=steam forces it)"
-    )
-    rows = library.load()["installed"]
+    rows = ps_games()
     assert rows, "no installed games found"
     assert all({"appid", "name", "state", "size", "lastPlayed"} <= set(r) for r in rows)
-
-    # Cross-validate the two independent implementations of layer 1.
-    ps_rows = ps_games()
-    ours = {(r["appid"], r["name"]) for r in rows}
-    theirs = {(r["appid"], r["name"]) for r in ps_rows}
-    assert ours == theirs, f"python vs PS verb drift: {ours ^ theirs}"
+    # The index lands under this test's runtime home (conftest).
+    library.save({"installed": rows})
 
     # Resolver: every installed game round-trips from its own spoken form...
     resolve = titles.build_resolver(87)

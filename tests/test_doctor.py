@@ -4,7 +4,6 @@ the hints are prose.
 """
 
 import json
-import os
 import subprocess
 import time
 import types
@@ -80,7 +79,7 @@ def cfg(monkeypatch):
     """config.example.json, and what config.current() answers (check_ssh
     reads sshHost from it)."""
     cfg = dict(helpers.CONFIG)
-    monkeypatch.setattr(config, "_current", cfg)  # what config.use() sets
+    monkeypatch.setattr(config, "_current", cfg)
     return cfg
 
 
@@ -110,13 +109,6 @@ def media_up(monkeypatch):
         lambda: {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32},
     )
     monkeypatch.setattr(doctor, "_tcp_reachable", lambda url, timeout=1: True)
-
-
-def _seed_lock(age_s, content="x"):
-    """A session lock of that age in this test's state directory."""
-    sessionlock.lock_file().write_text(content)
-    old = time.time() - age_s
-    os.utime(sessionlock.lock_file(), (old, old))
 
 
 # --- config --------------------------------------------------------------
@@ -214,7 +206,7 @@ def test_session_state_idle(rows):
 
 
 def test_session_state_fresh_lock_and_a_last_error(rows):
-    _seed_lock(age_s=10)
+    helpers.seed_lock(10)
     sessionlock.last_error_file().write_text("boom")
     doctor.check_session_state()
     assert rows.levels()["session lock"] == "PASS"
@@ -222,7 +214,7 @@ def test_session_state_fresh_lock_and_a_last_error(rows):
 
 
 def test_session_state_stale_lock(rows):
-    _seed_lock(age_s=sessionlock.LOCK_STALE_S + 1)
+    helpers.seed_lock(sessionlock.LOCK_STALE_S + 1)
     doctor.check_session_state()
     assert rows.levels()["session lock"] == "WARN"
 

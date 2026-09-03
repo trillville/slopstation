@@ -25,26 +25,18 @@ from slopstation import config, logbook, paths, sessionlock, supervise
 
 log = logbook.logger("deploy")
 
-ROOT = paths.HOME
-
 IDLE_POLL_S = 15
 RELAUNCH_S = 90  # a /Run is near-instant; this is room for a slow box
-# A relaunch that has to pip install first. The supervisor calls it "a minute
-# or two"; a cold venv on this box is longer, and this is a ceiling that only
-# elapses when something is genuinely stuck, not a wait that is spent.
-REINSTALL_S = 900
-
-# Compose reads compose.yaml only when something runs `up`, so a landed edit to
-# it changes nothing until this script runs - the containers keep the shape
-# they were created with. `up -d` is a no-op when nothing changed, so this runs
-# every deploy rather than diffing the commits.
-MEDIA_SCRIPT = ROOT / "media" / "Start-Media.ps1"
+REINSTALL_S = 900  # a relaunch that has to pip install first: a ceiling, not a wait
 MEDIA_S = 900  # a compose up that has to pull an image first
 
 
 def git(*args: str) -> str:
     r = subprocess.run(
-        ["git", "-C", str(ROOT), *args], capture_output=True, text=True, timeout=180
+        ["git", "-C", str(paths.HOME), *args],
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
     if r.returncode:
         raise RuntimeError(f"git {' '.join(args)}: {(r.stderr or r.stdout).strip()}")
@@ -62,10 +54,11 @@ def media_enabled() -> bool:
 
 
 def start_media() -> None:
-    """Bring the media stack onto the compose file just landed. Fails the
-    deploy: it only runs where the stack is enabled, and a stack that will not
-    come up is what this step exists to make visible - doctor.py's media rows
-    are WARNs, so nothing else here goes red."""
+    """Bring the media stack onto the compose file just landed: containers keep
+    the compose file they were created with until something runs `up`. A
+    stack that will not come up fails the deploy - doctor.py's media rows are
+    WARNs, so nothing else would go red."""
+    script = paths.HOME / "media" / "Start-Media.ps1"
     r = subprocess.run(
         [
             "powershell",
@@ -73,7 +66,7 @@ def start_media() -> None:
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(MEDIA_SCRIPT),
+            str(script),
         ],
         capture_output=True,
         text=True,
@@ -133,15 +126,13 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
 
     t0 = time.time()
-    log("deploy_start", sha=a.sha[:12], at=str(ROOT))
+    log("deploy_start", sha=a.sha[:12], at=str(paths.HOME))
     try:
         branch = git("rev-parse", "--abbrev-ref", "HEAD")
         if branch != "main":
             raise RuntimeError(f"checkout is on {branch!r}, not main")
-        # Tracked files only: the K15 carries untracked wake-training wavs and
-        # candidate models by design, and none of them stop a fast-forward. A
-        # collision between one and an incoming file fails the merge below, on
-        # its own terms.
+        # Tracked files only: the K15 carries untracked wake-training data by
+        # design, and a collision with an incoming file fails the merge itself.
         if git("status", "--porcelain", "--untracked-files=no"):
             raise RuntimeError("checkout has uncommitted changes to tracked files")
 
@@ -163,11 +154,10 @@ def main(argv: list[str]) -> int:
         was = {lane for lane in supervise.LANES if supervise.running(lane)}
         for lane in sorted(was):
             log("deploy_reloaded", what=lane, killed=int(supervise.stop(lane)))
-        # The chord lane is required back whether or not it was up to begin
-        # with: a deploy that leaves it dead has landed code that nothing is
-        # running, and doctor.py only WARNs about that. Voice is an overlay:
-        # it comes back only if it was up, so a lane someone stopped on
-        # purpose stays stopped.
+        # The chord lane comes back whether or not it was up: a deploy that
+        # leaves it dead has landed code nothing runs, and doctor.py only WARNs
+        # about that. Voice comes back only if it was up, so a lane someone
+        # stopped on purpose stays stopped.
         want = was | {"listener"}
         for lane in sorted(want):
             supervise.run(lane)
@@ -192,7 +182,7 @@ def main(argv: list[str]) -> int:
             log("deploy_media", dur_ms=int((time.time() - t_media) * 1000))
 
         fails = subprocess.run(
-            [sys.executable, "-m", "slopstation.doctor"], cwd=str(ROOT), timeout=900
+            [sys.executable, "-m", "slopstation.doctor"], cwd=paths.HOME, timeout=900
         ).returncode
         log(
             "deploy_done",

@@ -29,12 +29,6 @@ def current() -> dict:
     return _current
 
 
-def use(cfg: dict | None) -> None:
-    """Test seam: make current() answer `cfg` without touching the file."""
-    global _current
-    _current = cfg
-
-
 REQUIRED = (
     "gamingPcMac",
     "gamingPcIp",
@@ -44,9 +38,9 @@ REQUIRED = (
     "tvIdleCmd",
     "tvOffWhenDone",
 )
-# Missing any of these fails the voice agent at startup, not per-wake; every
-# other voice key has an inert default (config.json is per-machine: a key made
-# mandatory in code is an agent that will not start after a git pull).
+# Missing any of these fails the voice agent at startup; every other voice key
+# has an inert default, because config.json is per-machine and a key made
+# mandatory in code is an agent that will not start after a git pull.
 REQUIRED_VOICE = (
     "wakeModel",
     "wakeThreshold",

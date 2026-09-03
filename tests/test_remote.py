@@ -10,7 +10,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 import helpers
-from slopstation import logbook
 from slopstation.agent.interfaces import remote
 
 INNER_TOKEN = "i" * 64
@@ -122,11 +121,6 @@ def cfg(inner):
 
 
 @pytest.fixture
-def log():
-    return logbook.CapturingLog("voice")
-
-
-@pytest.fixture
 def server(cfg, log):
     """The MCP wrapper on a free port, forwarding to `inner`."""
     server = remote.start(cfg, SECRETS, log)
@@ -148,9 +142,7 @@ def test_start_needs_a_reachable_text_interface(cfg, log):
     assert log.find("lane_disabled")[0]["what"] == "remote_interface"
 
 
-def test_initialize_negotiates_the_protocol_version(base, log):
-    assert log.find("lane_up")[0]["what"] == "remote_interface"
-
+def test_initialize_negotiates_the_protocol_version(base):
     status, hello = rpc(
         base,
         {

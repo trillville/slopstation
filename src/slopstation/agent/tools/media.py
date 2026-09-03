@@ -22,8 +22,8 @@ from slopstation.agent.tools.media_clients import (
     MediaError,
     _clean_text,
     _kind,
+    _parse_time,
     _qbit_from_config,
-    _root_and_profile_gaps,
 )
 from slopstation.agent.tools.media_health import HEALTH_POLL_S, MediaHealthMonitor
 from slopstation.agent.tools.media_proton import (
@@ -32,6 +32,17 @@ from slopstation.agent.tools.media_proton import (
 )
 
 PRESETS = ("default", "1080p", "2160p")
+
+
+def _command(client, command_id):
+    """The command row, or None once the authority has dropped it."""
+    try:
+        row = client.get(f"command/{command_id}")
+    except MediaError as e:
+        if "HTTP 404" in str(e):
+            return None
+        raise
+    return row if isinstance(row, dict) else None
 
 
 class MediaService:
@@ -44,7 +55,7 @@ class MediaService:
         self.sonarr = sonarr
 
     def _client(self, kind):
-        return getattr(self, _kind(kind)["client"])
+        return getattr(self, _kind(kind)["authority"])
 
     def _library_row(self, kind, catalog_id):
         """The service's own record for a catalog id, or None if it holds none."""
@@ -129,61 +140,6 @@ class MediaService:
             "seasons": [seasons[number] for number in sorted(seasons)],
         }
 
-    def profiles(self):
-        return {
-            "movie": self._profile_names(self.radarr),
-            "series": self._profile_names(self.sonarr),
-        }
-
-    def validate(self):
-        """Check configured roots and preset targets without mutating either service."""
-        status = self.status()
-        profiles = self.profiles()
-        checks = {}
-        for kind, client, root_key, presets_key in (
-            ("movie", self.radarr, "movieRoot", "moviePresets"),
-            ("series", self.sonarr, "seriesRoot", "seriesPresets"),
-        ):
-            rows = client.get("rootfolder")
-            if not isinstance(rows, list):
-                raise MediaError(f"{client.name} returned invalid root folders")
-            roots = [
-                _clean_text(row.get("path"))
-                for row in rows
-                if isinstance(row, dict) and row.get("path")
-            ]
-            wanted_root = str(self.cfg[root_key])
-            root_exists, missing_profiles = _root_and_profile_gaps(
-                roots,
-                profiles[kind],
-                wanted_root,
-                sorted(set(self.cfg[presets_key].values())),
-            )
-            checks[kind] = {
-                "configured_root": wanted_root,
-                "root_exists": root_exists,
-                "missing_profiles": missing_profiles,
-            }
-        return {
-            "ok": all(
-                check["root_exists"] and not check["missing_profiles"]
-                for check in checks.values()
-            ),
-            "services": status,
-            "checks": checks,
-        }
-
-    @staticmethod
-    def _profile_names(client):
-        rows = client.get("qualityprofile")
-        if not isinstance(rows, list):
-            raise MediaError(f"{client.name} returned invalid quality profiles")
-        return [
-            _clean_text(r.get("name"))
-            for r in rows
-            if isinstance(r, dict) and r.get("name")
-        ]
-
     def _profile(self, kind, preset):
         preset = str(preset or "default").lower()
         mapping = self.cfg.get(_kind(kind)["presets_key"], {})
@@ -230,6 +186,30 @@ class MediaService:
                 continue
         return None
 
+    def _movie_file_id(self, movie_id):
+        rows = self.radarr.get("moviefile", {"movieId": movie_id})
+        if not isinstance(rows, list) or not rows:
+            raise MediaError("Radarr reports a movie file but did not return it")
+        try:
+            return int(rows[0]["id"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise MediaError("Radarr movie file has no id") from e
+
+    @staticmethod
+    def _operation_kind(operation):
+        kind = operation.get("kind")
+        if kind == "movie_acquisition":
+            return "movie"
+        if kind == "series_acquisition":
+            return "series"
+        raise MediaError(f"unsupported media operation kind {kind}")
+
+    def _monitor_episodes(self, episode_ids, monitored):
+        if episode_ids:
+            self.sonarr.put(
+                "episode/monitor", {"episodeIds": episode_ids, "monitored": monitored}
+            )
+
     def request_movie(self, tmdb_id, preset="default"):
         try:
             tmdb_id = int(tmdb_id)
@@ -238,9 +218,7 @@ class MediaService:
         if tmdb_id <= 0:
             raise MediaError("tmdb_id must be positive")
         profile_id, profile_name = self._profile("movie", preset)
-        existing = self._existing(
-            self.radarr.get("movie", {"tmdbId": tmdb_id}), "tmdbId", tmdb_id, "Radarr"
-        )
+        existing = self._library_row("movie", tmdb_id)
 
         if existing is not None:
             movie = dict(existing)
@@ -254,17 +232,9 @@ class MediaService:
                 return self._submission(
                     "movie", movie_id, title, tmdb_id, preset, profile_name, True
                 )
-            baseline_file_id = None
-            if movie.get("hasFile"):
-                rows = self.radarr.get("moviefile", {"movieId": movie_id})
-                if not isinstance(rows, list) or not rows:
-                    raise MediaError(
-                        "Radarr reports a movie file but did not return it"
-                    )
-                try:
-                    baseline_file_id = int(rows[0]["id"])
-                except (KeyError, TypeError, ValueError) as e:
-                    raise MediaError("Radarr movie file has no id") from e
+            baseline_file_id = (
+                self._movie_file_id(movie_id) if movie.get("hasFile") else None
+            )
             movie.update(qualityProfileId=profile_id, monitored=True)
             self.radarr.put(f"movie/{movie_id}", movie)
         else:
@@ -372,14 +342,7 @@ class MediaService:
         return command_ids
 
     def search_available(self, operation):
-        kind = operation.get("kind")
-        if kind == "movie_acquisition":
-            client = self.radarr
-        elif kind == "series_acquisition":
-            client = self.sonarr
-        else:
-            raise MediaError(f"unsupported media operation kind {kind}")
-
+        client = self._client(self._operation_kind(operation))
         indexers = client.get("indexer")
         health = client.get("health")
         if not isinstance(indexers, list) or not isinstance(health, list):
@@ -399,8 +362,7 @@ class MediaService:
 
     def abandon_missing(self, operation):
         """Unmonitor the still-missing scope so the authority stops watching."""
-        kind = operation.get("kind")
-        if kind == "movie_acquisition":
+        if self._operation_kind(operation) == "movie":
             movie_id = int(operation["external_ref"])
             movie = self._one(self.radarr.get(f"movie/{movie_id}"), "Radarr", "movie")
             if movie.get("hasFile"):
@@ -409,8 +371,6 @@ class MediaService:
             unmonitored["monitored"] = False
             self.radarr.put(f"movie/{movie_id}", unmonitored)
             return {"have": 0, "missing": []}
-        if kind != "series_acquisition":
-            raise MediaError(f"unsupported media operation kind {kind}")
         metadata = operation.get("metadata") or {}
         seasons = self._seasons(metadata.get("seasons"))
         series_id = int(operation["external_ref"])
@@ -423,11 +383,7 @@ class MediaService:
                 episode_ids.append(int(row["id"]))
             except (KeyError, TypeError, ValueError) as e:
                 raise MediaError("Sonarr episode has no id") from e
-        if episode_ids:
-            self.sonarr.put(
-                "episode/monitor",
-                {"episodeIds": sorted(episode_ids), "monitored": False},
-            )
+        self._monitor_episodes(sorted(episode_ids), False)
         by_season: dict = {}
         for row in missing:
             number = int(row.get("seasonNumber", 0) or 0)
@@ -441,9 +397,8 @@ class MediaService:
         }
 
     def retry_search(self, operation):
-        kind = operation.get("kind")
         external_ref = int(operation["external_ref"])
-        if kind == "movie_acquisition":
+        if self._operation_kind(operation) == "movie":
             command = self._one(
                 self.radarr.post(
                     "command", {"name": "MoviesSearch", "movieIds": [external_ref]}
@@ -452,11 +407,9 @@ class MediaService:
                 "search command",
             )
             return [int(command["id"])]
-        if kind == "series_acquisition":
-            metadata = operation.get("metadata") or {}
-            seasons = self._seasons(metadata.get("seasons"))
-            return self._search_series(external_ref, seasons)
-        raise MediaError(f"unsupported media operation kind {kind}")
+        metadata = operation.get("metadata") or {}
+        seasons = self._seasons(metadata.get("seasons"))
+        return self._search_series(external_ref, seasons)
 
     @staticmethod
     def _episode_metadata_ready(rows, seasons):
@@ -488,14 +441,7 @@ class MediaService:
             if episode_id <= 0:
                 raise MediaError("Sonarr episode has no id")
             episode_ids.append(episode_id)
-        if episode_ids:
-            self.sonarr.put(
-                "episode/monitor",
-                {
-                    "episodeIds": episode_ids,
-                    "monitored": True,
-                },
-            )
+        self._monitor_episodes(episode_ids, True)
 
     def dispatch_pending_series_search(self, operation):
         metadata = operation.get("metadata") or {}
@@ -520,9 +466,7 @@ class MediaService:
             raise MediaError("tvdb_id must be positive")
         seasons = self._seasons(seasons)
         profile_id, profile_name = self._profile("series", preset)
-        existing = self._existing(
-            self.sonarr.get("series", {"tvdbId": tvdb_id}), "tvdbId", tvdb_id, "Sonarr"
-        )
+        existing = self._library_row("series", tvdb_id)
         search_pending = False
         command_ids = []
 
@@ -651,25 +595,11 @@ class MediaService:
         return out
 
     @staticmethod
-    def _parse_time(value):
-        if not value:
-            return None
-        try:
-            return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        except ValueError:
-            return None
-
-    @staticmethod
     def _command_phase(client, command_ids):
         statuses = []
         for command_id in command_ids or []:
-            try:
-                row = client.get(f"command/{int(command_id)}")
-            except MediaError as e:
-                if "HTTP 404" in str(e):
-                    continue
-                raise
-            if not isinstance(row, dict):
+            row = _command(client, int(command_id))
+            if row is None:
                 continue
             status = str(row.get("status", "")).lower()
             result = str(row.get("result", "")).lower()
@@ -726,14 +656,7 @@ class MediaService:
                     "progress": {"phase": "ready", "percent": 100},
                     "detail": "Radarr reports the movie imported",
                 }
-            rows = self.radarr.get("moviefile", {"movieId": int(movie_id)})
-            if not isinstance(rows, list) or not rows:
-                raise MediaError("Radarr reports a movie file but did not return it")
-            try:
-                current_file_id = int(rows[0]["id"])
-            except (KeyError, TypeError, ValueError) as e:
-                raise MediaError("Radarr movie file has no id") from e
-            if current_file_id != int(baseline_file_id):
+            if self._movie_file_id(int(movie_id)) != int(baseline_file_id):
                 return {
                     "complete": True,
                     "progress": {"phase": "ready", "percent": 100},
@@ -780,7 +703,7 @@ class MediaService:
                 continue
             if monitored_only and not episode.get("monitored"):
                 continue
-            aired = self._parse_time(episode.get("airDateUtc"))
+            aired = _parse_time(episode.get("airDateUtc"))
             if aired is None or aired > now:
                 continue
             targets.append(episode)
@@ -887,28 +810,24 @@ class MediaService:
             "metadata_ready": metadata_ready,
         }
 
-    def observe(self, operation, now=None):
-        kind = operation.get("kind")
+    def observe(self, operation):
         external_ref = int(operation["external_ref"])
-        if kind == "movie_acquisition":
-            metadata = operation.get("metadata") or {}
+        metadata = operation.get("metadata") or {}
+        phase = (operation.get("progress") or {}).get("phase")
+        if self._operation_kind(operation) == "movie":
             return self.observe_movie(
                 external_ref,
                 metadata.get("baseline_file_id"),
                 metadata.get("command_ids"),
-                (operation.get("progress") or {}).get("phase"),
+                phase,
             )
-        if kind == "series_acquisition":
-            metadata = operation.get("metadata") or {}
-            return self.observe_series(
-                external_ref,
-                metadata.get("seasons"),
-                now,
-                metadata.get("baseline_episode_files"),
-                metadata.get("command_ids"),
-                (operation.get("progress") or {}).get("phase"),
-            )
-        raise MediaError(f"unsupported media operation kind {kind}")
+        return self.observe_series(
+            external_ref,
+            metadata.get("seasons"),
+            baseline_episode_files=metadata.get("baseline_episode_files"),
+            command_ids=metadata.get("command_ids"),
+            previous_phase=phase,
+        )
 
     QUEUE_DELETE_PARAMS = {
         "removeFromClient": True,
@@ -920,13 +839,8 @@ class MediaService:
     @staticmethod
     def _cancel_commands(client, command_ids):
         for command_id in sorted({int(value) for value in command_ids or []}):
-            try:
-                row = client.get(f"command/{command_id}")
-            except MediaError as e:
-                if "HTTP 404" in str(e):
-                    continue
-                raise
-            if isinstance(row, dict) and str(row.get("status", "")).lower() in (
+            row = _command(client, command_id)
+            if row is not None and str(row.get("status", "")).lower() in (
                 "queued",
                 "started",
             ):
@@ -946,9 +860,7 @@ class MediaService:
 
     def delete_movie(self, tmdb_id, command_ids=None):
         tmdb_id = int(tmdb_id)
-        movie = self._existing(
-            self.radarr.get("movie", {"tmdbId": tmdb_id}), "tmdbId", tmdb_id, "Radarr"
-        )
+        movie = self._library_row("movie", tmdb_id)
         if movie is None:
             return {
                 "ok": True,
@@ -985,9 +897,7 @@ class MediaService:
         selected = self._seasons(seasons)
         if selected is None and not all_seasons:
             raise MediaError("series deletion needs seasons or explicit all_seasons")
-        series = self._existing(
-            self.sonarr.get("series", {"tvdbId": tvdb_id}), "tvdbId", tvdb_id, "Sonarr"
-        )
+        series = self._library_row("series", tvdb_id)
         if series is None:
             return {
                 "ok": True,
@@ -1027,10 +937,7 @@ class MediaService:
             and int(row.get("seasonNumber", 0) or 0) in selected
         ]
         episode_ids = sorted({int(row["id"]) for row in wanted if row.get("id")})
-        if episode_ids:
-            self.sonarr.put(
-                "episode/monitor", {"episodeIds": episode_ids, "monitored": False}
-            )
+        self._monitor_episodes(episode_ids, False)
         updated = dict(series)
         updated["seasons"] = [
             {**row, "monitored": False}
@@ -1068,77 +975,64 @@ class MediaService:
             "detail": f"deleted season {season_text} of {title} and stopped monitoring it",
         }
 
-    def status(self):
-        out = {}
-        for name, client in (("radarr", self.radarr), ("sonarr", self.sonarr)):
-            row = client.get("system/status")
-            row = self._one(row, client.name, "system status")
-            out[name] = {
-                "version": _clean_text(row.get("version"), 40),
-                "app": _clean_text(row.get("appName"), 40),
-            }
-        return out
 
-
-def proton_port_monitor_from_config(
-    cfg, secrets, log, transport=None, path=None, now=None
-):
-    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if (
-        not isinstance(media_cfg, dict)
-        or not media_cfg.get("enabled")
-        or not media_cfg.get("protonPortSync")
-    ):
+def _media_cfg(cfg, flag=None, default=True):
+    """The media section while the lane, and `flag` if given, are on."""
+    media_cfg = cfg.get("media")
+    if not isinstance(media_cfg, dict) or not media_cfg.get("enabled"):
         return None
-    try:
-        poll_s = media_cfg.get("pollS", 30)
-        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
-            raise MediaConfigurationError("media.pollS must be positive")
-        return ProtonPortMonitor(
-            _qbit_from_config(media_cfg, secrets, transport),
-            log,
-            path=path,
-            poll_s=poll_s,
-            now=now,
-        )
-    except MediaConfigurationError as e:
-        log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
+    if flag is not None and not media_cfg.get(flag, default):
         return None
+    return media_cfg
 
 
-def media_health_monitor_from_config(
-    cfg, secrets, log, transport=None, operations=None
-):
-    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if (
-        not isinstance(media_cfg, dict)
-        or not media_cfg.get("enabled")
-        or not media_cfg.get("healthSync", True)
-    ):
-        return None
+def _positive(media_cfg, key, default):
+    value = media_cfg.get(key, default)
+    if not isinstance(value, (int, float)) or value <= 0:
+        raise MediaConfigurationError(f"media.{key} must be positive")
+    return value
+
+
+def _arr_clients(media_cfg, secrets):
     missing = [
         name
         for name in ("radarrApiKey", "sonarrApiKey")
         if not config.real_key(secrets.get(name))
     ]
     if missing:
-        log.warn(
-            "lane_disabled",
-            what="media_health_sync",
-            reason="missing media API keys: " + ", ".join(missing),
-        )
+        raise MediaConfigurationError("missing media API keys: " + ", ".join(missing))
+    return tuple(
+        ArrClient(name, media_cfg[f"{name.lower()}Url"], secrets[key])
+        for name, key in (("Radarr", "radarrApiKey"), ("Sonarr", "sonarrApiKey"))
+    )
+
+
+def proton_port_monitor_from_config(cfg, secrets, log):
+    media_cfg = _media_cfg(cfg, "protonPortSync", default=False)
+    if media_cfg is None:
         return None
     try:
-        poll_s = media_cfg.get("healthPollS", HEALTH_POLL_S)
-        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
-            raise MediaConfigurationError("media.healthPollS must be positive")
-        clients = tuple(
-            ArrClient(
-                name, media_cfg[f"{name.lower()}Url"], secrets[key], transport=transport
-            )
-            for name, key in (("Radarr", "radarrApiKey"), ("Sonarr", "sonarrApiKey"))
+        return ProtonPortMonitor(
+            _qbit_from_config(media_cfg, secrets),
+            log,
+            poll_s=_positive(media_cfg, "pollS", 30),
         )
-        return MediaHealthMonitor(clients, log, poll_s=poll_s, operations=operations)
+    except MediaConfigurationError as e:
+        log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
+        return None
+
+
+def media_health_monitor_from_config(cfg, secrets, log, operations=None):
+    media_cfg = _media_cfg(cfg, "healthSync")
+    if media_cfg is None:
+        return None
+    try:
+        return MediaHealthMonitor(
+            _arr_clients(media_cfg, secrets),
+            log,
+            poll_s=_positive(media_cfg, "healthPollS", HEALTH_POLL_S),
+            operations=operations,
+        )
     except (MediaConfigurationError, KeyError) as e:
         log.warn("lane_disabled", what="media_health_sync", reason=str(e))
         return None
@@ -1158,71 +1052,39 @@ def _media_root(env_path):
     return None
 
 
-def disk_health_monitor_from_config(cfg, log, env_path=None):
-    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if (
-        not isinstance(media_cfg, dict)
-        or not media_cfg.get("enabled")
-        or not media_cfg.get("diskWatch", True)
-    ):
+def disk_health_monitor_from_config(cfg, log):
+    media_cfg = _media_cfg(cfg, "diskWatch")
+    if media_cfg is None:
         return None
     try:
-        poll_s = media_cfg.get("diskPollS", DISK_POLL_S)
-        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
-            raise MediaConfigurationError("media.diskPollS must be positive")
-        warn_gb = media_cfg.get("diskFreeWarnGb", FREE_WARN_BYTES // 1024**3)
-        if not isinstance(warn_gb, (int, float)) or warn_gb <= 0:
-            raise MediaConfigurationError("media.diskFreeWarnGb must be positive")
-        if env_path is None:
-            env_path = paths.HOME / "media" / ".env"
+        poll_s = _positive(media_cfg, "diskPollS", DISK_POLL_S)
+        warn_gb = _positive(media_cfg, "diskFreeWarnGb", FREE_WARN_BYTES // 1024**3)
+        env_path = paths.HOME / "media" / ".env"
         root = _media_root(env_path)
         if not root:
             raise MediaConfigurationError(
                 f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
             )
-        # Both volumes matter and are normally different: the library fills
-        # from downloads, the checkout drive holds the config databases and
-        # the event log. Anchors, so one volume named twice is watched once.
-        mounts = sorted(
-            {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
-        )
-        return DiskHealthMonitor(
-            mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
-        )
     except MediaConfigurationError as e:
         log.warn("lane_disabled", what="disk_watch", reason=str(e))
         return None
+    # Both volumes matter and are normally different: the library fills
+    # from downloads, the checkout drive holds the config databases and
+    # the event log. Anchors, so one volume named twice is watched once.
+    mounts = sorted(
+        {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
+    )
+    return DiskHealthMonitor(
+        mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
+    )
 
 
-def from_config(cfg, secrets, log, transport=None):
-    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-    if not isinstance(media_cfg, dict) or not media_cfg.get("enabled"):
-        return None
-    missing = [
-        name
-        for name in ("radarrApiKey", "sonarrApiKey")
-        if not config.real_key(secrets.get(name))
-    ]
-    if missing:
-        log.warn(
-            "lane_disabled",
-            what="media",
-            reason="missing media API keys: " + ", ".join(missing),
-        )
+def from_config(cfg, secrets, log):
+    media_cfg = _media_cfg(cfg)
+    if media_cfg is None:
         return None
     try:
-        radarr = ArrClient(
-            "Radarr",
-            media_cfg["radarrUrl"],
-            secrets["radarrApiKey"],
-            transport=transport,
-        )
-        sonarr = ArrClient(
-            "Sonarr",
-            media_cfg["sonarrUrl"],
-            secrets["sonarrApiKey"],
-            transport=transport,
-        )
+        radarr, sonarr = _arr_clients(media_cfg, secrets)
         for key in ("movieRoot", "seriesRoot"):
             if not isinstance(media_cfg.get(key), str) or not media_cfg[key]:
                 raise MediaConfigurationError(f"media.{key} is missing")
@@ -1234,9 +1096,7 @@ def from_config(cfg, secrets, log, transport=None):
                 or not all(isinstance(name, str) and name for name in mapping.values())
             ):
                 raise MediaConfigurationError(f"media.{key} is invalid")
-        poll_s = media_cfg.get("pollS", 30)
-        if not isinstance(poll_s, (int, float)) or poll_s <= 0:
-            raise MediaConfigurationError("media.pollS must be positive")
+        _positive(media_cfg, "pollS", 30)
     except (KeyError, MediaConfigurationError) as e:
         log.warn("lane_disabled", what="media", reason=str(e))
         return None
@@ -1246,7 +1106,7 @@ def from_config(cfg, secrets, log, transport=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Inspect and request media")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "profiles", "validate", "doctor", "proton-port"):
+    for name in ("doctor", "proton-port"):
         sub.add_parser(name)
     proton_sync = sub.add_parser("sync-proton-port")
     proton_sync.add_argument("--execute", action="store_true")
@@ -1284,7 +1144,7 @@ def main(argv=None):
     secrets = config.secrets()
     try:
         if args.command == "doctor":
-            result = media_doctor(cfg, secrets, log)
+            result = media_doctor(cfg, secrets)
             for check in result["checks"]:
                 print(f"{check['level']:<5} {check['name']} - {check['detail']}")
             return 0 if result["ok"] else 1
@@ -1292,40 +1152,26 @@ def main(argv=None):
             result = read_proton_port_state()
             print(json.dumps(result, indent=2))
             return 0 if result["state"] in ("active", "inactive", "transitional") else 1
-        if args.command == "sync-proton-port":
+        if args.command in ("sync-proton-port", "set-qbit-port"):
             if not args.execute:
                 print("change not submitted; repeat with --execute")
                 return 2
-            media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+            media_cfg = cfg.get("media")
             if not isinstance(media_cfg, dict):
                 raise MediaConfigurationError("media configuration is missing")
-            result = ProtonPortMonitor(
-                _qbit_from_config(media_cfg, secrets), log
-            ).reconcile_once()
+            qbit = _qbit_from_config(media_cfg, secrets)
+            if args.command == "set-qbit-port":
+                print(json.dumps(qbit.set_listen_port(args.port), indent=2))
+                return 0
+            result = ProtonPortMonitor(qbit, log).reconcile_once()
             print(json.dumps(result, indent=2))
             return 0 if result["state"] in ("active", "inactive") else 1
-        if args.command == "set-qbit-port":
-            if not args.execute:
-                print("change not submitted; repeat with --execute")
-                return 2
-            media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
-            if not isinstance(media_cfg, dict):
-                raise MediaConfigurationError("media configuration is missing")
-            result = _qbit_from_config(media_cfg, secrets).set_listen_port(args.port)
-            print(json.dumps(result, indent=2))
-            return 0
 
         service = from_config(cfg, secrets, log)
         if service is None:
             print("media is disabled or its configuration/API keys are incomplete")
             return 1
-        if args.command == "status":
-            result = service.status()
-        elif args.command == "profiles":
-            result = service.profiles()
-        elif args.command == "validate":
-            result = service.validate()
-        elif args.command == "find":
+        if args.command == "find":
             result = service.find(args.kind, args.query)
         elif args.command == "library":
             result = service.library(args.kind, args.catalog_id)
@@ -1360,8 +1206,6 @@ def main(argv=None):
                 )
                 operations.record_deleted(store, covered, result)
         print(json.dumps(result, indent=2))
-        if args.command == "validate" and not result["ok"]:
-            return 1
         return 0
     except MediaError as e:
         print(f"media request failed: {e}")

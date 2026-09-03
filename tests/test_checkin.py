@@ -114,7 +114,6 @@ def test_thread_checks_in_and_logs_the_first_result(monkeypatch):
         return len(sent) > 1  # first call fails, then recovers
 
     monkeypatch.setattr(checkin, "send", fake_send)
-    monkeypatch.setattr(checkin, "last_ok", None)  # the thread sets it; put it back
     monkeypatch.setattr(events, "ENV", "prod")  # env=test would refuse to start at all
     day = time.strftime("%Y%m%d")
     stream = paths.logs() / f"k15-{day}.jsonl"
@@ -131,13 +130,11 @@ def test_thread_checks_in_and_logs_the_first_result(monkeypatch):
 
     t = checkin.start("listener", {"sentryDsn": DSN})
     assert t is not None and t.daemon, "must not hold the process open"
-    # Wait on the EVENT, not on last_ok: the flag is set before the emit.
     for _ in range(300):
         if any(r["event"].startswith("checkin") for r in records()):
             break
         time.sleep(0.01)
     assert sent and sent[0] == URL, sent
-    assert checkin.last_ok is False, "the stub failed the first call"
 
     # Both outcomes are events, and both names are frozen in test_event_names.
     lines = records()

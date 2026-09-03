@@ -1,6 +1,6 @@
 """The gaming PC as the K15 sees it: one ssh call per Dispatch.ps1 verb, the
 turn tag on the mutating ones, and the answer words. Dispatch.ps1 is the
-server; agent/tests/test_turn.py holds the two in step.
+server; tests/test_turn.py holds the two in step.
 """
 
 from __future__ import annotations
@@ -39,10 +39,9 @@ def ssh_intent(cmd: str, turn: str | None = None, **kw) -> str:
 
 
 def enter_running() -> bool | None:
-    """True/False if the gaming PC could tell us whether its Enter task is
-    still running; None if it could not. The None is load-bearing: a PC
-    predating `enterstate` answers DENIED and an ssh blip raises, and
-    re-dispatching on either would fight a healthy Enter."""
+    """Whether the PC's Enter task is still running, or None when it could not
+    say (a PC predating `enterstate` answers DENIED; an ssh blip raises).
+    Re-dispatching on a None would fight a healthy Enter."""
     try:
         ans = enterstate()
     except Exception:

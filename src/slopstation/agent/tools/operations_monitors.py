@@ -3,22 +3,26 @@
 Observation only: a monitor reads Steam or Radarr/Sonarr and writes what it
 finds through the store. It never starts, cancels, or owns execution.
 
-Imports operations, never the reverse - operations.main() imports this one
-lazily so the pair stays acyclic at module scope.
+The `operations` CLI (list, show, reconcile, abandon) is main() below.
 """
 
-import threading
+import argparse
+import json
 import time
 from typing import Any
 
-from slopstation.agent.tools import library
+from slopstation import config, events, logbook
+from slopstation.agent.tools import library, media, steam_session
 from slopstation.agent.tools.operations import (
     CANCELED,
     FAILED,
     POLL_S,
     RUNNING,
     SUCCEEDED,
+    TERMINAL,
     UNKNOWN,
+    OperationStore,
+    record_deleted,
 )
 
 
@@ -65,9 +69,9 @@ def _fully_installed_appids():
 
 
 class Monitor:
-    """The observation loop both monitors run: daemon so it never holds a
-    shutdown, and an authority's failure logs rather than ending the thread.
-    Subclasses set THREAD_NAME and supply reconcile_once, log and poll_s."""
+    """The observation loop both monitors run: an authority's failure logs
+    rather than ending the thread. Subclasses set THREAD_NAME and supply
+    reconcile_once, log and poll_s."""
 
     THREAD_NAME = "operation-monitor"
     log: Any
@@ -77,15 +81,13 @@ class Monitor:
         raise NotImplementedError
 
     def start(self):
-        threading.Thread(target=self._run, daemon=True, name=self.THREAD_NAME).start()
+        events.Ticker(self.THREAD_NAME, self.poll_s, self._tick).start()
 
-    def _run(self):
-        while True:
-            try:
-                self.reconcile_once()
-            except Exception as e:
-                self.log.error("operation_monitor_failed", err=str(e))
-            time.sleep(self.poll_s)
+    def _tick(self):
+        try:
+            self.reconcile_once()
+        except Exception as e:
+            self.log.error("operation_monitor_failed", err=str(e))
 
 
 class SteamMonitor(Monitor):
@@ -93,11 +95,10 @@ class SteamMonitor(Monitor):
 
     THREAD_NAME = "steam-operation-monitor"
 
-    def __init__(self, store, steam, log, installed_probe=None, poll_s=POLL_S):
+    def __init__(self, store, steam, log, poll_s=POLL_S):
         self.store = store
         self.steam = steam
         self.log = log
-        self.installed_probe = installed_probe or _fully_installed_appids
         self.poll_s = poll_s
 
     def reconcile_once(self):
@@ -130,7 +131,7 @@ class SteamMonitor(Monitor):
         probe_error = None
         if needs_manifest:
             try:
-                installed = set(self.installed_probe())
+                installed = _fully_installed_appids()
             except Exception as e:
                 probe_error = str(e)
 
@@ -366,3 +367,116 @@ class MediaMonitor(Monitor):
                     operation["id"], UNKNOWN, {}, f"{authority} observation failed: {e}"
                 )
         return len(active)
+
+
+def _line(operation):
+    progress = operation.get("progress") or {}
+    phase = progress.get("phase")
+    pct = (
+        progress.get("download_percent")
+        if phase == "downloading"
+        else progress.get("percent")
+    )
+    suffix = f" ({pct}%)" if pct is not None else ""
+    if phase:
+        suffix = f" [{phase}]" + suffix
+    return (
+        f"{operation['id']} {operation['state']} {operation['kind']} "
+        f"{operation['title']}{suffix}"
+    )
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Inspect durable operations")
+    sub = parser.add_subparsers(dest="command", required=True)
+    ls = sub.add_parser("list")
+    ls.add_argument("--active", action="store_true")
+    show = sub.add_parser("show")
+    show.add_argument("operation")
+    sub.add_parser("reconcile")
+    abandon = sub.add_parser("abandon")
+    abandon.add_argument("operation")
+    abandon.add_argument("--execute", action="store_true")
+    args = parser.parse_args(argv)
+
+    log = logbook.logger("voice")
+    store = OperationStore(log)
+
+    if args.command == "list":
+        rows = store.active() if args.active else store.recent(50)
+        if not rows:
+            print("no operations")
+        for operation in rows:
+            print(_line(operation))
+        return 0
+    if args.command == "show":
+        operation = store.get(args.operation)
+        if operation is None:
+            print(f"no operation named {args.operation}")
+            return 1
+        print(json.dumps(operation, indent=2))
+        return 0
+    if args.command == "abandon":
+        operation = store.get(args.operation)
+        if operation is None:
+            print(f"no operation named {args.operation}")
+            return 1
+        if operation.get("state") in TERMINAL:
+            print(f"{args.operation} is already {operation['state'].lower()}")
+            return 1
+        if operation.get("kind") not in MediaMonitor.KINDS:
+            print("only Radarr and Sonarr operations support clean abandonment")
+            return 1
+        if not args.execute:
+            print("nothing deleted; repeat with --execute")
+            return 2
+        service = media.from_config(config.current(), config.secrets(), log)
+        if service is None:
+            print("media is disabled or its configuration/API keys are incomplete")
+            return 1
+        metadata = operation.get("metadata") or {}
+        command_ids = metadata.get("command_ids") or []
+        try:
+            if operation["kind"] == "movie_acquisition":
+                result = service.delete_movie(metadata["catalog_id"], command_ids)
+            else:
+                seasons = metadata.get("seasons")
+                result = service.delete_series(
+                    metadata["catalog_id"],
+                    seasons=seasons,
+                    all_seasons=seasons is None,
+                    command_ids=command_ids,
+                )
+            record_deleted(store, [operation])
+        except Exception as e:
+            print(f"abandon failed; operation left active: {e}")
+            return 1
+        print(result["detail"])
+        return 0
+
+    cfg = config.current()
+    secrets = config.secrets()
+    counts = []
+    steam = steam_session.SteamSession(
+        secrets, log, machine_name=cfg.get("steamMachineName")
+    )
+    if steam.available():
+        monitor: Monitor = SteamMonitor(store, steam, log)
+        counts.append(("Steam", monitor.reconcile_once()))
+    service = media.from_config(cfg, secrets, log)
+    if service is not None:
+        monitor = MediaMonitor(store, service, log)
+        counts.append(("media", monitor.reconcile_once()))
+    if not counts:
+        print("no external operation authorities are configured")
+        return 1
+    print(
+        "; ".join(
+            f"reconciled {count} active {name} operation(s)" for name, count in counts
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

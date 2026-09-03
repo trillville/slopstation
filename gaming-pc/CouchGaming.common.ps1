@@ -151,8 +151,8 @@ function Get-VhList {
 
 # A VirtualHere address is the server's kernel device number, not a physical
 # port: every unbind/rebind - which is what a claim IS - can renumber the Puck.
-# A pinned address goes stale silently (K15.5 -> K15.16 timed out Enter's claim
-# gate, 2026-08-23 turn b540b9), so resolve through the stable NAME per use.
+# A pinned address goes stale silently, so resolve through the stable NAME
+# per use.
 # '' means the hub is not listing the Puck at all.
 function Get-PuckAddress {
     if ((Get-VhList) -match ([regex]::Escape($CG.PuckName) + '\s*\(([^)]+)\)')) { $Matches[1] }
@@ -166,8 +166,8 @@ function Stop-DisplayMagician {
 }
 
 # A failed profile apply explains itself only in DisplayMagician's own log,
-# under LOCALAPPDATA, which it rotates away within hours (2026-08-13: gone by
-# lunchtime). Copying it beside the transcript puts it in the shipper's
+# under LOCALAPPDATA, which it rotates away within hours. Copying it beside
+# the transcript puts it in the shipper's
 # C:/CouchGaming/logs/*.log glob and under Clear-OldLogs retention.
 # Level-filtered: a run is ~800 KB of TRACE, ERROR/WARN/INFO ~5%. Swallows
 # everything - it runs inside Enter's try block.
@@ -361,7 +361,6 @@ function Request-PuckRelease([int]$Attempts = 3) {
 # /Query: .State is an enum, while /FO LIST prints a LOCALISED string that a
 # non-English install would read as idle - the direction that re-dispatches
 # Enter on top of a healthy launch. A missing task reads as not running.
-# ~0.45 s for a fresh process, ~0.3 s per call after (measured 2026-08-22).
 function Test-CgTaskRunning([string]$Name) {
     (Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName $Name -ErrorAction SilentlyContinue).State -eq 'Running'
 }

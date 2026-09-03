@@ -10,7 +10,8 @@ import types
 
 import pytest
 
-from slopstation import config, logbook
+from helpers import CapturingLog
+from slopstation import config
 from slopstation.agent.tools import library, steamstore
 
 KEYLESS = {"steamApiKey": "dg_...", "steamId64": ""}
@@ -89,8 +90,11 @@ def test_deals_stale_refreshes_without_a_key(layers):
 
 
 def test_key_and_stale_owned_run_all_three(keyed):
-    # owned has no timestamp -> stale
-    keyed.state["index"] = {"installed": [{"appid": 1}], "owned": {"2": {}}}
+    keyed.state["index"] = {
+        "installed": [{"appid": 1}],
+        "owned": {"2": {}},
+        "ownedRefreshed": stamp(7 * 3600),  # >6h -> owned runs
+    }
     keyed.state["meta_cache"] = {}  # nothing cached -> meta runs
     library.sync()
     assert keyed.calls == {
@@ -111,24 +115,6 @@ def test_owned_fresh_and_meta_cached_skip_both(keyed):
     keyed.state["meta_cache"] = {"1": {}, "2": {}}  # both known appids cached
     library.sync()
     assert keyed.calls == {**NOTHING, "installed": 1, "collections": 1}, keyed.calls
-
-
-def test_owned_stale_refreshes_owned(keyed):
-    keyed.state["index"] = {
-        "installed": [{"appid": 1}],
-        "owned": {},
-        "ownedRefreshed": stamp(7 * 3600),  # >6h
-    }
-    keyed.state["meta_cache"] = {"1": {}}
-    library.sync()
-    assert keyed.calls["owned"] == 1, keyed.calls
-
-
-def test_deals_stale_refreshes_deals(keyed):
-    keyed.state["deals"] = {"refreshed": stamp(7 * 3600)}  # >6h
-    keyed.state["index"] = {"installed": [{"appid": 1}]}
-    library.sync()
-    assert keyed.calls["deals"] == 1, keyed.calls
 
 
 def test_pc_asleep_skips_collections(keyed):
@@ -166,7 +152,7 @@ def test_second_sync_while_one_runs_is_a_noop(keyed, monkeypatch):
 def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
     """The events: the real layer 1 says sync_done / sync_skipped on the
     library lane."""
-    log = logbook.CapturingLog("library")
+    log = CapturingLog("library")
     monkeypatch.setattr(library, "log", log)
     monkeypatch.setattr(
         library,

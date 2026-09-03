@@ -3,10 +3,9 @@ that works on this rig) and the session ducker built on them.
 
 With sound output on the eARC soundbar (HW-Q990C) the TV refuses every direct
 volume write: Ex-Link vol frames ack and pop "Not Available", UPnP SetVolume
-answers 501 (both 2026-08-21). Only remote volume keys move the bar, relayed
-by the TV over HDMI-CEC; the WebSocket remote on port 8002 injects those.
-Bench 2026-08-21: one KEY_VOLDOWN = one step, tracked by tv.tv_volume
-within a second.
+answers 501. Only remote volume keys move the bar, relayed by the TV over
+HDMI-CEC; the WebSocket remote on port 8002 injects those. One KEY_VOLDOWN =
+one step, tracked by tv.tv_volume within a second.
 
 The voice lane's write path; the chord lane's own readback lives in tv.py.
 
@@ -82,18 +81,10 @@ class TvDucker:
     """Drop the room's volume for a voice session; restore it on close. A
     talker on the couch reaches the mic 10-20 dB below TV dialogue.
 
-    One per agent process, synchronous, every call from the wake loop's
-    duck() thread under its lock. The ledger spans sessions but dies with the
-    process, so a restart between duck and unduck loses it.
-
-    Gate: duck() runs only when tv.tv_power_state says "on" (it answers
-    from standby too); anything else, unknown included, skips (2026-08-16).
-
-    Readback: writes are remote keys over CEC (TvRemote.press, the only path
-    the eARC setup honours) and the pairing-free UPnP volume (tv.tv_volume,
-    mirroring the soundbar) is ground truth. The ledger holds only VERIFIED
-    movement, so a shortfall carries as debt to the next close and a human
-    moving the remote mid-session is detected (2026-08-21)."""
+    Writes are remote keys over CEC; the UPnP readback (tv.tv_volume) is
+    ground truth. The ledger holds only VERIFIED movement, so a shortfall
+    carries as debt to the next close and a human moving the remote
+    mid-session is detected. It dies with the process."""
 
     TOPUPS = 2  # extra key rounds when the readback comes up short
     POLLS = 6  # readback polls per settle, POLL_GAP_S apart
@@ -119,17 +110,10 @@ class TvDucker:
         self.dry_run = dry_run
         self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
         self.read = read or (lambda: tv.tv_volume(tv_ip))
-        self.press = press or self._ws_press(tv_ip)
+        self.press = press or (lambda d, n: TvRemote(tv_ip).press(d, n))
         self.pause = pause  # None: time.sleep, looked up at call time
         self.out = 0  # verified steps down, not yet restored
         self.expect = None  # the readback our last op left behind
-
-    @staticmethod
-    def _ws_press(tv_ip):
-        def go(direction, n):
-            TvRemote(tv_ip).press(direction, n)
-
-        return go
 
     def _settle(self, target):
         """Poll the readback toward target; the relay lands in ~1 s."""

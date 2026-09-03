@@ -7,8 +7,8 @@
 # Each task runs `slopstation-lane <name>` at logon, in the logged-on user's
 # own session - a service would land in session 0, which reaches neither the
 # Puck nor the audio devices. The wrapper restarts a crashed lane itself; the
-# scheduler's restart-on-failure is not set because, measured 2026-09-03, it
-# does not fire on a non-zero exit at all. The task, not a shortcut, is what
+# scheduler's restart-on-failure is not set because it does not fire on a
+# non-zero exit at all (measured). The task, not a shortcut, is what
 # brings the lanes up after a reboot; there is nothing to put in shell:startup
 # any more. Re-run after moving the checkout.
 param([string]$Checkout = $PSScriptRoot)

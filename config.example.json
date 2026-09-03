@@ -96,7 +96,6 @@
     "keytermCount": 40,
     "fuzzyTitleThreshold": 87,
     "ttsVoice": "aura-2-thalia-en",
-    "ttsLocal": false,
     "assistantProvider": "anthropic",
     "assistantModelAnthropic": "claude-haiku-4-5",
     "assistantModelOpenai": "gpt-5.6-luna",

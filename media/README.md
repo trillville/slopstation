@@ -184,16 +184,12 @@ indexers, then set `enabled` to `true`.
 From the checkout root:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.tools.media status
-.venv\Scripts\python -m slopstation.agent.tools.media profiles
-.venv\Scripts\python -m slopstation.agent.tools.media validate
 .venv\Scripts\python -m slopstation.agent.tools.media doctor
 ```
 
-`validate` checks roots and exact profile names. `doctor` additionally checks
-containers, APIs, health, indexers, download clients, cleanup policy,
-qBittorrent’s VPN binding, categories, Web UI security, and Proton port sync.
-Neither command adds a torrent.
+`doctor` checks roots, exact profile names, containers, APIs, health, indexers,
+download clients, cleanup policy, qBittorrent’s VPN binding, categories, Web UI
+security, and Proton port sync. It adds no torrent.
 
 For unattended use, configure Docker Desktop, Proton, and native qBittorrent
 to start at login. Compose services use `restart: unless-stopped`.
@@ -393,7 +389,7 @@ Start diagnosis with:
 
 ```powershell
 .venv\Scripts\python -m slopstation.agent.tools.media doctor
-.venv\Scripts\python tools\operations.py list --active
+.venv\Scripts\python -m slopstation.agent.tools.operations list --active
 docker compose --project-directory ..\media --env-file ..\media\.env ps
 ```
 

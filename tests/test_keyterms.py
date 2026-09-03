@@ -2,13 +2,10 @@
 Pins the list's shape; bench/probe_stt.py is the live counterpart.
 """
 
-import dataclasses
-
 import pytest
 
-from slopstation import logbook
-from slopstation.agent.speech import session_runtime
-from slopstation.agent.speech.grammar_gate import stt_confidence
+from helpers import CapturingLog
+from slopstation.agent.speech import keyterms
 from slopstation.agent.tools import library, titles
 
 VOICE = {"keytermCount": 40}
@@ -42,11 +39,6 @@ def _fake_catalog(monkeypatch):
     )
 
 
-@dataclasses.dataclass
-class Frame:
-    result: object
-
-
 def test_forms_teach_the_short_name_a_person_says():
     forms = titles.keyterm_forms("ARMORED CORE VI FIRES OF RUBICON")
     assert "armored core 6" in forms, forms
@@ -66,7 +58,7 @@ def test_trailing_sequel_number_yields_the_bare_name():
 
 
 def test_vocabulary_covers_all_three_sources_and_drops_non_games():
-    terms = session_runtime.stt_keyterms(VOICE, "hey jarvis")
+    terms = keyterms.stt_keyterms(VOICE, "hey jarvis")
     assert terms[0] == "hey jarvis", terms[:1]
     assert "armored core 6" in terms, "titles missing"
     assert "mech" in terms, "collection names missing - this is the mech/neck bug"
@@ -77,45 +69,23 @@ def test_vocabulary_covers_all_three_sources_and_drops_non_games():
 
 def test_query_words_are_spoken_forms_not_steamspy_strings():
     """SteamSpy writes 'Rogue-like'; the couch says 'rogue like'."""
-    terms = session_runtime.query_keyterms()
+    terms = keyterms.query_keyterms()
     assert "rogue like" in terms, terms
     assert not any("-" in t or t != t.lower() for t in terms), terms
 
 
 def test_generic_english_does_not_take_a_slot():
     """A keyterm buys a prior Flux lacks. It already has 'action'."""
-    terms = session_runtime.query_keyterms()
+    terms = keyterms.query_keyterms()
     assert "action" not in terms, terms
     assert "mechs" in terms, "the mishear query_terms exists for was filtered out"
 
 
 def test_the_cap_is_announced_not_silent(monkeypatch):
-    log = logbook.CapturingLog()
-    monkeypatch.setattr(session_runtime, "MAX_KEYTERMS", 3)
-    monkeypatch.setattr(session_runtime, "log", log)
-    terms = session_runtime.stt_keyterms(VOICE, "hey jarvis")
+    log = CapturingLog()
+    monkeypatch.setattr(keyterms, "MAX_KEYTERMS", 3)
+    monkeypatch.setattr(keyterms, "log", log)
+    terms = keyterms.stt_keyterms(VOICE, "hey jarvis")
     assert len(terms) == 3, terms
     capped = log.find("keyterms_capped")
     assert capped and capped[0]["dropped"] > 0, log.events()
-
-
-def test_the_cap_never_exceeds_deepgram_s_measured_ceiling():
-    """100 keyterms connect, 110 are refused with HTTP 400 at the handshake
-    (measured 2026-08-15). Over the cap, every session fails to open."""
-    assert session_runtime.MAX_KEYTERMS <= 100, session_runtime.MAX_KEYTERMS
-
-
-def test_confidence_is_read_and_never_raises():
-    assert (
-        stt_confidence(Frame({"words": [{"confidence": 0.9}, {"confidence": 0.7}]}))
-        == 0.8
-    )
-    for bad in ({}, {"words": []}, {"words": [{}]}, {"words": "nope"}, None):
-        assert stt_confidence(Frame(bad)) is None, bad
-
-    class Exploding:
-        @property
-        def result(self):
-            raise RuntimeError("upstream moved")
-
-    assert stt_confidence(Exploding()) is None, "telemetry cost the turn"

@@ -137,8 +137,8 @@ correlation suffix; every other command returns `DENIED`.
 | `src/slopstation/events.py`, `logbook.py`, `config.py`, `sessionlock.py`, `statefile.py`, `doctor.py` | Telemetry, the per-lane logger, configuration, the session lock, state files, and diagnostics |
 | `src/slopstation/supervise.py`, `deploy.py`, `paths.py` | Lane supervision, the CD deployer, and where runtime data lives |
 | `src/slopstation/agent/` | The voice/assistant half of the package |
-| `src/slopstation/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
-| `src/slopstation/agent/brain/` (`assistant.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
+| `src/slopstation/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `keyterms.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
+| `src/slopstation/agent/brain/` (`assistant.py`, `prompts.py`, `media_tools.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
 | `src/slopstation/agent/tools/` (`media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py`, `library.py`, `steamstore.py`) | Domain tools: Radarr/Sonarr, the durable ledger, the Steam catalogue and store, the TV |
 | `src/slopstation/agent/interfaces/` (`text.py`, `remote.py`) | Front-ends: LAN HTTP, and the MCP adapter over localhost |
 | `src/slopstation/agent/telemetry/` (`sentry.py`, `genai.py`, `traces.py`) | Sentry wiring, the pipecat-to-Sentry span adapter, and per-turn trace dumps |
@@ -319,8 +319,7 @@ Useful commands:
 ```
 
 `operations abandon <operation-id> --execute` performs authoritative media
-cleanup through Radarr or Sonarr. The generic `cancel` command refuses work it
-cannot safely cancel at the external authority.
+cleanup through Radarr or Sonarr.
 
 The text endpoint requires `textInterfaceToken`. Bind it to `0.0.0.0` only for
 LAN access, allow its port on the Windows **Private** profile for `LocalSubnet`,

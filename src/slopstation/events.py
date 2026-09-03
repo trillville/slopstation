@@ -3,11 +3,11 @@
 Every `log(...)` call lands twice - the human line in couch.log, and a record
 in logs/{service}-YYYYMMDD.jsonl that the OpenTelemetry Collector tails.
 
-No import of config or logbook: they import THIS, so the emit boundary
-cannot fail on a cycle (hence secrets are re-loaded here). Nothing here may open a socket or
-block. Fail-soft throughout: a lost event never costs the caller. Daily files
-are never renamed - the shipper holds a read handle open on Windows - so the
-date is in the name and expired files are deleted.
+No import of config or logbook: they import THIS, so secrets are loaded here
+rather than through config. Nothing here may open a socket or block, and a
+lost event never costs the caller. Daily files are never renamed - the shipper
+holds a read handle open on Windows - so the date is in the name and expired
+files are deleted.
 
 CLI, so smartd's alert script can emit too:
 
@@ -67,29 +67,17 @@ _SECRET_NAME_HINTS = (
 _HUMAN_MAX = 80
 
 
-def _service() -> str:
-    """The role this box plays; a log attribute alerts select on, so keep it
-    low-cardinality.
-    Overridable for the bench; the hostname is a field, not this."""
-    return os.environ.get("SLOPSTATION_SERVICE", "k15")
-
-
-def _env() -> str:
-    """The `env` label on every record: prod unless told otherwise. The test
-    suite sets SLOPSTATION_ENV before anything imports this, so a test can
-    never write a record indistinguishable from an outage."""
-    return os.environ.get("SLOPSTATION_ENV", "prod")
-
-
-SERVICE = _service()
-ENV = _env()
+# Record attributes alerts select on, so they stay low-cardinality and are
+# read once. The test suite sets SLOPSTATION_ENV before anything imports this,
+# so a test can never write a record indistinguishable from an outage.
+SERVICE = os.environ.get("SLOPSTATION_SERVICE", "k15")
+ENV = os.environ.get("SLOPSTATION_ENV", "prod")
 HOST = platform.node()
 
 # Correlation, set once per user intent and inherited downstream. A ContextVar
-# rather than a global so the voice agent's concurrent sessions cannot bleed
-# into each other; explicit kwargs win over the ambient value.
-# A read-only default: every writer builds a fresh dict, so nothing can
-# mutate the shared one.
+# so the voice agent's concurrent sessions cannot bleed into each other;
+# explicit kwargs win over the ambient value. The default is read-only and
+# every writer builds a fresh dict.
 _ctx: contextvars.ContextVar[Mapping[str, Any]] = contextvars.ContextVar(
     "event_ctx", default=MappingProxyType({})
 )
@@ -193,17 +181,11 @@ def _path(day: str) -> pathlib.Path:
 
 
 def _prune() -> None:
-    """Archive closed daily files out of the shipper's glob, then delete the
-    expired ones. Called on the first emit of a process and at date rollover,
-    never per line.
-
-    The move keeps the shipper cheap: its glob is k15-*.jsonl and a tailed
-    file costs ~0.04% of a core whether or not it can still change (A/B-measured
-    under Alloy; the collector's filelog receiver polls the same glob), so
-    TTL_DAYS=14 meant 13 tailers on finished files. archive/ is outside the
-    glob and the delete pass scans both folders. Moving a file the shipper
-    holds open is safe: Windows lets the rename through and the handle
-    follows."""
+    """Move closed daily files out of the shipper's glob (every tailed file
+    costs it CPU whether or not it can still change), then delete the expired
+    ones from both folders. Called on a process's first emit and at date
+    rollover. Moving a file the shipper holds open is safe on Windows: the
+    handle follows the rename."""
     now = time.time()
     archive = paths.logs() / ARCHIVE_NAME
     try:
@@ -229,11 +211,9 @@ def _prune() -> None:
 
 
 # Windows emulates O_APPEND as seek-to-end THEN write, so two processes can
-# choose the same offset and one silently overwrites the other - measured at
-# ~20% loss with 8 concurrent emitters, and the survivor's tail is the torn
-# line that shows up downstream. Every writer takes this one-byte lock on a
-# sidecar file first, which makes the pair atomic (measured: no loss). Never
-# blocks long and never raises - an unlocked write beats a lost event.
+# pick the same offset and one silently overwrites the other (~20% loss with
+# 8 concurrent emitters). Every writer takes a one-byte lock on a sidecar
+# file first, for at most this long: an unlocked write beats a blocked lane.
 LOCK_WAIT_S = 0.2
 
 
@@ -344,20 +324,12 @@ class Ticker(threading.Thread):
 
 
 def start_heartbeat(lane: str, interval_s: float = HEARTBEAT_S) -> Ticker:
-    """Emit `heartbeat` from a daemon thread for as long as this process runs.
-    A dead process writes nothing, so silence and idle look identical. Writes
-    JSONL ONLY, not through the lane logger: ~1440 lines/day would swamp
-    couch.log. Daemon thread, and the loop swallows everything.
-
-    ALERTING: this proves the SHIPPER is alive, not the lane. A
-    count-below-threshold on it cannot prove a lane is up - a dead lane emits
-    no rows at all, and whether a threshold evaluates an empty window is
-    undocumented in Sentry, the same trap *No data = OK* was in Grafana.
-    checkin.py carries lane liveness instead, where a missed check-in is an
-    alert by construction. The two read together: heartbeats missing while
-    check-ins arrive is a dead collector; check-ins missing is a dead lane.
-    """
-
+    """Emit `heartbeat` every minute for as long as this process runs. JSONL
+    only, not through the lane logger: ~1440 lines a day would swamp
+    couch.log. This proves the SHIPPER is alive, not the lane - a dead lane
+    emits no rows at all, and a threshold over an empty window proves
+    nothing. checkin.py carries lane liveness; read together, heartbeats
+    missing while check-ins arrive is a dead collector."""
     t = Ticker(
         f"heartbeat-{lane}",
         interval_s,
@@ -395,9 +367,7 @@ def human(event: str, level: str = INFO, /, **fields: Any) -> str:
 
 
 def _cli(argv: list[str]) -> int:
-    """events.py emit <lane> <event> [--level warn] [k=v ...]
-
-    So smart-alert.bat can report a SMART warning."""
+    """events.py emit <lane> <event> [--level warn] [k=v ...], for smart-alert.bat."""
     if not argv or argv[0] != "emit" or len(argv) < 3:
         print(__doc__.strip().splitlines()[-1].strip())
         return 2
@@ -410,16 +380,14 @@ def _cli(argv: list[str]) -> int:
             level = rest.pop(0)
         elif "=" in a:
             k, _, v = a.partition("=")
-            # cmd.exe hands everything over as text; a numeric-looking value
-            # is more useful to a dashboard as a number (code=1 comparable,
-            # not just groupable).
+            # cmd.exe hands everything over as text; a number is more useful
+            # to a dashboard as a number. Anything else is ignored: a caller
+            # must never die on its own telemetry.
             try:
                 fields[k] = int(v)
             except ValueError:
                 fields[k] = v
-        # anything else is ignored: a supervisor must never die on its own
-        # telemetry, and cmd.exe quoting is hostile.
-    rec = emit(lane, event, level, **fields)  # positional: see emit()
+    rec = emit(lane, event, level, **fields)
     print(
         f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{lane}] "
         + human(event, level, **fields),

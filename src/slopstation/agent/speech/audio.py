@@ -36,10 +36,16 @@ class DeviceMissing(Exception):
         self.wanted = wanted
 
 
+def model_key(model_name: str) -> str:
+    """ "hey_jarvis_v0.1" -> "hey_jarvis": the stem openWakeWord's download and
+    WakeListener.key go by."""
+    return model_name.rsplit("_v", 1)[0]
+
+
 def wake_phrase(model_name: str) -> str:
     """ "hey_jarvis_v0.1" -> "hey jarvis": what the pre-roll transcribes and
-    strip_wake anchors on. WakeListener.key keeps the underscored stem."""
-    return model_name.rsplit("_v", 1)[0].replace("_", " ")
+    strip_wake anchors on."""
+    return model_key(model_name).replace("_", " ")
 
 
 def resolve_device(
@@ -133,12 +139,11 @@ def build_audio(voice: dict) -> tuple:
         raise
 
 
-def open_audio(voice: dict, log=log) -> tuple:
+def open_audio(voice: dict) -> tuple:
     """build_audio, but WAITING for a configured device that isn't there yet
-    rather than settling for the Windows default - a silent fallback once cost
-    5 min 10 s of deafness, the wake loop taking -9999 on the wrong endpoint
-    62 times. Same policy for startup and recovery; loops until the real
-    device answers."""
+    rather than settling for the Windows default: a silent fallback leaves the
+    wake loop deaf on the wrong endpoint. Same policy for startup and
+    recovery; loops until the real device answers."""
     waited = 0.0
     while True:
         try:
@@ -164,8 +169,7 @@ def rebuild_audio(old_pa, voice: dict, listener) -> tuple:
     """Recovery from a dead wake stream: tear the whole PortAudio instance
     down and rebuild against the current device table. Reopening on the old
     instance retries a stale index - a reconnected headset gets a NEW one the
-    old snapshot can't see (240 blind reopens over 2.6 h, deaf until
-    morning)."""
+    old snapshot can't see."""
     try:
         old_pa.terminate()
     except Exception as e:
@@ -260,14 +264,6 @@ class WakeListener:
     # Hand-trained models live in the repo: no upstream to re-fetch them from.
     MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 
-    # Inert CLASS defaults for a listener built by __new__ with no config
-    # (test_preroll). The dicts are read-only here; _patience assigns fresh.
-    vad_threshold = 0.0
-    near_miss_factor = 0.0
-    clips_keep = 0
-    patience: dict[str, int] = {}
-    patience_threshold: dict[str, float] = {}
-
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np
         from openwakeword.model import Model
@@ -276,7 +272,7 @@ class WakeListener:
         self.pa = pa
         self.device_index = input_device_index
         self.model_name = voice_cfg["wakeModel"]  # e.g. hey_jarvis_v0.1
-        self.key = self.model_name.rsplit("_v", 1)[0]  # e.g. hey_jarvis
+        self.key = model_key(self.model_name)  # e.g. hey_jarvis
         # EVERY tuning key below is optional with an off-or-inert default and
         # none may join REQUIRED_VOICE: the K15's config.json is per-machine
         # and gitignored, so a mandatory key means an agent that will not start
@@ -298,18 +294,7 @@ class WakeListener:
 
     def _verifier(self, voice_cfg):
         """{model_key: path} for openWakeWord's second stage, or {} for off.
-
-        A threshold cannot separate what the 2026-08-15 logs showed: three
-        false accepts at 0.25/0.26/0.28 against a median genuine wake of 0.255.
-        The verifier is a logistic regression over the SAME embeddings the wake
-        model already computed, so it costs a dot product, and it can use whose
-        voice this is; bench/train_verifier.py builds it.
-
-        Fitted against one specific .onnx, so it is named by file and resolved
-        beside the model, and a named-but-missing file is fatal - the
-        threshold in config was calibrated with it in the path. It REPLACES
-        the base score above custom_verifier_threshold rather than gating it,
-        so enabling it voids every wakeThreshold measured without it."""
+        It replaces the score, so enabling it voids wakeThreshold."""
         name = voice_cfg.get("wakeVerifier")
         if not name:
             return {}
@@ -323,14 +308,8 @@ class WakeListener:
         return {self.model_path.stem: str(path)}
 
     def _patience(self, voice_cfg):
-        """openWakeWord's N-of-last-N gate, as the (patience, threshold) pair
-        predict() wants; empty dicts mean off. Upstream rules the config
-        cannot express: predict() RAISES unless a threshold dict accompanies
-        patience; a patience of 1 is a no-op; and the keys are openWakeWord's
-        own model names (the ONNX basename), so they are read off the loaded
-        model - a key that does not match silently skips the gate. Costs
-        (n-1) hops of 80 ms per detection, capped at 30 (the maxlen of
-        prediction_buffer)."""
+        """openWakeWord's N-of-N gate; predict() needs both dicts or raises;
+        keys are the loaded model's names."""
         n = min(int(voice_cfg.get("wakePatience", 0) or 0), 30)
         if n < 2:
             return {}, {}
@@ -344,9 +323,7 @@ class WakeListener:
         ValueError on anything else, while a path it just loads, naming the
         model after the basename. Downloads still target openwakeword's OWN
         package dir - it resolves the bundled feature extractors relative to
-        that path. LOADING from elsewhere is unaffected (measured 2026-08-13,
-        identical scores).
-        """
+        that path. LOADING from elsewhere is unaffected."""
         import openwakeword
         from openwakeword.utils import download_models
 
@@ -403,13 +380,8 @@ class WakeListener:
         return max(scores.values())
 
     def _scan_peak(self, stream, score, hops):
-        """Keep scoring past the crossing to find the peak. Bench paths ONLY.
-
-        The crossing score says how far up the ramp the threshold happened to
-        sit: on 2026-08-15 that made 15 genuine wakes (median 0.255)
-        indistinguishable from 3 false accepts (0.25 / 0.26 / 0.28). The peak
-        lands AFTER the crossing and costs hops*80 ms - unaffordable in the
-        live loop, hence peak_hops=0 and no peak field on the `wake` event."""
+        """Score past the crossing to find the peak; costs hops x 80 ms, so
+        bench only."""
         peak = score
         for _ in range(hops):
             data = stream.read(self.CHUNK, exception_on_overflow=False)
@@ -446,8 +418,8 @@ class WakeListener:
             chunk = self.np.frombuffer(data, self.np.int16)
             # Zombie watchdog: a WASAPI stream can outlive its endpoint (BT
             # profile flap) and deliver exact zeros forever with no error to
-            # catch (observed 8.5 h). A real mic has a noise floor, so 30 s of
-            # zeros means a dead stream; raise into the recovery path.
+            # catch. A real mic has a noise floor, so 30 s of zeros means a
+            # dead stream; raise into the recovery path.
             silent = silent + 1 if not chunk.any() else 0
             if silent >= self.SILENT_CHUNKS:
                 raise OSError(

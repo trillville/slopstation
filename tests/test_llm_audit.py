@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from slopstation import logbook
+from helpers import CapturingLog
 from slopstation.agent.brain import llm_audit
 
 
@@ -88,7 +88,7 @@ def turn():
     """One audited turn in which the model ran a search: the service, the
     log and span sink it was installed with, the context the note lands in,
     and what the tee yielded."""
-    log = logbook.CapturingLog("audit")
+    log = CapturingLog("audit")
     evs = [
         ev("response.output_text.delta"),
         ev("response.output_item.done", search_item("couch co-op 2026")),
@@ -134,7 +134,7 @@ def test_only_done_counts_and_only_search_items():
             ]
         )
     )
-    log = logbook.CapturingLog("audit")
+    log = CapturingLog("audit")
     llm_audit.install(svc, log)
     drain(svc, stream=True)
     hits = [r for r in log.records if r["event"] == "web_search"]
@@ -148,7 +148,7 @@ def test_a_new_search_family_member_is_recorded():
             [ev("response.output_item.done", search_item("f", kind="file_search_call"))]
         )
     )
-    log = logbook.CapturingLog("audit")
+    log = CapturingLog("audit")
     llm_audit.install(svc, log)
     drain(svc, stream=True)
     assert [r["kind"] for r in log.records if r["event"] == "web_search"] == [
@@ -176,20 +176,20 @@ def test_a_throwing_span_sink_costs_no_event():
         def tool_span(self, *a, **kw):
             raise RuntimeError("span sink is down")
 
-    llm_audit.install(boom, logbook.CapturingLog("audit"), spans=Angry())
+    llm_audit.install(boom, CapturingLog("audit"), spans=Angry())
     out = drain(boom, stream=True)
     assert len(out) == 1, "a throwing sink swallowed an event"
 
 
 def test_a_moved_pipecat_internal_disables_the_audit_not_the_voice():
     naked = types.SimpleNamespace(_client=types.SimpleNamespace())
-    assert llm_audit.install(naked, logbook.CapturingLog("audit")) is False
+    assert llm_audit.install(naked, CapturingLog("audit")) is False
 
 
 def test_close_reaches_the_wrapped_stream():
     s = FakeStream([])
     svc = FakeService(s)
-    llm_audit.install(svc, logbook.CapturingLog("audit"))
+    llm_audit.install(svc, CapturingLog("audit"))
     tee = asyncio.run(svc._client.responses.create(stream=True))
     asyncio.run(tee.close())
     assert s.closes == 1, "close() did not reach the wrapped stream"
@@ -200,7 +200,7 @@ def test_a_non_streaming_create_passes_through_untouched():
     # reads .output_text) must come back raw - the tee has no such surface.
     plain = types.SimpleNamespace(output_text="hi")
     svc = FakeService(plain)
-    llm_audit.install(svc, logbook.CapturingLog("audit"))
+    llm_audit.install(svc, CapturingLog("audit"))
     out = asyncio.run(svc._client.responses.create(stream=False))
     assert out is plain, "a non-streaming response must pass through untouched"
 
@@ -219,7 +219,7 @@ def test_installs_on_the_real_pipecat_class():
         ),
     )
     before = real._client.responses.create
-    assert llm_audit.install(real, logbook.CapturingLog("audit")) is True, (
+    assert llm_audit.install(real, CapturingLog("audit")) is True, (
         "pipecat's client shape moved - production searches are invisible"
     )
     assert real._client.responses.create is not before

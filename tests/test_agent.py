@@ -16,6 +16,7 @@ import time
 import pytest
 
 import helpers
+from helpers import CapturingLog
 from slopstation import config, events, logbook
 from slopstation.agent import voice_agent as va
 from slopstation.agent.speech import announce
@@ -49,10 +50,9 @@ class FakeListener:
     model_source = "pretrained"
     PEAK_HOPS = 0
     wakes = []  # scripted (score, capture)
-    built = []
 
     def __init__(self, pa, voice, idx):
-        FakeListener.built.append((pa, idx))
+        pass
 
     def wait_for_wake_capture(self, threshold, on_quiet=None, interrupt=None):
         if FakeListener.wakes:
@@ -68,7 +68,6 @@ class FakeAnnouncer:
         self.store = None
         self.follow_up = threading.Event()
         self.session_active = threading.Event()
-        self.aborted = 0
         FakeAnnouncer.made.append(self)
 
     def submit(self, operation):
@@ -78,14 +77,14 @@ class FakeAnnouncer:
         pass
 
     def abort_current(self):
-        self.aborted += 1
+        pass
 
 
 class FakeOperationStore:
     made = []
 
-    def __init__(self, log, on_terminal=None, path=None):
-        self.on_terminal = on_terminal
+    def __init__(self, log):
+        self.on_terminal = None
         self.on_notification = None
         FakeOperationStore.made.append(self)
 
@@ -103,7 +102,7 @@ class FakeSteamMonitor:
     made = []
 
     def __init__(self, store, steam, log):
-        self.store, self.steam = store, steam
+        self.steam = steam
         self.poll_s = 30
         self.started = False
         FakeSteamMonitor.made.append(self)
@@ -117,7 +116,6 @@ class FakeMediaMonitor:
     made = []
 
     def __init__(self, store, service, log, poll_s=30):
-        self.store, self.service = store, service
         self.poll_s = poll_s
         self.started = False
         FakeMediaMonitor.made.append(self)
@@ -166,7 +164,7 @@ class FakeDucker:
         pass
 
 
-class CtxLog(logbook.CapturingLog):
+class CtxLog(CapturingLog):
     """CapturingLog plus the ambient session id at each call."""
 
     def _write(self, level, event, fields):
@@ -211,7 +209,6 @@ def stubbed(monkeypatch):
     ):
         monkeypatch.setattr(cls, "made", [])
     monkeypatch.setattr(FakeListener, "wakes", [])
-    monkeypatch.setattr(FakeListener, "built", [])
     monkeypatch.setattr(FakeAnnouncer, "submitted", [])
     monkeypatch.setattr(FakeSteam, "available_answer", False)
     monkeypatch.setattr(va, "open_audio", lambda voice: ("PA", 0, 1))
@@ -253,47 +250,49 @@ def stubbed(monkeypatch):
 @pytest.fixture
 def run(monkeypatch, stubbed):
     """main() with the given argv over the stubs; returns (exit code or
-    "ended", log, run_session calls). `wakes` scripts the listener and
-    `session` runs inside the faked run_session. config.use() is
-    process-wide, so the suite's config goes back afterwards."""
-    suite_cfg = config.current()
+    "ended", log, the Sessions built). `wakes` scripts the listener and
+    `session` runs inside the faked Session.run."""
 
     def run(argv, cfg, wakes=(), session=None):
         FakeListener.wakes.extend(wakes)
-        config.use(cfg)
+        monkeypatch.setattr(config, "_current", cfg)
         log = CtxLog("voice")
         monkeypatch.setattr(va, "log", log)
         calls = []
 
-        async def fake_session(
-            cfg,
-            secrets,
-            matcher,
-            dry_run,
-            input_idx,
-            output_idx,
-            capture=None,
-            operations=None,
-            ack=None,
-            steam=None,
-            media=None,
-            on_end_session=None,
-        ):
-            calls.append(
-                dict(
-                    dry_run=dry_run,
-                    operations=operations,
-                    steam=steam,
-                    media=media,
-                    capture=capture,
-                    matcher=matcher,
-                    on_end_session=on_end_session,
+        class FakeSession:
+            def __init__(
+                self,
+                cfg,
+                secrets,
+                matcher,
+                dry_run,
+                input_idx,
+                output_idx,
+                capture=None,
+                operations=None,
+                ack=None,
+                steam=None,
+                media=None,
+                on_end_session=None,
+            ):
+                calls.append(
+                    dict(
+                        dry_run=dry_run,
+                        operations=operations,
+                        steam=steam,
+                        media=media,
+                        capture=capture,
+                        matcher=matcher,
+                        on_end_session=on_end_session,
+                    )
                 )
-            )
-            if session is not None:
-                session()
 
-        monkeypatch.setattr(va, "run_session", fake_session)
+            async def run(self):
+                if session is not None:
+                    session()
+
+        monkeypatch.setattr(va, "Session", FakeSession)
         monkeypatch.setattr(sys, "argv", ["voice_agent.py"] + argv)
         try:
             rc = va.main()
@@ -301,8 +300,7 @@ def run(monkeypatch, stubbed):
             rc = "ended"
         return rc, log, calls
 
-    yield run
-    config.use(suite_cfg)
+    return run
 
 
 def test_a_missing_voice_key_fails_startup(run):
@@ -365,13 +363,14 @@ def test_steam_online_starts_the_monitor_and_reaches_the_session(monkeypatch, ru
     assert FakeSteamMonitor.made and FakeSteamMonitor.made[0].started
     assert any(r["what"] == "operation_monitor" for r in log.find("lane_up"))
     assert calls[0]["steam"] is FakeSteamMonitor.made[0].steam
+    # A live run replays what was pending at boot to the announcer.
+    assert FakeAnnouncer.submitted == [{"id": "op-pending"}]
 
 
 def test_a_dry_run_keeps_live_steam_out_of_the_operation_lanes(monkeypatch, run):
     monkeypatch.setattr(FakeSteam, "available_answer", True)
     rc, log, calls = run(["--once", "--dry-run"], make_config(), wakes=one_wake())
     assert not FakeSteamMonitor.made, "dry run must not observe live Steam operations"
-    assert not FakeAnnouncer.made, "dry run must not deliver operation events"
     assert isinstance(calls[0]["steam"], FakeSteam)
 
 

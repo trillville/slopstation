@@ -109,13 +109,29 @@ def check_puck():
     return False
 
 
-def _process_row(name, lane, up, down, down_hint, undetected_hint=""):
-    """One 'is this lane's python running' row. A probe that itself fails is
-    reported as that, and reads as not running."""
+def _service_row(name, service, stopped_hint, absent_hint):
+    """One row for a Windows service the K15 relies on."""
+    try:
+        out = subprocess.run(
+            ["sc", "query", service], capture_output=True, text=True, timeout=10
+        ).stdout
+    except Exception as e:
+        report(WARN, name, f"could not query ({e})", "")
+        return
+    if "RUNNING" in out:
+        report(PASS, name, f"{service} service running")
+    elif "STOPPED" in out:
+        report(WARN, name, f"{service} installed but STOPPED", stopped_hint)
+    else:
+        report(WARN, name, f"{service} not installed", absent_hint)
+
+
+def _process_row(name, lane, up, down, down_hint):
+    """One 'is this lane running' row, read from its scheduled task."""
     try:
         task = supervise.query(lane)
     except Exception as e:
-        report(WARN, name, f"could not query the task ({e})", undetected_hint)
+        report(WARN, name, f"could not query the task ({e})", "")
         return False
     if task is None:
         report(
@@ -144,7 +160,6 @@ def check_listener():
         "running (owns the Puck - haptic check skipped)",
         "NOT running - the chord is deaf",
         "run Start-Slopstation.bat (a crashed lane is back within seconds)",
-        "assuming not running",
     )
 
 
@@ -549,49 +564,35 @@ def check_voice_keys():
 
 
 def check_venv(cfg):
-    venv = pathlib.Path(sys.prefix)
-    if supervise.SENTINEL.exists():
-        report(PASS, "venv", "bootstrapped (deps-ok sentinel present)")
-        model = cfg["voice"].get("wakeModel", "")
-        # Same resolution order as audio.py _resolve_model.
-        vendored = (
-            pathlib.Path(__file__).resolve().parent
-            / "agent"
-            / "models"
-            / f"{model}.onnx"
-        )
-        onnx = (
-            venv
-            / "Lib"
-            / "site-packages"
-            / "openwakeword"
-            / "resources"
-            / "models"
-            / f"{model}.onnx"
-        )
-        if vendored.exists():
-            report(
-                PASS,
-                "wake model",
-                f"{model}.onnx vendored in src\\slopstation\\agent\\models",
-            )
-        elif onnx.exists():
-            report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
-        else:
-            report(
-                WARN,
-                "wake model",
-                f"{model}.onnx not present",
-                "a pretrained name is auto-fetched on the agent's first "
-                "run; a custom one has no upstream and must be committed "
-                "to src\\slopstation\\agent\\models",
-            )
-    else:
+    if not supervise.SENTINEL.exists():
         report(
             WARN,
             "venv",
             "not bootstrapped (no deps-ok sentinel)",
             "run Start-Slopstation.bat once (~2 min with network)",
+        )
+        return
+    report(PASS, "venv", "bootstrapped (deps-ok sentinel present)")
+    model = cfg["voice"].get("wakeModel", "")
+    # Same resolution order as audio.py _resolve_model.
+    vendored = pathlib.Path(__file__).parent / "agent" / "models" / f"{model}.onnx"
+    pretrained = (
+        pathlib.Path(
+            sys.prefix, "Lib", "site-packages", "openwakeword", "resources", "models"
+        )
+        / f"{model}.onnx"
+    )
+    if vendored.exists():
+        report(PASS, "wake model", f"{model}.onnx vendored in {vendored.parent}")
+    elif pretrained.exists():
+        report(PASS, "wake model", f"{model}.onnx in the venv (pretrained)")
+    else:
+        report(
+            WARN,
+            "wake model",
+            f"{model}.onnx not present",
+            "a pretrained name is fetched on the agent's first run; a custom "
+            f"one must be committed to {vendored.parent}",
         )
 
 
@@ -928,28 +929,12 @@ def check_remote(cfg):
             "the voice agent hosts it; check the voice lane above",
         )
     # Without the tunnel the connector cannot reach the K15 at all.
-    try:
-        out = subprocess.run(
-            ["sc", "query", "cloudflared"], capture_output=True, text=True, timeout=10
-        ).stdout
-        if "RUNNING" in out:
-            report(PASS, "remote tunnel", "cloudflared service running")
-        elif "STOPPED" in out:
-            report(
-                WARN,
-                "remote tunnel",
-                "cloudflared installed but STOPPED",
-                "Start-Service cloudflared - the connector is offline meanwhile",
-            )
-        else:
-            report(
-                WARN,
-                "remote tunnel",
-                "cloudflared not installed",
-                "the wrapper is LAN-only until the tunnel is created",
-            )
-    except Exception as e:
-        report(WARN, "remote tunnel", f"could not query ({e})", "")
+    _service_row(
+        "remote tunnel",
+        "cloudflared",
+        "Start-Service cloudflared - the connector is offline meanwhile",
+        "the wrapper is LAN-only until the tunnel is created",
+    )
 
 
 def check_operations():
@@ -1120,59 +1105,21 @@ def check_telemetry():
         pass
 
     # The shipper. Absent is expected until the collector is installed.
-    try:
-        out = subprocess.run(
-            ["sc", "query", "otelcol-contrib"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
-        if "RUNNING" in out:
-            report(PASS, "log shipper", "otelcol-contrib service running")
-        elif "STOPPED" in out:
-            report(
-                WARN,
-                "log shipper",
-                "otelcol-contrib installed but STOPPED",
-                "Start-Service otelcol-contrib - nothing reaches Sentry meanwhile",
-            )
-        else:
-            report(
-                WARN,
-                "log shipper",
-                "otelcol-contrib not installed",
-                "events are local-only; see otelcol/config.yaml.example",
-            )
-    except Exception as e:
-        report(WARN, "log shipper", f"could not query ({e})", "")
-
+    _service_row(
+        "log shipper",
+        "otelcol-contrib",
+        "Start-Service otelcol-contrib - nothing reaches Sentry meanwhile",
+        "events are local-only; see otelcol/config.yaml.example",
+    )
     check_sentry(today)
-
     # SMART needs Administrator for raw device access, so it is a service and
-    # not part of any lane. A rebuilt K15 has it absent until someone registers
-    # it by hand.
-    try:
-        out = subprocess.run(
-            ["sc", "query", "smartd"], capture_output=True, text=True, timeout=10
-        ).stdout
-        if "RUNNING" in out:
-            report(PASS, "smart watch", "smartd service running")
-        elif "STOPPED" in out:
-            report(
-                WARN,
-                "smart watch",
-                "smartd installed but STOPPED",
-                "Start-Service smartd - a failing disk says nothing meanwhile",
-            )
-        else:
-            report(
-                WARN,
-                "smart watch",
-                "smartd not installed",
-                "disk attributes unwatched; see smartd.conf.example",
-            )
-    except Exception as e:
-        report(WARN, "smart watch", f"could not query ({e})", "")
+    # not part of any lane; a rebuilt K15 lacks it until someone registers it.
+    _service_row(
+        "smart watch",
+        "smartd",
+        "Start-Service smartd - a failing disk says nothing meanwhile",
+        "disk attributes unwatched; see smartd.conf.example",
+    )
 
 
 def main():

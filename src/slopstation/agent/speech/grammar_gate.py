@@ -46,7 +46,7 @@ _PUNCT = ",.!?"
 # that half already IS the anchor, joining would eat the real word in front
 # ("a jarvis" 92.3, "my/is jarvis" 85.7, "the jarvis" exactly 80.0). A genuine
 # split's second half only scores as a fragment ("fred" is 80 against
-# "alfred"), so the bar sits above 80. Measured with rapidfuzz 2026-08-16.
+# "alfred"), so the bar sits above 80.
 _WHOLE_ANCHOR = 90
 
 
@@ -59,7 +59,7 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
     is content.
 
     STT can split the anchor across two tokens ("hey alfred" -> "Hey, all.
-    Fred," 2026-08-15) and neither half clears 80 alone, so the two leading
+    Fred,") and neither half clears 80 alone, so the two leading
     tokens are also tried JOINED - "allfred" ~92 against "alfred", non-wake
     pairs under the bar ("all for" ~67, "play jarvis" ~75), guarded by
     _WHOLE_ANCHOR."""
@@ -103,7 +103,7 @@ def load_intents() -> Intents:
 
 
 class GrammarMatcher:
-    """Pure logic (no pipecat) so tests and the --text REPL reuse it.
+    """Pure logic (no pipecat) so tests and bench/probe_stt reuse it.
     Runtime slot lists: inputs from config, game titles from the library."""
 
     def __init__(self, voice_cfg: dict) -> None:
@@ -175,11 +175,8 @@ class GrammarGate(FrameProcessor):
         self._stop_after_reply = False  # stop_listening tool armed one
 
     def request_stop(self) -> None:
-        """stop_listening asking for the mic back. ARMS the ending; the frame
-        goes out from process_frame once the goodbye has been spoken. It
-        cannot end the session here: tool impls run on a worker thread
-        (asyncio.to_thread) while frames belong to the event loop, and it runs
-        BEFORE the model has said anything. Must not raise."""
+        """stop_listening asking for the mic back: arms the ending, which
+        process_frame sends once the goodbye has been spoken. Must not raise."""
         self._stop_after_reply = True
         self.log("session_stop_requested")
 
@@ -375,8 +372,7 @@ class GrammarGate(FrameProcessor):
             if text:
                 # The utterance snapshot (see dispatch.Utterance). `asked` is
                 # post-strip, so a queued job stores the command itself.
-                if self.dispatch is not None:
-                    self.dispatch.begin_utterance(turn, text)
+                self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
                 if m is not None:
                     self.log("gate_match", text=text, intent=m[0], confidence=conf)

@@ -51,11 +51,9 @@ PASSTHROUGH = (
 # The ids the next spans are stamped with. A module slot and not a ContextVar:
 # the reader is a batch export thread with none of the calling context.
 #
-# TWO setters because the two ids have different lifetimes. The session is
-# pinned once by sentry.session_trace and lasts the whole conversation; the
-# turn is minted per utterance, deep inside the pipeline, long after the
-# session began. Pinning both at session start left couch.turn empty on every
-# span - measured 2026-09-03, and the reason this is not one function.
+# Two setters because the ids have different lifetimes: the session is pinned
+# once by sentry.session_trace and lasts the whole conversation; the turn is
+# minted per utterance, deep inside the pipeline, long after the session began.
 _ids: dict = {}
 
 
@@ -79,14 +77,14 @@ def set_turn(turn=None) -> None:
         _ids.pop("couch.turn", None)
 
 
-def sentry_attributes(attrs: dict, conversation: dict | None = None) -> dict:
+def sentry_attributes(attrs: dict) -> dict:
     """Attributes to ADD to a pipecat gen_ai span; {} when the span is not one
     Sentry indexes. Never overwrites an attribute the span already carries."""
     op = attrs.get("gen_ai.operation.name")
     if op not in CHAT_OPS:
         return {}
     add: dict[str, Any] = {"sentry.op": f"gen_ai.{op}"}
-    for k, v in (_ids if conversation is None else conversation).items():
+    for k, v in _ids.items():
         if k not in attrs:
             add[k] = v
     model = attrs.get("gen_ai.request.model")

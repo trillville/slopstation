@@ -1,10 +1,9 @@
 """doctor rows for the media stack: Compose, Radarr/Sonarr, Prowlarr,
 qBittorrent, and the Proton port.
 
-The only module that reaches Prowlarr or qBittorrent directly, and only to
-report configuration: no release title and no indexer name from an API
-response may enter a row. Every indexer name reported comes from
-media.managedIndexers, which the operator wrote.
+No release title or indexer name from an API response enters a row. Every
+indexer name reported comes from media.managedIndexers, which the operator
+wrote.
 """
 
 import json
@@ -18,7 +17,6 @@ from slopstation.agent.tools.media_clients import (
     _clean_text,
     _kind,
     _qbit_from_config,
-    _root_and_profile_gaps,
 )
 from slopstation.agent.tools.media_proton import read_proton_port_state
 
@@ -103,6 +101,20 @@ def _enabled_rows(rows):
         for row in rows
         if isinstance(row, dict) and row.get("enable", row.get("enabled", True))
     ]
+
+
+def _root_and_profile_gaps(root_paths, profile_names, wanted_root, wanted_profiles):
+    """Roots compare case-folded and without a trailing separator - Servarr
+    echoes the path back in either form."""
+    normalized = {str(path).rstrip("/\\").casefold() for path in root_paths}
+    root_exists = (
+        bool(wanted_root) and str(wanted_root).rstrip("/\\").casefold() in normalized
+    )
+    available = {str(name).casefold() for name in profile_names}
+    missing = [
+        name for name in wanted_profiles if str(name).casefold() not in available
+    ]
+    return root_exists, missing
 
 
 def _check_service_reachable(report, client):
@@ -247,13 +259,13 @@ def _check_arr(report, kind, client, media_cfg):
                 f"{label} completed-download handling",
                 "completed-download handling is disabled",
             )
-        elif handling and removal:
+        elif removal:
             report.add(
                 "PASS",
                 f"{label} completed-download removal",
                 "enabled after import and seed-goal completion",
             )
-        elif handling and qbittorrent:
+        elif qbittorrent:
             report.add(
                 "WARN",
                 f"{label} completed-download removal",
@@ -420,9 +432,9 @@ def _check_qbittorrent(report, client, media_cfg):
     return preferences
 
 
-def _check_proton_port_sync(report, preferences, path=None, now=None):
+def _check_proton_port_sync(report, preferences, now=None):
     try:
-        source = read_proton_port_state(path=path, now=now)
+        source = read_proton_port_state(now=now)
     except MediaError as e:
         report.add("FAIL", "Proton port synchronization", str(e))
         return
@@ -474,19 +486,10 @@ def _check_proton_port_sync(report, preferences, path=None, now=None):
         )
 
 
-def media_doctor(
-    cfg,
-    secrets,
-    log,
-    arr_transport=None,
-    qbit_transport=None,
-    compose_runner=None,
-    proton_log_path=None,
-    now=None,
-):
+def media_doctor(cfg, secrets, now=None):
     """Read live configuration without changing any service."""
     report = DoctorReport()
-    media_cfg = cfg.get("media") if isinstance(cfg, dict) else None
+    media_cfg = cfg.get("media")
     if not isinstance(media_cfg, dict):
         report.add("FAIL", "Slopstation media config", "media section is missing")
         return report.result()
@@ -498,7 +501,7 @@ def media_doctor(
 
     media_dir = paths.HOME / "media"
     try:
-        rows = (compose_runner or _compose_services)(media_dir)
+        rows = _compose_services(media_dir)
         states = {
             str(row.get("Service", row.get("service", ""))).casefold(): row
             for row in rows
@@ -541,9 +544,7 @@ def media_doctor(
             report.add("FAIL", f"{name} API", f"{key} is missing")
             continue
         try:
-            clients[name] = ArrClient(
-                name, media_cfg.get(url_key, ""), secrets[key], transport=arr_transport
-            )
+            clients[name] = ArrClient(name, media_cfg.get(url_key, ""), secrets[key])
         except MediaConfigurationError as e:
             report.add("FAIL", f"{name} API", str(e))
     if "Radarr" in clients:
@@ -558,7 +559,6 @@ def media_doctor(
                 media_cfg.get("prowlarrUrl", ""),
                 secrets["prowlarrApiKey"],
                 api_version="v1",
-                transport=arr_transport,
             )
             _check_prowlarr(report, prowlarr, media_cfg)
         except MediaConfigurationError as e:
@@ -568,12 +568,10 @@ def media_doctor(
 
     try:
         qbit_preferences = _check_qbittorrent(
-            report, _qbit_from_config(media_cfg, secrets, qbit_transport), media_cfg
+            report, _qbit_from_config(media_cfg, secrets), media_cfg
         )
         if media_cfg.get("protonPortSync") and qbit_preferences is not None:
-            _check_proton_port_sync(
-                report, qbit_preferences, path=proton_log_path, now=now
-            )
+            _check_proton_port_sync(report, qbit_preferences, now=now)
     except MediaConfigurationError as e:
         report.add("FAIL", "qBittorrent API", str(e))
     return report.result()

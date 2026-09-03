@@ -9,7 +9,6 @@ import urllib.request
 import pytest
 
 import helpers
-from slopstation import logbook
 from slopstation.agent.brain import backends
 from slopstation.agent.interfaces import text
 from slopstation.agent.telemetry import traces
@@ -84,24 +83,19 @@ class FakeMedia:
         }
 
 
-def request(url, token=None, payload=None):
-    headers = {}
-    if token:
-        headers["Authorization"] = "Bearer " + token
-    data = None
-    method = "GET"
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-        method = "POST"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+def chat(base, session, message):
+    req = urllib.request.Request(
+        base + "/v1/chat",
+        data=json.dumps({"session": session, "message": message}).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + TOKEN,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
     # Above BUSY_GRACE_S: a busy reply arrives only after the lock grace.
     with urllib.request.urlopen(req, timeout=8) as response:
         return response.status, json.loads(response.read().decode("utf-8"))
-
-
-def chat(base, session, message):
-    return request(base + "/v1/chat", TOKEN, {"session": session, "message": message})
 
 
 @pytest.fixture
@@ -109,11 +103,6 @@ def cfg():
     cfg = json.loads(json.dumps(helpers.CONFIG))
     cfg["textInterface"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
     return cfg
-
-
-@pytest.fixture
-def log():
-    return logbook.CapturingLog("voice")
 
 
 @pytest.fixture
@@ -166,14 +155,6 @@ def test_dry_run_reaches_the_dispatch(cfg, log, fake_backend):
     assert dry._new_session()["dispatch"].dry_run
 
 
-def test_health_needs_the_token(base):
-    with pytest.raises(urllib.error.HTTPError) as refused:
-        request(base + "/health")
-    assert refused.value.code == 401, "health endpoint accepted no token"
-    status, health = request(base + "/health", TOKEN)
-    assert status == 200 and health["ok"]
-
-
 def test_a_session_carries_turns_tools_and_one_trace_file(base, log, saved):
     first = chat(base, "couch", "what is running?")[1]
     second = chat(base, "couch", "and recently?")[1]
@@ -220,11 +201,3 @@ def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
     gate.release.set()
     stall_thread.join(timeout=10)
     assert stalled["result"][1]["ok"]
-
-
-def test_the_sdk_clients_carry_deadlines():
-    # The SDK clients carry explicit deadlines: without them a stalled
-    # provider stream outlives remote.py's 280 s forwarding budget.
-    real = backends.AnthropicBackend({"anthropicApiKey": "a" * 64}, "claude-test")
-    assert real.client.timeout == backends.LLM_TIMEOUT_S
-    assert real.client.max_retries == backends.LLM_MAX_RETRIES

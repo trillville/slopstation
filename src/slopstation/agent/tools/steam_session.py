@@ -10,7 +10,7 @@ Plain REST with an access_token, undocumented but stable, so mutating calls
 VERIFY rather than trust: an install returns an empty 200 whether or not it
 queued, and failures arrive as an X-eresult response HEADER, not a JSON body.
 Parsing is defensive throughout - shape drift must degrade to a spoken
-"couldn't reach Steam". Confirmed live 2026-08-14 from a WEB-audience token.
+"couldn't reach Steam".
 """
 
 import base64
@@ -157,7 +157,7 @@ class SteamSession:
 
         NOT GenerateAccessTokenForApp: Valve gated it to MOBILE-audience
         tokens, so this WebBrowser enrollment (aud=[web,renew,derive]) gets an
-        empty 200 with X-eresult 15 AccessDenied (2026-08-14).
+        empty 200 with X-eresult 15 AccessDenied.
 
         Non-rotating and repeatable with the same stored refresh token, which
         is what makes it safe unattended. renewRefreshToken rotates and would
@@ -253,28 +253,26 @@ class SteamSession:
     def client_online(self):
         return self._target() is not None
 
-    def app_list(self, changing_only=False):
-        """GetClientAppList for the target client, normalized to
-        {appid: {name, installed, changing, paused, downloaded, total, queue}}.
-        Shape, confirmed live 2026-08-14: the name field is 'app', not
-        'app_name'; byte counts arrive as STRINGS; queue_position is -1 for
-        "not queued", not absent. The plain list carries only {app, app_type,
-        appid, bytes_required, changing, queue_position, running}, while
-        filters=changing adds bytes_downloaded/bytes_to_download, installed and
-        bytes_staged - so anything needing progress must pass changing_only."""
+    def app_list(self):
+        """GetClientAppList for the target client, apps mid-change only,
+        normalized to {appid: {name, installed, changing, paused, downloaded,
+        total, queue}}. Shape: the name field is 'app', not 'app_name'; byte
+        counts arrive as STRINGS; queue_position is -1 for "not queued", not
+        absent. filters=changing is what carries the progress fields."""
         tgt = self._target()
         if not tgt:
             return {}
-        params = {
-            "access_token": self.access_token(),
-            "origin": ORIGIN,
-            "client_instanceid": tgt["instanceid"],
-            "fields": "games",
-            "include_client_info": "true",
-        }
-        if changing_only:
-            params["filters"] = "changing"
-        body, _ = self._get("IClientCommService/GetClientAppList/v1", params)
+        body, _ = self._get(
+            "IClientCommService/GetClientAppList/v1",
+            {
+                "access_token": self.access_token(),
+                "origin": ORIGIN,
+                "client_instanceid": tgt["instanceid"],
+                "fields": "games",
+                "include_client_info": "true",
+                "filters": "changing",
+            },
+        )
         out = {}
         for a in ((body or {}).get("response", {}) or {}).get("apps", []) or []:
             appid = a.get("appid")
@@ -325,7 +323,7 @@ class SteamSession:
                     "error": f"Steam refused the install (code {eresult})",
                 }
             time.sleep(1.5)
-            app = self.app_list(changing_only=True).get(appid, {})
+            app = self.app_list().get(appid, {})
         except Exception as e:
             self.log.error("install_error", appid=appid, err=str(e))
             return {
@@ -348,9 +346,8 @@ class SteamSession:
     def download_status(self):
         """Apps mid-change, most-complete first - the list_games 'downloading'
         source."""
-        apps = self.app_list(changing_only=True)
         rows = []
-        for appid, a in apps.items():
+        for appid, a in self.app_list().items():
             if not a["changing"] and a["total"] <= a["downloaded"]:
                 continue
             pct = round(100 * a["downloaded"] / a["total"]) if a["total"] else None
@@ -479,9 +476,8 @@ def _cli(argv):
         )
         return 1
     if cmd == "token":
-        # doctor's health check: an unexpired token is not a working one - a
-        # JWT exp read alone reported green on a dead lane (2026-08-14). So
-        # actually mint. Exit 0 == usable.
+        # doctor's health check. Mint rather than read exp: an unexpired token
+        # is not a working one. Exit 0 == usable.
         try:
             t = s.access_token()
             hours = (_jwt_exp(t) - time.time()) / 3600

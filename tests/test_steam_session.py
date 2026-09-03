@@ -12,7 +12,8 @@ from urllib.parse import quote
 
 import pytest
 
-from slopstation import logbook, paths
+from helpers import CapturingLog
+from slopstation import paths
 from slopstation.agent.tools import steam_session as ss
 
 STEAMID = "76561190000"
@@ -43,7 +44,7 @@ def two_clients():
 
 @pytest.fixture
 def log():
-    return logbook.CapturingLog("steam")
+    return CapturingLog("steam")
 
 
 @pytest.fixture
@@ -120,25 +121,34 @@ def seams(monkeypatch):
 
 
 @pytest.fixture
-def session(seams, log, refresh, monkeypatch):
-    """A session on the seams, no machine name pinned."""
-    s = ss.SteamSession({"steamId64": STEAMID, "steamRefreshToken": refresh}, log)
-    monkeypatch.setattr(s, "_post", seams.post)
-    monkeypatch.setattr(s, "_get", seams.get)
-    monkeypatch.setattr(s, "_login_post", seams.login_post)
-    return s
+def make_session(seams, log, refresh, monkeypatch):
+    """A session on the seams. `token` is the stored refresh token;
+    `machine_name` pins the target."""
+
+    def make(token=refresh, machine_name=None):
+        s = ss.SteamSession(
+            {"steamId64": STEAMID, "steamRefreshToken": token},
+            log,
+            machine_name=machine_name,
+        )
+        monkeypatch.setattr(s, "_post", seams.post)
+        monkeypatch.setattr(s, "_get", seams.get)
+        monkeypatch.setattr(s, "_login_post", seams.login_post)
+        return s
+
+    return make
 
 
 @pytest.fixture
-def pinned(seams, log, refresh, monkeypatch):
-    """A session pinned to the rig by machine name, its token pre-minted."""
-    s = ss.SteamSession(
-        {"steamId64": STEAMID, "steamRefreshToken": refresh},
-        log,
-        machine_name="TILLMAN-DESKTOP",
-    )
-    monkeypatch.setattr(s, "_get", seams.get)
-    monkeypatch.setattr(s, "_post", seams.post)
+def session(make_session):
+    """No machine name pinned."""
+    return make_session()
+
+
+@pytest.fixture
+def pinned(make_session, monkeypatch):
+    """Pinned to the rig by machine name, its token pre-minted."""
+    s = make_session(machine_name="TILLMAN-DESKTOP")
     monkeypatch.setattr(s, "_access", "tok")  # skip minting
     monkeypatch.setattr(s, "_access_exp", time.time() + 3600)
     return s
@@ -164,8 +174,7 @@ def test_gating_and_token_expiry(log, refresh):
 
 def test_token_mint_cache_and_remint_on_expiry(session, seams, monkeypatch):
     # The mint is the transfer-login flow: GenerateAccessTokenForApp is gated
-    # to mobile-audience tokens and answers ours with eresult 15 AccessDenied
-    # (2026-08-14).
+    # to mobile-audience tokens and answers ours with eresult 15 AccessDenied.
     t1 = session.access_token()
     session.access_token()  # cached, no 2nd mint
 
@@ -281,12 +290,9 @@ def test_install_refused_surfaces_the_eresult(session, seams):
 
 def test_install_with_the_pc_offline_is_an_honest_asleep(session, seams):
     seams.state["sessions"] = []
-    before = sum("InstallClientApp" in m for m, _ in seams.posts)
     r = session.install(570)
     assert not r["ok"] and "online" in r["error"], r
-    assert (
-        sum("InstallClientApp" in m for m, _ in seams.posts) == before
-    )  # never called
+    assert not any("InstallClientApp" in m for m, _ in seams.posts), "never called"
 
 
 def test_download_status_lists_changing_apps_most_complete_first(session, seams):
@@ -348,12 +354,10 @@ def test_download_status_lists_changing_apps_most_complete_first(session, seams)
 
 
 @pytest.fixture
-def enrolling(seams, log, monkeypatch):
+def enrolling(make_session, monkeypatch):
     """A session with no token yet, its QR going nowhere near the console."""
-    monkeypatch.setattr(ss, "_print_qr", lambda text: None)  # no console spam
-    s = ss.SteamSession({"steamId64": STEAMID, "steamRefreshToken": None}, log)
-    monkeypatch.setattr(s, "_post", seams.post)
-    return s
+    monkeypatch.setattr(ss, "_print_qr", lambda text: None)
+    return make_session(token=None)
 
 
 def test_enroll_persists_the_token_and_never_logs_it(enrolling, log):

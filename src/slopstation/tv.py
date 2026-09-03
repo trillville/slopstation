@@ -9,11 +9,9 @@ from __future__ import annotations
 import json
 import time
 
-# Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum,
-# checksum = (0x100 - sum(first 6)) & 0xFF. Serial is 9600 baud, 8N1.
-# Volume/mute family from Samsung's RS-232 worksheet. DANGER: a one-byte slip
-# in this family is power_off - frozen literals, cross-checked against
-# exlink_frame() by agent/tests/test_exlink.py.
+# Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum, 9600 baud 8N1.
+# Frozen literals, cross-checked against exlink_frame() by tests/test_exlink.py:
+# a one-byte slip in the volume family is power_off.
 EXLINK_FRAMES = {
     "power_on": "082200000002d4",
     "power_off": "082200000001d5",
@@ -57,10 +55,9 @@ def _exlink_txn(frame_hex: str, port: str) -> str:
 
 
 def exlink_send_hex(frame_hex: str, port: str) -> str:
-    """Send one raw Ex-Link frame (hex string); returns EXLINK_ACK, raises
-    ExlinkNak on any other answer, never retries a NAK. serial imports lazily
-    so a box without pyserial can still import tv. The 1 s retry is for
-    PORT CONTENTION only: couch.py and the voice agent share this port."""
+    """Send one raw Ex-Link frame; returns EXLINK_ACK, raises ExlinkNak on any
+    other answer and never retries a NAK. The one retry is for port contention
+    only: couch.py and the voice agent share the port."""
     import serial
 
     try:
@@ -81,18 +78,14 @@ def exlink_send(name: str, port: str) -> str:
 
 
 def tv_power_state(ip: str, timeout: float = 2.0, raw: bool = False) -> str | None:
-    """Ask the S90C whether it is on: GET /api/v2/ on port 8001 answers
-    .device.PowerState = "on" | "standby". Unauthenticated, ~30 ms, answers
-    from standby (2026-08-19). An accepted power_on takes ~5 s to flip the
-    state, so poll rather than read once across a transition.
+    """The set's own word: GET /api/v2/ on port 8001 answers PowerState "on" or
+    "standby", unauthenticated and from standby. An accepted power_on takes
+    ~5 s to flip it, so poll across a transition.
 
-    None = UNKNOWN (unreachable, IP drifted, unparseable), never "off": the
-    endpoint rides Wi-Fi and deeper standby depths can drop IP entirely. A set
-    off for HOURS answers in 3 ms with PowerState as the empty string
-    (2026-08-21); "standby" is only what a recently-used set says. raw=True
-    returns the value as reported - "on" / "standby" / "" / None - instead of
-    collapsing to the safe pair. Callers pick their own safe side; the voice
-    ducker treats anything but "on" as do-not-touch."""
+    None is UNKNOWN (unreachable, IP drifted, unparseable), never "off": deep
+    standby can drop IP entirely, and a set off for hours answers with an
+    empty PowerState. raw=True returns the value as reported instead of
+    collapsing it to the "on"/"standby" pair."""
     import urllib.request
 
     try:
@@ -106,17 +99,12 @@ def tv_power_state(ip: str, timeout: float = 2.0, raw: bool = False) -> str | No
 
 
 def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
-    """Current volume as the TV tracks it, via pairing-free UPnP
-    RenderingControl (port 9197, plain SOAP, ~3 ms). With eARC soundbar output
-    this number IS the bar's level - the TV mirrors HDMI-CEC system audio
-    (2026-08-21).
-
-    READ half only: with eARC audio the set refuses every direct volume WRITE
-    (SetVolume answers UPnP 501; Ex-Link volume frames ack, then pop "Not
-    Available" on screen - 2026-08-21). Writes go through remote keys over
-    HDMI-CEC, agent/tools/tv_remote.py, verified by this read. None = unknown, not
-    zero: unreachable, or the TV's UPnP renderer asleep (it goes down with
-    the panel, unlike /api/v2/ above)."""
+    """Current volume via pairing-free UPnP RenderingControl (port 9197). With
+    eARC audio this is the soundbar's level, and the set refuses every direct
+    volume WRITE (UPnP 501; Ex-Link frames ack, then say "Not Available"), so
+    writes go through remote keys in agent/tools/tv_remote.py and this read
+    verifies them. None is unknown, not zero: the renderer sleeps with the
+    panel, unlike /api/v2/ above."""
     import urllib.request
 
     body = (

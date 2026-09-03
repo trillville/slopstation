@@ -10,9 +10,9 @@
 # forwarding, window focus), so they fire a scheduled task.
 #
 # The collection-id charset ([A-Za-z0-9_.*+=-]) is fail-closed but must cover
-# Steam's base64-ish ids ("uc-mkD+r+pfQ1hu", "uc-odwxN*+G1zDb*+") - a tighter
-# [A-Za-z0-9_.-] DENIED 3 of this rig's 11 collections (2026-08-14). '/' stays
-# out: every value here is one URL path segment.
+# Steam's base64-ish ids ("uc-mkD+r+pfQ1hu", "uc-odwxN*+G1zDb*+"); a tighter
+# one denied real collections. '/' stays out: every value here is one URL
+# path segment.
 $ready = 'C:\ProgramData\CouchGaming\ready'
 $turnFile = 'C:\ProgramData\CouchGaming\turn'
 $launchMarker = 'C:\ProgramData\CouchGaming\launch-app'
@@ -44,8 +44,7 @@ function Set-Turn($t) {
 }
 
 # Fire a scheduled task and say WHICH way it failed: schtasks /Run answers 1
-# both for "task not registered" and for a real failure (2026-08-14: every nav
-# read as broken when the Nav task had simply never been registered).
+# both for "task not registered" and for a real failure.
 # The /Query only runs on the failure path.
 function Start-CgTask([string]$Name) {
   schtasks /Run /TN "\CouchGaming\$Name" | Out-Null
@@ -140,7 +139,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
                break }
   # Is the Enter task still running? `status` cannot say: mid-Enter and
   # already-died both read NOTREADY, so the K15 would burn its whole READY
-  # window polling a dead task (3 times, latest 2026-08-19 01:18).
+  # window polling a dead task.
   # Get-ScheduledTask, not schtasks /Query: .State is an enum, while /FO LIST
   # prints a LOCALISED string that a non-English install would read as idle -
   # the direction that re-dispatches Enter on top of a healthy launch.

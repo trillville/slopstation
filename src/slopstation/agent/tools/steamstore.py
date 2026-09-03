@@ -7,8 +7,8 @@ and GetNewsForApp are officially documented, so parses read defensively and the
 lane degrades rather than crashing.
 
 CLI:
-    python steamstore.py <deals|search ...|reviews <appid>|news <appid>
-                          |hltb <name>|trending|recent>
+    python -m slopstation.agent.tools.steamstore <deals|search ...|reviews <appid>
+                                                  |news <appid>|hltb <name>|trending|recent>
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ def deals_file():
 DEALS_MAX_AGE_S = 6 * 3600  # prices move at sale boundaries
 
 
-# per-game how-long-to-beat (stable)
-def facet_cache_file():
-    return paths.state("facet-cache.json")
+# per-game how-long-to-beat, {fuzzy_key: {main, extra, complete}}, forever
+def hltb_cache_file():
+    return paths.state("hltb-cache.json")
 
 
 # {tag_name_lower: tagid}, weekly
@@ -213,7 +213,7 @@ def _tag_map():
 def fetch_store_search(term="", tags=None, max_price=None, on_sale=False, cc=None):
     """Keyless /search/results for the appid list, then GetItems for names and
     prices. Tag names -> tagids via the cached map; unknown tags are dropped."""
-    # An exact tag lookup dropped "Rogue-like" silently (2026-08-14).
+    # fuzzy_key: 'Rogue-like' must find Steam's 'Roguelike'.
     tmap = {library.fuzzy_key(k): v for k, v in _tag_map().items()}
     tagids = [
         str(tmap[library.fuzzy_key(t)])
@@ -286,17 +286,12 @@ def fetch_reviews(appid: int) -> dict | None:
 
 def fetch_news(appid: int, count: int = 3) -> list[dict]:
     """GetNewsForApp, patch notes preferred. Keyless, titles only."""
-    d = _get(
-        f"{API}/ISteamNews/GetNewsForApp/v2/",
-        {"appid": int(appid), "count": count, "maxlength": 1, "tags": "patchnotes"},
-    )
-    items = ((d or {}).get("appnews", {}) or {}).get("newsitems", []) or []
-    if not items:  # no patch notes -> any announcement
-        d = _get(
-            f"{API}/ISteamNews/GetNewsForApp/v2/",
-            {"appid": int(appid), "count": count, "maxlength": 1},
-        )
+    params = {"appid": int(appid), "count": count, "maxlength": 1}
+    for tags in ({"tags": "patchnotes"}, {}):  # no patch notes -> any announcement
+        d = _get(f"{API}/ISteamNews/GetNewsForApp/v2/", {**params, **tags})
         items = ((d or {}).get("appnews", {}) or {}).get("newsitems", []) or []
+        if items:
+            break
     return [
         {
             "title": library.ascii_only(n.get("title", "")),
@@ -313,9 +308,9 @@ def fetch_hltb(name: str) -> dict | None:
     optional, it drags in fake_useragent/bs4). Beat-times never move, so
     results cache forever."""
     key = library.fuzzy_key(name)
-    cache = _load_facets()
-    if key in cache and "hltb" in cache[key]:
-        return cache[key]["hltb"]
+    cache = statefile.load(hltb_cache_file(), {})
+    if key in cache:
+        return cache[key]
     hltb = None
     try:
         from howlongtobeatpy import HowLongToBeat
@@ -333,17 +328,9 @@ def fetch_hltb(name: str) -> dict | None:
     except Exception as e:  # missing pin, or endpoint churn
         log.warn("hltb_failed", name=name[:80], err=str(e))
         return None
-    cache.setdefault(key, {})["hltb"] = hltb
-    _save_facets(cache)
+    cache[key] = hltb
+    statefile.write(hltb_cache_file(), cache, indent=1)
     return hltb
-
-
-def _load_facets():
-    return statefile.load(facet_cache_file(), {})
-
-
-def _save_facets(cache):
-    statefile.write(facet_cache_file(), cache, indent=1)
 
 
 def load_deals() -> dict:

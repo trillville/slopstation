@@ -45,8 +45,7 @@ def signal_last_error(dev):
 
     dev is None when the Puck is reporting nothing, and the age-out still
     runs: a launch started by voice or from a phone leaves nobody holding the
-    controller, so a buzz-gated discard would strand the marker until the next
-    successful launch (2026-08-30, stranded 5 h)."""
+    controller, and a buzz-gated discard would strand the marker."""
     try:
         age = time.time() - sessionlock.last_error_file().stat().st_mtime
     except OSError:
@@ -128,14 +127,11 @@ class Puck:
 
 def main():
     logbook.rotate()
-    # Liveness for the load-bearing lane; a deaf chord is only discovered from
-    # the couch. A thread rather than a check in the read loop: the loop can
-    # block in hid.read or the 3 s stand-by sleep, and a heartbeat that stopped
-    # while the Puck is claimed would page during every normal session.
+    # Liveness from threads, not the read loop, which blocks in hid.read and
+    # in the stand-by sleep. The heartbeat proves the lane to the log shipper;
+    # the check-in proves it to Sentry directly, so a dead collector cannot
+    # make a dead lane look healthy.
     events.start_heartbeat("listener")
-    # The heartbeat proves the lane is alive TO THE SHIPPER; this proves it to
-    # Sentry directly, so a dead collector cannot make a dead lane look
-    # healthy. No-ops without a sentryDsn.
     checkin.start("listener")
 
     puck, held, armed = Puck(), None, False
@@ -145,14 +141,11 @@ def main():
     last_session_check = 0.0
     standoff = False
     while True:
-        # HANDS OFF while a session owns the Puck, launch included. The claim
-        # is the fragile moment: VirtualHere unbinds the Puck from the K15's
-        # HID stack to forward it, and reading 13 interfaces at 200 Hz through
-        # that handoff is a plausible (unproven) cause of the controller that
-        # enumerates, rumbles, then ignores every button. The chord path closes
-        # before it dispatches; a VOICE launch is another process, so the
-        # session lock is the signal - couch.py holds it from ~10 s before the
-        # claim.
+        # HANDS OFF while a session owns the Puck, launch included: VirtualHere
+        # unbinds it from the K15's HID stack to forward it, and reading its
+        # interfaces through that handoff can leave a controller that
+        # enumerates, rumbles, then ignores every button. A voice launch is
+        # another process, so the session lock is the signal.
         if time.time() - last_session_check >= STANDOFF_POLL_S:
             last_session_check = time.time()
             standoff = sessionlock.active()
@@ -193,15 +186,12 @@ def main():
                             last_busy = time.time()
                         held = None
                     else:
-                        # The intent begins here, so the turn id is minted
-                        # here and handed to couch.py, which passes it on to
-                        # the gaming PC.
+                        # The intent begins here: the turn id is minted here
+                        # and rides through couch.py to the gaming PC.
                         turn = events.new_turn()
                         log("chord", turn=turn)
                         buzz(puck.active, haptics.PATTERN_LAUNCH, "launch")
-                        # The only silence guaranteed BEFORE couch.py has
-                        # started python and taken the lock.
-                        puck.close()
+                        puck.close()  # let go before couch.py takes the lock
                         subprocess.Popen(
                             COUCH + ["start", "--turn", turn],
                             creationflags=subprocess.CREATE_NEW_CONSOLE,
@@ -210,11 +200,9 @@ def main():
                         held, armed = None, False
             else:
                 held = None
-                # Separates a Puck nobody touched from one that enumerates,
-                # rumbles and never reports a button - which otherwise needs
-                # calibrate.py to tell apart (2026-08-19). The BYTE, not the
-                # count: whether buttons arrive, and whether they still land
-                # where CHORD expects after a firmware update.
+                # Tells a Puck nobody touched from one that never reports a
+                # button, and shows whether buttons still land where CHORD
+                # expects after a firmware update.
                 b = r[BTN_BYTE] if len(r) > BTN_BYTE else 0
                 if b and time.time() - last_partial >= PARTIAL_COOLDOWN_S:
                     log("chord_partial", btn=f"{b:02x}", want=f"{CHORD:02x}")

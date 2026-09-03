@@ -13,43 +13,25 @@ requires-python = ">=3.13"
 
 dependencies = [
   # Pipecat moves weekly: re-read its docs for every service used and re-run
-  # the suite before bumping. 1.7.0 -> 1.8.1 was the proposed-turn-frame
-  # rework; grammar_gate and session_runtime carry the compensations.
+  # the suite before bumping.
   "pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.8.1",
-  # Sentry's OTLP endpoint is HTTP-only (no gRPC), and pipecat's own tracing
-  # example imports the gRPC exporter - pin http so it cannot resolve by
-  # accident. (In constraints.txt, semantic-conventions 0.65b0 is sdk
-  # 1.44.0's lockstep partner under its own 0.x scheme.)
+  # Sentry's OTLP endpoint is HTTP-only; pinned so the gRPC exporter pipecat's
+  # tracing example imports cannot resolve by accident.
   "opentelemetry-exporter-otlp-proto-http==1.44.0",
-  # Errors as Issues, plus OTLPIntegration's event linking (an exception lands
-  # on the span it broke). NO [opentelemetry-otlp] extra: that pulls
-  # opentelemetry-distro, which resolves its own otel versions against the pin
-  # above. The integration's imports are already satisfied by that exporter
-  # and opentelemetry-sdk - if a future version needs the extra, it raises
-  # DidNotEnable and telemetry/sentry.py logs lane_disabled rather than
-  # crashing.
+  # No [opentelemetry-otlp] extra: it pulls opentelemetry-distro, which
+  # resolves its own otel versions against the pin above.
   "sentry-sdk==2.68.1",
   "openwakeword==0.6.0",
   "hassil==3.12.0",
   "rapidfuzz==3.14.6",
-  # The TV's Ex-Link serial path (tv.py, exlink.py).
-  "pyserial==3.5",
-  # The Steam Puck over HID. hidapi, NOT the 'hid' package - different
-  # project, same import name.
-  "hidapi",
-  # grammar_gate.py imports yaml at MODULE scope to read grammar.yaml. It
-  # arrives as a pipecat transitive; named here so a pipecat that drops it
-  # fails at install rather than at the first wake word.
+  "pyserial==3.5",  # the TV's Ex-Link serial path
+  "hidapi",  # the Steam Puck; NOT the 'hid' package, a different project
+  # PyYAML and requests are pipecat transitives today, named so a pipecat that
+  # drops one fails at install rather than at the first wake word.
   "PyYAML==6.0.3",
-  # steam_session.py imports it lazily, as do library.py and steamstore.py.
-  # Also a pipecat transitive today; same reason to name it.
   "requests==2.34.2",
-  # how-long-to-beat hours (assistant game-details facet). library.py imports
-  # it lazily and fail-soft.
-  "howlongtobeatpy==1.0.23",
-  # TV remote keys over WebSocket (tv_remote.py) - the volume write path that
-  # works with eARC audio; imported lazily and fail-soft.
-  "samsungtvws==3.0.5",
+  "howlongtobeatpy==1.0.23",  # game hours; imported lazily and fail-soft
+  "samsungtvws==3.0.5",  # TV remote keys, the volume write path under eARC
 ]
 
 [project.optional-dependencies]
@@ -75,7 +57,9 @@ slopstation = ["agent/grammar.yaml", "agent/models/*.onnx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["tests"]
+# src first: a checkout that is not the one the venv's editable install points
+# at (a git worktree) must still test its own code.
+pythonpath = ["src", "tests"]
 addopts = "-ra"
 # The pre-roll pipeline tests are coroutines; auto mode runs them without
 # a marker on each one.

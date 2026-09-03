@@ -41,7 +41,7 @@ from slopstation.agent.speech.audio import (
 )
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.speech.preroll import WakeAck
-from slopstation.agent.speech.session_runtime import run_session
+from slopstation.agent.speech.session_runtime import Session
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import library
 from slopstation.agent.tools.tv_remote import TvDucker
@@ -189,15 +189,8 @@ def make_ducker(cfg, dry_run):
     duck_lock = threading.Lock()
 
     def duck(restore):
-        """Fire duck/unduck without making the session wait for the TV.
-
-        Threaded because a burst costs real seconds (~1 s WebSocket connect,
-        ~0.15 s per key, plus readback polls). The LOCK is what makes it
-        correct: a quick session would otherwise start the unduck mid-duck and
-        the two would interleave into an arbitrary final volume. It also
-        serializes the ledger - TvDucker is only touched under this lock. A
-        failed restore stays on the ledger as debt for the next session's
-        close (tv_duck_deficit); a hard process death loses it."""
+        """Off-thread so the session never waits on the TV; the lock keeps
+        duck and unduck from interleaving."""
         if ducker is None:
             return
 
@@ -532,7 +525,7 @@ def main():
                 # Inside the try so the finally's unduck is always paired with it.
                 duck(restore=False)
                 asyncio.run(
-                    run_session(
+                    Session(
                         cfg,
                         secrets,
                         matcher,
@@ -545,7 +538,7 @@ def main():
                         steam=steam,
                         media=media_service,
                         on_end_session=lambda: duck(restore=True),
-                    )
+                    ).run()
                 )
         except Exception as e:
             log.error("session_crashed", err=repr(e))

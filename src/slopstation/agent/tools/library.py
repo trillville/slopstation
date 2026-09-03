@@ -1,34 +1,27 @@
 """Game-library index builder.
 
-Layer 1 (installed) comes from `ssh gamepc games`, or --local-steam (a read
-of Steam's appmanifest_*.acf files) when run on the gaming PC. Layers 2-3
-(owned/playtime via the Steam Web API, metadata via appdetails + SteamSpy)
-merge into the same file. Layer 4 is live store data (deals, search,
-reviews, news, how-long-to-beat), not the catalog.
-
-Layer 4 lives in steamstore.py; `probe` below delegates to it.
+Layer 1 (installed) comes from `ssh gamepc games`. Layers 2-3 (owned/playtime
+via the Steam Web API, metadata via appdetails + SteamSpy) merge into the same
+file. Layer 4 is live store data (deals, search, reviews, news,
+how-long-to-beat), not the catalog; it lives in steamstore.py.
 
 Output: state/library.json, written atomically. sync() runs on a background
 thread at startup and after each voice session.
 
 CLI:
     python -m slopstation.agent.tools.library sync                        (every layer, as the agent does)
-    python -m slopstation.agent.tools.library refresh [--local-steam] [--owned] [--meta [N]]
-    python library.py show
-    python library.py catalog
-    python library.py probe <deals|search ...|reviews <appid>|news <appid>
-                             |hltb <name>|trending|recent>
+    python -m slopstation.agent.tools.library refresh [--owned] [--meta [N]]
+    python -m slopstation.agent.tools.library show
+    python -m slopstation.agent.tools.library catalog
 """
 
 from __future__ import annotations
 
-import glob
 import json
 import re
 import sys
 import threading
 import time
-from pathlib import Path
 
 from slopstation import config, logbook, paths, statefile
 
@@ -54,42 +47,6 @@ def parse_games_json(text: str) -> list[dict]:
     rows = json.loads(text.strip().lstrip("﻿"))
     if isinstance(rows, dict):  # single-game library edge
         rows = [rows]
-    return rows
-
-
-def fetch_installed_local() -> list[dict]:
-    """Running ON the gaming PC: same fields as the Dispatch `games` verb."""
-    import winreg
-
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
-        steam = winreg.QueryValueEx(k, "SteamPath")[0].replace("/", "\\")
-    roots = {steam.lower()}
-    lf = Path(steam) / "steamapps" / "libraryfolders.vdf"
-    if lf.exists():
-        for pm in re.finditer(r'^\s*"path"\s+"(.+)"\s*$', lf.read_text(), re.M):
-            roots.add(pm.group(1).replace("\\\\", "\\").lower())
-    rows, seen = [], set()
-    for root in roots:
-        for acf in glob.glob(str(Path(root) / "steamapps" / "appmanifest_*.acf")):
-            text = Path(acf).read_text(encoding="utf-8", errors="replace")
-            f = {}
-            for key in ("appid", "name", "StateFlags", "SizeOnDisk", "LastPlayed"):
-                m = re.search(f'"{key}"\\s+"([^"]*)"', text)
-                if m:
-                    f[key] = m.group(1)
-            # ASCII-only, as the Dispatch verb: encoding-proof over ssh.
-            name = ascii_only(f.get("name", ""))
-            if f.get("appid") and name and f["appid"] not in seen:
-                seen.add(f["appid"])
-                rows.append(
-                    {
-                        "appid": int(f["appid"]),
-                        "name": name,
-                        "state": int(f.get("StateFlags", 0) or 0),
-                        "size": int(f.get("SizeOnDisk", 0) or 0),
-                        "lastPlayed": int(f.get("LastPlayed", 0) or 0),
-                    }
-                )
     return rows
 
 
@@ -127,9 +84,9 @@ def save(index: dict) -> None:
     statefile.write(library_file(), index)
 
 
-def refresh(local: bool = False) -> int:
+def refresh() -> int:
     try:
-        rows = fetch_installed_local() if local else fetch_installed_ssh()
+        rows = fetch_installed_ssh()
     except Exception as e:
         log.warn("sync_skipped", layer="installed", err=str(e))
         return 1
@@ -238,9 +195,7 @@ def fetch_meta_one(appid: int) -> dict:
             {
                 "genres": [g["description"] for g in data.get("genres", [])],
                 "controller": next((v for k, v in _CTRL.items() if k in cats), "none"),
-                "desc": re.sub(r"[^\x20-\x7E]", "", data.get("short_description", ""))[
-                    :160
-                ],
+                "desc": ascii_only(data.get("short_description", ""))[:160],
                 "score": (data.get("metacritic") or {}).get("score"),
                 "year": (data.get("release_date") or {}).get("date", "")[-4:],
             }
@@ -333,7 +288,7 @@ def _iso_age(index: dict, key: str) -> float | None:
         return None
 
 
-def sync(meta_limit: int = 200) -> None:
+def sync() -> None:
     """Full catalog refresh for the background thread: installed every call,
     owned when stale >6h, metadata top-up for new appids. Steam layers are
     skipped without keys. Non-reentrant, so calls can't stack meta crawls."""
@@ -344,8 +299,7 @@ def sync(meta_limit: int = 200) -> None:
         # gating spares a sleeping sync (and the blind test) a 15 s ssh wait.
         if refresh() == 0:  # layer 1 (fail-softs asleep)
             refresh_collections()  # layer 1b (PC-dependent too)
-        # Layer 4 is keyless, so it runs BEFORE the key gate. Reached through
-        # the module attribute so the test suite's patches bite.
+        # Layer 4 is keyless, so it runs BEFORE the key gate.
         from slopstation.agent.tools import steamstore
 
         d_age = _iso_age(steamstore.load_deals(), "refreshed")
@@ -360,7 +314,7 @@ def sync(meta_limit: int = 200) -> None:
         appids = {r["appid"] for r in index.get("installed", [])}
         appids.update(int(a) for a in index.get("owned", {}))
         if any(str(a) not in load_meta() for a in appids):
-            refresh_meta(list(appids), meta_limit)  # layer 3 (top-up only)
+            refresh_meta(list(appids))  # layer 3 (top-up only)
     except Exception as e:
         log.error("sync_failed", err=str(e))
     finally:
@@ -370,7 +324,7 @@ def sync(meta_limit: int = 200) -> None:
 def query_terms(limit: int | None = 30) -> list[str]:
     """Distinct tags/genres, frequency-ranked: the raw material for the STT
     vocabulary ("mech games" -> "met games"); None for the whole ranking.
-    Ranking is all this owes - session_runtime.query_keyterms picks the spoken
+    Ranking is all this owes - keyterms.query_keyterms picks the spoken
     form and drops the generic words."""
     counts: dict[str, int] = {}
     for m in load_meta().values():
@@ -402,8 +356,7 @@ def catalog_lines() -> list[str]:
     for appid, name in rows.items():
         o = owned.get(str(appid), {})
         m = meta.get(str(appid), {})
-        # Day precision: month-only rows made the model guess wrong about
-        # what was played last (2026-08-15).
+        # Day precision, so the model can say what was played last.
         last = (
             time.strftime("%Y-%m-%d", time.localtime(o["last"]))
             if o.get("last")
@@ -435,9 +388,8 @@ def catalog() -> int:
 
 def usage() -> int:
     print(
-        "usage: python -m slopstation.agent.tools.library sync | refresh [--local-steam] [--owned] "
-        "[--meta [N]] | show | catalog | probe <deals|search ...|reviews "
-        "<appid>|news <appid>|hltb <name>|trending|recent>"
+        "usage: python -m slopstation.agent.tools.library sync | refresh [--owned] "
+        "[--meta [N]] | show | catalog"
     )
     return 2
 
@@ -448,7 +400,7 @@ if __name__ == "__main__":
         sync()
         sys.exit(0)
     elif args[:1] == ["refresh"]:
-        rc = refresh(local="--local-steam" in args)
+        rc = refresh()
         if "--owned" in args:
             rc = refresh_owned() or rc
         if "--meta" in args:
@@ -460,9 +412,5 @@ if __name__ == "__main__":
         sys.exit(show())
     elif args[:1] == ["catalog"]:
         sys.exit(catalog())
-    elif args[:1] == ["probe"]:
-        from slopstation.agent.tools import steamstore
-
-        sys.exit(steamstore.probe(args[1:]))
     else:
         sys.exit(usage())
