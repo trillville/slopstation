@@ -29,6 +29,40 @@ of these questions without touching either machine, so start there.
 When the ask is a question or a description of something going wrong, the
 deliverable is the diagnosis. Report it and stop; the fix is a separate ask.
 
+## Writing to the user
+
+Whoever reads your message is on a phone between other things, or reading
+the PR months later with no memory of the session. Write for that reader.
+
+- Say what you mean. When a plain phrase exists, use it: "a setting worth
+  changing", not "a dial worth turning". Metaphor and flourish are there to
+  show off the writer, they make the reader work harder, and they drag in
+  meanings you did not choose. Cut them.
+- No jargon. Give an acronym its expansion the first time, and give this
+  repo's own words (lane, turn, chord, Puck) a plain gloss when the reader
+  might not have `README.md` open.
+- Short sentences, one idea each. Break paragraphs often. Lead with the
+  answer or the outcome. If something could not be verified, say that first.
+- Lists are for items that really are parallel: findings, steps, files to
+  look at. Everything else is prose. No headers in a short message.
+- Commit messages, PR descriptions, code comments and this file follow the
+  same rules. They outlive the session.
+
+## Changing code
+
+- Keep the change to what the task needs. A pre-existing bug, a slow path
+  or behavior the task does not mention is a follow-up to report in your
+  summary, not something to fix in this change, unless the requested
+  behavior cannot work without it.
+- Where the task is ambiguous, build the reading its wording and the
+  surrounding code most directly support, say so in your summary, and do
+  not build the other readings as well.
+- Tests go where this repo already keeps tests for that kind of change,
+  sized like the neighboring files: roughly one focused test per stated
+  behavior. Scratch checks stay scratch and are not committed.
+- Edit the lines that change rather than rewriting the file, unless the
+  file is short or most of it is changing.
+
 ## Running the tests
 
     .venv\Scripts\pytest      (from the repo root; on the K15 set
