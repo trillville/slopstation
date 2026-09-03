@@ -62,11 +62,18 @@ class AnthropicBackend:
                     messages=self.messages, tools=tools)
                 u = resp.usage
                 text = " ".join(b.text for b in resp.content if b.type == "text")
-                span.response(model=resp.model, output=text, usage={
+                # getattr throughout: every one of these is read ONLY for
+                # the span, and arguments are evaluated before response() can
+                # swallow anything - so a field a provider stopped sending
+                # would kill the turn rather than cost a span attribute.
+                usage = {
                     "input": getattr(u, "input_tokens", None),
                     "output": getattr(u, "output_tokens", None),
                     "cache_read": getattr(u, "cache_read_input_tokens", None),
-                    "cache_write": getattr(u, "cache_creation_input_tokens", None)})
+                    "cache_write": getattr(u, "cache_creation_input_tokens", None),
+                }
+                span.response(model=getattr(resp, "model", None),
+                              output=text, usage=usage)
             self.cache_note = (
                 f"cache w{getattr(u, 'cache_creation_input_tokens', 0) or 0}"
                 f"/r{getattr(u, 'cache_read_input_tokens', 0) or 0}")
@@ -122,11 +129,15 @@ class OpenAIBackend:
                     max_output_tokens=1500, previous_response_id=self.prev)
                 u, det = resp.usage, getattr(resp.usage, "input_tokens_details", None)
                 out_det = getattr(u, "output_tokens_details", None)
-                span.response(model=resp.model, output=resp.output_text, usage={
+                usage = {          # getattr for the same reason as above
                     "input": getattr(u, "input_tokens", None),
                     "output": getattr(u, "output_tokens", None),
                     "cache_read": getattr(det, "cached_tokens", None),
-                    "reasoning": getattr(out_det, "reasoning_tokens", None)})
+                    "reasoning": getattr(out_det, "reasoning_tokens", None),
+                }
+                span.response(model=getattr(resp, "model", None),
+                              output=getattr(resp, "output_text", None),
+                              usage=usage)
             self.prev = resp.id
             self.cache_note = (
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else "")
