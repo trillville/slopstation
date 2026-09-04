@@ -159,14 +159,28 @@ def _secret_values() -> set[str]:
     return _redactions
 
 
+# Credentials in a URL's query string. The pass above can only redact values
+# that are ON FILE, and a Steam access token is MINTED at runtime from the
+# refresh token, so secrets.json has never heard of it. A requests exception
+# quotes the whole URL it failed on, so `err=str(e)` shipped one in full
+# (2026-09-03, download_status_error). Over-redacting a log line is free.
+_SECRET_QUERY = re.compile(
+    r"((?:access_token|refresh_token|token|api_?key|key|password|passwd"
+    r"|secret|auth|nonce|sessionid|steamloginsecure)=)[^&\s\"'<>]+",
+    re.IGNORECASE,
+)
+
+
 def scrub(key: str, value: Any) -> Any:
-    """Redact by field name, then by value. Returns the safe value."""
+    """Redact by field name, then by known value, then by query-string shape.
+    Returns the safe value."""
     if any(h in key.lower() for h in _SECRET_NAME_HINTS):
         return "***"
     if isinstance(value, str) and value:
         for secret in _secret_values():
             if secret in value:
                 value = value.replace(secret, "***")
+        value = _SECRET_QUERY.sub(r"\1***", value)
     return value
 
 
