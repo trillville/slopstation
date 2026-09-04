@@ -1,13 +1,13 @@
 {
   "_comment": "Copy to config.json and update the device names, addresses, and tuning for this machine.",
 
-  "gamingPcMac": "74-56-3C-45-92-DD",
-  "gamingPcIp":  "192.168.68.67",
+  "gamingPcMac": "00-11-22-33-44-55",
+  "gamingPcIp":  "192.168.1.20",
   "sshHost":     "gamepc",
   "steamMachineName": "",
   "_steamMachineName": "Optional Steam client name. Set this when more than one signed-in PC is available.",
   "tvComPort":   "COM3",
-  "tvIp":        "192.168.68.51",
+  "tvIp":        "192.168.1.30",
   "_tvIp": "Optional TV address. A DHCP reservation is recommended. Without it, volume ducking is disabled and launches cannot verify the TV's power state.",
   "tvGamingCmd": "hdmi4",
   "tvIdleCmd":   "hdmi1",
