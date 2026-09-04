@@ -182,17 +182,21 @@ def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
 
     tick()
     assert keyed.calls["installed"] == 1
+    # A reachable PC arms nothing: the ticker's own interval is the pacing, so
+    # there is no deadline for a tick to land on and skip.
+    tick()
+    assert keyed.calls["installed"] == 2
     now["t"] += library.SYNC_S
     keyed.state["refresh_rc"] = 1  # PC asleep from here
     tick()
-    assert keyed.calls["installed"] == 2
+    assert keyed.calls["installed"] == 3
 
     now["t"] += library.SYNC_S  # too soon after a skip
     tick()
-    assert keyed.calls["installed"] == 2, "a skip should hold off SYNC_ASLEEP_S"
+    assert keyed.calls["installed"] == 3, "a skip should hold off SYNC_ASLEEP_S"
     now["t"] += library.SYNC_ASLEEP_S
     tick()
-    assert keyed.calls["installed"] == 3
+    assert keyed.calls["installed"] == 4
 
 
 def test_periodic_sync_does_not_back_off_on_a_held_lock(keyed, monkeypatch):

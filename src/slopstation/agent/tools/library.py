@@ -337,18 +337,20 @@ def sync() -> bool | None:
 
 
 def periodic_sync():
-    """Tick body for an events.Ticker on SYNC_S: sync, then hold off until
-    SYNC_ASLEEP_S has passed instead when the PC was unreachable. Off the wake
-    path entirely, so a session pays nothing for a fresh catalog."""
+    """Tick body for an events.Ticker on SYNC_S. Off the wake path entirely,
+    so a session pays nothing for a fresh catalog.
+
+    The ticker's own interval paces the normal case; this gate exists only to
+    EXTEND it after an unreachable PC, and arms nothing otherwise. A tick that
+    lands on the hold-off's expiry may wait one more interval, which for a
+    back-off does not matter."""
     held = {"until": 0.0}
 
     def tick() -> None:
         if time.monotonic() < held["until"]:
             return
-        ran = sync()
-        if ran is None:
-            return  # a session-close sync holds the lock; retry next tick
-        held["until"] = time.monotonic() + (SYNC_S if ran else SYNC_ASLEEP_S)
+        if sync() is False:  # None is a held lock, and says nothing about the PC
+            held["until"] = time.monotonic() + SYNC_ASLEEP_S
 
     return tick
 
