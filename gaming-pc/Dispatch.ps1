@@ -110,6 +110,11 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       $v = Get-RunningAppId
       if ($null -eq $v) { '0' } else { "$v" }
       break }
+  # Monitor names Windows lists, comma-joined (Get-TvNames, inlined).
+  '^displays\z' {
+      (Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue |
+        ForEach-Object { -join [char[]]($_.UserFriendlyName | Where-Object { $_ -ne 0 }) }) -join ','
+      break }
   '^games\z' {
       $roots = Get-SteamRoots
       if (-not $roots) { '[]'; break }

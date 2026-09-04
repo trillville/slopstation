@@ -91,6 +91,16 @@ def wait_port(timeout: float = PORT_WAIT_S) -> bool:
     return False
 
 
+def pc_displays() -> str | None:
+    """What Windows on the PC lists as monitors; None when it cannot say
+    (DENIED from an older Dispatch, or an ssh blip)."""
+    try:
+        ans = gamepc.displays()
+    except Exception:
+        return None
+    return None if ans == "DENIED" else ans
+
+
 class TvEvidence:
     """Track the TV's reported power state while the gaming PC starts."""
 
@@ -117,6 +127,9 @@ class TvEvidence:
         if self.last == "on":
             self.confirmed = True
             log("tv_on", dur_ms=self._ms())
+            # Insurance only - measured 2026-09-03, the frame sent 0.1 s
+            # after power_on already executes.
+            exlink(config.current()["tvGamingCmd"], again=True)
             return
         if self.last is None:
             self._unknowns += 1
@@ -181,7 +194,7 @@ def wait_ready(
             # Require two idle checks to avoid racing the READY marker write.
             idle_seen += 1
             if idle_seen >= 2:
-                log.warn("enter_died", dur_ms=ms())
+                log.warn("enter_died", dur_ms=ms(), pc_displays=pc_displays())
                 raise_if_cancelled()
                 if not redispatches:
                     raise RuntimeError("Enter exited without READY")
@@ -262,6 +275,9 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
         )
         exlink("power_on")
+        # On AND this input, like HDMI-CEC One Touch Play: the PC can only
+        # see the set on its active input, so this precedes Enter.
+        exlink(config.current()["tvGamingCmd"])
         # Only restore power on failure if this launch woke the TV.
         tv_woken = tv0 != "on"
         wol()
@@ -296,7 +312,8 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
         sessionlock.last_error_file().unlink(missing_ok=True)  # success supersedes it
-        exlink(config.current()["tvGamingCmd"])
+        # Re-assert: a remote pressed mid-launch loses to READY.
+        exlink(config.current()["tvGamingCmd"], again=True)
         if appid:
             try:
                 answer = gamepc.launch(appid)

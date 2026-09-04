@@ -122,7 +122,7 @@ def test_release_refuses_a_successors_lock():
 # --- Successful launch --------------------------------------------------------
 
 
-def test_happy_path_switches_the_input_only_after_ready(wire):
+def test_happy_path_switches_the_input_with_power_on_and_reasserts_after_ready(wire):
     sessionlock.last_error_file().write_text("old failure")  # success must supersede it
     log, sent = wire(
         [
@@ -145,9 +145,10 @@ def test_happy_path_switches_the_input_only_after_ready(wire):
         for i, r in enumerate(log.records)
         if r["event"] == "exlink_send" and r["cmd"] == "hdmi4"
     ]
-    ready_at = ev.index("host_ready")
-    assert switches and all(i > ready_at for i in switches), (ev, switches)
-    assert sent == ["power_on", "hdmi4", "power_off"], sent
+    # Input goes out with power_on, before Enter; re-asserted after READY.
+    assert switches[0] < ev.index("enter_dispatched"), (ev, switches)
+    assert switches[-1] > ev.index("host_ready"), (ev, switches)
+    assert sent == ["power_on", "hdmi4", "hdmi4", "power_off"], sent
     assert "game_launch" in ev and "session_ended" in ev and "session_idle" in ev
     assert log.find("game_launch")[0]["level"] == "info"  # OK: a clean launch
     # A timestamp marker is the legacy shape (pre-turn-stamping PC): accepted,
@@ -230,8 +231,8 @@ def test_a_stale_lock_is_recycled_and_a_failing_enter_releases_it(wire):
     assert couch.start() == 1
     ev = log.events()
     assert "lock_recycled" in ev and "launch_failed" in ev, ev
-    assert sent == ["power_on", "power_off"], (
-        f"failure restores power, not input: {sent}"
+    assert sent == ["power_on", "hdmi4", "power_off"], (
+        f"failure restores power only: {sent}"
     )
     assert not sessionlock.lock_file().exists(), "failure must release the lock"
     assert "Enter" in sessionlock.last_error_file().read_text()
@@ -243,7 +244,7 @@ def test_ready_never_appearing_gives_the_same_guarantees(wire):
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
     assert "launch_failed" in log.events()
-    assert sent == ["power_on", "power_off"], sent
+    assert sent == ["power_on", "hdmi4", "power_off"], sent
     assert (
         not sessionlock.lock_file().exists()
         and "READY" in sessionlock.last_error_file().read_text()
@@ -259,8 +260,8 @@ def test_the_tv_asleep_rescue_resends_power_on_once(wire, monkeypatch):
     monkeypatch.setattr(couch, "WAKE_RETRY_S", 0.05)
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
-    assert sent == ["power_on", "power_on", "power_off"], sent
-    assert log.find("exlink_send")[1]["again"] is True, log.records
+    assert sent == ["power_on", "hdmi4", "power_on", "power_off"], sent
+    assert log.find("exlink_send")[2]["again"] is True, log.records
 
 
 def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypatch):
@@ -274,6 +275,7 @@ def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypat
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),  # twice = really dead
+            ("displays", "ULTRAWIDE"),  # logged on enter_died
             ("enter", "OK"),  # so run it again
             ("status", "ab12cd"),  # the TV woke this time
             ("status", "NOTREADY"),  # watch(): session ends
@@ -283,11 +285,14 @@ def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypat
     ev = log.events()
     assert "enter_died" in ev and "enter_redispatched" in ev, ev
     assert log.find("host_ready")[0]["verified"] is True
-    assert sent[:2] == ["power_on", "power_on"], (
+    assert sent[:3] == ["power_on", "hdmi4", "power_on"], (
         f"re-poke must precede the retry: {sent}"
     )
-    assert log.find("exlink_send")[1]["again"] is True, log.records
-    assert "hdmi4" in sent, "a rescued launch still switches the input"
+    assert log.find("exlink_send")[2]["again"] is True, log.records
+    assert log.find("enter_died")[0]["pc_displays"] == "ULTRAWIDE", (
+        "enter_died carries what the PC listed"
+    )
+    assert sent[-2:] == ["hdmi4", "power_off"], "READY re-asserts the input"
 
 
 def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
@@ -300,11 +305,13 @@ def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
+            ("displays", ""),
             ("enter", "OK"),  # the one rescue
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),  # gone again
+            ("displays", ""),
         ]
     )
     t0 = time.time()
@@ -314,7 +321,9 @@ def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
     assert ev.count("enter_died") == 2, ev
     assert ev.count("enter_redispatched") == 1, ev
     assert "launch_failed" in ev
-    assert sent == ["power_on", "power_on", "power_off"], f"input untouched: {sent}"
+    assert sent == ["power_on", "hdmi4", "power_on", "power_off"], (
+        f"a launch that woke the set turns it off: {sent}"
+    )
     assert (
         not sessionlock.lock_file().exists()
         and "READY" in sessionlock.last_error_file().read_text()
@@ -359,7 +368,7 @@ def test_no_enterstate_information_is_not_death(wire, monkeypatch, reply):
     ev = log.events()
     assert "enter_died" not in ev and "enter_redispatched" not in ev, ev
     assert "launch_failed" in ev, ev
-    assert sent == ["power_on", "power_off"], sent
+    assert sent == ["power_on", "hdmi4", "power_off"], sent
     assert not sessionlock.lock_file().exists()
 
 
@@ -378,7 +387,7 @@ def test_ctrl_c_in_the_launch_console_is_an_abort(wire):
     assert not sessionlock.last_error_file().exists(), (
         "a deliberate abort must not buzz the Puck"
     )
-    assert sent == ["power_on", "power_off"], f"abort restores power, not input: {sent}"
+    assert sent == ["power_on", "hdmi4", "power_off"], f"abort restores power: {sent}"
 
 
 def test_the_voice_cancel_marker_aborts_the_launch(wire, monkeypatch):
@@ -415,7 +424,7 @@ def test_the_voice_cancel_marker_aborts_the_launch(wire, monkeypatch):
     assert not sessionlock.cancel_file().exists(), (
         "consumed, or it kills the NEXT launch too"
     )
-    assert sent == ["power_on", "power_off"], f"cancel restores power: {sent}"
+    assert sent == ["power_on", "hdmi4", "power_off"], f"cancel restores power: {sent}"
 
 
 def test_a_cancel_beats_the_rescue(wire, monkeypatch):
@@ -441,7 +450,9 @@ def test_a_cancel_beats_the_rescue(wire, monkeypatch):
     assert "enter_died" in ev, ev
     assert "enter_redispatched" not in ev, ev
     assert "launch_aborted" in ev and "launch_failed" not in ev, ev
-    assert sent == ["power_on", "power_off"], f"no re-poke while tearing down: {sent}"
+    assert sent == ["power_on", "hdmi4", "power_off"], (
+        f"no re-poke while tearing down: {sent}"
+    )
     assert (
         not sessionlock.lock_file().exists() and not sessionlock.cancel_file().exists()
     )
@@ -484,9 +495,9 @@ def test_a_set_that_keeps_answering_standby_is_refusing(wire, tv_rig, monkeypatc
     assert "launch_failed" in ev and "tv_on" not in ev, ev
     assert "TV never reported on" in sessionlock.last_error_file().read_text()
     assert log.find("launch_start")[0]["tv"] == "standby"
-    assert set(sent) == {"power_on", "power_off"} and sent[-1] == "power_off", (
-        f"the evidence re-pokes while not-on, and never switches input: {sent}"
-    )
+    assert set(sent) == {"power_on", "hdmi4", "power_off"}, sent
+    assert sent[-1] == "power_off", f"the evidence re-pokes while not-on: {sent}"
+    assert sent.count("hdmi4") == 1, f"no tv_on, no repeat: {sent}"
     assert not sessionlock.lock_file().exists()
 
 
@@ -515,7 +526,14 @@ def test_the_evidence_rides_the_ready_wait(wire, tv_rig, monkeypatch):
     assert ev.index("enter_dispatched") < ev.index("tv_on"), (
         "Enter must not wait for the set - the evidence rides the READY wait"
     )
-    assert "hdmi4" in sent and sent.count("power_on") == 1, sent
+    assert sent.count("power_on") == 1, sent
+    # Repeated at tv_on, before READY.
+    again = [
+        i
+        for i, r in enumerate(log.records)
+        if r["event"] == "exlink_send" and r["cmd"] == "hdmi4" and r.get("again")
+    ]
+    assert again and ev.index("tv_on") < again[0] < ev.index("host_ready"), (ev, again)
 
 
 def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
@@ -532,6 +550,7 @@ def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
+            ("displays", "QCQ90S"),
             ("enter", "OK"),
             ("status", "ab12cd"),
             ("status", "NOTREADY"),
@@ -550,7 +569,10 @@ def test_a_set_found_on_stays_on(wire, tv_rig, monkeypatch):
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
     assert "launch_failed" in log.events()
-    assert sent == ["power_on"], f"a set found on stays on: {sent}"
+    assert sent[0] == "power_on" and "power_off" not in sent, (
+        f"a set found on stays on: {sent}"
+    )
+    assert "hdmi4" in sent, "switched to the PC anyway"
     assert not sessionlock.lock_file().exists()
 
 

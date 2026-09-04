@@ -83,10 +83,10 @@ def test_validation_rejects_every_hostile_shape():
 
 
 def test_dispatch_ps1_is_the_real_boundary():
-    # 13 patterns across 11 verbs: nav alone is three (front-page/library,
+    # 14 patterns across 12 verbs: nav alone is three (front-page/library,
     # game-page with an appid, collection), so this counts patterns, not verbs.
     allpats = dispatch_patterns()
-    assert len(allpats) == 13, f"expected 13 patterns, got {len(allpats)}: {allpats}"
+    assert len(allpats) == 14, f"expected 14 patterns, got {len(allpats)}: {allpats}"
     for p in allpats:
         # \z, not $: in .NET '$' also matches before a trailing newline.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"

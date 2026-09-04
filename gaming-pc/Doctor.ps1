@@ -68,6 +68,11 @@ if ($h -gt 0) {
     else { Report PASS 'display' "probe ok (primary height $h, office topology)" }
 } else { Report FAIL 'display' 'probe returned 0' 'Get-PrimaryHeight broken - PowerShell/DPI issue' }
 
+# Absent = every launch starts with a rescan, or the HDMI 4 link is down.
+$listed = @(Get-TvNames)
+if ($listed -match $CG.TvEdid) { Report PASS 'tv link' "$($CG.TvEdid) listed by Windows" }
+else { Report WARN 'tv link' "Windows lists: $($listed -join ', ')" 'Enter rescans at launch; if this persists with the TV on HDMI 4, check the cable' }
+
 # 6. Session state + logs
 if (Test-ReadyMarker) { Report WARN 'ready marker' 'present - a session is (or looks) active' 'stale after a crash? Exit task or Office-Safety clears it' }
 else { Report PASS 'ready marker' 'absent (idle)' }

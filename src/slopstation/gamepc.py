@@ -77,6 +77,11 @@ def playing() -> str:
     return ssh("playing")
 
 
+def displays() -> str:
+    """Monitor names Windows lists, comma-joined; empty when none."""
+    return ssh("displays", timeout=5)
+
+
 def games() -> str:
     return ssh("games", timeout=30)
 
@@ -109,6 +114,7 @@ VERBS = (
     "enterstate",
     "version",
     "playing",
+    "displays",
     "games",
     "collections",
     "launch",
