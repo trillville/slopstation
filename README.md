@@ -78,7 +78,7 @@ Then read `src/slopstation/couch.py` for the launch,
 
 | Document | Contents |
 |---|---|
-| [docs/setup.md](docs/setup.md) | installing the K15 and the gaming PC, and the CD runners |
+| [docs/setup.md](docs/setup.md) | installing the mini PC and the gaming PC, and the CD runners |
 | [docs/configuration.md](docs/configuration.md) | every value an operator sets, the file that owns it, and what breaks without it |
 | [docs/operations.md](docs/operations.md) | deploying, the doctors, diagnosing with the turn id, recovery |
 | [docs/decisions.md](docs/decisions.md) | the choices that shape the repository, and what is deferred |

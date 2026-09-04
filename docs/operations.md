@@ -9,7 +9,7 @@ up is [setup.md](setup.md); the values it reads are in
 A green `ci` run on `main` starts `cd` (`.github/workflows/cd.yml`). Two
 independent jobs run on the self-hosted runners:
 
-- **K15.** `python -m slopstation.deploy --sha <sha>` runs from the live
+- **Mini PC.** `python -m slopstation.deploy --sha <sha>` runs from the live
   checkout. It waits up to two hours for a live session to end, fast-forwards
   the checkout to the commit, restarts the lanes (installing changed pins
   first), starts the media stack if enabled, and runs the doctor. Its exit
@@ -26,7 +26,7 @@ wakes. Because the repository is public, `cd` deploys only commits pushed to
 Hand deploys are the same two scripts:
 
 ```powershell
-# K15, from a NORMAL window (an elevated lane cannot be stopped by the deployer)
+# mini PC, from a NORMAL window (an elevated lane cannot be stopped by the deployer)
 git pull
 .\Start-Slopstation.bat
 .venv\Scripts\slopstation-doctor
@@ -45,7 +45,7 @@ Rules the deployer enforces:
   thing that updates the checkout. A change to it takes effect one deploy
   later, and a new deployer must be pulled by hand once.
 - The live checkout never receives a commit. To ship something produced on
-  the K15, such as a refrozen `constraints.txt`: `git switch -c <branch>`
+  the mini PC, such as a refrozen `constraints.txt`: `git switch -c <branch>`
   first, commit, push, `git switch main`. `git status` must then read "up to
   date with origin/main"; "ahead by 1" means the fast-forward merge will
   refuse every deploy until the commit is gone.
@@ -56,18 +56,18 @@ Rules the deployer enforces:
 Each of these fails at the doctor rather than at the thing that broke, so a
 deploy goes red with a diagnosis, and someone does the step by hand.
 
-- **`constraints.txt`** is a `pip freeze` from the K15's venv, committed by
+- **`constraints.txt`** is a `pip freeze` from the mini PC's venv, committed by
   hand; no other machine can produce it. The lane's install gate hashes
   `pyproject.toml` and `constraints.txt` against a `deps-ok` sentinel in the
   venv, so a change to either installs itself on the next deploy. Regenerate
-  it on the K15 with
+  it on the mini PC with
   `.venv\Scripts\pip freeze --exclude-editable | Out-File -Encoding ascii constraints.txt`,
   not `>`, whose output under PowerShell 5.1 is UTF-16 and unreadable to pip.
 - **New `config.json` keys.** A key added to `config.REQUIRED` or
-  `config.REQUIRED_VOICE` is a hand edit on the K15.
+  `config.REQUIRED_VOICE` is a hand edit on the mini PC.
 - **New `config.psd1` keys.** The same on the gaming PC, in
   `C:\CouchGaming\config.psd1`.
-- **Scheduled tasks.** The K15's two lane tasks point at
+- **Scheduled tasks.** The mini PC's two lane tasks point at
   `.venv\Scripts\slopstation-lane.exe` by absolute path, so moving the
   checkout means re-running `Setup-K15-Tasks.ps1`. The gaming PC's tasks are
   re-registered by `gaming-pc\Install.ps1`, run elevated from a checkout.
@@ -79,14 +79,14 @@ deploy goes red with a diagnosis, and someone does the step by hand.
 Both doctors are read-only, print one row per check, and exit with their
 failure count.
 
-- K15: `.venv\Scripts\slopstation-doctor`. Config and secrets, imports, the
+- Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, imports, the
   Ex-Link port, the controller, both lanes, SSH to the gaming PC and the
   dispatcher's answer, deploy skew between the two machines (`ssh <sshHost>
   version` against the checkout), VirtualHere and its firewall rule, session
   state, the voice library and keys, the Steam session, and media when
   enabled.
 - Gaming PC: `C:\CouchGaming\Doctor.ps1`. The loaded config, the deployed
-  files, each scheduled task against its definition, sshd and the K15-only
+  files, each scheduled task against its definition, sshd and the mini-PC-only
   firewall rule, the key file's ACL, the NIC's wake settings, VirtualHere and
   the controller's address, the display probe, the TV link, and the session
   markers.
@@ -94,7 +94,7 @@ failure count.
 ## Diagnosing
 
 Every user intent, a chord press or a wake word, mints a short hex `turn` id.
-It travels through the K15's events, the SSH verb, the gaming PC's marker
+It travels through the mini PC's events, the SSH verb, the gaming PC's marker
 file, and the PC tasks' events and transcript names. Both machines ship their
 JSONL event logs to one Sentry project, so one query returns a launch from
 the chord to Big Picture:
@@ -115,7 +115,7 @@ Where to look:
 | the PC's own narrative | `service:gamepc lane:pc-transcript` |
 | a verb the PC refused | `lane:dispatch answer:DENIED` |
 
-Offline, the same events are on disk: `logs\k15-*.jsonl` on the K15 (14
+Offline, the same events are on disk: `logs\k15-*.jsonl` on the mini PC (14
 days), `C:\CouchGaming\logs\pc-*.jsonl` and `pc-dispatch-*.jsonl` on the PC,
 plus one transcript per PC task run with the turn id in its name. The
 collector persists its read offsets, so an outage backfills rather than
@@ -139,7 +139,7 @@ that answer the usual questions.
 | the two machines run different code | the doctor's `deploy skew` row | redeploy the older side |
 | a media request is stuck | see `operations list --active` | `operations reconcile`, or `operations abandon <id> --execute` |
 
-## Runtime state on the K15
+## Runtime state on the mini PC
 
 Under `state\`:
 
@@ -165,7 +165,7 @@ Under `state\`:
 .venv\Scripts\python -m slopstation.agent.tools.operations reconcile
 .venv\Scripts\python -m slopstation.agent.tools.operations abandon <operation-id> --execute
 
-# the gaming PC, from the K15
+# the gaming PC, from the mini PC
 ssh <sshHost> status
 ssh <sshHost> version
 

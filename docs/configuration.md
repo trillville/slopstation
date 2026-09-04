@@ -4,12 +4,12 @@ Where every value an operator sets lives, and what happens without it.
 
 | File | Machine | Committed example | Read by |
 |---|---|---|---|
-| `config.json` | K15, checkout root | `config.example.json` | everything on the K15 |
-| `secrets.json` | K15, checkout root | `secrets.example.json` | the voice agent, the text and MCP interfaces, the Steam and media tools, the doctor |
+| `config.json` | mini PC, checkout root | `config.example.json` | everything on the mini PC |
+| `secrets.json` | mini PC, checkout root | `secrets.example.json` | the voice agent, the text and MCP interfaces, the Steam and media tools, the doctor |
 | `C:\CouchGaming\config.psd1` | gaming PC | `gaming-pc/config.example.psd1` | every gaming-PC task and `Doctor.ps1` |
-| `media\.env` | K15 | `media/.env.example` | Docker Compose and `Start-Media.ps1` |
+| `media\.env` | mini PC | `media/.env.example` | Docker Compose and `Start-Media.ps1` |
 | the collector's `config.yaml` | both | `otelcol/config.yaml.example`, `gaming-pc/otelcol/config.yaml.example` | the OpenTelemetry Collector service |
-| `smartd.conf` | K15 | `smartd.conf.example` | smartd |
+| `smartd.conf` | mini PC | `smartd.conf.example` | smartd |
 
 No live file is committed. `SLOPSTATION_HOME` moves `config.json`,
 `secrets.json`, `state\` and `logs\` together to another directory; nothing
@@ -26,8 +26,8 @@ group is for.
 
 | Key | Meaning |
 |---|---|
-| `gamingPcMac`, `gamingPcIp` | Wake-on-LAN target, and the address the K15 polls until SSH answers |
-| `sshHost` | the gaming PC's entry in the K15 user's `.ssh\config` |
+| `gamingPcMac`, `gamingPcIp` | Wake-on-LAN target, and the address the mini PC polls until SSH answers |
+| `sshHost` | the gaming PC's entry in the mini PC user's `.ssh\config` |
 | `tvComPort` | the Ex-Link adapter's COM port |
 | `tvGamingCmd`, `tvIdleCmd` | the Ex-Link input commands for the PC's input and the idle input |
 | `tvOffWhenDone` | turn the TV off when a session ends |
@@ -107,5 +107,5 @@ Everything else on the PC is a convention rather than a setting:
 
 | Setting | Effect |
 |---|---|
-| Actions variable `K15_CHECKOUT` | where the K15 runner finds the live checkout |
+| Actions variable `K15_CHECKOUT` | where the mini PC runner finds the live checkout |
 | runner labels `k15`, `gamepc` | which machine each deploy job lands on |

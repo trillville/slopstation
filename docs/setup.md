@@ -1,14 +1,16 @@
 # Setup
 
-Two machines. The K15 is an always-on mini PC that runs Slopstation, talks to
-the TV, and wakes the gaming PC. The gaming PC runs Steam and a small set of
-PowerShell scripts under `C:\CouchGaming`.
+Two machines. The mini PC is always on; it runs Slopstation, talks to the
+TV, and wakes the gaming PC. The code calls it the K15, after the GMKtec K15
+ours runs on, so that name appears in task names, the runner label and log
+file names. The gaming PC runs Steam and a small set of PowerShell scripts
+under `C:\CouchGaming`.
 
 Every value you set is listed in [configuration.md](configuration.md).
 Running the system day to day is [operations.md](operations.md). The optional
 media stack has its own guide, [media/README.md](../media/README.md).
 
-## K15
+## Mini PC
 
 Prerequisites: Windows 11, Python 3.13, Git, the TV's Ex-Link serial adapter,
 and for voice a USB microphone and a speaker.
@@ -26,8 +28,8 @@ and for voice a USB microphone and a speaker.
    .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
    ```
 
-4. Install VirtualHere Server, plug the controller's receiver into the K15,
-   reserve the K15's address in DHCP, and allow the server's port on the
+4. Install VirtualHere Server, plug the controller's receiver into the mini PC,
+   reserve the mini PC's address in DHCP, and allow the server's port on the
    private LAN:
 
    ```powershell
@@ -35,7 +37,7 @@ and for voice a USB microphone and a speaker.
    ```
 
 5. Connect the Ex-Link adapter and set its COM port as `tvComPort`.
-6. Create an SSH key for the K15's user and an entry in that user's
+6. Create an SSH key for the mini PC's user and an entry in that user's
    `.ssh\config` named as `sshHost` in `config.json`, with the gaming PC's
    address, user and key. The gaming-PC installer below binds the public key
    to the dispatcher.
@@ -100,22 +102,22 @@ Server. `Doctor.ps1` checks the three NIC wake settings a launch depends on.
    as the only display, and save their shortcuts as `C:\CouchGaming\OFFICE.lnk`
    and `C:\CouchGaming\TV-GAMING.lnk`.
 2. Put the VirtualHere client at `C:\CouchGaming\vhui64.exe`, point it at the
-   K15's server, and have it start at logon.
+   mini PC's server, and have it start at logon.
 3. From an elevated PowerShell in a repository checkout, as the user who sits
    at the desktop:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 -K15Address <K15 address> -K15PublicKey '<the K15 public key line>'
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 -K15Address <mini PC address> -K15PublicKey '<the mini PC public key line>'
    ```
 
    The first run creates `C:\CouchGaming\config.psd1` from
    `gaming-pc\config.example.psd1` and stops so you can check the values.
    The second run deploys the scripts, registers the seven `CouchGaming`
-   scheduled tasks, allows SSH from the K15 only, binds the K15's key to
+   scheduled tasks, allows SSH from the mini PC only, binds the mini PC's key to
    `Dispatch.ps1`, and ends with the doctor. Re-run it whenever a task or the
    rule needs correcting.
 
-4. From the K15, `ssh <sshHost> status` should answer `NOTREADY`. The K15
+4. From the mini PC, `ssh <sshHost> status` should answer `NOTREADY`. The mini PC
    doctor's `ssh dispatch` row checks the same thing.
 
 ## Continuous deployment

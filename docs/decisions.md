@@ -10,16 +10,16 @@ not permanent; the last section says what would reopen them.
 and no separate override for each path.
 
 Why: `paths.py` resolves every runtime path from one root at call time, the
-K15's scheduled tasks point at the checkout by absolute path, and
+mini PC's scheduled tasks point at the checkout by absolute path, and
 `deploy.py` runs from that same checkout to update it. Moving the files would
-add a hand migration on the K15 and a second way to relocate them, for no
+add a hand migration on the mini PC and a second way to relocate them, for no
 reader-visible gain. The doctor already validates the files, so a JSON Schema
 would be a second contract that could drift from the first.
 
 ## Deploys wait, and never roll back
 
 Both deploy scripts wait for a live session to end and fail rather than
-interrupt one. Neither reverts on a failed doctor. The K15 leg fast-forwards
+interrupt one. Neither reverts on a failed doctor. The mini PC leg fast-forwards
 only, refuses a dirty or off-`main` checkout, and restarts the chord listener
 whether or not it was up.
 
@@ -31,7 +31,7 @@ recovery path, and every hand step CD cannot do is listed in
 
 ## One forced command and an allowlist of verbs
 
-The K15's key on the gaming PC is bound to `Dispatch.ps1`. It matches the
+The mini PC's key on the gaming PC is bound to `Dispatch.ps1`. It matches the
 command against a fixed set of anchored patterns, answers, and denies
 anything else. The turn id it accepts is one to eight lowercase hex
 characters, checked before it becomes part of a filename. Interactive Steam
@@ -39,15 +39,15 @@ work runs in scheduled tasks in the logged-in session; the SSH session only
 writes a marker and starts the task.
 
 Why: the gaming PC is a full Windows desktop with an administrator account.
-A general shell over SSH would make the K15 the PC's weakest point, and the
-K15 accepts voice from anyone in the room. The verb set is small enough to
+A general shell over SSH would make the mini PC the PC's weakest point, and the
+mini PC accepts voice from anyone in the room. The verb set is small enough to
 read in one screen, `tests/test_turn_ids.py` drills the turn regex from the
-shipping script, a denied command leaves a record on the PC, and the K15
+shipping script, a denied command leaves a record on the PC, and the mini PC
 doctor sends a bogus verb to prove it is still denied.
 
 ## One turn id and one telemetry project
 
-Each intent mints a short id on the K15. It rides the SSH verb, the PC's
+Each intent mints a short id on the mini PC. It rides the SSH verb, the PC's
 marker file, every event on both machines, and the PC tasks' transcript
 names. Both machines ship to one Sentry project.
 
