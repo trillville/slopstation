@@ -15,6 +15,10 @@ MEDIA_START = ROOT / "media" / "Start-Media.ps1"
 DISPATCH = PC / "Dispatch.ps1"
 COMMON = PC / "CouchGaming.common.ps1"
 NAV = PC / "Nav-BigPicture.ps1"
+DEPLOY = PC / "Deploy.ps1"
+CONFIG_EXAMPLE = PC / "config.example.psd1"
+# Run from a checkout, never shipped: like Deploy.ps1.
+LOCAL_ONLY = {"Deploy.ps1", "Install.ps1"}
 
 # Prints one 'FILE|LINE|MESSAGE' per parse error, then 'PARSED <n>'.
 PARSE_PS = r"""
@@ -30,6 +34,38 @@ foreach ($f in $files) {{
 
 def read(p):
     return p.read_text(encoding="utf-8")
+
+
+def powershell(script, timeout=120):
+    """Run a snippet in Windows PowerShell; stdout lines, stripped."""
+    if not shutil.which("powershell"):
+        pytest.skip("powershell not on PATH")
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        enc,
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def config_keys(common):
+    """The keys common.ps1 requires of config.psd1, name -> PowerShell type."""
+    m = re.search(r"\$script:CgConfigKeys\s*=\s*@\{([^}]*)\}", common)
+    assert m, "common.ps1: no $script:CgConfigKeys table"
+    return dict(re.findall(r"(\w+)\s*=\s*\[(\w+)\]", m.group(1)))
+
+
+def task_table(common):
+    """$CG.Tasks rows as dicts of their single-quoted fields."""
+    m = re.search(r"\$CG\.Tasks\s*=\s*@\((.*?)\n\)", common, re.S)
+    assert m, "common.ps1: no $CG.Tasks table"
+    rows = re.findall(r"@\{([^}]*)\}", m.group(1))
+    return [dict(re.findall(r"(\w+)\s*=\s*'([^']*)'", r)) for r in rows]
 
 
 def parse_all():
@@ -185,14 +221,122 @@ def test_gaming_pc_scripts_parse():
     #    a new script would deploy green and simply be absent on the PC. It
     #    does not copy itself. Doctor.ps1 keeps its own list and must check
     #    everything that ships.
-    on_disk = {p.name for p in PC.glob("*.ps1")} - {"Deploy.ps1"}
-    shipped = name_list(read(PC / "Deploy.ps1"), "scripts", "Deploy.ps1")
+    on_disk = {p.name for p in PC.glob("*.ps1")} - LOCAL_ONLY
+    on_disk.add(CONFIG_EXAMPLE.name)
+    shipped = name_list(read(DEPLOY), "scripts", "Deploy.ps1")
     assert shipped == on_disk, (
-        f"Deploy.ps1 ships {len(shipped)} of {len(on_disk)} scripts: "
+        f"Deploy.ps1 ships {len(shipped)} of {len(on_disk)} files: "
         f"never copied {sorted(on_disk - shipped)}, "
         f"listed but absent {sorted(shipped - on_disk)}"
     )
+    assert "config.psd1" not in shipped, "the live config is never deployed over"
     checked = name_list(read(PC / "Doctor.ps1"), "files", "Doctor.ps1")
     assert on_disk <= checked, (
         f"Doctor.ps1 $files does not check {sorted(on_disk - checked)}"
     )
+
+
+def test_config_example_is_what_common_requires():
+    """Every key common.ps1 validates is in the example, with the right type,
+    and nothing else is: the example is the whole per-installation surface."""
+    keys = config_keys(read(COMMON))
+    assert keys == {
+        "PuckName": "string",
+        "PuckHwId": "string",
+        "TvEdid": "string",
+        "TvHeight": "int",
+    }
+    got = dict(
+        ln.split("=", 1)
+        for ln in powershell(
+            f"$c = Import-PowerShellDataFile '{CONFIG_EXAMPLE}'; "
+            "foreach ($k in $c.Keys) { '{0}={1}' -f $k, $c[$k].GetType().Name }"
+        )
+    )
+    want = {k: {"string": "String", "int": "Int32"}[t] for k, t in keys.items()}
+    assert got == want
+
+
+def test_common_loads_config_beside_it(tmp_path):
+    """The library reads config.psd1 from its own directory into $CG, and a
+    missing or mistyped file stops the dot-source with a message naming it."""
+    shutil.copy(COMMON, tmp_path / "CouchGaming.common.ps1")
+    shutil.copy(CONFIG_EXAMPLE, tmp_path / "config.psd1")
+    lib = tmp_path / "CouchGaming.common.ps1"
+    load = (
+        f"try {{ . '{lib}'; 'LOADED ' + $CG.TvHeight + ' ' + $CG.TvEdid + ' ' + "
+        "(($CG.Tasks | ForEach-Object { $_.Name }) -join ',') } "
+        "catch { 'STOPPED ' + $_.Exception.Message }"
+    )
+    out = powershell(load)
+    assert out == [
+        "LOADED 2160 QCQ90S Enter,Exit,ForceOfficeAtLogon,WakeSafety,LaunchGame,Nav,StopGame"
+    ], out
+
+    (tmp_path / "config.psd1").unlink()
+    out = powershell(load)
+    assert out[0].startswith("STOPPED") and "config.psd1" in out[0], out
+
+    (tmp_path / "config.psd1").write_text(
+        "@{ PuckName = 'p'; PuckHwId = 'h'; TvEdid = 'e'; TvHeight = '2160' }"
+    )
+    out = powershell(load)
+    assert out[0].startswith("STOPPED") and "TvHeight" in out[0], out
+
+
+def test_deploy_ships_the_example_and_keeps_the_live_config(tmp_path):
+    """Deploy.ps1 into an empty directory carries config.example.psd1 and
+    leaves a config.psd1 already there untouched (CI's checkout cannot
+    supply one, so the live file must survive every deploy)."""
+    if not shutil.which("powershell"):
+        pytest.skip("powershell not on PATH")
+    dest = tmp_path / "CouchGaming"
+    dest.mkdir()
+    live = "@{ Sentinel = 1 }"
+    (dest / "config.psd1").write_text(live)
+    r = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(DEPLOY),
+            "-Dest",
+            str(dest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (dest / "config.psd1").read_text() == live
+    assert (dest / "config.example.psd1").exists()
+    assert (dest / "CouchGaming.common.ps1").exists()
+    assert (dest / "build-id").exists()
+
+
+def test_task_table_is_the_task_contract():
+    """$CG.Tasks names every task another script starts, stops or waits on,
+    every script it names ships, and its task path is the literal Dispatch.ps1
+    and Deploy.ps1 use (neither loads the library)."""
+    common = read(COMMON)
+    rows = task_table(common)
+    names = {r["Name"] for r in rows}
+    assert len(rows) == 7 and len(names) == 7, rows
+    shipped = name_list(read(DEPLOY), "scripts", "Deploy.ps1")
+    assert {r["Script"] for r in rows} <= shipped
+    assert {r["Trigger"] for r in rows} <= {"none", "logon", "wake"}
+
+    used = set()
+    for p in PC.glob("*.ps1"):
+        used |= set(
+            re.findall(
+                r"(?:Start-CgTask|Stop-CgTask|Test-CgTaskRunning) '(\w+)'", read(p)
+            )
+        )
+    assert used <= names, f"tasks used but not in the table: {sorted(used - names)}"
+
+    path = re.search(r"^\$CG\.TaskPath\s*=\s*'([^']+)'", common, re.M).group(1)
+    assert f'"{path}$Name"' in read(DISPATCH), "Dispatch.ps1 task path drifted"
+    assert f"-TaskPath '{path}'" in read(DEPLOY), "Deploy.ps1 task path drifted"

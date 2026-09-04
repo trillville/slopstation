@@ -6,7 +6,11 @@ if (-not (Test-Path $libPath)) {
     Write-Host "[FAIL] CouchGaming.common.ps1 missing beside this script - partial deploy; re-copy all files from the repo" -ForegroundColor Red
     exit 1
 }
-. $libPath
+# Loading the library validates config.psd1; a bad file is the first finding.
+try { . $libPath } catch {
+    Write-Host "[FAIL] config: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
 
 $script:Counts = @{ PASS = 0; WARN = 0; FAIL = 0 }
 function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = '') {
@@ -17,17 +21,29 @@ function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = 
     Write-Host $line -ForegroundColor $color
 }
 
-# 1. Deployed files
-$files = @('CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
+# 1. Configuration and deployed files
+Report PASS 'config' "Puck '$($CG.PuckName)' ($($CG.PuckHwId)), TV EDID $($CG.TvEdid), TV height $($CG.TvHeight)"
+
+$files = @('CouchGaming.common.ps1','config.example.psd1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
 $missing = $files | Where-Object { -not (Test-Path (Join-Path $CG.Root $_)) }
-if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 're-copy from repo gaming-pc/; recreate .lnk files from DisplayMagician' }
+if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 'Deploy.ps1 ships the scripts; vhui64.exe is the VirtualHere client; the .lnk files are made in DisplayMagician' }
 else { Report PASS 'files' "$($files.Count)/$($files.Count) present" }
 
-# 2. Scheduled tasks
-foreach ($t in 'Enter','Exit','ForceOfficeAtLogon','WakeSafety','LaunchGame','Nav','StopGame') {
-    schtasks /Query /TN "\CouchGaming\$t" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { Report PASS "task $t" 'registered' }
-    else { Report FAIL "task $t" 'not registered' 'register it with schtasks /Create as an interactive task for this user' }
+# 2. Scheduled tasks: registered, and defined as CouchGaming.common.ps1 says.
+foreach ($t in $CG.Tasks) {
+    $task = Get-ScheduledTask -TaskPath $CG.TaskPath -TaskName $t.Name -ErrorAction SilentlyContinue
+    if (-not $task) { Report FAIL "task $($t.Name)" 'not registered' 'run gaming-pc\Install.ps1 from a checkout'; continue }
+    $drift = @()
+    $a = @($task.Actions)[0]
+    if ($a.Execute -notmatch 'powershell(\.exe)?$' -or $a.Arguments -ne (Get-CgTaskArguments $t)) { $drift += "runs '$($a.Execute) $($a.Arguments)'" }
+    $level = if ($t.Elevated) { 'Highest' } else { 'Limited' }
+    if ($task.Principal.RunLevel -ne $level) { $drift += "run level $($task.Principal.RunLevel), want $level" }
+    if ($task.Principal.LogonType -ne 'Interactive') { $drift += "logon type $($task.Principal.LogonType)" }
+    $kinds = @($task.Triggers | ForEach-Object { $_.CimClass.CimClassName }) -join ','
+    $want = @{ none = ''; logon = 'MSFT_TaskLogonTrigger'; wake = 'MSFT_TaskEventTrigger' }[$t.Trigger]
+    if ($kinds -ne $want) { $drift += "triggers [$kinds], want [$want]" }
+    if ($drift) { Report FAIL "task $($t.Name)" ($drift -join '; ') 'Install.ps1 re-registers it' }
+    else { Report PASS "task $($t.Name)" "registered as defined ($level, trigger $($t.Trigger))" }
 }
 
 # 3. SSH surface
