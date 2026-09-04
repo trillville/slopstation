@@ -13,7 +13,10 @@ media stack has its own guide, [media/README.md](../media/README.md).
 ## Mini PC
 
 Prerequisites: Windows 11, Python 3.13, Git, the TV's Ex-Link serial adapter,
-and for voice a USB microphone and a speaker.
+and for voice a USB microphone and a speaker. The TV must be a Samsung set
+with an Ex-Link port: power and input go over that serial link, and the
+remote and volume ducking use Samsung's WebSocket API. Another make means
+replacing `tv.py` and `agent/tools/tv_remote.py`.
 
 1. Clone the repository, for example to `C:\slopstation`. The checkout is the
    installation: `config.json`, `secrets.json`, `state\` and `logs\` sit
