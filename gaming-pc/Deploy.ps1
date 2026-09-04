@@ -108,3 +108,5 @@ foreach ($f in 'vhui64.exe', 'OFFICE.lnk', 'TV-GAMING.lnk') {
 }
 Write-CgEvent 'deploy_done' @{ scripts = $scripts.Count; build_id = $stamp }
 Write-Host "deployed $($scripts.Count) files to $Dest"
+# The optional git call above may have left a non-zero $LASTEXITCODE.
+exit 0

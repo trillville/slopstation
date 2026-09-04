@@ -24,6 +24,9 @@ function Import-CgConfig {
         if ($cfg[$k] -isnot $script:CgConfigKeys[$k]) {
             throw "config.psd1: $k must be a $($script:CgConfigKeys[$k].Name)"
         }
+        if ($cfg[$k] -is [string] -and $cfg[$k] -match '^<.+>$') {
+            throw "config.psd1: $k is still the example placeholder - see config.example.psd1"
+        }
     }
     $cfg
 }
@@ -55,16 +58,18 @@ $CG.StopMarker   = Join-Path $CG.StateDir 'stop-app'
 # The scheduled tasks. Install.ps1 registers them from this table and
 # Doctor.ps1 checks what is registered against it. Trigger 'logon' fires at
 # the user's logon, 'wake' on the resume-from-sleep event below, and 'none'
-# means Dispatch.ps1 starts the task on demand.
+# means Dispatch.ps1 starts the task on demand. Delay (logon triggers only)
+# and TimeLimit are ISO 8601 durations. Office-Safety keeps the 72-hour limit
+# it has always had; narrowing it is a separate change.
 $CG.TaskPath = '\CouchGaming\'
 $CG.Tasks = @(
-    @{ Name = 'Enter';              Script = 'Enter-TV.ps1';       Hidden = $true;  Elevated = $true;  Trigger = 'none'  }
-    @{ Name = 'Exit';               Script = 'Exit-TV.ps1';        Hidden = $true;  Elevated = $true;  Trigger = 'none'  }
-    @{ Name = 'ForceOfficeAtLogon'; Script = 'Office-Safety.ps1';  Hidden = $true;  Elevated = $true;  Trigger = 'logon' }
-    @{ Name = 'WakeSafety';         Script = 'Wake-Safety.ps1';    Hidden = $true;  Elevated = $false; Trigger = 'wake'  }
-    @{ Name = 'LaunchGame';         Script = 'Launch-Game.ps1';    Hidden = $false; Elevated = $false; Trigger = 'none'  }
-    @{ Name = 'Nav';                Script = 'Nav-BigPicture.ps1'; Hidden = $false; Elevated = $false; Trigger = 'none'  }
-    @{ Name = 'StopGame';           Script = 'Stop-Game.ps1';      Hidden = $false; Elevated = $false; Trigger = 'none'  }
+    @{ Name = 'Enter';              Script = 'Enter-TV.ps1';       Hidden = $true;  Elevated = $true;  Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'Exit';               Script = 'Exit-TV.ps1';        Hidden = $true;  Elevated = $true;  Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'ForceOfficeAtLogon'; Script = 'Office-Safety.ps1';  Hidden = $true;  Elevated = $true;  Trigger = 'logon'; TimeLimit = 'PT72H'; Delay = 'PT20S' }
+    @{ Name = 'WakeSafety';         Script = 'Wake-Safety.ps1';    Hidden = $true;  Elevated = $false; Trigger = 'wake';  TimeLimit = 'PT5M'  }
+    @{ Name = 'LaunchGame';         Script = 'Launch-Game.ps1';    Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'Nav';                Script = 'Nav-BigPicture.ps1'; Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'StopGame';           Script = 'Stop-Game.ps1';      Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
 )
 $CG.WakeEventQuery = "<QueryList><Query><Select Path='System'>*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]</Select></Query></QueryList>"
 

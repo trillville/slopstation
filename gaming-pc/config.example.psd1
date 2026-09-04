@@ -8,8 +8,8 @@
     PuckHwId = 'VID_28DE&PID_1304'
 
     # The TV's EDID name as Windows reports it. Doctor.ps1 lists what Windows
-    # sees when this does not match.
-    TvEdid   = 'QCQ90S'
+    # sees when this does not match. Every task refuses this placeholder.
+    TvEdid   = '<TV EDID name from Windows>'
 
     # Primary-display height that means the TV profile is active. No desk
     # monitor may share it.

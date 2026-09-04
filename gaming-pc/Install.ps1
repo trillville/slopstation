@@ -16,6 +16,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+[Net.IPAddress]$parsed = $null
+if (-not [Net.IPAddress]::TryParse($K15Address, [ref]$parsed)) {
+    throw "-K15Address must be one IP address, got '$K15Address'"
+}
+
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'run this from an elevated PowerShell (the firewall rule, the key file and the elevated tasks need it)'
@@ -52,19 +57,23 @@ New-Item -ItemType Directory -Force -Path $CG.LogDir, $CG.StateDir | Out-Null
 # replaces a task that already exists, so a re-run corrects drift.
 Step 'scheduled tasks'
 $user = "$env:USERDOMAIN\$env:USERNAME"
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 foreach ($t in $CG.Tasks) {
     $level = if ($t.Elevated) { 'Highest' } else { 'Limited' }
+    $limit = [Xml.XmlConvert]::ToTimeSpan($t.TimeLimit)
     $reg = @{
         TaskPath  = $CG.TaskPath
         TaskName  = $t.Name
         Action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument (Get-CgTaskArguments $t)
         Principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel $level
-        Settings  = $settings
+        Settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit $limit
         Force     = $true
     }
     switch ($t.Trigger) {
-        'logon' { $reg.Trigger = New-ScheduledTaskTrigger -AtLogOn -User $user }
+        'logon' {
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+            $trigger.Delay = $t.Delay
+            $reg.Trigger = $trigger
+        }
         'wake'  {
             # No cmdlet builds an event trigger; the CIM class does.
             $class = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler
@@ -75,7 +84,7 @@ foreach ($t in $CG.Tasks) {
         }
     }
     Register-ScheduledTask @reg | Out-Null
-    Write-Host "  $($CG.TaskPath)$($t.Name) -> $($t.Script) ($level, trigger $($t.Trigger))"
+    Write-Host "  $($CG.TaskPath)$($t.Name) -> $($t.Script) ($level, trigger $($t.Trigger), limit $($t.TimeLimit))"
 }
 
 # 4. SSH from the K15 only. The rule Windows adds with the OpenSSH capability

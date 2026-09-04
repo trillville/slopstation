@@ -30,6 +30,8 @@ if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 'Deploy.ps
 else { Report PASS 'files' "$($files.Count)/$($files.Count) present" }
 
 # 2. Scheduled tasks: registered, and defined as CouchGaming.common.ps1 says.
+# Durations compare as TimeSpans, so PT72H and P3D are the same limit.
+function Get-Duration([string]$Iso) { if ($Iso) { [Xml.XmlConvert]::ToTimeSpan($Iso) } else { [TimeSpan]::Zero } }
 foreach ($t in $CG.Tasks) {
     $task = Get-ScheduledTask -TaskPath $CG.TaskPath -TaskName $t.Name -ErrorAction SilentlyContinue
     if (-not $task) { Report FAIL "task $($t.Name)" 'not registered' 'run gaming-pc\Install.ps1 from a checkout'; continue }
@@ -42,8 +44,14 @@ foreach ($t in $CG.Tasks) {
     $kinds = @($task.Triggers | ForEach-Object { $_.CimClass.CimClassName }) -join ','
     $want = @{ none = ''; logon = 'MSFT_TaskLogonTrigger'; wake = 'MSFT_TaskEventTrigger' }[$t.Trigger]
     if ($kinds -ne $want) { $drift += "triggers [$kinds], want [$want]" }
+    elseif ($t.Trigger -eq 'logon' -and (Get-Duration @($task.Triggers)[0].Delay) -ne (Get-Duration $t.Delay)) {
+        $drift += "logon delay '$(@($task.Triggers)[0].Delay)', want $($t.Delay)"
+    }
+    if ((Get-Duration $task.Settings.ExecutionTimeLimit) -ne (Get-Duration $t.TimeLimit)) {
+        $drift += "time limit '$($task.Settings.ExecutionTimeLimit)', want $($t.TimeLimit)"
+    }
     if ($drift) { Report FAIL "task $($t.Name)" ($drift -join '; ') 'Install.ps1 re-registers it' }
-    else { Report PASS "task $($t.Name)" "registered as defined ($level, trigger $($t.Trigger))" }
+    else { Report PASS "task $($t.Name)" "registered as defined ($level, trigger $($t.Trigger), limit $($t.TimeLimit))" }
 }
 
 # 3. SSH surface

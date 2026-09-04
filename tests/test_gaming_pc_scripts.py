@@ -261,30 +261,40 @@ def test_config_example_is_what_common_requires():
 
 
 def test_common_loads_config_beside_it(tmp_path):
-    """The library reads config.psd1 from its own directory into $CG, and a
-    missing or mistyped file stops the dot-source with a message naming it."""
+    """The library reads config.psd1 from its own directory into $CG. A
+    missing, mistyped, blank or still-placeholder file stops the dot-source
+    with a message naming the file or the key."""
     shutil.copy(COMMON, tmp_path / "CouchGaming.common.ps1")
-    shutil.copy(CONFIG_EXAMPLE, tmp_path / "config.psd1")
     lib = tmp_path / "CouchGaming.common.ps1"
+    config = tmp_path / "config.psd1"
     load = (
         f"try {{ . '{lib}'; 'LOADED ' + $CG.TvHeight + ' ' + $CG.TvEdid + ' ' + "
         "(($CG.Tasks | ForEach-Object { $_.Name }) -join ',') } "
         "catch { 'STOPPED ' + $_.Exception.Message }"
     )
+    config.write_text(
+        "@{ PuckName = 'p'; PuckHwId = 'VID_1&PID_2'; TvEdid = 'TVNAME'; TvHeight = 2160 }"
+    )
     out = powershell(load)
     assert out == [
-        "LOADED 2160 QCQ90S Enter,Exit,ForceOfficeAtLogon,WakeSafety,LaunchGame,Nav,StopGame"
+        "LOADED 2160 TVNAME Enter,Exit,ForceOfficeAtLogon,WakeSafety,LaunchGame,Nav,StopGame"
     ], out
 
-    (tmp_path / "config.psd1").unlink()
+    config.unlink()
     out = powershell(load)
     assert out[0].startswith("STOPPED") and "config.psd1" in out[0], out
 
-    (tmp_path / "config.psd1").write_text(
-        "@{ PuckName = 'p'; PuckHwId = 'h'; TvEdid = 'e'; TvHeight = '2160' }"
-    )
-    out = powershell(load)
-    assert out[0].startswith("STOPPED") and "TvHeight" in out[0], out
+    stops = {
+        "TvHeight": "@{ PuckName = 'p'; PuckHwId = 'h'; TvEdid = 'e'; TvHeight = '2160' }",
+        "PuckName": "@{ PuckName = ''; PuckHwId = 'h'; TvEdid = 'e'; TvHeight = 2160 }",
+    }
+    # The example as shipped is not a valid live file: its placeholder stops.
+    stops["TvEdid"] = CONFIG_EXAMPLE.read_text()
+    assert "<" in stops["TvEdid"], "config.example.psd1 has no placeholder"
+    for key, text in stops.items():
+        config.write_text(text)
+        out = powershell(load)
+        assert out[0].startswith("STOPPED") and key in out[0], (key, out)
 
 
 def test_deploy_ships_the_example_and_keeps_the_live_config(tmp_path):
@@ -330,6 +340,27 @@ def test_task_table_is_the_task_contract():
     shipped = name_list(read(DEPLOY), "scripts", "Deploy.ps1")
     assert {r["Script"] for r in rows} <= shipped
     assert {r["Trigger"] for r in rows} <= {"none", "logon", "wake"}
+
+    # Every row carries its execution limit; only logon rows carry a delay.
+    # The values reproduce the tasks as they were registered on the live PC.
+    duration = re.compile(r"^PT\d+[HMS]$")
+    for r in rows:
+        assert duration.match(r.get("TimeLimit", "")), r
+        assert ("Delay" in r) == (r["Trigger"] == "logon"), r
+        if "Delay" in r:
+            assert duration.match(r["Delay"]), r
+    by_name = {r["Name"]: r for r in rows}
+    assert by_name["ForceOfficeAtLogon"]["Delay"] == "PT20S"
+    assert by_name["ForceOfficeAtLogon"]["TimeLimit"] == "PT72H"
+    assert {r["TimeLimit"] for r in rows if r["Name"] != "ForceOfficeAtLogon"} == {
+        "PT5M"
+    }
+    # Install.ps1 and Doctor.ps1 read both fields from the table rather than
+    # carrying a constant of their own.
+    install, doctor = read(PC / "Install.ps1"), read(PC / "Doctor.ps1")
+    for text, where in ((install, "Install.ps1"), (doctor, "Doctor.ps1")):
+        assert "$t.TimeLimit" in text and "$t.Delay" in text, where
+    assert "New-TimeSpan" not in install, "Install.ps1 hard-codes a time limit"
 
     used = set()
     for p in PC.glob("*.ps1"):
