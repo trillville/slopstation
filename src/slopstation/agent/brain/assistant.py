@@ -354,10 +354,11 @@ def tool_impls(
                 return {"ok": True, "source": source, "games": steam.download_status()}
             except Exception as e:
                 log.error("download_status_error", err=str(e))
+                # No cause named: this is the catch-all, and the one time it
+                # fired the cause was a dropped connection, not enrollment.
                 return {
                     "ok": False,
-                    "error": "couldn't reach Steam for the "
-                    "download status - the session may need re-enrolling",
+                    "error": "couldn't reach Steam for the download status just now",
                 }
         return {"ok": False, "error": f"unknown source {source}"}
 

@@ -35,6 +35,8 @@ UA = (
 
 # EAuthTokenPlatformType - WebBrowser is 2; MobileApp (3) is the flagged one.
 PLATFORM_WEBBROWSER = 2
+# Between the retries in _get. Two waits, so a blip costs under a second.
+_RETRY_BACKOFF_S = 0.3
 
 log = logbook.logger("steam")
 
@@ -79,10 +81,34 @@ class SteamSession:
             self._sess.headers["User-Agent"] = UA
         return self._sess
 
-    def _get(self, method, params, timeout=20):
+    def _get(self, method, params, timeout=20, tries=3):
         """GET a ClientComm/Auth method -> (json_or_None, eresult), eresult
-        being the X-eresult header (1 == OK)."""
-        r = self._session().get(f"{API}/{method}/", params=params, timeout=timeout)
+        being the X-eresult header (1 == OK).
+
+        Retried on a network failure, because a dropped connection is not an
+        answer and every caller here is READ-ONLY. Steam closed one
+        mid-handshake on 2026-09-03 and, with no retry, that single packet
+        became a spoken apology. _post is deliberately NOT retried: one of
+        those queues an install.
+
+        Only the connection is retried. A 401 has its own one-shot re-mint
+        below, and an X-eresult failure is an answer, so both stand."""
+        for attempt in range(1, tries + 1):
+            try:
+                r = self._session().get(
+                    f"{API}/{method}/", params=params, timeout=timeout
+                )
+                break
+            except OSError as e:  # every requests error subclasses this
+                if attempt == tries:
+                    raise
+                self.log(
+                    "steam_read_retried",
+                    method=method,  # short, and carries no secret
+                    attempt=attempt,
+                    err=str(e),
+                )
+                time.sleep(_RETRY_BACKOFF_S * attempt)
         r = self._retry_401(r, method, "params", params, timeout)
         return self._parse(r)
 
@@ -328,8 +354,7 @@ class SteamSession:
             self.log.error("install_error", appid=appid, err=str(e))
             return {
                 "ok": False,
-                "error": "couldn't reach Steam - the account "
-                "session may need re-enrolling",
+                "error": "couldn't reach Steam just now, so the install was not queued",
             }
         # Presence in the CHANGING list is the proof; a just-queued app has no
         # bytes yet, so byte arithmetic would not do.

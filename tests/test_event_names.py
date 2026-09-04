@@ -186,6 +186,7 @@ PYTHON = {
     "start": {"what"},
     "start_refused": {"lock_age_s", "reason"},
     "status_poll_failed": {"err"},
+    "steam_read_retried": {"attempt", "err", "method"},
     "store_fetch_failed": {"err", "url"},
     "stt_final": {"confidence", "outcome", "text"},
     "stt_vocabulary": {"headroom", "terms", "titles"},

@@ -381,3 +381,71 @@ def test_enroll_refuses_to_clobber_a_corrupt_secrets_file(enrolling):
     with pytest.raises(SystemExit):
         enrolling.enroll()
     assert "keep-me" in secrets.read_text()  # untouched, recoverable
+
+
+class _Ok:
+    """What Steam answers once the connection holds."""
+
+    status_code = 200
+    headers = {"X-eresult": "1"}
+
+    def json(self):
+        return {"response": {"sessions": two_clients()}}
+
+
+def _flaky(calls, fail_first):
+    """A session double whose GET drops the connection `fail_first` times."""
+
+    class Flaky:
+        def get(self, url, params=None, timeout=None):
+            calls.append(url)
+            if len(calls) <= fail_first:
+                raise OSError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF")
+            return _Ok()
+
+        def post(self, url, data=None, timeout=None):
+            calls.append(url)
+            raise OSError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF")
+
+    return Flaky
+
+
+def bare_session(log, refresh, monkeypatch, calls, fail_first):
+    """A session with the HTTP layer, not the seams, replaced - the retry
+    lives under the seams the other tests patch out."""
+    monkeypatch.setattr(ss.time, "sleep", lambda n: None)
+    s = ss.SteamSession({"steamId64": STEAMID, "steamRefreshToken": refresh}, log)
+    monkeypatch.setattr(s, "access_token", lambda: "tok")
+    monkeypatch.setattr(s, "_session", _flaky(calls, fail_first))
+    return s
+
+
+def test_a_dropped_read_is_retried(log, refresh, monkeypatch):
+    """A dropped connection is not an answer, and these reads are safe to
+    repeat. Steam closed one mid-handshake on 2026-09-03 and, unretried, it
+    reached the user as a spoken apology."""
+    calls = []
+    s = bare_session(log, refresh, monkeypatch, calls, fail_first=2)
+    assert [c["machine_name"] for c in s.sessions()] == ["LAPTOP", "TILLMAN-DESKTOP"]
+    assert len(calls) == 3, calls
+    # Reported, or a degrading network stays invisible - but at info: a read
+    # that succeeded on the second try cost the user nothing.
+    retries = log.find("steam_read_retried")
+    assert len(retries) == 2 and retries[0]["level"] == "info", retries
+
+
+def test_a_read_that_never_connects_still_raises(log, refresh, monkeypatch):
+    calls = []
+    s = bare_session(log, refresh, monkeypatch, calls, fail_first=99)
+    with pytest.raises(OSError):
+        s.sessions()
+    assert len(calls) == 3, "three tries, then the caller hears about it"
+
+
+def test_a_post_is_never_retried(log, refresh, monkeypatch):
+    """One of these queues an install; repeating it is not safe."""
+    calls = []
+    s = bare_session(log, refresh, monkeypatch, calls, fail_first=99)
+    with pytest.raises(OSError):
+        s._post("IClientCommService/InstallClientApp/v1", {"appid": 1})
+    assert len(calls) == 1, calls
