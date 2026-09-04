@@ -1,12 +1,4 @@
-"""The wake model detects SYNTHESIZED speech - no mic, no human.
-Windows SAPI speaks the CONFIGURED wake phrase in two voices (oWW trains on
-synthetic TTS), plus negatives that must NOT fire. Follows the configured wake
-model rather than pinning hey_jarvis; the model ships in from the gaming PC.
-Downloads the oWW models on first run. SAPI may mispronounce an invented
-phrase, so a low score here alongside good live trials is the test's limit,
-not the model's.
-    pytest tests/test_wake.py
-"""
+"""Test the configured wake model with synthesized positive and negative speech."""
 
 import subprocess
 import wave

@@ -395,13 +395,11 @@ def _vh_lan_rule():
 
 
 def check_virtualhere():
-    """The USB-over-IP hub that hands the Puck to the gaming PC; every launch
-    claims through it. The firewall row is the load-bearing one: Windows
-    filters connection SETUP, not established flows, so a client that
-    connected before a rule went wrong keeps working and the hub looks
-    healthy until the next restart drops it - which is how a Public-only rule
-    on a Private LAN stayed invisible until the first launch after a K15
-    reboot (2026-08-30)."""
+    """Check the USB-over-IP hub used by the gaming PC.
+
+    Windows filters connection setup rather than established flows, so verify
+    the firewall rule even when a client is already connected.
+    """
     try:
         state = subprocess.run(
             ["sc", "query", VH_SERVICE], capture_output=True, text=True, timeout=15
@@ -695,9 +693,8 @@ def check_steam_session():
                     "re-scan soon: python -m slopstation.agent.tools.steam_session enroll",
                 )
             else:
-                # Unexpired != working: QR enrolment can yield a web-audience
-                # token (aud=[web,renew,derive]) that AccessDenies every mint
-                # while reading as good for months (2026-08-14).
+                # An unexpired web-audience token may still be unable to mint
+                # the client token this feature needs.
                 report(*_steam_mint_probe(days))
         except Exception as e:
             report(

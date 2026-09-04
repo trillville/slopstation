@@ -1,6 +1,4 @@
-"""Couch.py's orchestration state machine, with every side effect
-stubbed at its seam (ssh, exlink, wol, wait_port).
-"""
+"""Test couch-session orchestration with external calls stubbed."""
 
 import os
 import threading
@@ -21,7 +19,7 @@ CFG = {
     "gamingPcMac": "00-00-00-00-00-00",
 }
 
-READY_TS = "2026-08-12T20:00:00"  # what a legacy marker answers
+READY_TS = "2026-08-12T20:00:00"
 
 
 @pytest.fixture
@@ -121,7 +119,7 @@ def test_release_refuses_a_successors_lock():
     assert sessionlock.release() and not sessionlock.lock_file().exists()
 
 
-# --- happy path: ordering, the one rule, appid queue, lock lifecycle ----------
+# --- Successful launch --------------------------------------------------------
 
 
 def test_happy_path_switches_the_input_only_after_ready(wire):
@@ -160,8 +158,7 @@ def test_happy_path_switches_the_input_only_after_ready(wire):
 
 
 def test_already_is_a_degraded_launch_not_a_clean_one(wire):
-    # ALREADY = the appid was already up from an earlier session: Big Picture
-    # on the TV, undrivable (2026-08-13, turn 14852d). Level, not event.
+    # An app left running from an earlier session is not a clean launch.
     log, _ = wire(
         [
             ("enter", "OK"),
@@ -267,8 +264,7 @@ def test_the_tv_asleep_rescue_resends_power_on_once(wire, monkeypatch):
 
 
 def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypatch):
-    # TV acks power_on, stays dark, Enter gives up, K15 polls a dead task for
-    # 120 s (2026-08-13/16/19). Two (NOTREADY, IDLE) pairs prove death.
+    # Two consecutive idle checks show that the Enter task has stopped.
     monkeypatch.setattr(couch, "ENTER_SETTLE_S", 0)
     monkeypatch.setattr(couch, "READY_WAIT_S", 5)
     log, sent = wire(
@@ -371,8 +367,7 @@ def test_no_enterstate_information_is_not_death(wire, monkeypatch, reply):
 
 
 def test_ctrl_c_in_the_launch_console_is_an_abort(wire):
-    # KeyboardInterrupt is a BaseException, so `except Exception` missed it: no
-    # terminal event, no buzz, lock left to staleness (2026-08-16, turn b43b74).
+    # KeyboardInterrupt is a BaseException and must still run cleanup.
     log, sent = wire([("enter", "OK"), ("status", KeyboardInterrupt())])
     assert couch.start() == 1
     ev = log.events()
@@ -387,8 +382,7 @@ def test_ctrl_c_in_the_launch_console_is_an_abort(wire):
 
 
 def test_the_voice_cancel_marker_aborts_the_launch(wire, monkeypatch):
-    # ssh `exit` only stops a RUNNING Enter, so it raced the redispatch rescue
-    # (2026-08-21, turn 0b785e). The marker reaches THIS process.
+    # The cancellation marker must also stop a redispatched Enter task.
     monkeypatch.setattr(couch, "READY_WAIT_S", 5)  # only the cancel may end this wait
 
     def cancel_on_first_poll(cmd):
@@ -421,7 +415,6 @@ def test_the_voice_cancel_marker_aborts_the_launch(wire, monkeypatch):
     assert not sessionlock.cancel_file().exists(), (
         "consumed, or it kills the NEXT launch too"
     )
-    # The voice teardown that left the TV lit for the night (2026-08-23 b540b9).
     assert sent == ["power_on", "power_off"], f"cancel restores power: {sent}"
 
 
@@ -617,7 +610,7 @@ def test_watch_forgives_blips_and_dies_on_a_run_of_failures(wire):
             ("status", RuntimeError("down")),
             ("status", RuntimeError("down")),
             ("status", RuntimeError("down")),  # third consecutive = dead
-            ("exit", "OK"),  # best-effort Puck release
+            ("exit", "OK"),  # Puck release still runs.
         ]
     )
     couch.watch()
@@ -627,7 +620,7 @@ def test_watch_forgives_blips_and_dies_on_a_run_of_failures(wire):
     assert sent == ["power_off"] and not sessionlock.lock_file().exists()
 
 
-# --- reconcile: resume live, clear dead (TV untouched), ride out errors -------
+# --- Session recovery ---------------------------------------------------------
 
 
 def test_reconcile_resumes_a_live_session(wire):
@@ -657,7 +650,7 @@ def test_reconcile_clears_an_unreachable_host(wire):
         ]
     )
     assert couch.reconcile() == 0
-    # never answered is not the same as answered NOTREADY
+    # No response differs from an explicit NOTREADY response.
     assert log.find("reconcile_cleared")[0]["reason"] == "unreachable"
     assert not sessionlock.lock_file().exists()
 

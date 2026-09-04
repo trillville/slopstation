@@ -1,7 +1,4 @@
-"""Library layer-4 store-question parsers. Canned JSON through the
-single _get seam (no network), pinning the parse shapes a keyless checkout
-can't otherwise see, plus the hltb cache.
-"""
+"""Tests for Steam store parsing and the completion-time cache."""
 
 import dataclasses
 import json
@@ -130,10 +127,7 @@ class FakeStore:
 
 @pytest.fixture
 def store(monkeypatch):
-    """The HTTP seam swapped and no key. The deals, facet and tag-map files
-    already resolve under this test's home. The secrets are pinned BEFORE
-    anything runs: fetch_store_search -> _tag_map reaches for a key, and a
-    real secrets.json takes the keyed path."""
+    """Mock store requests and remove Steam credentials."""
     fake = FakeStore()
     monkeypatch.setattr(steamstore, "_get", fake)
     monkeypatch.setattr(config, "secrets", lambda: {})
@@ -189,7 +183,7 @@ def test_store_search_prices_deduped_capsules(store):
     # appids from capsule attrs (deduped) -> priced
     rows = steamstore.fetch_store_search(term="anything")
     assert [r["appid"] for r in rows] == [200, 201], rows
-    # max_price clips on the AUTHORITATIVE GetItems price, not the search page
+    # Filter by the GetItems price, not the search-page price.
     clipped = steamstore.fetch_store_search(term="anything", max_price=20)
     assert [r["appid"] for r in clipped] == [200], clipped  # 201 is $25 -> out
 
@@ -210,7 +204,7 @@ def test_news_prefers_patchnotes(store):
 
 
 def test_tag_map_is_keyed_and_cached(store, monkeypatch):
-    # keyed only; fail-soft to {} without a key
+    # A missing key disables the tag map.
     assert steamstore._tag_map() == {}
     monkeypatch.setattr(config, "secrets", lambda: dict(KEYED))
     tmap = steamstore._tag_map()

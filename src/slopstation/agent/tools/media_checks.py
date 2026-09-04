@@ -1,10 +1,4 @@
-"""doctor rows for the media stack: Compose, Radarr/Sonarr, Prowlarr,
-qBittorrent, and the Proton port.
-
-No release title or indexer name from an API response enters a row. Every
-indexer name reported comes from media.managedIndexers, which the operator
-wrote.
-"""
+"""Diagnostic checks for media services and Proton port forwarding."""
 
 import json
 import subprocess

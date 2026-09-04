@@ -7,30 +7,25 @@ name = "slopstation"
 version = "0.1.0"
 description = "Couch gaming on the K15: the chord listener, the voice agent, and the launch path to the gaming PC"
 readme = "README.md"
-# Tracks the K15's interpreter, not a floor: constraints.txt is frozen from
-# that venv, so an older one cannot resolve it.
+# Match the Python version used to generate constraints.txt.
 requires-python = ">=3.13"
 
 dependencies = [
-  # Pipecat moves weekly: re-read its docs for every service used and re-run
-  # the suite before bumping.
+  # Recheck service compatibility before changing Pipecat.
   "pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.8.1",
-  # Sentry's OTLP endpoint is HTTP-only; pinned so the gRPC exporter pipecat's
-  # tracing example imports cannot resolve by accident.
+  # Sentry uses the HTTP OTLP exporter.
   "opentelemetry-exporter-otlp-proto-http==1.44.0",
-  # No [opentelemetry-otlp] extra: it pulls opentelemetry-distro, which
-  # resolves its own otel versions against the pin above.
+  # Avoid the aggregate OTLP extra, which adds separately resolved packages.
   "sentry-sdk==2.68.1",
   "openwakeword==0.6.0",
   "hassil==3.12.0",
   "rapidfuzz==3.14.6",
   "pyserial==3.5",  # the TV's Ex-Link serial path
   "hidapi",  # the Steam Puck; NOT the 'hid' package, a different project
-  # PyYAML and requests are pipecat transitives today, named so a pipecat that
-  # drops one fails at install rather than at the first wake word.
+  # Used directly even though Pipecat also installs them transitively.
   "PyYAML==6.0.3",
   "requests==2.34.2",
-  "howlongtobeatpy==1.0.23",  # game hours; imported lazily and fail-soft
+  "howlongtobeatpy==1.0.23",  # completion times; imported only when used
   "samsungtvws==3.0.5",  # TV remote keys, the volume write path under eARC
 ]
 
@@ -43,9 +38,8 @@ dev = [
 ]
 
 [project.scripts]
-# What the two scheduled tasks run (Setup-K15-Tasks.ps1) ...
+# Scheduled-task entry points.
 slopstation-lane = "slopstation.supervise:lane_main"
-# ... and what Start-Slopstation.bat runs to start or reload them.
 slopstation-start = "slopstation.supervise:start"
 slopstation-doctor = "slopstation.doctor:main"
 
@@ -57,12 +51,10 @@ slopstation = ["agent/grammar.yaml", "agent/models/*.onnx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# src first: a checkout that is not the one the venv's editable install points
-# at (a git worktree) must still test its own code.
+# Import from the current checkout before any editable install.
 pythonpath = ["src", "tests"]
 addopts = "-ra"
-# The pre-roll pipeline tests are coroutines; auto mode runs them without
-# a marker on each one.
+# Run async tests without per-test markers.
 asyncio_mode = "auto"
 
 [tool.ruff]
@@ -70,8 +62,7 @@ src = ["src", "tests"]
 line-length = 88
 
 [tool.ruff.lint]
-# pyflakes and the pycodestyle errors, import order, modern syntax, and the
-# bugbear set. Style beyond that is the formatter's job.
+# Pyflakes, pycodestyle errors, import order, upgrades, and bugbear.
 select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 
 [tool.mypy]
@@ -79,7 +70,6 @@ python_version = "3.13"
 mypy_path = "src"
 files = ["src"]
 ignore_missing_imports = true
-# Most of the code is unannotated; without this mypy skips those bodies and
-# passes vacuously.
+# Check function bodies that lack annotations.
 check_untyped_defs = true
 warn_unused_ignores = true

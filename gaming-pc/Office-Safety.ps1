@@ -1,13 +1,8 @@
-# OFFICE restore at every logon (Task \CouchGaming\ForceOfficeAtLogon).
-# Normal boots confirm office in one probe and exit; after a crash that left the
-# TV-primary topology it applies OFFICE with verified retries. Sends zero TV
-# commands.
+# Restore the OFFICE display profile at logon when no session is starting.
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'office-safety'
 
-# An in-flight session task owns the topology. Cold-boot corner: the K15
-# dispatches Enter seconds after logon and this task fires at logon+20s, so
-# without the stand-down it would "recover" a live launch.
+# Do not change displays while a session task is active.
 if ((Test-CgTaskRunning 'Enter') -or (Test-CgTaskRunning 'Exit')) {
     Log 'Enter/Exit task running - standing down (session flow owns the displays)'
     Stop-CgTranscript
@@ -15,8 +10,7 @@ if ((Test-CgTaskRunning 'Enter') -or (Test-CgTaskRunning 'Exit')) {
 }
 
 if (-not (Test-TvIsPrimary)) {
-    # Fail-open: a broken probe reads as "office confirmed" rather than
-    # thrashing displays at every logon.
+    # Avoid changing displays when the probe fails.
     Log 'office confirmed'
 } elseif (Invoke-DisplayProfile $CG.OfficeLnk { -not (Test-TvIsPrimary) } 25 3 'office restored') {
     Write-CgEvent 'profile_applied' @{ profile = 'OFFICE' }

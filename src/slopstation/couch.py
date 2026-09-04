@@ -1,7 +1,4 @@
-"""K15 orchestrator: Ex-Link TV power -> WoL -> ssh enter -> poll READY ->
-switch TV input -> watch loop. Invariant: nothing switches the TV to the
-gaming input before the host writes READY, so a pre-READY failure leaves the
-TV as the viewer had it."""
+"""Start, monitor, and stop couch-gaming sessions."""
 
 from __future__ import annotations
 
@@ -16,39 +13,20 @@ from slopstation import config, events, gamepc, logbook, sessionlock, tv
 PORT_WAIT_S = 90  # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60  # ~1/s; also covers waiting out logon after a cold boot
 READY_WAIT_S = 120  # Enter dispatch until the READY marker appears
-# A blind power_on re-send this far into the READY wait: past the healthy
-# envelope (READY in ~9-20 s), and the gaming PC cannot wake the TV itself.
-WAKE_RETRY_S = 30
-# Extra Enter dispatches after a DETECTED death, not a timeout. Every recorded
-# failure was a TV that acked power_on and stayed dark while the K15 waited
-# out the window on an Enter that had already exited. Safe to redispatch:
-# Enter's abort path leaves OFFICE topology behind, the state a fresh one wants.
-ENTER_REDISPATCH = 1
-# How long a NOTREADY stays unremarkable: the gap between schtasks /Run
-# returning and the task reading as running, plus the slowest launch that
-# ever worked (~20 s).
+WAKE_RETRY_S = 30  # retry TV power while waiting for the gaming PC
+ENTER_REDISPATCH = 1  # retries after the Enter task exits before READY
 ENTER_SETTLE_S = 25
 WATCH_POLL_S = 5
-# Consecutive ssh failures that end a session. Low on purpose: a true sleep
-# restores the TV in ~20-30 s, and a false positive only costs a relaunch.
-WATCH_FAILS = 3
-# How long the enter_died rescue waits for the set to REPORT "on" before
-# spending its redispatch; the state flips ~5 s after an accepted frame.
+WATCH_FAILS = 3  # consecutive SSH failures that end a session
 TV_WAIT_S = 30
 TV_POKE_S = 6  # power_on re-send interval while the set answers not-on
-# Unreadable answers before standing down to the blind path. None is UNKNOWN
-# (Wi-Fi blip, IP drift, no tvIp), never "off".
-TV_UNKNOWN_N = 3
+TV_UNKNOWN_N = 3  # unreadable TV states allowed before stopping the checks
 
 log = logbook.logger("launch")
 
 
 class Cancelled(BaseException):
-    """A requested stop of an in-flight launch: end_session writes
-    sessionlock.cancel_file(), which every wait in start() consumes (ssh
-    `exit` alone stops only an Enter already RUNNING, so it can race the
-    redispatch rescue). BaseException on purpose, like KeyboardInterrupt: it
-    rides the abort handler (lock released, no last_error), not launch_failed."""
+    """Raised when an in-progress launch is cancelled."""
 
     def __init__(self, by: str) -> None:
         self.by = by  # the CANCELLING intent's turn, or ""
@@ -56,8 +34,7 @@ class Cancelled(BaseException):
 
 
 def raise_if_cancelled() -> None:
-    """Consume a pending cancel (the unlink is the ack - a marker left behind
-    would kill the next launch too) and stop through the abort path."""
+    """Consume a cancellation marker and stop the current launch."""
     try:
         by = sessionlock.cancel_file().read_text().strip()
     except OSError:
@@ -65,8 +42,7 @@ def raise_if_cancelled() -> None:
     try:
         sessionlock.cancel_file().unlink(missing_ok=True)
     except OSError:
-        # Sharing violation (the writer's handle still open - CPython opens
-        # without FILE_SHARE_DELETE) must not turn a stop into launch_failed.
+        # The writer may still have the marker open on Windows.
         pass
     raise Cancelled(by)
 
@@ -74,11 +50,9 @@ def raise_if_cancelled() -> None:
 def exlink(name: str, **fields) -> None:
     try:
         ack = tv.exlink_send(name, config.current()["tvComPort"])
-        # ack = the receiver accepted the frame, not that the set acted on
-        # it; Ex-Link is send-only and power_on can ack on a dark set.
+        # Ex-Link acknowledges receipt, not the resulting TV state.
         log("exlink_send", cmd=name, ack=ack or "no-ack", **fields)
     except Exception as e:
-        # non-fatal: PC readiness is independent of whether the TV heard us
         log.error("exlink_nak", cmd=name, err=str(e), **fields)
 
 
@@ -89,10 +63,7 @@ def restore_tv() -> None:
 
 
 def abort_teardown(tv_woken: bool) -> None:
-    """Release the lock and undo the TV power a failed or cancelled launch
-    spent; nothing was ever switched to the gaming input, so there is no input
-    to put back. The restore is gated on release_lock(): a lock recycled while
-    we stalled belongs to a successor whose live session owns the set."""
+    """Release the session lock and restore a TV this launch woke."""
     if sessionlock.release() and tv_woken:
         restore_tv()
 
@@ -111,7 +82,6 @@ def wol() -> None:
 def wait_port(timeout: float = PORT_WAIT_S) -> bool:
     end = time.time() + timeout
     while time.time() < end:
-        # A cold boot can spend the whole 90 s here; a cancel must not wait it out.
         raise_if_cancelled()
         try:
             with socket.create_connection((config.current()["gamingPcIp"], 22), 3):
@@ -122,12 +92,7 @@ def wait_port(timeout: float = PORT_WAIT_S) -> bool:
 
 
 class TvEvidence:
-    """The set's own word, read during start()'s READY wait on tvIp rigs. It
-    never gates Enter (the panel's ~5 s flip lag would tax every healthy
-    launch); it re-pokes power_on while the set answers not-on, and it gates
-    the enter_died rescue. Every recorded refusal acked power_on and stayed
-    dark, and the PC cannot see the panel either. Unreadable is not refused:
-    fail open, and fail closed only on the set's own word at the rescue."""
+    """Track the TV's reported power state while the gaming PC starts."""
 
     def __init__(
         self, ip: str | None, first: str | None, ms: Callable[[], int]
@@ -141,22 +106,16 @@ class TvEvidence:
         self._ms = ms  # elapsed-since-intent, for the milestones
 
     def undecided(self) -> bool:
-        """A tvIp rig whose set has neither answered "on" nor been given up on."""
+        """Return whether TV power checks should continue."""
         return bool(self.ip) and not self.confirmed and not self.gave_up
 
     def poll(self) -> None:
-        """One evidence step, called from waits that already loop: latch
-        "on", stand down on persistent silence, re-poke while not-on.
-
-        Tune TV_POKE_S / TV_WAIT_S against warm-PC launches only (ssh_up
-        ~0.2 s), where dur_ms approximates frame-to-lit."""
+        """Poll the TV, retry power when off, and stop after repeated errors."""
         if self.ip is None or not self.undecided():
             return
         self.last = tv.tv_power_state(self.ip, timeout=0.5, raw=True)
         if self.last == "on":
             self.confirmed = True
-            # Polling starts after wait_port, so only a warm-PC launch's
-            # dur_ms approximates frame-to-lit.
             log("tv_on", dur_ms=self._ms())
             return
         if self.last is None:
@@ -177,10 +136,7 @@ def wait_ready(
     dispatch_enter: Callable[..., bool],
     ms: Callable[[], int],
 ) -> None:
-    """Poll the host until the READY marker echoes `turn`, re-dispatching a
-    DETECTED dead Enter once (ENTER_REDISPATCH); raises once the window
-    closes. `dispatch_enter` is start()'s closure, so its enter_sent reaches
-    the abort handler; `evidence` gates the rescue."""
+    """Wait for the matching READY marker and retry a stopped Enter task."""
     end = time.time() + READY_WAIT_S
     ready = False
     foreign_seen = None
@@ -192,32 +148,24 @@ def wait_ready(
         sessionlock.touch()
         raise_if_cancelled()
         evidence.poll()
-        # Blind wake retry for a set that slept through the launch_start
-        # power_on. WAKE_RETRY_S lands the frame after Enter's first
-        # profile check has failed and before its retry apply, the only
-        # window where waking now still rescues this launch (Enter runs to
-        # ~66 s: 20 s check, OFFICE restore, retry up to 20 s).
+        # Retry once in case the TV missed the initial power command.
         if repoke_at and time.time() >= repoke_at:
             exlink("power_on", again=True)
             repoke_at = None
         try:
             st = gamepc.status()
-            # The marker echoes the turn Enter was given: ours = ready.
             if st == turn:
                 log("host_ready", status=st, dur_ms=ms(), verified=True)
                 ready = True
                 break
             if st != "NOTREADY":
                 if events.valid_turn(st):
-                    # Someone else's turn: a stale marker. Keep waiting,
-                    # our Enter overwrites it; treating any non-NOTREADY as
-                    # ready switched the TV to a host still mid-Enter.
+                    # A marker for another launch does not make this one ready.
                     if st != foreign_seen:
                         log.warn("ready_foreign", status=st)
                         foreign_seen = st
                 else:
-                    # ISO timestamp: a PC deployed before turn-stamping.
-                    # Accept, but record unverified.
+                    # Accept legacy timestamp markers, but mark them unverified.
                     log("host_ready", status=st, dur_ms=ms(), verified=False)
                     ready = True
                     break
@@ -225,29 +173,19 @@ def wait_ready(
             log.warn("status_poll_failed", err=str(e))
             time.sleep(1)
             continue
-        # Still NOTREADY. An Enter no longer running will never write the
-        # marker, so the rest of the window is dead time: re-dispatch.
         if (
             st == "NOTREADY"
             and time.time() >= settle_at
             and gamepc.enter_running() is False
         ):
-            # Enter writes the marker and THEN exits, so one (NOTREADY,
-            # task-idle) pair can be those instants read in the wrong
-            # order. Demand it twice: a marker that landed in between is
-            # taken by the next poll, and no redispatch hits a live session.
+            # Require two idle checks to avoid racing the READY marker write.
             idle_seen += 1
             if idle_seen >= 2:
                 log.warn("enter_died", dur_ms=ms())
-                # A cancel that landed while the death was being proven
-                # must win before the second Enter; the loop-top check is
-                # one iteration too coarse.
                 raise_if_cancelled()
                 if not redispatches:
                     raise RuntimeError("Enter exited without READY")
-                # Spend the one redispatch on a lit panel; never "on"
-                # inside TV_WAIT_S is a refusal. Confirmed-on and
-                # unreadable rigs skip this wait.
+                # Do not restart Enter while a reachable TV still reports off.
                 rescue_by = time.time() + TV_WAIT_S
                 while evidence.undecided():
                     if time.time() >= rescue_by:
@@ -267,7 +205,6 @@ def wait_ready(
                 redispatches -= 1
                 idle_seen = 0
                 settle_at = time.time() + ENTER_SETTLE_S
-                # A full window of its own; leftovers cannot reach READY.
                 end = time.time() + READY_WAIT_S
         else:
             idle_seen = 0
@@ -277,11 +214,8 @@ def wait_ready(
 
 
 def start(appid: str | None = None, turn: str | None = None) -> int:
-    # One id per intent, minted upstream; a direct run mints its own.
     turn = turn if events.valid_turn(turn) else events.new_turn()
     events.context(turn=turn)
-    # Before the lock: a config doctor would FAIL must not reach power_on, and
-    # must not die holding the lock.
     err: str | None = None
     try:
         missing = config.missing(config.current())
@@ -296,7 +230,6 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         except OSError:
             pass
         return 2
-    # The pre-read only shapes the log lines - acquire_lock is the arbiter.
     age = sessionlock.age()
     if sessionlock.active(age):
         log("launch_busy", lock_age_s=round(age or 0))
@@ -306,14 +239,9 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     if not sessionlock.acquire(f"{turn} {os.getpid()}"):
         log("launch_busy", reason="lost_acquire_race")
         return 1
-    # The Cancelled handler keys on this: a cancel consumed after our enter
-    # went out may have raced the exit that wrote it.
     enter_sent = False
-    # Only a set this launch WOKE is ours to put back on the abort path.
     tv_woken = False
-    # A cancel predating this intent is void. Guarded because this runs
-    # outside the try below and an unhandled OSError would die with the lock
-    # held.
+    # A cancellation left by an earlier launch does not apply here.
     try:
         sessionlock.cancel_file().unlink(missing_ok=True)
     except OSError as e:
@@ -321,16 +249,12 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     t0 = time.time()
 
     def ms():
-        """Milliseconds since the chord/voice trigger, on every milestone."""
+        """Return elapsed milliseconds for event timing."""
         return round((time.time() - t0) * 1000)
 
     try:
         tv_ip = config.current().get("tvIp")
-        # The raw state as the launch FOUND the set, or "unreachable": events.emit
-        # drops None-valued fields, so None would log like a rig with no tvIp.
-        # Ex-Link cannot answer this - its ack is constant whatever the state -
-        # and do not go hunting a status frame in its command space: the same
-        # protocol carries service-mode commands.
+        # Use an explicit value to distinguish an unreachable TV from no tvIp.
         tv0 = tv.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
         log(
             "launch_start",
@@ -338,9 +262,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
         )
         exlink("power_on")
-        # A set already on belongs to whoever was watching it - power_on was a
-        # no-op there, and powering it off on failure would end their show. No
-        # tvIp means no evidence, and the launch's own power_on is the guess.
+        # Only restore power on failure if this launch woke the TV.
         tv_woken = tv0 != "on"
         wol()
         if not wait_port():
@@ -350,9 +272,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         evidence = TvEvidence(tv_ip, tv0, ms)
 
         def dispatch_enter(event, attempts=ENTER_ATTEMPTS):
-            """Trigger the Enter task; True once Dispatch answered OK.
-            `attempts` is per-call: the first dispatch also waits out logon
-            after a cold boot, a re-dispatch must not spend the READY window."""
+            """Trigger the Enter task, retrying until it starts."""
             nonlocal enter_sent
             refused = set()
             for _ in range(attempts):
@@ -378,9 +298,6 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
         sessionlock.last_error_file().unlink(missing_ok=True)  # success supersedes it
         exlink(config.current()["tvGamingCmd"])
         if appid:
-            # Voice "play <title>" from cold. Best-effort - Big Picture up is
-            # a working outcome - except ALREADY (the game was left running by
-            # an earlier session), which the couch cannot drive: warn.
             try:
                 answer = gamepc.launch(appid)
                 emit = log.warn if answer == "ALREADY" else log
@@ -392,23 +309,17 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     except Exception as e:
         log.error("launch_failed", err=str(e), dur_ms=ms())
         try:
-            # The listener polls this and signals the failure haptically (3 thuds).
             sessionlock.last_error_file().write_text(str(e))
         except OSError:
             pass
         abort_teardown(tv_woken)
         return 1
     except BaseException as e:
-        # KeyboardInterrupt and Cancelled: without this clause the lane would
-        # die holding the lock until staleness recycled it. Neither writes
-        # last_error - a deliberate stop is not a failure to buzz about.
+        # Cancellation and Ctrl-C still need to release the session lock.
         by = {"cancelled_by": e.by} if isinstance(e, Cancelled) and e.by else {}
         log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms(), **by)
         if isinstance(e, Cancelled) and enter_sent:
-            # The canceller's exit stops a RUNNING Enter, but one still inside
-            # the schtasks trigger gap runs to completion and claims the Puck
-            # with no watcher alive. Our own exit, strictly after our last
-            # enter, closes the ordering.
+            # Stop an Enter task that started after the original cancel request.
             try:
                 gamepc.exit()
                 log("exit_dispatched", reason="cancel_after_enter")
@@ -420,10 +331,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
 
 
 def watch(expected: str | None = None) -> None:
-    """Poll the session until it ends, then restore the TV and release the
-    lock. `expected` is the turn the marker should keep echoing; a different
-    one means a successor owns the rig, so leave the TV and lock to it. None
-    disables the check."""
+    """Monitor a session, then restore the TV and release its lock."""
     fails = 0
     died_by_fails = False
     while True:
@@ -445,32 +353,23 @@ def watch(expected: str | None = None) -> None:
                 died_by_fails = True
                 break
     if died_by_fails:
-        # A fails-death can leave a live PC holding the Puck in TV topology,
-        # and a held Puck means a deaf chord; if it is only a blip, the PC's
-        # teardown releases it.
+        # Ask the PC to release the controller after losing SSH contact.
         try:
             if gamepc.exit() == "OK":
                 log("exit_dispatched", reason="release_puck_after_ssh_fails")
         except Exception:
             pass
     restore_tv()
-    # Ownership-checked: a lock recycled while we stalled belongs to the
-    # successor, and unlinking it would free a live session.
     if not sessionlock.release():
         log.warn("lock_kept", reason="owned_by_successor")
     log("session_idle")
 
 
 def reconcile() -> int:
-    """Run once at K15 startup, by the listener's supervisor before the listener.
-
-    A surviving session lock means the watch loop died with us: resume
-    watching a live session so its end still restores the TV, or clear the
-    lock so the chord isn't deaf. The TV is NOT touched on the dead path."""
+    """Resume monitoring a live session or clear an abandoned lock at startup."""
     logbook.rotate()
     if sessionlock.age() is None:
         return 0
-    # A reconcile is its own intent: new id, not the dead session's.
     events.context(turn=events.new_turn())
     log("reconcile_found")
     answered = False
@@ -480,18 +379,14 @@ def reconcile() -> int:
             answered = True
             if st != "NOTREADY":
                 log("reconcile_resumed")
-                # Adopt, don't just touch: the owner note still names the dead
-                # process, and release_lock at session end checks the pid.
                 sessionlock.adopt(f"{events.current().get('turn')} {os.getpid()}")
-                # Whatever the marker says now IS this session's identity.
                 watch(expected=st if events.valid_turn(st) else None)
                 return 0
             break  # definitive NOTREADY - session is dead
         except Exception:
             time.sleep(2)
     log.warn("reconcile_cleared", reason="dead_session" if answered else "unreachable")
-    # Force-clear, not release_lock: the owner is known dead and its pid would
-    # never match ours.
+    # The abandoned lock belongs to another process, so release() cannot own it.
     sessionlock.lock_file().unlink(missing_ok=True)
     return 0
 

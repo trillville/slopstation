@@ -1,10 +1,4 @@
-"""Reconcile the ledger against the authorities that own the work.
-
-Observation only: a monitor reads Steam or Radarr/Sonarr and writes what it
-finds through the store. It never starts, cancels, or owns execution.
-
-The `operations` CLI (list, show, reconcile, abandon) is main() below.
-"""
+"""Reconcile tracked operations with Steam, Radarr, and Sonarr."""
 
 import argparse
 import json
@@ -69,9 +63,7 @@ def _fully_installed_appids():
 
 
 class Monitor:
-    """The observation loop both monitors run: an authority's failure logs
-    rather than ending the thread. Subclasses set THREAD_NAME and supply
-    reconcile_once, log and poll_s."""
+    """Run a monitor repeatedly and log errors without stopping its thread."""
 
     THREAD_NAME = "operation-monitor"
     log: Any

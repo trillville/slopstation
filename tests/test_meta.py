@@ -1,9 +1,4 @@
-"""Refresh_meta saves incrementally so a killed crawl (daemon
-thread dies on Ctrl+C) keeps progress instead of re-crawling from zero.
-
-The metadata cache lives under paths.HOME, which conftest points at this
-test's tmp_path, so every test starts from an empty cache.
-"""
+"""Test incremental metadata caching and resume behavior."""
 
 import time
 

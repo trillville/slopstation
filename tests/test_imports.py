@@ -1,11 +1,4 @@
-"""Every module imports on a machine with no config.json, no secrets.json and
-no devices: the lanes must come up on a fresh checkout, and a config read at
-import time would fail before the doctor could say what is missing.
-
-One fresh interpreter with SLOPSTATION_HOME pointed at an empty directory,
-rather than this process: by the time this file runs, the suite has imported
-most of the package already, and a cached import proves nothing.
-"""
+"""Test package imports in a fresh process without local configuration."""
 
 import os
 import subprocess

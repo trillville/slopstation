@@ -6,10 +6,7 @@ on:
   pull_request:
 
 jobs:
-  # windows-latest is required: the tests assume Windows paths and
-  # test_ps_parse shells to the real PowerShell parser. The Steam and audio
-  # tests self-skip. 3.13 because that is what the K15 runs: constraints.txt
-  # is frozen from that venv, so an older interpreter cannot resolve it.
+  # Tests use Windows paths and PowerShell. Python 3.13 matches constraints.txt.
   tests:
     runs-on: windows-latest
     steps:
@@ -46,7 +43,6 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             constraints.txt
-      # The whole dependency set, not mypy alone: without the real third-party
-      # stubs every external call is Any and the check passes vacuously.
+      # Install application dependencies so mypy sees third-party types.
       - run: pip install -e ".[dev]" -c constraints.txt
       - run: mypy

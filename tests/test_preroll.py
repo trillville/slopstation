@@ -1,8 +1,4 @@
-"""The wake pre-roll path. Part 1 (pure): WakeCapture pump/stop
-against a fake stream, the wake chime's end-of-speech timing, the single-winner
-ack. Part 2 (real devices): a live PipelineWorker proves StartFrame first, then
-the ENTIRE pre-roll, only then live mic audio.
-"""
+"""Test wake pre-roll capture, acknowledgement, and pipeline ordering."""
 
 import asyncio
 import dataclasses
@@ -120,9 +116,8 @@ def test_wake_chime_waits_for_the_end_of_speech():
     time.sleep(0.05)
     assert len(fired) == 2, "noisy room never got its chime"
 
-    # Disarmed at the pipeline handoff, the deadline must NOT beep over a
-    # one-breath command still being spoken (the pump outlives the old stop
-    # point by the whole setup) - but a real gap still chimes.
+    # After handoff, ongoing speech suppresses the deadline but silence still
+    # triggers the chime.
     held = watcher()
     held._t0 -= WakeCapture.CHIME_BY_S
     held.disarm_deadline()
@@ -137,8 +132,7 @@ def test_wake_chime_waits_for_the_end_of_speech():
 
 
 def test_wake_ack_is_claimed_exactly_once():
-    """Capture watcher and GrammarGate race from different threads; two
-    winners means two chimes."""
+    """Only one thread can claim the wake acknowledgement."""
     ack = WakeAck()
     wins = []
     ready = threading.Barrier(8)
@@ -160,10 +154,7 @@ def test_wake_ack_is_claimed_exactly_once():
 
 
 async def test_feeder_stops_capture_at_startframe_and_feeds_it_in_hops(monkeypatch):
-    """The capture must survive until StartFrame: pipecat 1.8 runs the Flux
-    connect during setup, and words spoken there exist only if the wake
-    stream is still pumping when setup runs. The PCM then goes out whole,
-    right after StartFrame, in 80 ms frames with the ragged tail kept."""
+    """The feeder stops capture at StartFrame and preserves every sample."""
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -201,13 +192,8 @@ async def test_feeder_stops_capture_at_startframe_and_feeds_it_in_hops(monkeypat
 
 
 async def test_pipeline_ordering(monkeypatch):
-    """A live worker delivers StartFrame, then the whole pre-roll, then live
-    mic frames - strictly in that order. The pre-roll comes from a REAL
-    WakeCapture handed over live, so this also drills the 1.8 overlap: the
-    wake stream stays open while the transport opens its own stream on the
-    same mic during setup."""
-    # LocalAudioTransport opens PortAudio's default devices for real - the
-    # one test here a deviceless machine (CI) cannot run.
+    """A live worker sends StartFrame, pre-roll, then live microphone audio."""
+    # This test requires the default PortAudio devices.
     helpers.wants("audio")
     import pyaudio
     from pipecat.frames.frames import InputAudioRawFrame, StartFrame

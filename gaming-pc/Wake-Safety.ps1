@@ -1,13 +1,10 @@
-# Resume-from-sleep failsafe (Task \CouchGaming\WakeSafety, on the
-# Power-Troubleshooter resume event). Resume is not a logon, so
-# ForceOfficeAtLogon never fires here. Cleans up sessions abandoned before
-# sleep; stands down for network wakes, which a couch launch owns.
+# Clean up abandoned sessions after resume, except for network wakes used by
+# couch launches.
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'wake-safety'
 Start-Sleep 3
 
-# Matches this NIC's strings in `powercfg /lastwake` - free-form, English-locale
-# text. Re-verify against the raw dump below after any NIC or driver change.
+# Update these patterns after changing the NIC or driver.
 $NetworkWakePattern = 'Magic Packet|Ethernet|GbE'
 
 $wake = (powercfg /lastwake | Out-String)
@@ -17,8 +14,7 @@ if ($wake -match $NetworkWakePattern) {
 } elseif (Test-ReadyMarker) {
     Log 'stale TV session detected - running Exit cleanup'
     Write-CgEvent 'wake_cleanup' @{ reason = 'stale_session' }
-    # Via the task, not inline: Task Scheduler serializes this against a
-    # tile/hotkey Exit, and it leaves the normal exit-*.log trail.
+    # Use the task so concurrent teardown requests are serialized.
     schtasks /Run /TN '\CouchGaming\Exit' | Out-Null
 } else {
     Log 'clean wake - nothing to do'

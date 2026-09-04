@@ -1,7 +1,4 @@
-"""_trim_carry trims the carried slice to whole exchanges starting at a plain
-user turn - a tool result without its call is a 400 from the provider. The
-shapes are pipecat's universal LLMContext messages.
-"""
+"""Test trimming carried context to complete exchanges."""
 
 from slopstation.agent.speech.session_runtime import _trim_carry
 

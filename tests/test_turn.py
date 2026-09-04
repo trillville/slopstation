@@ -1,8 +1,4 @@
-"""The turn id - one id per user intent, carried from the wake
-word or the chord to the gaming PC's scheduled task. On the far side the id
-reaches a FILENAME, so Dispatch.ps1's patterns are the path-traversal boundary;
-they are read out of the shipping script rather than copied.
-"""
+"""Test turn-ID validation and propagation to gaming-PC tasks."""
 
 import re
 

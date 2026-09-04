@@ -1,25 +1,19 @@
-# Session teardown: close Big Picture, restore OFFICE, release the Puck.
-# Runs as Scheduled Task \CouchGaming\Exit (Big Picture tile, Ctrl+Alt+E, or
-# Wake-Safety).
-# Every step is best-effort and the logon failsafe converges what this misses,
-# hence Continue rather than Stop.
+# Close Big Picture, restore OFFICE, and release the Puck.
+# Continue if a teardown step fails.
 $ErrorActionPreference = 'Continue'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'exit'
 
-# Teardown wins: stop an in-flight launch. The steps below reconcile whatever
-# half-state the kill leaves.
+# Stop an in-progress launch before restoring the shared state.
 if (Test-CgTaskRunning 'Enter') {
     Log 'Enter task is running - stopping it (teardown wins)'
     Stop-CgTask 'Enter'
     Start-Sleep 1
-    # A killed Enter gets no catch block - clear any DisplayMagician instance it
-    # left mid-apply before this script launches its own.
+    # Clear a DisplayMagician process left by the stopped Enter task.
     Stop-DisplayMagician
 }
 
-# Leave Big Picture FIRST, while still on the TV, so Steam's window is never
-# resolution-yanked mid-render (that leaves a garbled desktop-Steam window).
+# Close Big Picture before changing display resolution.
 Start-Process 'steam://close/bigpicture'
 Log 'closing Big Picture'
 Start-Sleep 2   # blind wait: Big Picture exposes no reliable closed signal
@@ -40,9 +34,7 @@ else {
     Write-CgEvent 'puck_release_failed' @{} 'warn'
 }
 
-# Repaint guard: minimize desktop Steam so it re-lays-out at the ultrawide's
-# resolution next time it opens, rather than returning as a stale-4K garbled
-# window. (Enter calls this for a different reason - see the lib.)
+# Minimize desktop Steam so it relayouts at the restored resolution.
 Hide-DesktopSteam
 
 Clear-ReadyMarker

@@ -1,7 +1,4 @@
-"""What the model reads: the system prompt's fixed text and each tool's
-description. The words are the whole interface, so they read as prose;
-assistant.TOOL_DEFS pairs each description with its schema.
-"""
+"""System instructions and tool descriptions sent to the assistant."""
 
 WEB_SEARCH_RULE = """\
 You can search the web for current facts the catalog can't answer (release

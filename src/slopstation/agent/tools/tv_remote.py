@@ -1,16 +1,6 @@
-"""The TV over IP: remote keys (the volume write path
-that works on this rig) and the session ducker built on them.
+"""Control TV volume over WebSocket and restore it after voice sessions.
 
-With sound output on the eARC soundbar (HW-Q990C) the TV refuses every direct
-volume write: Ex-Link vol frames ack and pop "Not Available", UPnP SetVolume
-answers 501. Only remote volume keys move the bar, relayed by the TV over
-HDMI-CEC; the WebSocket remote on port 8002 injects those. One KEY_VOLDOWN =
-one step, tracked by tv.tv_volume within a second.
-
-The voice lane's write path; the chord lane's own readback lives in tv.py.
-
-The TV must allow this client once (Device Connection Manager): run `pair`
-from the K15 before first use and accept the popup on the TV.
+Run ``pair`` once and approve the client on the TV before first use.
 
 CLI (lane=manual):
 

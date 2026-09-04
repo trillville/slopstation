@@ -1,9 +1,4 @@
-"""Guard: the gaming-PC scripts parse, and the literals Dispatch.ps1 cannot
-share (it is dependency-free) stay equal to their one home in
-CouchGaming.common.ps1 - marker paths, the nav-collection charset, the
-emitter-owned key list, the event timestamp format, the vdf root regex -
-plus the Set-Turn-after-guards order and the deploy set.
-"""
+"""Parse gaming-PC scripts and verify their shared constants stay aligned."""
 
 import base64
 import re

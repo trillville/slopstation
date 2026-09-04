@@ -1,13 +1,4 @@
-"""GrammarGate: deterministic intent matching as a Pipecat processor.
-
-Sits between STT and everything else. Every FINAL transcript is screened here
-first - matches are swallowed (the LLM lane never sees them), acked, and
-dispatched; non-matches flow downstream to the assistant lane, or dead-end
-with a fail earcon when no LLM key is configured. Both ways out of a session
-end here by pushing EndWorkerFrame downstream: an exit phrase matched here
-ends it on the spot, and stop_listening arms request_stop() so it ends once
-the goodbye has been spoken.
-"""
+"""Handle fixed voice commands before sending other text to the assistant."""
 
 from __future__ import annotations
 
@@ -83,9 +74,7 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
 
 
 def stt_confidence(frame) -> float | None:
-    """Mean per-word confidence off Flux's turn payload, or None when it did
-    not send words. Rounded to 2dp - a dashboard axis, not maths. Fail-soft:
-    a shape change upstream costs the field, never the turn."""
+    """Return mean per-word confidence, or None when unavailable."""
     try:
         words = (frame.result or {}).get("words") or []
         scores = [
@@ -139,14 +128,10 @@ class GrammarGate(FrameProcessor):
     # deferring. Covers think-before-speak (GPT at low effort) and a 15s ssh.
     ASSISTANT_WAIT_S = 30
 
-    # Cap on a claimed-open user turn: a Flux socket that dies mid-turn never
-    # delivers the stop edge, and an unbounded flag would defer the idle
-    # handler forever - the session would never close.
+    # Clear a user-speaking flag if Flux disconnects before sending its stop.
     SPEAKING_WAIT_S = 30
 
-    # A local command dispatches in ~100 ms, so its ok earcon would land on
-    # the still-ringing wake chime; fold it in. Anything longer (ssh, a
-    # launch) clears the window and acks normally.
+    # Suppress an immediate acknowledgement that would overlap the wake chime.
     ACK_COALESCE_S = 0.8
 
     def __init__(
@@ -175,8 +160,7 @@ class GrammarGate(FrameProcessor):
         self._stop_after_reply = False  # stop_listening tool armed one
 
     def request_stop(self) -> None:
-        """stop_listening asking for the mic back: arms the ending, which
-        process_frame sends once the goodbye has been spoken. Must not raise."""
+        """End the session after the current assistant reply."""
         self._stop_after_reply = True
         self.log("session_stop_requested")
 
@@ -311,9 +295,7 @@ class GrammarGate(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        # Turn edges arrive as real frames from the turns resolver
-        # (session_runtime wires it into both pipelines; Flux itself only
-        # PROPOSES turns since pipecat 1.8).
+        # The turn resolver emits these speaking frames.
         if isinstance(frame, UserStartedSpeakingFrame):
             self._speaking = time.time()
         elif isinstance(frame, UserStoppedSpeakingFrame):
@@ -322,21 +304,15 @@ class GrammarGate(FrameProcessor):
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._assistant_pending = 0.0  # answer arrived; idle clock owns it now
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            # The goodbye is out of the speaker (pipecat emits this once per
-            # LLM response), so an armed stop can end the session without
-            # cutting it off. A model that calls the tool and says NOTHING
-            # produces no such frame; the idle timeout ends that one instead.
+            # Wait for the goodbye to finish before ending the session.
             await self._stop_if_armed("stop listening")
         elif isinstance(frame, ErrorFrame):
-            # Pipecat reports service failures (LLM 401/400, TTS death) via
-            # loguru to the console only - mirror them into couch.log.
+            # Copy Pipecat service errors into couch.log.
             self.log.error("pipeline_error", err=str(frame.error))
             if self._assistant_pending:
-                # The answer isn't coming: earcon, and unpin the idle handler.
                 self._assistant_pending = 0.0
                 await self._earcon("fail")
-            # Honour a pending stop rather than holding the mic to the idle
-            # timeout for a goodbye that is not coming.
+            # Do not wait for a goodbye after the response failed.
             await self._stop_if_armed("stop listening (answer failed)")
         if (
             isinstance(frame, TranscriptionFrame)
@@ -345,8 +321,7 @@ class GrammarGate(FrameProcessor):
             text = frame.text.strip()
             conf = stt_confidence(frame)
             if text:
-                # The turn id is born here and everything it causes carries
-                # it; the session id set at wake survives the merge.
+                # Associate downstream events with this utterance.
                 turn = events.new_turn()
                 events.context(turn=turn)
                 # Spans are exported off a batch thread that cannot see the

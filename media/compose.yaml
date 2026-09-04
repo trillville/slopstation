@@ -1,9 +1,6 @@
 name: slopstation-media
 
-# Tags are frozen BY HAND from the K15, the constraints.txt rule: pin what is
-# RUNNING there, never upstream latest (the runbook's Pinning section has the
-# procedure). ':latest' means nobody has frozen yet, and the next
-# `docker compose pull` upgrades all six services at once.
+# Replace ``latest`` tags with the versions verified on the K15 before pulling.
 
 services:
   flaresolverr:
@@ -27,9 +24,7 @@ services:
         source: ${MEDIA_CONFIG_ROOT}/prowlarr
         target: /config
     ports:
-      # LAN-wide so dashboard links resolve from other machines; every UI
-      # below authenticates, and the runbook's firewall rules scope them to
-      # LocalSubnet on the Private profile. Never the internet.
+      # LAN access requires authentication and a private-profile firewall rule.
       - 9696:9696
     depends_on:
       - flaresolverr
@@ -102,8 +97,7 @@ services:
         source: ./glances.conf
         target: /etc/glances.conf
         read_only: true
-      # statvfs on these binds is what reports each volume's real fill;
-      # glances.conf documents the 9p allow that makes them visible.
+      # These mounts let Glances report free space for both volumes.
       - type: bind
         source: ${MEDIA_ROOT}
         target: /mnt/media

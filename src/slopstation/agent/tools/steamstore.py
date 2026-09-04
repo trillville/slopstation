@@ -1,10 +1,7 @@
-"""Live Steam store data: deals, search, reviews, news, how-long-to-beat,
-and the state/deals.json precompute. Layer 4 of the catalog - library.py
-builds layers 1-3, what the user owns and has installed. Every HTTP fetch
-routes through _get, the one test seam; fetch_hltb is the exception - it
-delegates to howlongtobeatpy, whose lazy import is its seam. Only /appreviews
-and GetNewsForApp are officially documented, so parses read defensively and the
-lane degrades rather than crashing.
+"""Fetch Steam deals, search results, reviews, news, and completion times.
+
+Deals are cached in state/deals.json. Most requests use ``_get`` so network
+failures return no data instead of stopping the agent.
 
 CLI:
     python -m slopstation.agent.tools.steamstore <deals|search ...|reviews <appid>
@@ -21,8 +18,6 @@ import time
 from slopstation import config, logbook, paths, statefile
 from slopstation.agent.tools import library
 
-# The lane is a log attribute: store events ship as "library" (test_event_names
-# pins the set).
 log = logbook.logger("library")
 
 STORE = "https://store.steampowered.com"
@@ -51,7 +46,7 @@ TAGMAP_MAX_AGE_S = 7 * 24 * 3600
 
 
 def _get(url: str, params: dict | None = None, timeout: float = 20):
-    """One HTTP seam for layer 4 - tests swap it. JSON or None, never raises."""
+    """Fetch JSON and return ``None`` on request or decoding errors."""
     import requests
 
     try:
@@ -303,10 +298,7 @@ def fetch_news(appid: int, count: int = 3) -> list[dict]:
 
 
 def fetch_hltb(name: str) -> dict | None:
-    """Beat times via howlongtobeatpy, which chases howlongtobeat.com's
-    endpoint churn. Lazy + fail-soft on BOTH import and call (the pin is
-    optional, it drags in fake_useragent/bs4). Beat-times never move, so
-    results cache forever."""
+    """Fetch and cache completion times from HowLongToBeat."""
     key = library.fuzzy_key(name)
     cache = statefile.load(hltb_cache_file(), {})
     if key in cache:
@@ -358,8 +350,7 @@ def refresh_deals() -> int:
 
 
 def probe(args: list[str]) -> int:
-    """Manual layer-4 smoke test: confirms live endpoint shapes a keyless
-    checkout cannot see. Verbs as in usage()."""
+    """Run a live store request from the command line."""
     what = args[0] if args else "deals"
     out: object
     if what == "deals":

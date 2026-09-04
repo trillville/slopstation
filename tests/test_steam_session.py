@@ -1,8 +1,4 @@
-"""The account session with the HTTP seams mocked - token
-mint/cache/refresh, session pick, the empty-200 -> GetClientAppList verify
-path, X-eresult failures, download-status parse, and enrollment that persists
-the token without logging it. No network.
-"""
+"""Test Steam account sessions with mocked HTTP requests."""
 
 import base64
 import json
@@ -208,8 +204,7 @@ def test_sessions_and_target_pick_by_machine_name(session, pinned, seams):
 
 
 def test_401_remints_once_and_retries(log, refresh, monkeypatch):
-    """A revocation 401s a not-yet-expired token and _get retries once with a
-    fresh one (driven via _session; the seam fixtures replace _get)."""
+    """A revoked token is refreshed once before retrying."""
 
     def resp(code):
         return types.SimpleNamespace(
@@ -384,8 +379,6 @@ def test_enroll_refuses_to_clobber_a_corrupt_secrets_file(enrolling):
 
 
 class _Ok:
-    """What Steam answers once the connection holds."""
-
     status_code = 200
     headers = {"X-eresult": "1"}
 
@@ -394,7 +387,7 @@ class _Ok:
 
 
 def _flaky(calls, fail_first):
-    """A session double whose GET drops the connection `fail_first` times."""
+    """Return a session whose first GET requests fail."""
 
     class Flaky:
         def get(self, url, params=None, timeout=None):
@@ -411,8 +404,7 @@ def _flaky(calls, fail_first):
 
 
 def bare_session(log, refresh, monkeypatch, calls, fail_first):
-    """A session with the HTTP layer, not the seams, replaced - the retry
-    lives under the seams the other tests patch out."""
+    """Use the real retry logic with a mocked HTTP session."""
     monkeypatch.setattr(ss.time, "sleep", lambda n: None)
     s = ss.SteamSession({"steamId64": STEAMID, "steamRefreshToken": refresh}, log)
     monkeypatch.setattr(s, "access_token", lambda: "tok")
@@ -421,15 +413,12 @@ def bare_session(log, refresh, monkeypatch, calls, fail_first):
 
 
 def test_a_dropped_read_is_retried(log, refresh, monkeypatch):
-    """A dropped connection is not an answer, and these reads are safe to
-    repeat. Steam closed one mid-handshake on 2026-09-03 and, unretried, it
-    reached the user as a spoken apology."""
+    """GET requests retry transient connection failures."""
     calls = []
     s = bare_session(log, refresh, monkeypatch, calls, fail_first=2)
     assert [c["machine_name"] for c in s.sessions()] == ["LAPTOP", "TILLMAN-DESKTOP"]
     assert len(calls) == 3, calls
-    # Reported, or a degrading network stays invisible - but at info: a read
-    # that succeeded on the second try cost the user nothing.
+    # Log each retry at info level.
     retries = log.find("steam_read_retried")
     assert len(retries) == 2 and retries[0]["level"] == "info", retries
 
@@ -443,7 +432,7 @@ def test_a_read_that_never_connects_still_raises(log, refresh, monkeypatch):
 
 
 def test_a_post_is_never_retried(log, refresh, monkeypatch):
-    """One of these queues an install; repeating it is not safe."""
+    """POST requests are not retried."""
     calls = []
     s = bare_session(log, refresh, monkeypatch, calls, fail_first=99)
     with pytest.raises(OSError):

@@ -1,16 +1,7 @@
-"""A headless signed-in Steam session: install-by-voice and download status
-over IClientCommService. It queues an install on the PC's client with no dialog
-and no controller (steam -applaunch on an uninstalled appid pops a
-controller-needing dialog on the TV, so Dispatch answers NOTINSTALLED).
+"""Install games and read download status through a signed-in Steam session.
 
-SAFETY RULE: enroll under the WebBrowser platform with a realistic User-Agent,
-NEVER MobileApp - Steam flags a MobileApp+QR login as compromised.
-
-Plain REST with an access_token, undocumented but stable, so mutating calls
-VERIFY rather than trust: an install returns an empty 200 whether or not it
-queued, and failures arrive as an X-eresult response HEADER, not a JSON body.
-Parsing is defensive throughout - shape drift must degrade to a spoken
-"couldn't reach Steam".
+Enroll as WebBrowser, not MobileApp. Installation is verified because a
+successful HTTP response does not guarantee that Steam queued the request.
 """
 
 import base64
@@ -35,7 +26,7 @@ UA = (
 
 # EAuthTokenPlatformType - WebBrowser is 2; MobileApp (3) is the flagged one.
 PLATFORM_WEBBROWSER = 2
-# Between the retries in _get. Two waits, so a blip costs under a second.
+# Delay between GET retries.
 _RETRY_BACKOFF_S = 0.3
 
 log = logbook.logger("steam")
@@ -82,29 +73,19 @@ class SteamSession:
         return self._sess
 
     def _get(self, method, params, timeout=20, tries=3):
-        """GET a ClientComm/Auth method -> (json_or_None, eresult), eresult
-        being the X-eresult header (1 == OK).
-
-        Retried on a network failure, because a dropped connection is not an
-        answer and every caller here is READ-ONLY. Steam closed one
-        mid-handshake on 2026-09-03 and, with no retry, that single packet
-        became a spoken apology. _post is deliberately NOT retried: one of
-        those queues an install.
-
-        Only the connection is retried. A 401 has its own one-shot re-mint
-        below, and an X-eresult failure is an answer, so both stand."""
+        """Run a GET request, retrying connection errors only."""
         for attempt in range(1, tries + 1):
             try:
                 r = self._session().get(
                     f"{API}/{method}/", params=params, timeout=timeout
                 )
                 break
-            except OSError as e:  # every requests error subclasses this
+            except OSError as e:
                 if attempt == tries:
                     raise
                 self.log(
                     "steam_read_retried",
-                    method=method,  # short, and carries no secret
+                    method=method,
                     attempt=attempt,
                     err=str(e),
                 )
@@ -280,11 +261,7 @@ class SteamSession:
         return self._target() is not None
 
     def app_list(self):
-        """GetClientAppList for the target client, apps mid-change only,
-        normalized to {appid: {name, installed, changing, paused, downloaded,
-        total, queue}}. Shape: the name field is 'app', not 'app_name'; byte
-        counts arrive as STRINGS; queue_position is -1 for "not queued", not
-        absent. filters=changing is what carries the progress fields."""
+        """Return installation and download status for changing apps."""
         tgt = self._target()
         if not tgt:
             return {}

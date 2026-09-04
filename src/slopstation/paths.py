@@ -1,11 +1,6 @@
-"""Where the runtime data lives - config.json, secrets.json, state/, logs/,
-couch.log, media/.env - and nothing else.
+"""Paths for configuration, state, and logs.
 
-HOME is the checkout by default, because the install is editable, and
-SLOPSTATION_HOME overrides it. Everything below reads HOME when called, never
-at import, so re-pointing HOME moves the whole tree: the test suite gives every
-test a fresh one, and a deploy that ran from a runner workspace would still
-find the live checkout's lock.
+SLOPSTATION_HOME can override the checkout root used by default.
 """
 
 import os

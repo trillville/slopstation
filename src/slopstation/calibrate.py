@@ -1,12 +1,7 @@
-"""Rediscover the controller's HID button bytes: python -m slopstation.calibrate
+"""Measure the controller's HID report and button bytes.
 
-Valve does not document the 2026 Steam Controller's report format, so
-chord_listener.py's RID_INPUT / BTN_BYTE / CHORD are measured, not a contract.
-Re-run after a controller firmware update; a shuffled layout shows up as a
-listener that prints `armed` and never fires.
-
-Controller awake and flat for the 3 s noise window, then press ONE input at a
-time. Not while chord_listener.py is running - one process owns the Puck.
+Stop chord_listener.py, wake the controller, and keep it still during the
+three-second baseline. Re-run after controller firmware updates.
 """
 
 import time
@@ -16,8 +11,7 @@ from slopstation import haptics
 
 
 def pick_interface():
-    # Report type unknown here - that is what this tool measures - so accept on
-    # volume of traffic, not on the report id.
+    # Select by traffic volume because the report type is not known yet.
     dev, path = haptics.open_streaming_interface(lambda reads: len(reads) > 10)
     if dev:
         print(f"using interface: {path}")

@@ -1,8 +1,4 @@
-"""The TV, from the K15: Ex-Link over serial (power, inputs, the refused
-volume family) and the two pairing-free HTTP reads (power state, volume).
-Chord-safe: stdlib plus a lazy pyserial import. The venv-only write path over
-WebSocket is agent/tools/tv_remote.py.
-"""
+"""Control the TV over Ex-Link and read its state over HTTP."""
 
 from __future__ import annotations
 
@@ -10,8 +6,6 @@ import json
 import time
 
 # Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum, 9600 baud 8N1.
-# Frozen literals, cross-checked against exlink_frame() by tests/test_exlink.py:
-# a one-byte slip in the volume family is power_off.
 EXLINK_FRAMES = {
     "power_on": "082200000002d4",
     "power_off": "082200000001d5",
@@ -21,7 +15,6 @@ EXLINK_FRAMES = {
     "hdmi4": "08220a000503c4",
     "vol_up": "082201000100d4",
     "vol_down": "082201000200d3",
-    # the only toggle here - power_on/off are discrete, so safe to re-send
     "mute_toggle": "082202000000d4",
 }
 

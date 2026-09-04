@@ -1,9 +1,4 @@
-"""The chord listener's hands-off rule. The listener must hold no
-handles on the Puck while a session owns it - VirtualHere hands the device to
-the gaming PC, and a listener still reading its interfaces leaves an
-enumerated-but-dead controller. A stale lock must still read as free, or the
-chord lane goes deaf until someone deletes a file.
-"""
+"""Test controller handoff between the chord listener and gaming sessions."""
 
 import os
 import time

@@ -1,10 +1,4 @@
-"""config.json and secrets.json: the two per-machine files at paths.HOME.
-
-Both are read at call time, never at import. The chord lane has to import on a
-machine that has no config.json yet, and the doctor is what says which key is
-missing; a secrets.json that is absent or malformed means no keys, which
-disables the keyed lanes downstream rather than crashing anything.
-"""
+"""Load per-machine settings from config.json and secrets.json."""
 
 from __future__ import annotations
 

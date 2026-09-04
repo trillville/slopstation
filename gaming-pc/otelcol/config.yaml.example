@@ -1,6 +1,4 @@
-# OpenTelemetry Collector - gaming PC log shipper. Same MSI and the same two
-# EDIT ME values as otelcol\config.yaml.example, which carries the install
-# notes; only the paths and the second source differ.
+# Gaming PC log shipper. See otelcol\config.yaml.example for installation.
 #
 # Two streams: pc-*.jsonl is the milestones (structured, carries the turn id -
 # what alerts fire on; pc-dispatch-* is the same shape from Dispatch.ps1, in
@@ -29,8 +27,6 @@ receivers:
       - type: json_parser
         timestamp:
           parse_from: attributes.ts
-          # Write-CgEvent and events.emit produce the same format;
-          # test_ps_parse asserts they never drift apart.
           layout_type: gotime
           layout: '2006-01-02T15:04:05.000Z07:00'
         severity:

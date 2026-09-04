@@ -1,7 +1,4 @@
-"""The frozen EXLINK_FRAMES literals, the checksum builder, and
-vol_set clamping must agree - every table entry is rebuilt from its
-(c1, c2, c3, value) spec.
-"""
+"""Test Ex-Link frames, checksums, and volume clamping."""
 
 import sys
 import time

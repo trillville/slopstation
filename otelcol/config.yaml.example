@@ -1,20 +1,9 @@
-# OpenTelemetry Collector - K15 log shipper: the daily JSONL events.py writes,
-# into Sentry Logs over OTLP.
-#
-# CONTRIB, not core: core has no filelog receiver.
-#
-#   INSTALL FIRST - the MSI owns the config path and the service does not
-#   exist until it has run. Then read the path back off the service; do not
-#   guess it, and it is NOT under ProgramData:
+# Ships the K15 JSONL event logs to Sentry over OTLP.
+# Use the contrib collector because the core build lacks the filelog receiver.
+# Install the MSI first, then get the service's configuration path with:
 #      Get-CimInstance Win32_Service -Filter "Name='otelcol-contrib'" | % PathName
-#   Measured 2026-09-03: "C:\Program Files\OpenTelemetry Collector\config.yaml".
-#   Copy this file over that one, from an ELEVATED shell, and write it as UTF-8
-#   with NO BOM - PowerShell 5.1's Set-Content -Encoding utf8 adds one, and the
-#   collector will not parse it.
-#   Restart-Service otelcol-contrib          (validates on load, so a bad edit
-#                                             fails here; why is in the Windows
-#                                             Application event log, and so is
-#                                             a rejected push)
+# Copy this file there as UTF-8 without a BOM, then run:
+#      Restart-Service otelcol-contrib
 
 extensions:
   # Read offsets on disk: a collector that was down backfills rather than
@@ -28,10 +17,8 @@ extensions:
 receivers:
   filelog/events:
     include:
-      # EDIT ME. Print it, do not guess it, and use FORWARD slashes:
+      # Set this to events.LOG_DIR using forward slashes:
       #   .venv\Scripts\python -c "from slopstation import events; print(events.LOG_DIR)"
-      # k15-*.jsonl, so test runs writing test-*.jsonl never leave the
-      # machine, and events.py's archive\ is out of the glob.
       - C:/Users/minipc/Desktop/slopstation/logs/k15-*.jsonl
     start_at: beginning
     storage: file_storage
@@ -41,8 +28,7 @@ receivers:
         timestamp:
           parse_from: attributes.ts
           layout_type: gotime
-          # The record's own UTC time, never the moment the file was read: a
-          # shipper that was down must not stamp its backlog "now".
+          # Preserve each event's original timestamp when backfilling.
           layout: '2006-01-02T15:04:05.000Z07:00'
         severity:
           # info/warn/error are already stanza's own names (events.py owns that
@@ -76,9 +62,7 @@ processors:
 exporters:
   otlphttp/sentry:
     # EDIT ME, both lines: Sentry project settings > Client Keys (DSN) >
-    # OpenTelemetry (OTLP) prints them ready to paste. logs_endpoint and not
-    # endpoint - traces come from the voice lane's own SDK, and the combined
-    # form would advertise a traces pipeline this collector does not have.
+    # This collector exports logs only, so configure logs_endpoint.
     logs_endpoint: https://oORGID.ingest.us.sentry.io/api/PROJECTID/integration/otlp/v1/logs
     headers:
       x-sentry-auth: "sentry sentry_key=PUBLICKEY"

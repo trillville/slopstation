@@ -1,7 +1,4 @@
-"""Doctor.py's checks with every probe stubbed (serial, hid,
-process list, ssh, sc). Asserts the row names and the levels that matter;
-the hints are prose.
-"""
+"""Test diagnostic checks with hardware and service probes stubbed."""
 
 import json
 import subprocess

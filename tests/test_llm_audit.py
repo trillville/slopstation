@@ -1,10 +1,4 @@
-"""Provider-executed tool calls (OpenAI web_search).
-
-Pipecat (through 1.8.1) ignores server-side tool items, so llm_audit tees the
-event stream. The tee sits in the path of every token of every conversation: it
-must pass events through unchanged and in order, and never raise into the
-pipeline. Fakes only - no network, no keys.
-"""
+"""Test recording of provider-executed search calls."""
 
 import asyncio
 import types

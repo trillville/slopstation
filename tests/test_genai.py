@@ -1,10 +1,4 @@
-"""The pipecat -> Sentry span adapter.
-
-This is the only thing that will notice a pipecat upgrade quietly emptying the
-Agents dashboard, so it pins the attribute names on BOTH sides: the ones
-pipecat writes (service_attributes.add_llm_span_attributes) and the ones
-Sentry indexes. A failure here means one of the two moved.
-"""
+"""Test conversion from Pipecat spans to Sentry attributes."""
 
 import json
 
@@ -177,9 +171,7 @@ def memory_exporter(monkeypatch):
 
 
 def test_end_to_end_through_a_real_provider(memory_exporter):
-    # The seam that actually broke once: opentelemetry-sdk 1.44 calls private
-    # methods on every registered SpanProcessor, so a duck-typed processor
-    # blew up at span end. Nothing but wiring a real provider catches that.
+    # Exercise the adapter through a real OpenTelemetry provider.
     from opentelemetry import trace
 
     mem = memory_exporter

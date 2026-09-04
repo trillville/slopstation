@@ -220,8 +220,7 @@ def test_steam_monitor_needs_install_proof(log, monkeypatch):
 
 
 def test_media_monitor_observes_a_series_acquisition(log):
-    # The second authority justifies generic creation, but keeps its concrete
-    # observation semantics in MediaMonitor.
+    # Media downloads use the same operation store as Steam installs.
     terminal = []
     store = operations.OperationStore(log, on_terminal=terminal.append)
     media_op = store.track_external(

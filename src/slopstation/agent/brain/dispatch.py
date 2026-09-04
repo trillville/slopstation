@@ -1,11 +1,7 @@
-"""Every voice-triggered side effect: the grammar gate and the assistant's
-tools call the same functions.
+"""Dispatch side effects shared by voice grammar and assistant tools.
 
-Actions return a Result: `earcon` names the count-coded tone, `detail` is
-both the log line and the only thing the assistant lane reports to the model
-- prose a stranger could act on, not a status code.
-
-dry_run=True logs intent instead of acting; the lock check stays live.
+Actions return a status, earcon name, and user-facing detail. Dry runs log
+actions without executing them.
 """
 
 from __future__ import annotations
@@ -18,20 +14,11 @@ from collections import namedtuple
 from slopstation import events, gamepc, sessionlock, tv
 from slopstation.agent.tools import library
 
-# gamepc is reached through the MODULE, never `from gamepc import ...`: a
-# second binding is one the tests' patches would miss.
-
-# An argv prefix, not a path: the package is installed, so there is no script
-# on disk to point at.
 COUCH = [sys.executable, "-m", "slopstation.couch"]
 
 Result = namedtuple("Result", "ok earcon detail")
 
-# Per-utterance context: correlation id plus the user's words (post
-# wake-strip; None on lanes with no transcript - the chord, the REPL).
-# Passed explicitly, not via ContextVar: a ContextVar is copied at task
-# creation, so the gate setting it never reaches the assistant's tool
-# dispatch, a sibling task already running.
+# ContextVars do not propagate changes between sibling pipeline tasks.
 Utterance = namedtuple("Utterance", "turn asked")
 
 
@@ -48,7 +35,7 @@ def _fail(detail: str) -> Result:
 
 
 def _no_task(out: str) -> Result:
-    """NOTASK:<name> - a scheduled task the PC never had registered."""
+    """Describe a missing scheduled task response."""
     return _fail(
         f"the {out.split(':', 1)[1]} task isn't registered on the "
         "gaming PC - it needs the one-time Register-ScheduledTask "
@@ -57,8 +44,7 @@ def _no_task(out: str) -> Result:
 
 
 def _name(appid: int | str) -> str:
-    """appid -> installed title, falling back to the bare id. Never raises:
-    the index is a cache (empty on a fresh K15, stale after an install)."""
+    """Return an installed title or the app ID when the cache has no match."""
     try:
         appid = int(appid)
     except (TypeError, ValueError):
@@ -74,15 +60,11 @@ class Dispatch:
         self.voice = cfg["voice"]
         self.log = log
         self.dry_run = dry_run
-        # Fires at the top of end_session, while the TV is still on: the room
-        # ducker restores here, before couch's teardown cuts TV power. None on
-        # lanes with no ducker (the REPL, the bench).
         self.on_end_session = on_end_session
-        # See Utterance above; one Dispatch per session.
         self.utterance = Utterance(None, None)
 
     def begin_utterance(self, turn: str | None, asked: str | None = None) -> None:
-        """GrammarGate's one write per final transcript."""
+        """Set the active transcript context."""
         self.utterance = Utterance(turn, asked)
 
     # -- internals -------------------------------------------------------------
@@ -115,9 +97,6 @@ class Dispatch:
         if self.dry_run:
             return self._would(what)
         args = COUCH + ["start"] + ([str(appid)] if appid else [])
-        # couch.py runs in its own console, so the turn id travels as an
-        # argument; without it couch.py mints its own and only clock time
-        # joins the utterance to the launch it caused.
         turn = self.utterance.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
@@ -129,10 +108,7 @@ class Dispatch:
         """Works mid-game and mid-launch alike (teardown wins - Exit stops a
         running Enter on the host)."""
         turn = self.utterance.turn  # snapshot at operation start
-        # Before the exit, not after the voice session closes: the session
-        # stays open for the idle timeout, by which time couch has powered the
-        # TV off and remote keys relay nothing. Must not raise: this is a
-        # teardown.
+        # Restore volume before couch teardown can power off the TV.
         if self.on_end_session is not None:
             try:
                 self.on_end_session()
@@ -140,11 +116,7 @@ class Dispatch:
                 self.log.warn("end_session_hook_failed", err=repr(e))
         if self.dry_run:
             return self._would("ssh exit")
-        # K15-side half of "teardown wins": the host Exit only
-        # stops an Enter that is RUNNING when it lands, so it loses to
-        # couch.py's enter_redispatched rescue; the marker reaches that
-        # process, which consumes it at every wait. Written BEFORE the ssh so
-        # the K15 side stops even if the exit never gets through.
+        # Write the local cancellation marker before contacting the host.
         cancelled = False
         if sessionlock.active():
             try:
@@ -156,8 +128,6 @@ class Dispatch:
             out = gamepc.exit(turn)
         except Exception as e:
             if cancelled:
-                # A PC mid-wake is unreachable and has nothing to tear down
-                # anyway: the marker alone is the whole teardown.
                 self.log("end_session_dispatched", turn=turn, via="cancel")
                 return _ok("stopping the launch - the PC wasn't up yet")
             self.log.error("end_session_failed", err=str(e), turn=turn)
@@ -187,8 +157,6 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            # Explicit turn: the assistant path runs in a different task
-            # than the gate, so the ambient one is absent (see Utterance).
             out = gamepc.launch(appid, self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))
@@ -199,13 +167,11 @@ class Dispatch:
         if out == "ALREADY":
             return _ok(f"{_name(appid)} is already running")
         if out.startswith("BUSY:"):
-            # Name the blocker: the assistant lane sees only `detail`.
             return _busy(
                 f"{_name(out.split(':', 1)[1])} is already running - "
                 f"it has to be quit first, which I can do if you ask ({out})"
             )
         if out == "NOTREADY":
-            # Lock fresh but host pre-READY: a launch is in flight.
             return _busy("the session is still starting")
         if out == "NOTINSTALLED":
             return _fail(
@@ -232,7 +198,6 @@ class Dispatch:
         if out == "NOTRUNNING":
             return _ok("nothing is running to quit")
         if out.startswith("BUSY:"):
-            # A different game is up: name it, don't touch it.
             return _busy(
                 f"{_name(out.split(':', 1)[1])} is what's running, not "
                 f"{_name(appid)} - nothing was quit ({out})"

@@ -1,9 +1,4 @@
-"""A REAL session pipeline end-to-end minus STT, on the K15 -
-LocalAudioTransport on real devices, GrammarGate, dry-run dispatch, earcons
-through the actual speaker, and the exit phrase ending the worker. Scripted
-TranscriptionFrames stand in for Flux, whose connect path needs the key.
-Brief tones will be audible.
-"""
+"""Exercise a local voice pipeline with scripted transcripts and real audio."""
 
 import asyncio
 

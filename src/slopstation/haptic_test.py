@@ -1,26 +1,12 @@
-"""Haptic bench tool for the 2026 Steam Controller via the Puck.
+"""Test Steam Controller haptics through the Puck.
 
-Never run while chord_listener.py is running - one process owns the Puck.
-Close the listener console first; Start-Slopstation.bat brings it back.
-Wake the controller (tap any button) first - writes need it awake.
+Stop chord_listener.py and wake the controller before running this tool.
 
 Usage:
     python -m slopstation.haptic_test [chirp|sustained|pulse|rumble|probe|audition] [gain]
 
-Subcommands (try them in this order if the controller stays silent):
-  chirp      two short self-terminating 0x83 tones + stops [default]
-  sustained  long tones retriggered + explicit stops - the fallback if the
-             self-terminating form stops working after a firmware update
-  pulse      0x81 as a real pulse train (side 0 then side 1)
-  rumble     one-shot 0x80 back-motor rumble (hardware self-stops in ~50 ms)
-  probe      list all Puck HID interfaces and which one streams 0x42
-  audition   labeled tour of the production vocabulary (run with gain 0)
-
-Optional trailing integer = gain for tone commands (s8; default 120, a known
-loud value - firmware clamps; negative attenuates).
-
-After any controller firmware update, re-run calibrate.py AND `haptic_test.py
-chirp` - the protocol headers are a Valve snapshot, not a contract.
+The optional trailing integer sets the tone gain. Re-run calibrate.py and the
+chirp test after controller firmware updates.
 """
 
 import sys

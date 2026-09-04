@@ -1,7 +1,4 @@
-"""Earcon synthesis invariants - segmentation recovers the spec'd
-burst count however the tones are retuned, fades kill clicks, amplitudes and
-level order hold, and the gain knob scales without wrapping int16.
-"""
+"""Test earcon synthesis, timing, fades, and gain."""
 
 import numpy as np
 

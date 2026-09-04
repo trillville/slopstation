@@ -1,11 +1,4 @@
-"""Game-title normalization: Steam's title string <-> what a human says.
-
-spoken_form feeds hassil (the grammar matcher) its {game} slot variants;
-hassil matches exact token sequences, so variants must look like
-transcripts - hence apostrophes KEPT and numerals unified to digits, which
-is what numerals=true makes Flux emit.
-fuzzy_norm drops the rest of the punctuation and feeds rapidfuzz.
-"""
+"""Normalize Steam titles for exact grammar and fuzzy speech matching."""
 
 from __future__ import annotations
 
@@ -98,10 +91,7 @@ def keyterm_forms(title: str) -> list[str]:
 
 
 def variant_map(titles: list[str]) -> dict[str, str]:
-    """variant -> canonical title. A title's FULL spoken form always claims its
-    own key (Portal must not lose 'portal' to Portal 2's number-stripped
-    variant); derived variants claim only unclaimed keys, and
-    derived-vs-derived collisions drop the key as ambiguous."""
+    """Map unambiguous spoken variants to full titles."""
     out = {}
     for t in titles:
         full = spoken_form(t)
@@ -121,9 +111,7 @@ def variant_map(titles: list[str]) -> dict[str, str]:
 def _resolver_from(
     by_name: dict, threshold: float, margin: float = 5
 ) -> Callable[[str], tuple] | None:
-    """Fuzzy resolver over any {name: id} map. A near-tie between DIFFERENT
-    entries resolves to nothing: token_set_ratio scores subsets at 100, so
-    'warhammer' ties every 40K title."""
+    """Build a fuzzy resolver that rejects close matches between entries."""
     if not by_name:
         return None
     vmap = {
@@ -136,11 +124,10 @@ def _resolver_from(
 
     def resolve(spoken):
         q = fuzzy_norm(spoken)
-        if q in vmap:  # exact variant wins: 'hades 2'
-            canon = vmap[q]  # must never lose to 'hades'
+        if q in vmap:
+            canon = vmap[q]
             return by_name[canon], canon
-        # A bare pronoun ("it", "the") is a token-subset of some name and
-        # scores 100 - refuse it so "play it" reaches the assistant.
+        # Let the assistant handle short pronouns such as "it" and "the".
         if len(q.split()) == 1 and len(q) <= 3:
             return None, None
         hits = process.extract(q, keys, scorer=fuzz.token_set_ratio, limit=3)
@@ -158,8 +145,7 @@ def _resolver_from(
 def build_resolver(
     threshold: float, rows: list | None = None
 ) -> Callable[[str], tuple] | None:
-    """spoken -> (appid, canonical title) or (None, None), over installed games
-    (the index's, or `rows` - a session passes its Catalog snapshot)."""
+    """Build a spoken-title resolver for installed games."""
     if rows is None:
         rows = library.load().get("installed", [])
     return _resolver_from(
@@ -170,8 +156,7 @@ def build_resolver(
 def build_collection_resolver(
     threshold: float, rows: list | None = None
 ) -> Callable[[str], tuple] | None:
-    """spoken -> (collection id, canonical name) or (None, None), over Big
-    Picture collections. None when there are none yet."""
+    """Build a spoken-name resolver for Big Picture collections."""
     if rows is None:
         rows = library.load().get("collections", [])
     return _resolver_from(

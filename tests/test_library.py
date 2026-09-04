@@ -1,6 +1,4 @@
-"""Layer 1 rows and title resolution against the REAL Steam install on this
-machine, read through Dispatch.ps1's `games` verb run locally.
-"""
+"""Test title resolution against the local Steam installation."""
 
 import subprocess
 
@@ -56,7 +54,7 @@ def test_library():
         assert resolve("armored core six")[0] == 1888160
         assert resolve("armored core")[0] == 1888160
 
-    # Grammar + resolver: the full production path for "play X".
+    # Exercise grammar and title resolution together.
     m = GrammarMatcher(VOICE_CFG)
     hits = 0
     for r in rows[:10]:

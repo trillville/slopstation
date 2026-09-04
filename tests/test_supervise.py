@@ -1,6 +1,4 @@
-"""The lane wrapper and the task verbs: the install gate runs before the lane
-and re-checks under its lock, reconcile runs once per boot, an elevated window
-is refused, and start()/deploy speak schtasks."""
+"""Test lane supervision and scheduled-task commands."""
 
 import subprocess
 import sys

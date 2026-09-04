@@ -1,5 +1,4 @@
-"""Shared test helpers: the repository layout, the config fixture, the machine
-gates, the session-lock seed, and the capturing logger."""
+"""Shared test fixtures and helpers."""
 
 import functools
 import json

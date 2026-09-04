@@ -1,34 +1,4 @@
-"""Ships the agent lane to Sentry: crashes as Issues, the voice pipeline as
-traces, and the LLM spans agent monitoring reads.
-
-One sentry_sdk.init, in this order and for these reasons:
-
-  1. init FIRST, so crashes are reported even if the trace pipeline is
-     broken. A dead exporter is not a reason to stop hearing about
-     exceptions.
-  2. pipecat's setup_tracing() installs the global TracerProvider. It calls
-     set_tracer_provider unconditionally, so anything installed before it is
-     discarded - it has to run before our exporter, not after.
-  3. our exporter goes on that provider.
-
-`OTLPIntegration(setup_otlp_traces_exporter=False)` is deliberate. The half we
-want from it is event linking: an exception attaches to the OTel span it broke
-on, which is the whole reason errors and traces are worth having in one
-place. The half we decline is its exporter, because genai.SentryShape has to
-wrap ours - two would double-ship every span.
-
-Enabled by config.json's `sentryDsn` alone: no secrets.json key, because a
-DSN's public half is not a secret - it ships inside client apps by design.
-Template junk reads as absent, the same rule as every other keyed lane.
-
-Every entry point returns a bool and swallows everything: a bad DSN or a dead
-uplink costs telemetry, never voice.
-
-Spans carry transcripts and completions VERBATIM. events.scrub() does not
-apply - pipecat builds those attributes - so no secret may become a span
-attribute. send_default_pii is what turns that capture on; without it Sentry
-drops every prompt and reply.
-"""
+"""Send errors and voice-session traces to Sentry."""
 
 import contextlib
 import functools
@@ -40,23 +10,18 @@ from typing import cast
 from slopstation import config, events
 from slopstation.agent.telemetry import genai
 
-# One Sentry project takes both machines and every lane, so this is what
-# separates the voice pipeline's traces inside it.
 SERVICE_NAME = "slopstation-voice"
 
 _on = False
 
 
 def is_on():
-    """True once tracing is wired. Callers gate on this rather than
-    re-deriving, so a mid-run config change cannot half-enable the pipeline."""
+    """Return whether tracing is configured."""
     return _on
 
 
 def otlp_target(dsn):
-    """(url, headers) for Sentry's OTLP traces endpoint, from the SDK's own
-    DSN helper - the same call OTLPIntegration makes, so a region or path
-    change upstream is picked up rather than re-derived here."""
+    """Build Sentry's OTLP trace endpoint and authentication headers."""
     from sentry_sdk.consts import VERSION, EndpointType
     from sentry_sdk.utils import Dsn
 
@@ -68,8 +33,7 @@ def otlp_target(dsn):
 
 
 def _init(dsn, log):
-    """sentry_sdk.init: errors, and the linking that puts them on the right
-    span. True if the SDK is live."""
+    """Initialize Sentry error reporting and trace linking."""
     try:
         import sentry_sdk
         from sentry_sdk.integrations.otlp import OTLPIntegration
@@ -79,12 +43,8 @@ def _init(dsn, log):
             environment=events.ENV,
             integrations=[OTLPIntegration(setup_otlp_traces_exporter=False)],
             send_default_pii=True,
-            # Logs reach Sentry through the collector reading the JSONL. The
-            # SDK must not ship a second copy of the same lines.
             enable_logs=False,
         )
-        # Populates the User column in Conversations. The host, not a person:
-        # this is a house, and one box is one user.
         sentry_sdk.set_user({"id": events.HOST})
         log("lane_up", what="sentry", kind="errors")
         return True
@@ -102,7 +62,7 @@ def _init(dsn, log):
 
 
 def _trace(dsn, log):
-    """Pipecat's tracer provider, and our exporter on top of it."""
+    """Add the Sentry exporter to Pipecat's tracer provider."""
     global _on
     try:
         from opentelemetry import trace
@@ -113,8 +73,6 @@ def _trace(dsn, log):
         from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
         from pipecat.utils.tracing.setup import setup_tracing
 
-        # WARNING, not CRITICAL: export errors - a wrong DSN, a dead uplink -
-        # are the only signal that traces are misconfigured.
         logging.getLogger("opentelemetry").setLevel(logging.WARNING)
 
         if not setup_tracing(service_name=SERVICE_NAME, console_export=False):
@@ -129,9 +87,6 @@ def _trace(dsn, log):
         if not isinstance(provider, TracerProvider):
             log.warn("lane_disabled", what="tracing", reason="no SDK tracer provider")
             return False
-        # The exporter OTLPIntegration would have built, wrapped so genai can
-        # reshape spans on the way out. SentryShape duck-types SpanExporter
-        # rather than subclassing it (genai says why), hence the cast.
         exporter = genai.SentryShape(OTLPSpanExporter(endpoint=url, headers=headers))
         provider.add_span_processor(BatchSpanProcessor(cast(SpanExporter, exporter)))
         _on = True
@@ -151,13 +106,7 @@ def _trace(dsn, log):
 
 
 def setup(cfg, log):
-    """Wire the agent lane to Sentry. True when TRACES will flow; errors can
-    be on while this returns False, which is deliberate - a broken trace
-    pipeline is not a reason to stop reporting crashes.
-
-    The last try/except is the boundary the whole module promises: voice_agent
-    calls this bare, before the wake loop, so anything that escapes here is an
-    agent that will not start."""
+    """Configure Sentry and return whether traces are enabled."""
     global _on
     _on = False
     try:
@@ -176,8 +125,7 @@ def setup(cfg, log):
 
 
 def capture(exc):
-    """Report an exception the lane has already handled, so a swallowed error
-    still reaches Issues with its stack. No-ops when the SDK is absent."""
+    """Report a handled exception when the Sentry SDK is available."""
     try:
         import sentry_sdk
 
@@ -199,32 +147,19 @@ def span_attributes(session=None, turn=None):
     }
     if session:
         attrs["session.id"] = session
-        # What Sentry groups a Conversation on. Same value as session.id -
-        # one voice session is one Conversation.
+        # Group each voice session as one Sentry conversation.
         attrs["gen_ai.conversation.id"] = session
     if turn:
-        # The turn that OPENED the session: the join back to the JSONL, not a
-        # per-turn label (pipecat numbers its turn spans independently).
+        # Link the trace to the log entry that opened the session.
         attrs["couch.turn"] = turn
     return attrs
 
 
 @contextlib.contextmanager
 def session_trace():
-    """Pin one trace id across a voice session, in the spans AND in the JSONL,
-    so clicking a log line in Sentry opens that session's waterfall.
+    """Use one trace ID for a voice session's spans and local log entries.
 
-    The id has to exist BEFORE the pipeline starts, because events.context is
-    inherited by asyncio.run and cannot be back-filled once tasks are running.
-    So rather than opening a span of our own, this attaches a non-recording
-    REMOTE parent - the standard OTel way to continue a trace started
-    elsewhere. Pipecat's conversation span becomes its child and inherits the
-    id: nothing extra is exported, and the parent Sentry never sees is the
-    ordinary orphan-trace case.
-
-    Yields 32 hex, or None when tracing is off or anything goes wrong. Both
-    contexts are reset on the way out - a `trace` field outliving its span
-    would join log lines to a waterfall they were not part of.
+    Yields the hexadecimal trace ID, or ``None`` when tracing is unavailable.
     """
     if not _on:
         yield None
@@ -247,10 +182,7 @@ def session_trace():
     except Exception:
         yield None
         return
-    # The export thread cannot read events.current(), so the id pipecat's
-    # spans get stamped with is pinned here for the session's length. The TURN
-    # is not knowable yet - it is minted per utterance inside the pipeline, so
-    # grammar_gate calls set_turn as each one is born.
+    # The export thread needs its own copy of the session ID.
     genai.set_session(events.current().get("session"))
     events_token = events.context(trace=hex_id)
     try:
@@ -401,12 +333,7 @@ def chat_span(provider, model, messages=None, tools=None, system=None):
 
 
 def tool_span(kind, query, result=None):
-    """A provider-executed tool call, parented to whatever span is open (in
-    the voice pipeline, pipecat's llm span). Pipecat cannot do this itself:
-    server-side tools are not in its Responses handler (see llm_audit.py).
-
-    Shaped at creation rather than by genai.reshape - we own these, so there
-    is nothing to adapt."""
+    """Record a provider-executed tool call under the active span."""
     if not _on:
         return
     try:

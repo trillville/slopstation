@@ -1,7 +1,4 @@
-"""Device resolution never substitutes the system default for a configured
-device that is merely absent, and the wake listener's stream watchdogs,
-near-miss log and clip dump. Fake device tables and streams, no PortAudio.
-"""
+"""Test audio device resolution and wake-listener behavior with fake streams."""
 
 import sys
 import time
@@ -246,8 +243,7 @@ def test_near_miss_reports_one_event_per_run_with_its_peak(monkeypatch):
 
 
 def test_clip_dump_writes_prunes_and_never_raises(monkeypatch, tmp_path):
-    """The false-activation corpus openWakeWord's verifier trains negatives
-    on. Capped (writes on every fire) and fail-soft (a session is building)."""
+    """Wake clips are retained up to the configured limit."""
     ring = [b"\x01\x00" * CHUNK] * 3
     log = CapturingLog()
     monkeypatch.setattr(audio, "log", log)
@@ -262,8 +258,7 @@ def test_clip_dump_writes_prunes_and_never_raises(monkeypatch, tmp_path):
     audio.dump_clip(ring, 0.5, keep=0)
     off_made = (tmp_path / "off").exists()
 
-    # Fail-soft: a CLIPS_DIR that cannot be created (here, under a file)
-    # logs and returns, never raises into the wake path.
+    # An unwritable clip directory does not stop wake detection.
     blocker = tmp_path / "blocker"
     blocker.write_bytes(b"")
     monkeypatch.setattr(audio, "clips_dir", lambda: blocker / "wake")

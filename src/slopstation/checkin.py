@@ -1,17 +1,11 @@
-"""Sentry cron check-ins: one monitor per lane, so a dead lane pages by itself.
+"""Send independent Sentry liveness check-ins for each lane.
 
-Liveness must not ride the log shipper - a dead collector and a dead lane
-look identical in the log stream - and a missed check-in is an alert by
-construction rather than a threshold over an empty window. Everything the
-check-in URL needs is inside the DSN, so this adds no config key:
+The check-in URL is derived from the DSN:
 
     https://<key>@<host>/<project>
       -> https://<host>/api/<project>/cron/k15-<lane>/<key>/
 
-Stdlib only and fail-soft throughout: a check-in that cannot be sent costs
-telemetry, never the lane. Every Sentry plan includes ONE cron monitor; the
-second lane's check-in is rejected until a budget is set, which reads exactly
-like a lane that never started - doctor.py's check-in row tells them apart.
+Failed check-ins do not stop the lane.
 """
 
 from __future__ import annotations
