@@ -34,7 +34,8 @@ def test_library():
     helpers.wants("steam")
     rows = ps_games()
     assert rows, "no installed games found"
-    assert all({"appid", "name", "state", "size", "lastPlayed"} <= set(r) for r in rows)
+    keys = {"appid", "name", "state", "size", "lastPlayed", "updated"}
+    assert all(keys <= set(r) for r in rows)
     # The index lands under this test's runtime home (conftest).
     library.save({"installed": rows})
 

@@ -41,6 +41,7 @@ VOICE_ON = {
 }
 
 INSTALLED = 892970  # Valheim: installed and played
+INSTALLED_AT = 1756000000  # when its content last finished changing
 OWNED_ONLY = 413150  # Stardew Valley: owned, never installed
 UNKNOWN = 999999999  # in neither layer of the index
 
@@ -53,6 +54,7 @@ INDEX = {
             "state": 4,
             "size": 1,
             "lastPlayed": 1700000000,
+            "updated": INSTALLED_AT,
         },
         {
             "appid": 1245620,
@@ -307,6 +309,21 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     assert "isn't in the library" in flat(si)
     n_tokens = len(si) // 4
     assert 500 < n_tokens < 30000, n_tokens
+
+
+def test_catalog_dates_the_rows_the_pc_stamped(catalog):
+    """The install date rides the inst token, so "what did I just download" is
+    answerable from the row rather than from a tool."""
+    rows = {line.split("|")[0]: line for line in library.catalog_lines()}
+    day = time.strftime("%Y-%m-%d", time.localtime(INSTALLED_AT))
+    assert rows[str(INSTALLED)].split("|")[6] == f"inst:{day}"
+    # A row synced before the games verb carried the stamp keeps the bare token.
+    assert rows["1245620"].split("|")[6] == "inst"
+    assert rows[str(OWNED_ONLY)].split("|")[6] == "notinst"
+    # And the header says what the token means, or the model invents one.
+    assert "inst[:YYYY-MM-DD last install or update]" in assistant.system_instruction(
+        CFG_MIN
+    )
 
 
 # -- the base tools ------------------------------------------------------------

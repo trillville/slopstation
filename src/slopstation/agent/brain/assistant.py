@@ -51,8 +51,8 @@ def system_instruction(cfg, interface="voice"):
     return (
         style + input_rule + "\n\n" + prompts.RULES + " " + " ".join(tail) + "\n\n"
         "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
-        "never|inst/notinst|controller full/partial/none/?):\n"
-        + "\n".join(library.catalog_lines())
+        "never|inst[:YYYY-MM-DD last install or update]/notinst|controller "
+        "full/partial/none/?):\n" + "\n".join(library.catalog_lines())
     )
 
 

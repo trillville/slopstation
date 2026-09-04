@@ -164,7 +164,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
         foreach ($acf in (Get-ChildItem (Join-Path $root 'steamapps\appmanifest_*.acf') -ErrorAction SilentlyContinue)) {
           $t = Get-Content $acf.FullName -Raw -Encoding UTF8
           $f = @{}
-          foreach ($k in 'appid','name','StateFlags','SizeOnDisk','LastPlayed') {
+          foreach ($k in 'appid','name','StateFlags','SizeOnDisk','LastPlayed','LastUpdated') {
             if ($t -match ('"' + $k + '"\s+"([^"]*)"')) { $f[$k] = $Matches[1] }
           }
           # Names go ASCII-only: keeps the JSON identical across every
@@ -175,7 +175,10 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
             [pscustomobject]@{
               appid = [long]$f['appid']; name = $f['name']
               state = [int]$f['StateFlags']; size = [long]$f['SizeOnDisk']
-              lastPlayed = [long]$f['LastPlayed'] }
+              lastPlayed = [long]$f['LastPlayed']
+              # When the content last finished changing: a first install, or a
+              # patch. Missing on a manifest Steam has not rewritten -> 0.
+              updated = [long]$f['LastUpdated'] }
           }
         }
       }

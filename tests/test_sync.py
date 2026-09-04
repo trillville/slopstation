@@ -169,3 +169,72 @@ def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
     assert library.refresh() == 1
     skipped = log.find("sync_skipped")[0]
     assert skipped["layer"] == "installed" and skipped["level"] == "warn"
+
+
+def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
+    # One sync per tick while the PC answers; after a skip, ticks no-op until
+    # SYNC_ASLEEP_S has passed, so a sleeping night is quiet.
+    now = {"t": 0.0}
+    monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+    keyed.state["meta_cache"] = {"1": {}}
+    tick = library.periodic_sync()
+
+    tick()
+    assert keyed.calls["installed"] == 1
+    # A reachable PC arms nothing: the ticker's own interval is the pacing, so
+    # there is no deadline for a tick to land on and skip.
+    tick()
+    assert keyed.calls["installed"] == 2
+    now["t"] += library.SYNC_S
+    keyed.state["refresh_rc"] = 1  # PC asleep from here
+    tick()
+    assert keyed.calls["installed"] == 3
+
+    now["t"] += library.SYNC_S  # too soon after a skip
+    tick()
+    assert keyed.calls["installed"] == 3, "a skip should hold off SYNC_ASLEEP_S"
+    now["t"] += library.SYNC_ASLEEP_S
+    tick()
+    assert keyed.calls["installed"] == 4
+
+
+def test_periodic_sync_does_not_back_off_on_a_held_lock(keyed, monkeypatch):
+    # A session-close sync holding the lock says nothing about the PC, so the
+    # next tick must still be SYNC_S away, not SYNC_ASLEEP_S.
+    now = {"t": 0.0}
+    monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+    keyed.state["meta_cache"] = {"1": {}}
+    tick = library.periodic_sync()
+
+    library._sync_lock.acquire()
+    try:
+        tick()
+        assert keyed.calls["installed"] == 0, "the held lock should have won"
+    finally:
+        library._sync_lock.release()
+    # No clock movement: a tick that armed ANY hold-off would no-op here.
+    tick()
+    assert keyed.calls["installed"] == 1
+
+
+def test_periodic_sync_does_not_back_off_on_a_local_failure(keyed, monkeypatch):
+    """A raise from layer 1 is a broken disk, not a sleeping PC. It is already
+    reported as sync_failed; it must not also buy a 30-minute hold-off."""
+    now = {"t": 0.0}
+    monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+
+    def boom(**k):
+        keyed.calls["installed"] += 1
+        raise OSError("state/ is unwritable")
+
+    monkeypatch.setattr(library, "refresh", boom)
+    tick = library.periodic_sync()
+
+    tick()
+    assert keyed.calls["installed"] == 1
+    # No clock movement: an armed hold-off of any length would swallow this.
+    tick()
+    assert keyed.calls["installed"] == 2
