@@ -149,6 +149,16 @@ class Dispatch:
             return _fail(f"couldn't reach the PC (ssh playing: {e})")
         return _ok(out if out.isdigit() else "0")
 
+    def launch_in_flight(self) -> bool:
+        """Lock held, READY not yet written: a launch or its rescue is still
+        running. A PC that cannot answer is not up yet."""
+        if self.dry_run or not sessionlock.active():
+            return False
+        try:
+            return gamepc.status() == "NOTREADY"
+        except Exception:
+            return True
+
     def play_game(self, appid: int | str) -> Result:
         """Session live -> direct host launch (OK/ALREADY/BUSY/NOTREADY).
         No session -> full couch launch, game queued for after READY."""

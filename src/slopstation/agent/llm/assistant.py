@@ -238,16 +238,23 @@ def tool_impls(
         # session_active is the same predicate that refusal uses
         # (sessionlock.active), so the two cannot disagree.
         active = sessionlock.active()
+        launching = dispatch.launch_in_flight()
         r = dispatch.now_playing()
         if not r.ok:
             # Mid-launch the PC can be unreachable; the lock still answers.
-            return {"ok": False, "error": r.detail, "session_active": active}
+            return {
+                "ok": False,
+                "error": r.detail,
+                "session_active": active,
+                "launching": launching,
+            }
         appid = int(r.detail) if str(r.detail).isdigit() else 0
         return {
             "ok": True,
             "appid": appid,
             "name": library.installed_name(appid) if appid else None,
             "session_active": active,
+            "launching": launching,
         }
 
     def get_game_details(args):

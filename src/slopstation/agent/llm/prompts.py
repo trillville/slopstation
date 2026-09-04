@@ -122,10 +122,12 @@ the mic close. The wake word reopens it, so this costs the user nothing."""
 
 GET_NOW_PLAYING = """\
 What game is currently running, if any. session_active is the rig's own
-busy state: true with appid 0 means a session is STARTING (a launch can
-take a minute before anything shows on the TV) or Big Picture is up with no
-game - either way the rig is busy, so never report it as idle and never
-offer to start a session. false means truly idle."""
+busy state. launching true means a launch is still in progress (it can take
+a minute and may be retrying): say so, offer to wait or to cancel, and never
+call it an active session. session_active true with launching false means
+Big Picture is up (appid 0) or a game is running. Either way the rig is
+busy: never report it as idle or offer to start a session. false means truly
+idle."""
 
 GET_GAME_DETAILS = """\
 Details for one appid: tags/description/score from the catalog, plus any

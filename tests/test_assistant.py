@@ -8,7 +8,7 @@ import types
 import pytest
 
 from helpers import CapturingLog, seed_lock
-from slopstation import sessionlock, statefile
+from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.llm import assistant, backends, media_tools
 from slopstation.agent.tools import library, steamstore
@@ -360,6 +360,23 @@ def test_now_playing_reports_whether_the_rig_is_busy(impls):
     assert r["ok"] and r["session_active"] is True, r
     seed_lock(sessionlock.LOCK_STALE_S + 60)  # stale = free, same as ever
     assert impls["get_now_playing"]({})["session_active"] is False
+
+
+def test_now_playing_tells_a_launch_from_a_live_session(
+    live_dispatch, log, monkeypatch
+):
+    # The lock is held from the chord to the end of the session; READY on the
+    # PC is what separates "starting" from "up".
+    impls = assistant.tool_impls(live_dispatch, log)
+    monkeypatch.setattr(gamepc, "playing", lambda: "0")
+    seed_lock(0)
+    monkeypatch.setattr(gamepc, "status", lambda: "NOTREADY")
+    r = impls["get_now_playing"]({})
+    assert r["session_active"] is True and r["launching"] is True, r
+    monkeypatch.setattr(gamepc, "status", lambda: "ab12cd")
+    assert impls["get_now_playing"]({})["launching"] is False
+    monkeypatch.setattr(gamepc, "status", lambda: (_ for _ in ()).throw(OSError()))
+    assert impls["get_now_playing"]({})["launching"] is True, "unreachable = not up"
 
 
 def test_game_details_names_installed_and_owned_only_games(impls):
