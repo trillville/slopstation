@@ -1,11 +1,4 @@
-"""K15 voice agent: wake word -> session pipeline -> dispatch.
-
-Each wake builds ONE PipelineWorker (mic -> Flux STT -> turn resolver ->
-GrammarGate -> speaker), torn down at session end; the wake loop itself is
-raw PyAudio + openWakeWord, outside Pipecat. Forced by Flux: it connects when the pipeline
-comes up (during setup since pipecat 1.8) with no app-facing
-connect/disconnect, and its socket dies ~20-30 s after audio stops. Sessions
-end on an exit phrase or the idle timeout (holdWindowS).
+"""Run the wake-word listener and a Pipecat pipeline for each voice session.
 
 Modes:
   (default)             run the agent
@@ -17,9 +10,7 @@ Modes:
   --text                the assistant REPL (brain/backends.py); --provider,
                         --model, --effort pick the A/B side
 
-Composition root and wake loop only; audio.py owns PortAudio,
-session_runtime.py owns one session. Never load-bearing: the chord listener is
-a separate process and must survive anything that happens here.
+Audio handling lives in audio.py and session execution in session_runtime.py.
 """
 
 import argparse
@@ -48,17 +39,12 @@ log = logbook.logger("voice")
 
 
 def refresh_library_bg():
-    """Catalog sync off the wake loop: a slow/asleep PC (30 s ssh timeout)
-    must not delay a wake. Fail-soft; no-ops if one is running. Session close
-    calls this so an install made DURING a session lands at once, ahead of the
-    periodic sync."""
+    """Refresh the library without blocking wake detection."""
     threading.Thread(target=library.sync, daemon=True).start()
 
 
 def prewarm_imports_bg(provider):
-    """Import pipecat's services + the provider SDK at boot: several seconds
-    on the K15's U-class CPU, once ~6.5 s of dead air on the first wake.
-    Safe off-thread - imports are idempotent and lock-protected."""
+    """Import Pipecat and the selected provider in the background."""
 
     def warm():
         import pipecat.pipeline.pipeline  # noqa: F401
@@ -74,11 +60,7 @@ def prewarm_imports_bg(provider):
             import pipecat.services.openai.responses.llm  # noqa: F401
         else:
             import pipecat.services.anthropic.llm  # noqa: F401
-        # Last and guarded: pipecat 1.8 defers nltk (+sklearn) to a warm that
-        # otherwise runs INSIDE the first worker's setup - StartFrame waits on
-        # it (~0.9 s dev box), and a missing punkt_tab even runs nltk.download
-        # there against the 20 s setup ceiling. Internal module, so a pipecat
-        # rename must not cost the imports above.
+        # Prewarm optional language dependencies without blocking startup.
         try:
             from pipecat.utils.prewarm import warm_deferred_imports
 
@@ -90,8 +72,7 @@ def prewarm_imports_bg(provider):
 
 
 def bench_mode(args, cfg, secrets):
-    """The one-shot modes that need config but no wake loop: the exit code,
-    or None to run the agent. --devices is handled before config."""
+    """Run a one-shot mode, or return ``None`` for the normal agent."""
     voice = cfg["voice"]
     if args.earcons:
         pa, _, output_idx = open_audio(voice)
@@ -133,9 +114,7 @@ def bench_mode(args, cfg, secrets):
 
 
 def warn_config(voice):
-    """Settings that are legal but probably not what was meant. Warn, never
-    refuse: the INACTIVE provider must not block startup."""
-    # The Messages API accepts full model ids, not CLI aliases.
+    """Warn about settings that are valid but likely unintended."""
     if not voice["assistantModelAnthropic"].startswith("claude-"):
         log.warn(
             "config_suspect",
@@ -153,14 +132,8 @@ def warn_config(voice):
 
 
 def make_ducker(cfg, dry_run):
-    """The session ducker as one duck(restore) call; a no-op when ducking is
-    off."""
+    """Return a session volume controller or a no-op."""
     voice = cfg["voice"]
-    # Session-length room ducking; details on TvDucker. Steps are SOUNDBAR
-    # volume points, moved by remote-key relay and verified against the TV's
-    # readback. Off unless duckSteps/duckToPct AND tvIp are set. First use on
-    # a machine needs `slopstation.agent.tools.tv_remote pair`, accepted on
-    # the TV.
     duck_steps = int(voice.get("duckSteps", 0) or 0)
     duck_to_pct = int(voice.get("duckToPct", 0) or 0)
     if duck_to_pct and not 0 < duck_to_pct < 100:
@@ -267,8 +240,7 @@ def main():
 
     # Grammar built once: a YAML typo fails here, not per-wake.
     matcher = GrammarMatcher(voice)
-    # Ticks immediately, then every SYNC_S: the catalog a wake snapshots is
-    # minutes old rather than one-session-behind, and no wake waits on ssh.
+    # Refresh periodically without blocking wake detection.
     events.Ticker("library-sync", library.SYNC_S, library.periodic_sync()).start()
     prewarm_imports_bg(voice["assistantProvider"])
     if brain_live:
@@ -401,7 +373,7 @@ def main():
 
     remote.start(cfg, secrets, log)
 
-    # Before the wake loop, so the first session is traced too. Fail-soft.
+    # Configure tracing before the first session.
     sentry.setup(cfg, log)
 
     # LAST: open_audio blocks until the configured device answers (~15 s on a

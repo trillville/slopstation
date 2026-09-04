@@ -1,11 +1,4 @@
-"""One voice session: the per-wake Pipecat pipeline (mic -> Flux STT ->
-turn resolver -> GrammarGate -> speaker, plus the optional LLM assistant
-lane) and the cross-session context carry. "Session" here is the voice
-session, not the couch session (the lock in state/).
-
-Heavy imports (pipecat, provider SDKs) stay INSIDE Session.run so importing
-this module is cheap.
-"""
+"""Build and run one Pipecat voice session."""
 
 import time
 from typing import Any
@@ -22,9 +15,7 @@ CARRY: dict[str, Any] = {"messages": [], "t": 0.0}  # cross-session context
 
 
 def _trim_carry(messages):
-    """Carry only whole tool exchanges: a tool result without its call is a
-    400 from the provider. Drop from the front until a plain user turn, and
-    drop a trailing assistant turn whose tool calls have no results."""
+    """Keep only complete tool exchanges beginning with a user message."""
     msgs = list(messages)
     while msgs and msgs[0].get("role") != "user":
         msgs.pop(0)
@@ -44,8 +35,7 @@ def _make_tts(voice, secrets):
 
 
 def _make_llm(voice, secrets, system_text):
-    """The LLM, chosen by config.assistantProvider. OpenAI goes through the
-    Responses API, the one that lets reasoning and tools coexist."""
+    """Create the configured assistant provider."""
     from slopstation.agent.brain.assistant import default_model
 
     provider = voice["assistantProvider"]
@@ -82,9 +72,7 @@ def _make_llm(voice, secrets, system_text):
 
 
 class Session:
-    """One voice session, from a wake to idle or an exit phrase: build the
-    pipeline (mic -> Flux -> turn resolver -> GrammarGate -> speaker, plus
-    the LLM lane), run it, then save the transcript and the carry."""
+    """A voice pipeline running from wake until idle or an exit phrase."""
 
     def __init__(
         self,
@@ -140,8 +128,6 @@ class Session:
         cfg, secrets, voice = self.cfg, self.secrets, self.voice
         catalog = library.Catalog.load()
         game_terms = keyterms.load_titles(voice["keytermCount"], catalog.installed)
-        # Keyterm-boosted so the pre-roll wake phrase transcribes canonically
-        # and strip_wake matches.
         wake_phrase = _wake_phrase(voice["wakeModel"])
         terms = keyterms.stt_keyterms(voice, wake_phrase, catalog)
         log(
@@ -169,10 +155,7 @@ class Session:
             settings=DeepgramFluxSTTService.Settings(
                 model="flux-general-en",
                 eot_threshold=voice["eotThreshold"],
-                # Dormant: pipecat (still in 1.8.1) forwards Flux's
-                # EagerEndOfTurn as an InterimTranscriptionFrame, which
-                # GrammarGate (finals only) never sees. Its one live effect is
-                # resetting the idle clock.
+                # Pipecat currently exposes this only as an interim frame.
                 eager_eot_threshold=(
                     voice["eagerEotThreshold"]
                     if voice.get("eagerEnabled", True)

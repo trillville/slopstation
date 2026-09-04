@@ -1,15 +1,9 @@
-"""Structured events: one JSON object per line, beside the human log.
+"""Write structured JSONL events alongside the human-readable log.
 
-Every `log(...)` call lands twice - the human line in couch.log, and a record
-in logs/{service}-YYYYMMDD.jsonl that the OpenTelemetry Collector tails.
+Daily files are deleted when they expire rather than renamed because the log
+shipper keeps them open on Windows. Event writes do not raise to callers.
 
-No import of config or logbook: they import THIS, so secrets are loaded here
-rather than through config. Nothing here may open a socket or block, and a
-lost event never costs the caller. Daily files are never renamed - the shipper
-holds a read handle open on Windows - so the date is in the name and expired
-files are deleted.
-
-CLI, so smartd's alert script can emit too:
+CLI:
 
     python -m slopstation.events emit supervisor restart code=1 what=listener
 """
@@ -159,11 +153,7 @@ def _secret_values() -> set[str]:
     return _redactions
 
 
-# Credentials in a URL's query string. The pass above can only redact values
-# that are ON FILE, and a Steam access token is MINTED at runtime from the
-# refresh token, so secrets.json has never heard of it. A requests exception
-# quotes the whole URL it failed on, so `err=str(e)` shipped one in full
-# (2026-09-03, download_status_error). Over-redacting a log line is free.
+# Redact credentials embedded in URL query strings, including runtime tokens.
 _SECRET_QUERY = re.compile(
     r"((?:access_token|refresh_token|token|api_?key|key|password|passwd"
     r"|secret|auth|nonce|sessionid|steamloginsecure)=)[^&\s\"'<>]+",
@@ -172,8 +162,7 @@ _SECRET_QUERY = re.compile(
 
 
 def scrub(key: str, value: Any) -> Any:
-    """Redact by field name, then by known value, then by query-string shape.
-    Returns the safe value."""
+    """Remove secrets identified by field name, value, or URL syntax."""
     if any(h in key.lower() for h in _SECRET_NAME_HINTS):
         return "***"
     if isinstance(value, str) and value:

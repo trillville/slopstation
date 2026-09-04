@@ -1,12 +1,5 @@
-# Task \CouchGaming\StopGame, fired by Dispatch's `stop <appid>` verb. The appid
-# arrives via the stop-app marker (schtasks /Run can't pass args); Dispatch
-# already confirmed it IS the RunningAppID. Re-focuses Big Picture afterwards so
-# the couch controller keeps working.
-#
-# Escalation order is for save-data safety: app_stop (Steam's own teardown),
-# then CloseMainWindow (WM_CLOSE, honoured as save+quit by most games), then
-# taskkill /T /F, which can lose unsaved progress. Each phase verifies
-# RunningAppID cleared before escalating; the event records which path worked.
+# Stop a game through Steam, then its window, then a forced process-tree kill.
+# Each step verifies the game stopped before using the next, less safe method.
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\CouchGaming.common.ps1"
 Start-CgTranscript 'stopgame'

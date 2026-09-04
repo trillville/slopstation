@@ -1,18 +1,4 @@
-"""Wake pre-roll: keep mic audio flowing across the wake->pipeline gap.
-
-The session transport delivers mic audio only from StartFrame, and pipecat
-1.8 runs the Flux websocket connect during pipeline SETUP, before StartFrame
-- so without this "hey jarvis volume up" loses "volume up". WakeCapture keeps
-reading the wake stream through the whole session build; PrerollFeeder, a
-stage between transport.input() and Flux, stops it on StartFrame and replays
-the PCM - frames move serially through one queue, so Flux sees [StartFrame,
-pre-roll, live mic] in order. The capture must run until StartFrame, not be
-stopped at build start: the setup window (Flux handshake, 0.3-1.5 s) is
-otherwise covered by neither the capture nor the live mic.
-
-The transcript therefore starts with the wake phrase; grammar_gate.strip_wake
-removes it text-side.
-"""
+"""Preserve microphone audio recorded while a voice session starts."""
 
 from __future__ import annotations
 
@@ -37,17 +23,14 @@ def _rms(chunk: bytes) -> float:
 
 
 class WakeAck:
-    """One wake chime per session, claimed by whichever of the capture watcher
-    below and GrammarGate first sees the user stop talking - different
-    threads, hence the lock. The timestamp lets the gate fold a success earcon
-    landing on the chime into it."""
+    """Let one caller claim the wake chime and record when it happened."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._at: float | None = None
 
     def claim(self) -> bool:
-        """True for exactly one caller - the winner plays the chime."""
+        """Return true for the first caller only."""
         with self._lock:
             if self._at is not None:
                 return False
@@ -55,19 +38,18 @@ class WakeAck:
             return True
 
     def age(self) -> float:
-        """Seconds since the chime was claimed; inf while unclaimed."""
+        """Return seconds since the claim, or infinity before a claim."""
         with self._lock:
             return float("inf") if self._at is None else time.monotonic() - self._at
 
 
 class WakeCapture:
-    """Owns the wake stream from detection until stop(). stop() is idempotent
-    and returns all PCM captured (pre-detection ring included)."""
+    """Capture microphone audio until ``stop()`` returns the collected PCM."""
 
-    MAX_S = 30  # runaway guard: stop growing if a session build stalls
-    QUIET_MS = 350  # end-of-speech gap that earns the wake chime
-    QUIET_RATIO = 0.18  # of the loudest speech heard since the wake word
-    CHIME_BY_S = 1.5  # too noisy to tell -> chime anyway, never not at all
+    MAX_S = 30  # Stop buffering if session setup stalls.
+    QUIET_MS = 350  # Silence needed before the wake chime.
+    QUIET_RATIO = 0.18  # Fraction of the loudest speech since the wake word.
+    CHIME_BY_S = 1.5  # Chime by this deadline when silence is unclear.
 
     def __init__(self, stream, seed_chunks: Iterable[bytes], on_quiet=None) -> None:
         self._stream = stream
@@ -84,10 +66,7 @@ class WakeCapture:
         self._thread.start()
 
     def _watch(self, chunk: bytes) -> None:
-        """Fire the wake chime at end of speech, not at detection. Levels are
-        relative to the wake phrase, so a loud TV doesn't read as talking;
-        too loud to call chimes at CHIME_BY_S. Playback on its own thread -
-        stalling the pump would drop mic audio."""
+        """Play the wake chime after speech ends or the deadline passes."""
         if self._on_quiet is None:
             return
         level = _rms(chunk)
@@ -100,8 +79,7 @@ class WakeCapture:
             threading.Thread(target=fn, daemon=True).start()
 
     def disarm_deadline(self) -> None:
-        """Retire the CHIME_BY_S fallback at the pipeline handoff; quiet
-        detection and the gate's transcript backstop own the chime from here."""
+        """Disable the chime deadline after handing audio to the session."""
         self._chime_deadline = False
 
     def _pump(self) -> None:
@@ -110,7 +88,7 @@ class WakeCapture:
             try:
                 chunk = self._stream.read(CHUNK_SAMPLES, exception_on_overflow=False)
             except OSError:
-                break  # device vanished (BT flap) - keep what we have
+                break
             self._chunks.append(chunk)
             self._watch(chunk)
 

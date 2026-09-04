@@ -1,7 +1,7 @@
-"""One PortAudio world: device resolution, recovery, out-of-session playback,
-and the wake listener. Invariant: NEVER resolve a device against a PyAudio
-instance that predates a device change - PortAudio snapshots the device table
-at init.
+"""Resolve audio devices, recover streams, and run the wake listener.
+
+Resolve devices from a new PyAudio instance after device changes because
+PortAudio snapshots its device list at initialization.
 """
 
 from __future__ import annotations
@@ -181,10 +181,7 @@ def rebuild_audio(old_pa, voice: dict, listener) -> tuple:
 
 
 def play_pcm(pa, pcm: bytes, device_index: int | None = None) -> None:
-    """Blocking playback for the earcons outside a session (wake chime before
-    the pipeline is up, sleep chime after teardown). One retry after a settle:
-    Bluetooth outputs renegotiate profiles around our stream churn and can
-    transiently refuse to open (-9999). Never fatal."""
+    """Play an earcon, retrying once if the audio device is unavailable."""
     import pyaudio
 
     for attempt in (1, 2):
@@ -210,19 +207,12 @@ def play_pcm(pa, pcm: bytes, device_index: int | None = None) -> None:
 
 
 def dump_clip(ring, score, keep):
-    """Write the pre-roll that fired to a wav, oldest pruned past `keep`.
-
-    openWakeWord's custom verifier trains on real false activations, and a
-    transcript cannot be re-scored. This is the PRE-detection window, so
-    replaying it reproduces the score up to the crossing and not the peak
-    that follows it. Local only, never uploaded. Fail-soft."""
+    """Save a wake-detection audio clip and prune the oldest clips."""
     if keep <= 0 or not ring:
         return
     try:
         clips_dir().mkdir(parents=True, exist_ok=True)
-        # Milliseconds are load-bearing: the prune below trusts names to sort
-        # chronologically, and two fires in one second would collide. Same
-        # `now` as the seconds field so the tiebreaker cannot wrap.
+        # Milliseconds keep filenames ordered and reduce collisions.
         now = time.time()
         name = (
             f"wake-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}"
@@ -242,9 +232,7 @@ def dump_clip(ring, score, keep):
 
 
 def close_stream_quietly(stream) -> None:
-    """Best-effort close for a possibly-dead stream: after a -9999 host error
-    the stream is already torn down and stop/close themselves raise 'Stream
-    not open', replacing the original error."""
+    """Close a stream without replacing an earlier audio error."""
     for op in (stream.stop_stream, stream.close):
         try:
             op()
@@ -253,14 +241,13 @@ def close_stream_quietly(stream) -> None:
 
 
 class WakeListener:
-    """openWakeWord over a raw PyAudio stream. Owns the mic while DORMANT;
-    releases it before a session pipeline opens it."""
+    """Listen for the wake word through a raw PyAudio stream."""
 
     CHUNK = 1280  # oWW's native 80 ms hop
     PREROLL_CHUNKS = 25  # 2 s ring kept ahead of detection
     SILENT_CHUNKS = 375  # 30 s of literal zeros = dead stream
 
-    # Hand-trained models live in the repo: no upstream to re-fetch them from.
+    # Custom wake models are stored in the repository.
     MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 
     def __init__(self, pa, voice_cfg, input_device_index):

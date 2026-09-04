@@ -1,11 +1,4 @@
-"""Each provider's plain SDK loop - one turn, with its tool loop, to reply text
-- and the --text REPL that drives one locally.
-
-The backends are production: interfaces/text.py builds one per LAN chat session
-from BACKENDS, so this is the conversation path for text and MCP. The REPL
-wires only the base tool set, so it is not tool-for-tool with a live session;
-nothing here is on the wake path.
-"""
+"""Run assistant turns through Anthropic or OpenAI, including tool calls."""
 
 import json
 import time
@@ -15,19 +8,16 @@ from slopstation import config
 from slopstation.agent.brain import assistant, llm_audit
 from slopstation.agent.telemetry import sentry, traces
 
-# Both SDKs default to 600 s per attempt plus retries. remote.py abandons its
-# forward at 280 s and text.py holds the session lock for the whole turn, so a
-# stalled attempt has to die before every caller's patience, not after.
+# Keep provider timeouts shorter than the HTTP interface timeout.
 LLM_TIMEOUT_S = 90
 LLM_MAX_RETRIES = 1
 
 
-# --- provider backends: one turn (with its tool loop) -> reply text -----------
-# Each backend holds its own conversation state.
+# --- Provider backends --------------------------------------------------------
 
 
 class Backend:
-    """What the REPL and the trace need from either provider."""
+    """Provider-independent assistant backend."""
 
     model: str
     messages: list
@@ -56,11 +46,7 @@ class AnthropicBackend(Backend):
 
     @sentry.agent("assistant")
     def turn(self, system_text, user_text, impls):
-        # cache_control on the system block caches tools+system together: a
-        # breakpoint covers everything before it, and the render order is
-        # tools -> system -> messages. Small models have a
-        # minimum cacheable prefix (4096 tokens on Haiku 4.5) below which the
-        # marker silently does nothing; the REPL's cache w/r makes that visible.
+        # Cache the stable tools and system prompt together.
         system = [
             {
                 "type": "text",
@@ -72,9 +58,6 @@ class AnthropicBackend(Backend):
         spoken = []  # text carried across pause_turn continuations
         while True:
             tools = assistant.anthropic_tools(set(impls)) + self.server_tools
-            # The span closes before the tool loop below, so tool spans land
-            # beside it under the agent span rather than inside it - Sentry's
-            # documented hierarchy.
             with sentry.chat_span(
                 "anthropic",
                 self.model,
@@ -107,9 +90,7 @@ class AnthropicBackend(Backend):
             )
             self.messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason == "pause_turn":
-                # Contract: re-send the partial assistant content as-is and
-                # let the model continue. Server tool blocks need no
-                # client-side result; only the accumulated text matters.
+                # Server-side tool blocks require no client result.
                 if text:
                     spoken.append(text)
                 continue
@@ -131,9 +112,7 @@ class AnthropicBackend(Backend):
 
 
 class OpenAIBackend(Backend):
-    """Responses API: reasoning and tool calls coexist here, unlike the legacy
-    chat-completions endpoint. State is server-side via previous_response_id,
-    which also threads reasoning items across tool calls."""
+    """Run a stateful conversation through the OpenAI Responses API."""
 
     key = assistant.PROVIDER_KEY["openai"]
 
@@ -187,9 +166,7 @@ class OpenAIBackend(Backend):
             self.cache_note = (
                 f"cache r{getattr(det, 'cached_tokens', 0) or 0}" if det else ""
             )
-            # Server-side searches are ITEMS in resp.output, not function
-            # calls: filtering to function_call drops them entirely and the
-            # trace then carries no evidence a lookup happened.
+            # Server-side searches are separate from function calls.
             for o in resp.output:
                 hit = llm_audit.search_item(o)
                 if hit:
@@ -229,10 +206,7 @@ BACKENDS: dict[str, Callable[..., Backend]] = {
 
 
 def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
-    """--text mode: type transcripts, see replies + tool calls + latency. The
-    voice pipeline's system prompt and tool schemas, but only the base tool set
-    - no operations, media or steam. Pick with --provider anthropic|openai
-    [--model <id>] [--effort none|low|medium|high]."""
+    """Run the text interface with the base assistant tools."""
     from slopstation.agent.brain.dispatch import Dispatch
 
     provider = provider or cfg["voice"]["assistantProvider"]

@@ -1,11 +1,7 @@
-"""The session lock and its marker files, shared by couch.py, the chord
-listener and the voice agent's dispatch.
+"""Coordinate ownership of the controller with a filesystem lock.
 
-`state/session.lock` says whether a launch or a live session owns the Puck.
-Its mtime is what liveness keys on; its content is the owner note
-("<turn> <pid>") that release() checks. Taking it is one filesystem operation
-- an exclusive create, or an atomic swap over a stale lock - so racing
-launches produce exactly one winner.
+The lock contains a turn ID and process ID. Its modification time indicates
+liveness, and acquisition is atomic so concurrent launches have one winner.
 """
 
 from __future__ import annotations
@@ -42,21 +38,14 @@ def age() -> float | None:
 
 
 def active(age_s: float | None = None) -> bool:
-    """True while a launch or a live session owns the Puck. A stale lock reads
-    as free on purpose: LOCK_STALE_S of deafness beats a permanently deaf
-    chord lane."""
+    """Return whether a recent session lock exists."""
     if age_s is None:
         age_s = age()
     return age_s is not None and age_s < LOCK_STALE_S
 
 
 def _recycle_stale(content: str) -> bool:
-    """Swap a fresh lock over a stale one; True if THIS call now owns it.
-
-    The swap is one os.replace, never unlink-then-create, which would let two
-    racers win. A guard file taken with O_EXCL serialises recyclers, the
-    staleness check is repeated inside it, and the guard itself is what gets
-    swapped in. A guard orphaned mid-section is recycled after 10 s."""
+    """Atomically replace a stale lock and return whether this call won."""
     guard = lock_file().with_name("session.lock.recycle")
     try:
         if time.time() - guard.stat().st_mtime > 10:
@@ -73,9 +62,8 @@ def _recycle_stale(content: str) -> bool:
             if active():
                 return False  # a racer took it while we opened the guard
             f.write(content)
-        # After the close: Windows will not rename an open file. A losing
-        # racer's stat can deny the swap, so retry - but re-read staleness
-        # first, or a release landing in between puts a live lock under us.
+        # Windows cannot replace an open file. Recheck ownership after a
+        # collision so a live lock is never replaced.
         for _ in range(8):
             try:
                 os.replace(guard, lock_file())
@@ -96,9 +84,7 @@ def _recycle_stale(content: str) -> bool:
 
 
 def acquire(content: str = "") -> bool:
-    """Take the session lock; True only if THIS call put the file there, by
-    exclusive create or by the swap over a stale lock. `content` is the owner
-    note ("<turn> <pid>") that release() reads back."""
+    """Acquire the session lock and store its owner note."""
     lock_file().parent.mkdir(exist_ok=True)
     denied = None
     for attempt in (1, 2, 3):
@@ -109,9 +95,7 @@ def acquire(content: str = "") -> bool:
         except FileExistsError:
             denied = None
         except PermissionError as e:
-            # Windows spells a racing create as a sharing violation. A real
-            # ACL problem lands here too, told apart below by no lock existing
-            # once the dust settles.
+            # Windows may report a racing create as a sharing violation.
             denied = e
         if active() or attempt == 3:
             break
@@ -131,8 +115,7 @@ def touch() -> None:
 
 
 def adopt(content: str) -> None:
-    """Take over an existing lock (reconcile's resume): rewrite the owner note
-    so release() recognises us. Doubles as the first heartbeat."""
+    """Replace an existing lock's owner note and refresh its timestamp."""
     try:
         lock_file().write_text(content, encoding="utf-8")
     except OSError:
@@ -140,9 +123,7 @@ def adopt(content: str) -> None:
 
 
 def release() -> bool:
-    """Unlink the lock if this process still owns it; True if it did. A lock
-    recycled out from under us is the successor's, and unlinking it would
-    free a live session. A note with no readable pid releases anyway."""
+    """Remove the lock if this process still owns it."""
     try:
         parts = lock_file().read_text(encoding="utf-8").split()
     except OSError:

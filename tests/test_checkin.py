@@ -1,6 +1,4 @@
-"""Cron check-ins - the URL built out of the DSN, the upsert
-payload, and the fail-soft rules that keep a lane alive when Sentry is not.
-"""
+"""Test Sentry check-in URLs, payloads, and error handling."""
 
 import json
 import time
@@ -82,7 +80,7 @@ def test_monitor_config_is_a_json_upsert_naming_a_schedule():
     assert checkin.INTERVAL_S == 60, "the schedule above says one minute"
 
 
-# -- fail-soft -----------------------------------------------------------------
+# -- Error handling ------------------------------------------------------------
 
 
 def test_send_answers_false_and_does_not_sit_on_an_unroutable_host():

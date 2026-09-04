@@ -1,10 +1,4 @@
-"""The per-lane logger: every call prints, appends the human line to couch.log,
-and emits the same event as JSON for the log shipper (events.py).
-
-Event names are a closed vocabulary that dashboards group by and alerts fire
-on, so variable data goes in fields, never in the name; tests/test_event_names
-freezes the set. warn/error mean the user lost something they would notice.
-"""
+"""Write human-readable and structured event logs."""
 
 from __future__ import annotations
 
@@ -16,9 +10,7 @@ from slopstation import events, paths
 
 
 def rotate(max_bytes: int = 5_000_000) -> None:
-    """Two-generation rotation: couch.log -> couch.log.1 past the cap. Called
-    at K15 boot (reconcile) and listener startup. Writers open-append-close
-    per line, so a lost rename just rotates on the next call."""
+    """Rotate couch.log to couch.log.1 when it exceeds the size limit."""
     logf = paths.couch_log()
     try:
         if logf.stat().st_size > max_bytes:

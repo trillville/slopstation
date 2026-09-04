@@ -1,6 +1,4 @@
-"""TvDucker - on-gate, verified ledger, key-loss top-ups, user
-takeover, and the debt that self-heals a failed restore.
-"""
+"""Test TV volume ducking and restoration."""
 
 import dataclasses
 

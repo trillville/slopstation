@@ -1,7 +1,4 @@
-"""The gaming PC as the K15 sees it: one ssh call per Dispatch.ps1 verb, the
-turn tag on the mutating ones, and the answer words. Dispatch.ps1 is the
-server; tests/test_turn.py holds the two in step.
-"""
+"""Run Dispatch.ps1 commands on the gaming PC over SSH."""
 
 from __future__ import annotations
 
@@ -13,11 +10,8 @@ from slopstation import config, events
 def ssh(cmd: str, timeout: float = 15) -> str:
     """Run one Dispatch verb on the host; returns its stdout.
 
-    stdout only, so stderr noise stays out of state comparisons; Dispatch
-    reports its own failures as FAILED:<code>. check=True is load-bearing: an
-    unreachable host RAISES instead of returning ssh's error text as session
-    state - otherwise the READY poll reads 'ssh: connect ... timed out' as
-    READY, and watch() never detects sleep."""
+    ``check=True`` prevents SSH errors from being mistaken for session state.
+    """
     r = subprocess.run(
         ["ssh", config.current()["sshHost"], cmd],
         capture_output=True,

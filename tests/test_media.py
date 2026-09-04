@@ -1061,7 +1061,7 @@ def test_observe_series_counts_aired_monitored_episodes(svc):
     assert canceled["canceled"] and not canceled["complete"]
 
 
-# --- authoritative abandonment ------------------------------------------------
+# --- Abandoned requests -------------------------------------------------------
 
 
 def test_delete_movie_cancels_its_downloads(svc):

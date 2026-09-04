@@ -1,9 +1,4 @@
-"""Assistant lane: system prompt, tool schemas, and tool impls.
-
-Shared by the Pipecat pipeline (voice) and brain/backends.py (text and MCP);
-every tool routes through the same dispatch.py as the grammar gate.
-An appid that isn't in the index is refused at the tool boundary.
-"""
+"""Define the assistant prompt, tools, and tool implementations."""
 
 import concurrent.futures
 import json
@@ -19,9 +14,7 @@ from slopstation.agent.tools import library, steamstore
 
 
 def system_instruction(cfg, interface="voice"):
-    """prompts.RULES + a config-derived tail (date, spoken input names, volume
-    ceiling, mute semantics) + the catalog. Built once per session, so none
-    of it moves under the prompt cache."""
+    """Build the system prompt from configuration and the game catalog."""
     voice = cfg["voice"]
     inputs = voice.get("inputs", {})
     # A day with no zone resolves toward UTC and dates an evening brief
@@ -72,11 +65,7 @@ def tool_impls(
     steam=None,
     media=None,
 ):
-    """name -> fn(args: dict) -> dict, shared by pipeline and REPL. What is
-    wired in gates what is offered: list_operations needs the operations
-    ledger, the media tools a media service, and steamDataTools false drops
-    the two store tools - from the schemas too, so the model never sees
-    them."""
+    """Return the tool implementations enabled by the supplied services."""
 
     def _unknown(tool, appid):
         """The refusal for an appid outside the catalog, else None."""
@@ -269,11 +258,8 @@ def tool_impls(
         if not installed:
             o = library.load().get("owned", {}).get(str(appid))
             name = o.get("name") if o else None
-        # Facets are opt-in and work for ANY appid, not just owned. The
-        # independent ones run concurrently; hltb runs after, since it needs
-        # the name price (or a fallback GetItems lookup) supplies. Each facet
-        # is fail-soft: one that raises drops to None. Live store calls, so
-        # steamDataTools gates them too.
+        # Optional lookups run concurrently. Completion times run afterward
+        # because they need the resolved game name.
         store_on = voice is None or voice.get("steamDataTools", True)
         want = (args.get("facets") or []) if store_on else []
         tasks = {}
@@ -354,8 +340,6 @@ def tool_impls(
                 return {"ok": True, "source": source, "games": steam.download_status()}
             except Exception as e:
                 log.error("download_status_error", err=str(e))
-                # No cause named: this is the catch-all, and the one time it
-                # fired the cause was a dropped connection, not enrollment.
                 return {
                     "ok": False,
                     "error": "couldn't reach Steam for the download status just now",
@@ -561,9 +545,7 @@ TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
 
 
 def record_tool_call(name, args, out, log=None):
-    """Emit one tool call to both telemetry sinks; the voice pipeline and the
-    text interface both record through here. Pipecat's llm span carries only
-    the completion text, so this event is the record of which tool ran."""
+    """Record a tool call in Sentry and the local log."""
     try:
         sentry.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
     except Exception:
@@ -574,9 +556,7 @@ def record_tool_call(name, args, out, log=None):
 
 
 def function_schemas(impls, log):
-    """Pipecat FunctionSchema list with auto-registering async handlers. Tool
-    impls call blocking dispatch (ssh/serial) - run them off the event loop so
-    audio and the Flux socket keep flowing."""
+    """Build Pipecat schemas that run blocking tools in worker threads."""
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -588,9 +568,7 @@ def function_schemas(impls, log):
             try:
                 out = await asyncio.to_thread(fn, args)
             except Exception as e:
-                # Fail-soft backstop for the whole tool surface: an impl that
-                # raises must never leave result_callback uncalled - that
-                # breaks the turn instead of answering.
+                # Always return a result so a tool exception cannot hang the turn.
                 log.error("tool_error", tool=name, err=repr(e))
                 out = {
                     "ok": False,

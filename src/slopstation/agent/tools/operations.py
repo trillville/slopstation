@@ -1,6 +1,4 @@
-"""Durable correlation and observation for externally-owned work. The CLI
-lives in operations_monitors; `python -m slopstation.agent.tools.operations`
-still reaches it."""
+"""Persist and correlate work performed by external services."""
 
 import time
 import uuid
@@ -45,7 +43,7 @@ def _summary(operation, state):
 
 
 class OperationStore:
-    """One K15-owned JSON ledger; external systems remain authoritative."""
+    """Store tracked operations in a local JSON file."""
 
     def __init__(self, log, on_terminal=None, on_notification=None):
         self.log = log

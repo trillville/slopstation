@@ -1,7 +1,4 @@
-"""The Steam Controller's haptics over the Puck: the interface latch, report
-builders, the play engine, the thud vocabulary. Shared by the chord listener,
-haptic_test, calibrate and doctor.
-"""
+"""Play Steam Controller haptics through the Puck."""
 
 import struct
 import time
@@ -11,16 +8,11 @@ from collections.abc import Sequence
 # 0x1304 = USB_PRODUCT_VALVE_STEAM_PROTEUS_DONGLE in SDL's usb_ids.h.
 VID, PID = 0x28DE, 0x1304
 
-# Input report type the controller streams; measured by calibrate.py, not a
-# Valve contract - re-run it after a firmware update. Also the interface that
-# takes haptic output reports.
+# Input report type measured by calibrate.py. Recheck after firmware updates.
 RID_INPUT = 0x42  # ID_TRITON_CONTROLLER_STATE in SDL
 
-# --- Triton haptic output reports ---------------------------------------------
-# Layouts from SDL's steam/controller_structs.h (Nov 2024 snapshot; re-verify
-# after controller firmware updates). Plain HID output reports (dev.write) on
-# the same interface that streams 0x42 state reports. All u16 little-endian,
-# no padding.
+# Layouts from SDL's steam/controller_structs.h. All u16 values are
+# little-endian with no padding.
 HAPTIC_RUMBLE = 0x80  # 10B: type u8, intensity u16, left speed u16 + gain s8, right speed u16 + gain s8
 # 8B: side u8, on_us u16, off_us u16, repeat u16; zero-filled = stop tone
 HAPTIC_PULSE = 0x81

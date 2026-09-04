@@ -1,5 +1,4 @@
-"""Every GitHub workflow parses. A YAML error there is a workflow GitHub never
-loads, and the only place that shows is a run that never happens."""
+"""Verify that every GitHub workflow contains valid YAML."""
 
 import pytest
 import yaml

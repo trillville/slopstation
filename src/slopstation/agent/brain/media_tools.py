@@ -1,7 +1,4 @@
-"""The media tools: Radarr/Sonarr lookups, requests and deletes through the
-media boundary (tools/media.py). Requests are tracked in the operations ledger;
-a delete is confirmed across two turns.
-"""
+"""Define assistant tools for media lookup, requests, and deletion."""
 
 import time
 from typing import Any

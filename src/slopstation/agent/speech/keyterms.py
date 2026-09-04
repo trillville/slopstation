@@ -1,6 +1,4 @@
-"""The vocabulary handed to Flux: installed titles, collection names and the
-tag/genre words people ask with, each in the form Flux will hear it.
-"""
+"""Build the title and genre vocabulary supplied to Flux."""
 
 from slopstation import logbook
 from slopstation.agent.tools import library, titles

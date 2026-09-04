@@ -1,17 +1,10 @@
-# Ship the gaming-pc script set from this checkout to the runtime folder
-# (default C:\CouchGaming) as one checked set, and stamp `build-id` so the K15
-# can ask what is running (`ssh gamepc version`, compared by doctor.py).
-# test_turn.py drills the REPO's Dispatch.ps1, so a hand-copied deployed copy
-# would drift undetected.
+# Deploy the gaming-PC scripts as one checked set and record the build ID.
 #
 # Run from a checkout, on the PC:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Deploy.ps1
 #
-# -WaitMinutes > 0 parks until no session owns the PC (what CD passes). The
-# default 0 keeps the hand-run behaviour: warn and copy anyway.
-#
-# Does not copy itself. The gitignored runtime pieces (vhui64.exe, OFFICE.lnk,
-# TV-GAMING.lnk) are warned about, never touched.
+# ``-WaitMinutes`` waits for active sessions. This script and local runtime
+# files are not copied.
 param([string]$Dest = 'C:\CouchGaming', [int]$WaitMinutes = 0)
 
 $scripts = @(
@@ -21,10 +14,7 @@ $scripts = @(
     'Office-Safety.ps1', 'Wake-Safety.ps1'
 )
 
-# Own copy of the emitter, like Dispatch.ps1's: this script cannot dot-source
-# CouchGaming.common.ps1 - it is what ships it, and common's $CG.LogDir would
-# point at this checkout instead of the runtime folder the shipper tails.
-# test_event_names.py holds every $owned list equal to events._EMITTER_OWNED.
+# This emitter writes directly to the runtime log directory being deployed.
 function Write-CgEvent([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 'info') {
     try {
         $rec = [ordered]@{
@@ -52,10 +42,7 @@ function Write-CgEvent([string]$Event, [hashtable]$Fields = @{}, [string]$Level 
     } catch { }     # telemetry never costs a session
 }
 
-# A session owns the PC while the READY marker exists or an Enter/Exit task is
-# still running - mid-Enter the marker is not written yet, and that is the
-# window where a swapped script set would run half-old. Literal path for the
-# same reason Dispatch.ps1 uses one: no common.ps1 here.
+# Do not replace scripts while a session task or READY marker is active.
 $ready = 'C:\ProgramData\CouchGaming\ready'
 
 function Test-SessionLive {
@@ -67,7 +54,7 @@ function Test-SessionLive {
     return $false
 }
 
-# Refuse a partial set - half a contract is skew.
+# Refuse incomplete script sets.
 $missing = $scripts | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) }
 if ($missing) {
     Write-Host "ABORT: this checkout is missing $($missing -join ', ') - nothing copied"
@@ -97,15 +84,13 @@ foreach ($f in $scripts) {
     Write-Host "  $f"
 }
 
-# Short rev, '-dirty' when the tree has uncommitted edits. No git degrades to a
-# dated 'nogit' stamp, never a failure.
+# Record the short revision and whether deployed files have local changes.
 $rev = ''
 if (Get-Command git -ErrorAction SilentlyContinue) {
     $out = git -C $PSScriptRoot rev-parse --short HEAD
     if ($LASTEXITCODE -eq 0 -and $out) {
         $rev = "$out".Trim()
-        # Scoped to this folder: -dirty must mean the SHIPPED scripts do not
-        # match the rev. A scratch file elsewhere in the checkout does not.
+        # Only changes to deployed files mark the build dirty.
         if (git -C $PSScriptRoot status --porcelain .) { $rev += '-dirty' }
     }
 }

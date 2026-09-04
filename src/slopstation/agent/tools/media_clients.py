@@ -1,8 +1,4 @@
-"""Authenticated transports for the media sidecars, and the vocabulary every
-media module shares. Leaf of the media import graph.
-
-Nothing above this module speaks HTTP.
-"""
+"""Authenticated HTTP clients and shared types for media services."""
 
 import datetime
 import http.cookies

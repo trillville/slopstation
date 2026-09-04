@@ -1,6 +1,4 @@
-"""The vocabulary handed to Flux - offline, no Deepgram, no audio.
-Pins the list's shape; bench/probe_stt.py is the live counterpart.
-"""
+"""Test the vocabulary generated for Flux speech recognition."""
 
 import pytest
 

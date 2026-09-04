@@ -1,6 +1,4 @@
-"""The grammar gate, offline - utterance -> intent+slots,
-negatives that must fall through to the assistant lane.
-"""
+"""Test offline grammar matching and assistant fallthrough."""
 
 import asyncio
 import dataclasses
@@ -90,8 +88,7 @@ TABLE = [
     ("show my roguelikes", "ShowCollection", {"collection": "roguelikes"}),
     ("show me the co-op collection", "ShowCollection", {"collection": "co op"}),
     ("open my mech games collection", "ShowCollection", {"collection": "mech games"}),
-    # {game} is a wildcard carrying normalized spoken text; title->appid
-    # resolution is titles.py, tested in test_library.
+    # The {game} wildcard contains the spoken title.
     ("play armored core six", "PlayGame", {"game": "armored core 6"}),
     ("launch elden ring", "PlayGame", {"game": "elden ring"}),
     ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),

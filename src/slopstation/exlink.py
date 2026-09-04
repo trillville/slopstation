@@ -1,9 +1,7 @@
-"""Manual Ex-Link TV control:
+"""Send manual Ex-Link TV commands.
 
-    python exlink.py power_on|power_off|hdmi1..4|vol_up|vol_down|mute_toggle
-    python exlink.py vol_set <0-100>
-
-Frames come from tv.py, the COM port from config.json.
+python exlink.py power_on|power_off|hdmi1..4|vol_up|vol_down|mute_toggle
+python exlink.py vol_set <0-100>
 """
 
 import sys

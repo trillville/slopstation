@@ -1,11 +1,4 @@
-"""Catalog + system prompt from a fixture index, tool-impl
-validation, pipecat/anthropic constructions with dummy keys, and a tolerant
-live metadata fetch.
-
-The catalog is the fixture index written under the runtime home conftest gives
-each test, so every tool reads the same library.json and the session lock
-lives beside it.
-"""
+"""Test assistant prompts, tool validation, and provider configuration."""
 
 import asyncio
 import re
@@ -40,10 +33,10 @@ VOICE_ON = {
     "location": {"city": "Portland", "region": "", "country": "US", "timezone": ""},
 }
 
-INSTALLED = 892970  # Valheim: installed and played
-INSTALLED_AT = 1756000000  # when its content last finished changing
-OWNED_ONLY = 413150  # Stardew Valley: owned, never installed
-UNKNOWN = 999999999  # in neither layer of the index
+INSTALLED = 892970  # Valheim
+INSTALLED_AT = 1756000000
+OWNED_ONLY = 413150  # Stardew Valley
+UNKNOWN = 999999999  # Not in the index.
 
 INDEX = {
     "refreshed": "2026-08-22T00:00:00",
@@ -312,15 +305,14 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
 
 
 def test_catalog_dates_the_rows_the_pc_stamped(catalog):
-    """The install date rides the inst token, so "what did I just download" is
-    answerable from the row rather than from a tool."""
+    """Catalog rows include Steam's update date when available."""
     rows = {line.split("|")[0]: line for line in library.catalog_lines()}
     day = time.strftime("%Y-%m-%d", time.localtime(INSTALLED_AT))
     assert rows[str(INSTALLED)].split("|")[6] == f"inst:{day}"
-    # A row synced before the games verb carried the stamp keeps the bare token.
+    # Missing update times keep the bare token.
     assert rows["1245620"].split("|")[6] == "inst"
     assert rows[str(OWNED_ONLY)].split("|")[6] == "notinst"
-    # And the header says what the token means, or the model invents one.
+    # The prompt defines the date suffix.
     assert "inst[:YYYY-MM-DD last install or update]" in assistant.system_instruction(
         CFG_MIN
     )
@@ -549,7 +541,7 @@ def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
     assert len(assistant.function_schemas(gated, log)) == 8
 
 
-# -- fail-soft: an impl that RAISES must return an error, never propagate ------
+# -- Tool errors ---------------------------------------------------------------
 
 
 def test_a_dead_token_falls_through_to_the_tv_path(
@@ -765,8 +757,7 @@ def test_tool_defs_render_flat_for_both_providers(catalog):
         for t in ot
     )
     assert all("input_schema" in t for t in at)
-    # The volume range lives in the prompt (clamped), not the tool def;
-    # session-start semantics live on launch_game.
+    # The prompt defines the volume range and launch_game starts sessions.
     assert "0-100" not in flat(assistant.TOOL_DEFS)
     assert "never call start_session" in flat(assistant.TOOL_DEFS)
     # Closing the mic must never read as ending the session on the TV - spelled
@@ -798,14 +789,13 @@ def test_server_side_search_follows_the_knob(catalog):
     }
     assert "user_location" not in assistant.server_tools(bare, "openai")[0]
     si_on = assistant.system_instruction({**CFG_MIN, "voice": VOICE_ON})
-    # Spoken-register guardrails: no citations in TTS, no narrating search.
+    # Voice replies omit citations and search narration.
     assert "search the web" in flat(si_on) and "NO citations" in flat(si_on)
     assert "Never announce or offer to search" in flat(si_on)
 
 
 def test_anthropic_backend_resumes_a_paused_turn(monkeypatch):
-    # pause_turn: the partial assistant content is re-sent as-is and the text
-    # accumulates - the API's documented contract.
+    # Resuming a turn keeps the partial assistant response.
     b = backends.AnthropicBackend(
         {"anthropicApiKey": "x" * 24}, "claude-haiku-4-5", voice=VOICE_ON
     )

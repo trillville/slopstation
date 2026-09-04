@@ -1,4 +1,4 @@
-"""Authenticated LAN text interface over the production assistant tools."""
+"""Expose the assistant through an authenticated LAN text API."""
 
 import hmac
 import json
@@ -103,9 +103,7 @@ class TextApplication:
             for name, fn in session["impls"].items():
 
                 def audited(args, _name=name, _fn=fn):
-                    # The raise is load-bearing here: the LAN client learns a
-                    # tool failed as a 500. The voice lane fail-softs instead,
-                    # because an uncalled result_callback breaks the turn.
+                    # Let the LAN client receive tool failures as HTTP 500.
                     try:
                         out = _fn(args)
                     except Exception:

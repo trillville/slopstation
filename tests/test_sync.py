@@ -1,8 +1,4 @@
-"""Library.sync orchestration - layer 1 always, deals (layer 4)
-keyless and staleness-gated, owned gated on staleness + key, metadata top-up
-only, and the non-reentrant guard against stacked crawls. All layer fns are
-mocked; no network.
-"""
+"""Tests for library synchronization. All external calls are mocked."""
 
 import threading
 import time
@@ -26,11 +22,8 @@ def stamp(age_s=0):
 
 
 @pytest.fixture
-def layers(monkeypatch):
-    """Every layer fn mocked to count into `calls`; `state` is what the loads
-    answer (index, meta_cache, deals) and what layer 1 returns (refresh_rc).
-    No Steam key, and deals fresh, so nothing beyond layers 1+1b runs until a
-    test turns a knob."""
+def sync_env(monkeypatch):
+    """Provide mocked refresh calls and cached state."""
     calls = dict(NOTHING)
     state = {
         "index": {},
@@ -39,10 +32,9 @@ def layers(monkeypatch):
         "refresh_rc": 0,
     }
 
-    def hit(layer):
-        calls[layer] += 1
+    def hit(source):
+        calls[source] += 1
 
-    # refresh returns 0 on success (PC awake); sync gates collections on it.
     def mock_refresh(**k):
         hit("installed")
         return state["refresh_rc"]
@@ -51,42 +43,40 @@ def layers(monkeypatch):
     monkeypatch.setattr(library, "refresh_collections", lambda: hit("collections"))
     monkeypatch.setattr(library, "refresh_owned", lambda: hit("owned"))
     monkeypatch.setattr(library, "refresh_meta", lambda appids, limit=200: hit("meta"))
-    # Layer 4: deals is keyless and MUST be mocked here or sync() hits the store.
     monkeypatch.setattr(steamstore, "refresh_deals", lambda: hit("deals"))
     monkeypatch.setattr(steamstore, "load_deals", lambda: state["deals"])
     monkeypatch.setattr(library, "load", lambda: state["index"])
     monkeypatch.setattr(library, "load_meta", lambda: state["meta_cache"])
-    # A lock of this test's own, so a stacked-crawl test cannot inherit one.
     monkeypatch.setattr(library, "_sync_lock", threading.Lock())
     monkeypatch.setattr(config, "secrets", lambda: dict(KEYLESS))
     return types.SimpleNamespace(calls=calls, state=state)
 
 
 @pytest.fixture
-def keyed(layers, monkeypatch):
-    """The same layers with a Steam key and id on file."""
+def keyed(sync_env, monkeypatch):
+    """Add Steam credentials to the synchronization environment."""
     monkeypatch.setattr(config, "secrets", lambda: dict(KEYED))
-    return layers
+    return sync_env
 
 
-def test_no_key_runs_layers_1_and_4_only(layers):
-    # deals fresh here -> skipped
-    layers.state["index"] = {"installed": [{"appid": 1}]}
+def test_no_key_refreshes_local_data_only(sync_env):
+    sync_env.state["index"] = {"installed": [{"appid": 1}]}
     library.sync()
-    assert layers.calls == {**NOTHING, "installed": 1, "collections": 1}, layers.calls
+    assert sync_env.calls == {**NOTHING, "installed": 1, "collections": 1}, (
+        sync_env.calls
+    )
 
 
-def test_deals_stale_refreshes_without_a_key(layers):
-    # GetWishlist/specials are keyless.
-    layers.state["deals"] = {}  # no stamp -> stale
-    layers.state["index"] = {"installed": [{"appid": 1}]}
+def test_deals_stale_refreshes_without_a_key(sync_env):
+    sync_env.state["deals"] = {}
+    sync_env.state["index"] = {"installed": [{"appid": 1}]}
     library.sync()
-    assert layers.calls == {
+    assert sync_env.calls == {
         **NOTHING,
         "installed": 1,
         "deals": 1,
         "collections": 1,
-    }, layers.calls
+    }, sync_env.calls
 
 
 def test_key_and_stale_owned_run_all_three(keyed):
@@ -144,14 +134,13 @@ def test_second_sync_while_one_runs_is_a_noop(keyed, monkeypatch):
         library.sync()  # must no-op immediately
         assert keyed.calls["installed"] == 1, "second sync should not have entered"
     finally:
-        # Let the first sync finish while the layers are still mocked.
+        # Let the first sync finish while the refresh calls are still mocked.
         barrier.set()
         t.join()
 
 
 def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
-    """The events: the real layer 1 says sync_done / sync_skipped on the
-    library lane."""
+    """Refresh logs success and skipped events."""
     log = CapturingLog("library")
     monkeypatch.setattr(library, "log", log)
     monkeypatch.setattr(
@@ -172,8 +161,7 @@ def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
 
 
 def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
-    # One sync per tick while the PC answers; after a skip, ticks no-op until
-    # SYNC_ASLEEP_S has passed, so a sleeping night is quiet.
+    # Wait SYNC_ASLEEP_S before retrying an unavailable PC.
     now = {"t": 0.0}
     monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
     keyed.state["index"] = {"installed": [{"appid": 1}]}
@@ -182,8 +170,6 @@ def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
 
     tick()
     assert keyed.calls["installed"] == 1
-    # A reachable PC arms nothing: the ticker's own interval is the pacing, so
-    # there is no deadline for a tick to land on and skip.
     tick()
     assert keyed.calls["installed"] == 2
     now["t"] += library.SYNC_S
@@ -200,8 +186,7 @@ def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
 
 
 def test_periodic_sync_does_not_back_off_on_a_held_lock(keyed, monkeypatch):
-    # A session-close sync holding the lock says nothing about the PC, so the
-    # next tick must still be SYNC_S away, not SYNC_ASLEEP_S.
+    # A held lock does not trigger the unavailable-PC delay.
     now = {"t": 0.0}
     monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
     keyed.state["index"] = {"installed": [{"appid": 1}]}
@@ -214,14 +199,12 @@ def test_periodic_sync_does_not_back_off_on_a_held_lock(keyed, monkeypatch):
         assert keyed.calls["installed"] == 0, "the held lock should have won"
     finally:
         library._sync_lock.release()
-    # No clock movement: a tick that armed ANY hold-off would no-op here.
     tick()
     assert keyed.calls["installed"] == 1
 
 
 def test_periodic_sync_does_not_back_off_on_a_local_failure(keyed, monkeypatch):
-    """A raise from layer 1 is a broken disk, not a sleeping PC. It is already
-    reported as sync_failed; it must not also buy a 30-minute hold-off."""
+    """Local refresh errors do not trigger the unavailable-PC delay."""
     now = {"t": 0.0}
     monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
     keyed.state["index"] = {"installed": [{"appid": 1}]}
@@ -235,6 +218,5 @@ def test_periodic_sync_does_not_back_off_on_a_local_failure(keyed, monkeypatch):
 
     tick()
     assert keyed.calls["installed"] == 1
-    # No clock movement: an armed hold-off of any length would swallow this.
     tick()
     assert keyed.calls["installed"] == 2

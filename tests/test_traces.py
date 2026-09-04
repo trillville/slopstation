@@ -1,6 +1,4 @@
-"""Traces write one JSON file per conversation, tolerate SDK
-objects (model_dump), prune expired files on save, and fail soft.
-"""
+"""Test conversation trace writing and retention."""
 
 import json
 import os
@@ -59,7 +57,7 @@ def test_expired_file_is_pruned_by_the_next_save(trace_dir):
 
 
 def test_unwritable_directory_fails_soft(tmp_path, monkeypatch):
-    # Fail-soft: unwritable DIR (parent is a file) must not raise.
+    # An unwritable trace directory does not raise.
     blocker = tmp_path / "blocker"
     blocker.write_text("", encoding="utf-8")
     monkeypatch.setattr(traces, "directory", lambda: blocker / "sub")

@@ -1,5 +1,4 @@
-# CouchGaming.common.ps1 - shared library for the couch gaming session scripts.
-# Dot-source from a sibling script:   . "$PSScriptRoot\CouchGaming.common.ps1"
+# Shared functions for couch-gaming scripts.
 
 $CG = @{
     Root        = $PSScriptRoot
@@ -17,10 +16,7 @@ $CG = @{
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
     StateDir    = 'C:\ProgramData\CouchGaming'   # cross-context state, not under Root
 }
-# Markers under StateDir, shared with the dependency-free Dispatch.ps1 as
-# literals; agent/tests/test_ps_parse.py holds the two sets equal. Dispatch
-# writes turn/launch-app/nav-target/stop-app (schtasks /Run can't pass args)
-# and reads ready.
+# Marker paths shared with Dispatch.ps1.
 $CG.ReadyMarker  = Join-Path $CG.StateDir 'ready'
 $CG.TurnMarker   = Join-Path $CG.StateDir 'turn'
 $CG.LaunchMarker = Join-Path $CG.StateDir 'launch-app'
@@ -29,10 +25,7 @@ $CG.StopMarker   = Join-Path $CG.StateDir 'stop-app'
 
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-# The K15's correlation id for this run; absent or malformed = no correlation,
-# never a failure. Re-validated on read (it ends up in a filename) and
-# age-gated (unelevated LaunchGame cannot delete elevated Dispatch's marker, so
-# a logon hours later must not tag its events with a long-dead launch).
+# Read a recent correlation ID. The value is validated before use in filenames.
 $script:CgTurnStaleSec = 300
 
 function Get-CgTurn {
@@ -46,8 +39,7 @@ function Get-CgTurn {
 }
 
 $script:CgTurn = Get-CgTurn
-# Start-CgTranscript sets the lane (every emitting script calls it first);
-# this default only labels an emit that precedes it.
+# Start-CgTranscript replaces this default lane.
 $script:CgLane = if ($MyInvocation.PSCommandPath) {
     [IO.Path]::GetFileNameWithoutExtension($MyInvocation.PSCommandPath).ToLower()
 } else { 'pc' }
@@ -56,7 +48,7 @@ function Log($m) {
     Write-Host ("[+{0,5:n1}s] {1}" -f $script:CgStopwatch.Elapsed.TotalSeconds, $m)
 }
 
-# Structured twin of Log, for the milestones dashboards count and alerts fire on.
+# Emit one structured event.
 function Write-CgEvent {
     param([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 'info')
     try {
@@ -71,8 +63,7 @@ function Write-CgEvent {
         if ($script:CgTurn) { $rec.turn = $script:CgTurn }
         $rec.host = $env:COMPUTERNAME
         $rec.dur_ms = [int]$script:CgStopwatch.Elapsed.TotalMilliseconds
-        # A caller field must never overwrite an emitter-owned key (they are
-        # the log attributes alerts select on), so it is prefixed rather than dropped.
+        # Prefix fields that would overwrite event metadata.
         $owned = @('ts','level','env','service','lane','event','host')
         foreach ($k in $Fields.Keys) {
             if ($owned -contains $k) { $rec["f_$k"] = $Fields[$k] }
@@ -80,8 +71,7 @@ function Write-CgEvent {
         }
         $file = Join-Path $CG.LogDir ("pc-{0}.jsonl" -f (Get-Date -Format yyyyMMdd))
         $line = ConvertTo-Json -InputObject $rec -Compress -Depth 4
-        # BOM-less encoder: PowerShell 5.1's `-Encoding utf8` means WITH BOM,
-        # and those three bytes before the first '{' break JSON parsing.
+        # PowerShell 5.1's UTF-8 encoding adds a BOM, so use .NET directly.
         [IO.File]::AppendAllText(
             $file, $line + [Environment]::NewLine,
             (New-Object System.Text.UTF8Encoding($false)))
@@ -91,8 +81,7 @@ function Write-CgEvent {
 function Start-CgTranscript([string]$Tag) {
     $script:CgLane = $Tag
     New-Item -ItemType Directory -Force -Path $CG.LogDir -ErrorAction SilentlyContinue | Out-Null
-    # The turn rides in the filename too, so a folder listing maps transcripts
-    # to launches.
+    # Include the turn ID so transcripts can be matched to launches.
     $stamp = Get-Date -Format yyyyMMdd-HHmmss
     $name = if ($script:CgTurn) { "{0}-{1}-{2}.log" -f $Tag, $stamp, $script:CgTurn }
             else                { "{0}-{1}.log" -f $Tag, $stamp }
@@ -101,8 +90,7 @@ function Start-CgTranscript([string]$Tag) {
     Write-CgEvent "${Tag}_start"
 }
 
-# `| Out-Null` alone does not suppress the "not transcribing" error a failed
-# Start-CgTranscript leaves behind.
+# Stop-Transcript writes an error when no transcript is active.
 function Stop-CgTranscript { try { Stop-Transcript | Out-Null } catch { } }
 
 function Wait-For([scriptblock]$Cond, [double]$TimeoutSec, [string]$What) {
@@ -114,8 +102,7 @@ function Wait-For([scriptblock]$Cond, [double]$TimeoutSec, [string]$What) {
     Log "TIMEOUT waiting for: $What"; return $false
 }
 
-# Display state must be probed from a fresh process: WMI display classes and
-# in-process GetSystemMetrics report stale values in windowless scheduled tasks.
+# Probe display state in a fresh process to avoid stale scheduled-task data.
 $script:CgProbe = @'
 Add-Type -Namespace W -Name N -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);'
 [void][W.N]::SetProcessDPIAware()
@@ -125,9 +112,7 @@ $script:CgProbeEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes
 
 function Get-PrimaryHeight { [int](& powershell.exe -NoProfile -EncodedCommand $script:CgProbeEnc | Select-Object -Last 1) }
 
-# Topology sentinel: primary-display height equals the TV's. Holds only because
-# the desk ultrawide is not 2160 tall - a 4K or 5K2K (5120x2160) desk monitor
-# would read as "TV is primary" at every logon.
+# The current desk monitor is not 2160 pixels tall, so height identifies the TV.
 function Test-TvIsPrimary { (Get-PrimaryHeight) -eq $CG.TvHeight }
 
 function Get-TvNames {
@@ -135,42 +120,31 @@ function Get-TvNames {
     ForEach-Object { -join [char[]]($_.UserFriendlyName | Where-Object { $_ -ne 0 }) }
 }
 
-# Windows device enumeration is the arbiter of claim state - VirtualHere's IPC
-# report can read "FAILED: API Timeout" on operations that succeeded.
+# Use Windows device enumeration to verify VirtualHere claim state.
 function Test-PuckPresent {
     [bool](Get-PnpDevice -ErrorAction SilentlyContinue |
            Where-Object { $_.InstanceId -match $CG.PuckHwId -and $_.Status -eq 'OK' })
 }
 
-# Console-less -t calls throw GUI popups unless redirected to a file with -r.
+# Redirect console-less VirtualHere calls to prevent GUI error dialogs.
 function Get-VhList {
     & $CG.Vh -t "LIST" -r $CG.VhResult | Out-Null
     Start-Sleep -Milliseconds 400
     (Get-Content $CG.VhResult -ErrorAction SilentlyContinue) -join ' '
 }
 
-# A VirtualHere address is the server's kernel device number, not a physical
-# port: every unbind/rebind - which is what a claim IS - can renumber the Puck.
-# A pinned address goes stale silently, so resolve through the stable NAME
-# per use.
-# '' means the hub is not listing the Puck at all.
+# Resolve the Puck by name because VirtualHere addresses can change.
 function Get-PuckAddress {
     if ((Get-VhList) -match ([regex]::Escape($CG.PuckName) + '\s*\(([^)]+)\)')) { $Matches[1] }
     else { '' }
 }
 
-# A lingering DisplayMagician instance produces the frozen profile window on
-# the next apply - kill after every apply.
+# Stop DisplayMagician after each profile application.
 function Stop-DisplayMagician {
     Get-Process DisplayMagician -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
-# A failed profile apply explains itself only in DisplayMagician's own log,
-# under LOCALAPPDATA, which it rotates away within hours. Copying it beside
-# the transcript puts it in the shipper's
-# C:/CouchGaming/logs/*.log glob and under Clear-OldLogs retention.
-# Level-filtered: a run is ~800 KB of TRACE, ERROR/WARN/INFO ~5%. Swallows
-# everything - it runs inside Enter's try block.
+# Copy DisplayMagician warnings and errors into the retained session logs.
 function Copy-DisplayMagicianLog([string]$Tag) {
     try {
         $src = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'DisplayMagician\Logs\*.log') `
@@ -231,11 +205,7 @@ public static IntPtr WindowByTitle(string want) {
 '@
 }
 
-# Steam delivers input to the FOCUSED window, so a session left holding the
-# desktop library window moves nothing on the TV while the Steam button keeps
-# working (Steam Input handles that one globally). EXACT title, so it cannot
-# hit 'Steam Big Picture Mode' - safe to call at any point. Minimize, not
-# unfocus: a window laid out at 4K comes back garbled at the ultrawide's res.
+# Minimize the desktop Steam window so Big Picture can receive controller input.
 function Hide-DesktopSteam {
     $h = [CG.Win]::WindowByTitle($CG.SteamWindow)
     if ($h -ne [IntPtr]::Zero) {
@@ -244,8 +214,7 @@ function Hide-DesktopSteam {
     }
 }
 
-# What is actually in front, for the ready event to carry: `focused=True` once
-# rode in a ready event while the controller was reaching nothing.
+# Return the foreground window title for the ready event.
 function Get-ForegroundTitle { [CG.Win]::ForegroundTitle() }
 
 # Steam's install path, from the registry. Shared with Launch-Game.
@@ -256,9 +225,7 @@ function Get-SteamExe {
     $exe
 }
 
-# Every steamapps library root: SteamPath plus each "path" in libraryfolders.vdf
-# (games live on any drive). Dispatch parses the same vdf inline, since it must
-# stay dependency-free.
+# Return every library root listed in libraryfolders.vdf.
 function Get-SteamLibraryRoots {
     $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
     if (-not $steam) { return @() }
@@ -288,25 +255,17 @@ function Get-AppInstallDir([int]$AppId) {
     $null
 }
 
-# The processes belonging to a game: those whose image path sits under its
-# install dir (Steam exposes no appid->pid map). .Path throws for processes
-# this unelevated task can't open - guard and skip. Empty if unresolvable.
+# Find game processes by matching executable paths to the install directory.
 function Get-GameProcess([int]$AppId) {
     $dir = Get-AppInstallDir $AppId
     if (-not $dir) { return @() }
-    # Dir PLUS a trailing separator, so a sibling whose folder name is a string
-    # prefix ("Half-Life 2" vs "Half-Life 2 Deathmatch") cannot cross-match.
+    # The trailing separator prevents matches against sibling directory names.
     $prefix = $dir.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     Get-Process | Where-Object {
         try { $_.Path -and $_.Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) }
         catch { $false }
     }
 }
-
-# No Resume-Game here: `-applaunch` on the already-running game just before the
-# ready marker puts its 2160p re-init inside the window where the K15 is still
-# flipping the TV input - black screen, dead controller, ~40 s. Only the K15
-# can observe when the TV actually goes live.
 
 # Apply a profile shortcut, verify with $Until, kill DisplayMagician either way.
 function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$TimeoutSec = 20, [int]$Attempts = 1, [string]$What = 'profile applied') {
@@ -319,22 +278,18 @@ function Invoke-DisplayProfile([string]$Lnk, [scriptblock]$Until, [double]$Timeo
     return $false
 }
 
-# Claim the Puck, verified by Windows enumeration. A stale claim is released
-# first: VirtualHere re-acquires the device on reconnect, and Steam holding
-# handles to the old instance yields a haptics-alive / inputs-dead controller.
+# Recycle stale claims, then claim the Puck and verify it through Windows.
 function Request-PuckClaim {
     if (Test-PuckPresent) {
         Log 'stale Puck claim detected - releasing for a fresh instance'
         & $CG.Vh -t "STOP USING,$(Get-PuckAddress)" -r $CG.VhResult
         if (-not (Wait-For { -not (Test-PuckPresent) } 6 'stale claim released')) {
-            # Proceeding would pass the claim gate on the stale, dead instance,
-            # reproducing the inputs-dead controller this recycle prevents.
             throw 'stale Puck claim would not release - aborting launch'
         }
     }
     $claimed = $false
     for ($i = 1; -not $claimed -and $i -le 2; $i++) {
-        # Re-resolved per attempt: the stale release above renumbers the device.
+        # Re-resolve because releasing a stale claim can change the address.
         $addr = Get-PuckAddress
         & $CG.Vh -t "USE,$addr" -r $CG.VhResult
         $claimed = Wait-For { Test-PuckPresent } 8 "Puck enumerated (attempt $i)"
@@ -357,10 +312,7 @@ function Request-PuckRelease([int]$Attempts = 3) {
     $released
 }
 
-# Task guards for the \CouchGaming\ folder. Get-ScheduledTask, not schtasks
-# /Query: .State is an enum, while /FO LIST prints a LOCALISED string that a
-# non-English install would read as idle - the direction that re-dispatches
-# Enter on top of a healthy launch. A missing task reads as not running.
+# Query task state through the locale-independent ScheduledTasks API.
 function Test-CgTaskRunning([string]$Name) {
     (Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName $Name -ErrorAction SilentlyContinue).State -eq 'Running'
 }
@@ -369,14 +321,10 @@ function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | O
 
 # Transcript retention; called from Office-Safety (logon) and Wake-Safety (wake).
 function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
-    # Transcripts and daily jsonl move to archive\ after $ArchiveAfterDays and
-    # are deleted at $Days. The move is for the SHIPPER: it tails every file
-    # its glob matches at ~0.04% of a core each (110 finished files was ~4.5%),
-    # and only a running transcript or today's jsonl can still grow.
+    # Archive completed logs so the shipper watches only files that may grow.
     $archive = Join-Path $CG.LogDir 'archive'
     New-Item -ItemType Directory -Force -Path $archive -ErrorAction SilentlyContinue | Out-Null
-    # Wildcard path + -Include and NO -Recurse: this directory's files only, so
-    # archive\ is never re-scanned. (-Filter takes one pattern, hence -Include.)
+    # Search only the live log directory, not archive\.
     Get-ChildItem (Join-Path $CG.LogDir '*') -Include *.log, *.jsonl -File `
             -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$ArchiveAfterDays) } |
@@ -389,11 +337,7 @@ function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
-# The cross-machine session API: Enter writes it last, the K15 switches the TV
-# input only after seeing it, Exit/safeties remove it. Content is the launch's
-# turn id, which the K15 must see echoed before it trusts a READY, so a stale
-# marker cannot satisfy a new launch's poll. No turn falls back to a timestamp,
-# accepted as a legacy READY, so either side may deploy first.
+# Enter writes the READY marker after setup; Exit and safety tasks remove it.
 function Set-ReadyMarker {
     New-Item -ItemType Directory -Force (Split-Path $CG.ReadyMarker) | Out-Null
     $stamp = if ($script:CgTurn) { $script:CgTurn } else { (Get-Date).ToString('o') }
@@ -402,15 +346,8 @@ function Set-ReadyMarker {
 function Clear-ReadyMarker { Remove-Item $CG.ReadyMarker -ErrorAction SilentlyContinue }
 function Test-ReadyMarker  { Test-Path $CG.ReadyMarker }
 
-# One-shot payload from Dispatch to a task (LaunchMarker/NavMarker/StopMarker):
-# the first line, trimmed, or $null when absent; the caller validates.
-# Stringify before trimming: Get-Content on an empty file returns $null in
-# PS 5.1 and .Trim() would throw before the delete, stranding the marker. The
-# delete is best-effort: the marker is owned by the ELEVATED sshd forced-command
-# context (BUILTIN\Administrators; Users read-only) and the tasks run limited,
-# so it is DENIED - fatal under ErrorActionPreference=Stop. Dispatch clears it
-# before every write, so a survivor is overwritten; only a MANUAL task run
-# replays the last value.
+# Read a one-shot task payload. Deletion can fail when Dispatch created the
+# marker from an elevated SSH session.
 function Read-CgMarker([string]$Path) {
     if (-not (Test-Path $Path)) { return $null }
     $raw = Get-Content $Path -TotalCount 1

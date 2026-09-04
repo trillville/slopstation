@@ -1,19 +1,8 @@
 name: cd
 
-# Pull-based by necessity: neither machine accepts inbound connections, so each
-# runs a self-hosted runner that polls GitHub outbound. Triggered by ci rather
-# than by push, so only a commit whose test suite and mypy went green can
-# reach the machines. workflow_run runs are listed under the default branch and
-# do not appear in the commit's own check list - look for them under Actions.
-#
-# PUBLIC REPO, SELF-HOSTED RUNNERS. The `workflow_run.event == 'push'` guard
-# below is load-bearing, not a tidy-up. A fork's pull request runs ci HERE, and
-# its head branch is whatever the fork called it - `main` included - so the
-# branch filter alone would let a stranger's commit reach the gaming PC as
-# `Deploy.ps1`. Only a push can put a commit on this repo's main, and a fork
-# cannot push. Never widen this to a trigger a fork can reach. checkout is
-# held at v7+ for the same reason: from v7 it refuses a fork PR ref under
-# workflow_run on its own, independently of the guard.
+# Self-hosted runners poll GitHub because neither machine accepts inbound
+# connections. Deploy only after CI succeeds on a push to this repository.
+# The event guard prevents code from fork pull requests reaching the runners.
 on:
   workflow_run:
     workflows: [ci]
@@ -21,22 +10,18 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Windows PowerShell 5.1, explicitly: the runner default is pwsh, which is not
-# installed on either machine.
+# Both runners use Windows PowerShell 5.1 rather than pwsh.
 defaults:
   run:
     shell: powershell
 
 env:
   SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-  # The couch gate's budget. Both legs park rather than end a live session, so
-  # every job timeout below must exceed this.
+  # Job timeouts must exceed the wait for an active couch session.
   WAIT_MINUTES: "120"
 
 jobs:
-  # Per machine, not per workflow: a shared group would let the sleeping PC's
-  # queued job hold the K15's deploys behind it for the whole 24 h a job can
-  # sit unclaimed. Never cancelled mid-copy.
+  # Use separate queues so an offline gaming PC does not block K15 deploys.
   gaming-pc:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
@@ -59,11 +44,7 @@ jobs:
       - name: doctor
         run: powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
 
-  # Independent of the PC leg, deliberately. The PC sleeps, so its runner is
-  # offline most of the time; chaining these would mean the K15 - which is
-  # always on - deployed nothing until someone next played a game. The cost is
-  # that doctor.py's deploy-skew row reads as a mismatch until the PC catches
-  # up on its own next wake, and that row is a WARN, not a FAIL.
+  # Deploy independently because the gaming PC runner is often offline.
   k15:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
@@ -75,11 +56,7 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 150
     steps:
-      # No actions/checkout: deploy.py runs from the LIVE checkout, which is
-      # the one holding the session lock it gates on and the rev doctor.py
-      # compares with the PC's build-id. It fast-forwards that checkout itself,
-      # so the copy that runs is the previous commit's - a broken deploy.py is
-      # fixed by hand on the K15, like any deployer.
+      # deploy.py updates the live checkout that owns the session lock.
       - name: deploy and doctor
         run: |
           & "$env:SLOP_HOME\.venv\Scripts\python.exe" -m slopstation.deploy --sha $env:SHA --wait-minutes $env:WAIT_MINUTES

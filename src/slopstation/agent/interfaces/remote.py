@@ -1,10 +1,4 @@
-"""MCP server for Claude connectors: one tool over the text interface.
-
-Hand-rolled and stdlib-only: the tool surface is one conversational call, so
-the protocol is three methods over JSON-RPC. Ignores Mcp-Session-Id - the
-client does not reliably echo it, and conversation identity rides in the tool
-arguments instead (see `session`).
-"""
+"""Expose the text interface as a small MCP server for Claude connectors."""
 
 import hmac
 import json

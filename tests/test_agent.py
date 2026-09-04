@@ -1,12 +1,4 @@
-"""Voice_agent.main() - lane bring-up per config shape, the bench
-modes, the wake loop's event order, dry-run plumbing, --once, a crashing
-session. Every external seam stubbed (audio, wake model, pipeline, announcer,
-operations, steam, telemetry).
-
-The fakes record what main() built into class attributes; the `stubbed`
-fixture empties those per test, so each run starts from nothing built and
-nothing scripted.
-"""
+"""Test voice-agent startup, modes, event order, and error handling."""
 
 import json
 import sys
@@ -196,8 +188,7 @@ def one_wake():
 
 @pytest.fixture
 def stubbed(monkeypatch):
-    """Every external seam of main() replaced, and every fake's recorder
-    emptied."""
+    """Replace external calls and reset fake recorders."""
     for cls in (
         FakeAnnouncer,
         FakeOperationStore,

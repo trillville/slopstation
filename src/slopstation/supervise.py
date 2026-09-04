@@ -1,18 +1,8 @@
-"""The lanes as scheduled tasks: what each one runs, and the verbs the deployer,
-the doctor and Start-Slopstation.bat use on them.
+"""Run and manage Slopstation's scheduled tasks.
 
-Task Scheduler owns the lifecycle - start at logon, one instance at a time, in
-the logged-on session where the Puck and the audio devices are - and
-Setup-K15-Tasks.ps1 declares it. Each task's action is
-
-    slopstation-lane <name>
-
-the wrapper below: install changed pins, run the lane, and run it again after
-a crash. The scheduler's own restart-on-failure does not fire on a non-zero
-exit (measured), so the wrapper carries that. A Windows service cannot host
-these lanes: session 0 reaches neither device.
-
-    slopstation-start          start what is down, reload what is up
+The task wrapper installs changed dependencies, runs a lane, and restarts it
+after a crash. The tasks run in the logged-in session so they can access audio
+and controller devices.
 """
 
 import argparse

@@ -1,11 +1,6 @@
-"""Earcons - the short tones the system answers with instead of speech:
-count vocabulary, session bookends, announcement cue. Synthesized from
-specs, so no binary assets; all PCM is SAMPLE_RATE mono s16le, ready to
-wrap in an OutputAudioRawFrame.
+"""Synthesize short tones for acknowledgements and session events.
 
-The counts are the contract, mirroring the haptic thuds: 1 = accepted,
-2 = busy, 3 = failed. A grammar-gate ack must be instant - never
-synthesize speech for it; pcm() is a dict lookup after first use.
+One tone means accepted, two means busy, and three means failed.
 """
 
 import numpy as np
@@ -13,8 +8,6 @@ import numpy as np
 SAMPLE_RATE = 16000
 GAP_MS = 70  # silence between the bursts of a counted earcon
 ATTACK_MS = 5  # per-note fade-in (click prevention)
-# per-note fade-out to true zero - a decaying note still clicks if it is simply
-# truncated
 RELEASE_MS = 10
 
 # Bell timbre: partials decaying faster the higher they are.
@@ -24,9 +17,7 @@ GAIN = 1.0  # global volume knob, config voice.earconGain
 
 
 def _seq(bursts, gap_ms=GAP_MS):
-    """Counted earcon -> notes at start offsets. Bursts never overlap: the
-    silence between them is what makes the count recoverable, by ear and by
-    test_earcons."""
+    """Convert tone bursts to notes with start offsets."""
     notes, t = [], 0
     for freq, dur in bursts:
         notes.append((freq, t, dur))
@@ -37,15 +28,11 @@ def _seq(bursts, gap_ms=GAP_MS):
 # name -> (peak amplitude, decay tau as a fraction of note duration,
 #          [(freq_hz, start_ms, dur_ms), ...])
 SPECS = {
-    # Bookends: ascending fifth to open, the same fifth descending to close.
     "wake": (3800, 0.32, [(784.0, 0, 200), (1174.7, 70, 310)]),
     "close": (2400, 0.32, [(1174.7, 0, 200), (784.0, 70, 340)]),
-    # The count vocabulary: ok = one bell on the wake chime's note, busy = the
-    # same note twice, fail = three falling.
     "ok": (5200, 0.30, _seq([(1174.7, 260)])),
     "busy": (4600, 0.26, _seq([(880.0, 150), (880.0, 150)])),
     "fail": (4600, 0.26, _seq([(698.5, 160), (587.3, 160), (440.0, 160)], 60)),
-    # Loudest: it arrives unasked, across the room.
     "announce": (6200, 0.30, _seq([(987.8, 200), (1318.5, 300)])),
 }
 
@@ -53,7 +40,7 @@ _cache: dict = {}
 
 
 def set_gain(gain):
-    """Global earcon volume (config voice.earconGain; 1.0 = as spec'd)."""
+    """Set the global earcon volume multiplier."""
     global GAIN
     gain = max(0.0, float(gain))
     if gain != GAIN:
@@ -89,8 +76,7 @@ def samples(name):
         mix = np.zeros(max(i + len(w) for i, w in zip(starts, waves, strict=True)))
         for i, w in zip(starts, waves, strict=True):
             mix[i : i + len(w)] += w
-        # Normalize to the spec'd peak: an amplitude means the same thing
-        # across earcons regardless of partial/note count.
+        # Normalize each earcon to its configured peak amplitude.
         mix *= amp * GAIN / max(float(np.max(np.abs(mix))), 1e-9)
         _cache[name] = np.clip(mix, -32767, 32767).astype(np.int16)
     return _cache[name]

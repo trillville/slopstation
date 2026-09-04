@@ -1,7 +1,4 @@
-"""Dispatch.py logic with every side effect mocked - lock arbiter,
-dry-run, volume stepping + clamp, mute, input map + the READY-gate on the
-gaming input, serial retry, ssh outcomes.
-"""
+"""Test command dispatch with side effects mocked."""
 
 import subprocess
 import time
@@ -9,7 +6,7 @@ import time
 import pytest
 
 from helpers import CapturingLog, seed_lock
-from slopstation import gamepc, sessionlock, tv  # gamepc: the ssh seam
+from slopstation import gamepc, sessionlock, tv
 from slopstation.agent.brain import dispatch as dp
 from slopstation.agent.tools import library
 
@@ -202,8 +199,7 @@ def test_play_game_session_live_ssh_outcomes_and_cold_start(monkeypatch, host, s
     assert d.play_game(1).ok
     host("BUSY:42")
     r = d.play_game(1)
-    # The blocker is named for the assistant lane; an index miss degrades to
-    # the bare id, never to a crash.
+    # An index miss reports the app ID instead of raising.
     assert not r.ok and r.earcon == "busy" and "BUSY:42" in r.detail, r
     monkeypatch.setattr(
         library, "installed_name", lambda a: {42: "Baldur's Gate 3"}.get(a)

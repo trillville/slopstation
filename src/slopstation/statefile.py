@@ -1,5 +1,4 @@
-"""JSON state files under state/: read with a default, write atomically, and
-serialise a load-mutate-write across threads and processes."""
+"""Read, write, and lock JSON state files."""
 
 from __future__ import annotations
 
@@ -22,9 +21,8 @@ def load(path: pathlib.Path, default: Any) -> Any:
 
 @contextlib.contextmanager
 def guard(path: pathlib.Path):
-    """Serialise one state file's load/mutate/write across threads AND
-    processes: write() is atomic per write, never across the pair, and the
-    voice agent, operations.py and media.py all mutate operations.json.
+    """Serialize a state file update across threads and processes.
+
     LK_NBLCK spins because LK_LOCK retries on its own 1 s timer. Windows drops
     the byte lock when the holder dies, so a killed CLI cannot wedge the agent."""
     lock = path.with_suffix(path.suffix + ".lock")

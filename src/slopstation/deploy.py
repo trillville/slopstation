@@ -1,17 +1,10 @@
-"""CD's K15 leg: land one commit on this checkout without ending a session.
+"""Deploy one commit to the K15 without interrupting an active session.
 
-Runs from the LIVE checkout, never a runner workspace: paths.HOME is what
-locates the session lock this gates on and the rev doctor.py compares with the
-gaming PC's build-id, so a workspace copy would gate on the wrong lock and
-leave the real checkout behind.
+Run this from the live checkout so it uses the active session lock.
 
     python -m slopstation.deploy --sha <sha> [--wait-minutes 120]
 
-Exit code = doctor.py's (its FAIL count); 1 if the deploy could not finish.
-The reload is `schtasks /End` then `/Run` on each lane's task. The scheduler
-starts a task in the session it was registered for - the logged-on user's,
-where the Puck and the audio devices are - whichever process asks, so the
-runner can bring the chord lane back even when it was down.
+The exit code is doctor.py's failure count, or 1 if deployment cannot finish.
 """
 
 from __future__ import annotations

@@ -1,6 +1,4 @@
-"""Structured events - the JSONL shape, levels, correlation
-context, the secret scrubber, daily rollover, and fail-soft.
-"""
+"""Test structured event output, redaction, and retention."""
 
 import json
 import os
@@ -145,7 +143,7 @@ def test_scrubber(monkeypatch):
     assert "supersecret" not in events.human("x", note="sk-ant-supersecretvalue123")
 
 
-# -- fail-soft -------------------------------------------------------------
+# -- Error handling --------------------------------------------------------
 
 
 def test_an_unwritable_log_dir_loses_the_write_not_the_event(monkeypatch, tmp_path):
@@ -249,10 +247,8 @@ def test_concurrent_emitters_keep_every_line(tmp_path):
 
 
 def test_scrubber_redacts_a_token_a_url_carried(monkeypatch):
-    """A minted access token is in no secrets file, so the value pass cannot
-    see it and only the query-string pass can. One shipped in full on
-    2026-09-03, quoted by a requests exception as part of the failing URL."""
-    monkeypatch.setattr(events, "_redactions", set())  # nothing on file to match
+    """Tokens embedded in exception URLs are redacted."""
+    monkeypatch.setattr(events, "_redactions", set())
     err = (
         "HTTPSConnectionPool(host='api.steampowered.com', port=443): Max "
         "retries exceeded with url: /IClientCommService/GetAllClientLogonInfo"
@@ -263,10 +259,8 @@ def test_scrubber_redacts_a_token_a_url_carried(monkeypatch):
     r = events.emit("voice", "download_status_error", events.ERROR, err=err)
     assert "eyJhbGciOi" not in json.dumps(r), r
     assert "access_token=***" in r["err"]
-    # The diagnosis has to survive, or redacting has cost us the log line.
+    # Preserve the non-secret error details.
     assert "UNEXPECTED_EOF_WHILE_READING" in r["err"]
     assert "GetAllClientLogonInfo" in r["err"]
-    # A Steam Web API key rides the same shape on a different call.
     assert events.scrub("err", "?key=DEADBEEF&steamid=7") == "?key=***&steamid=7"
-    # Ordinary text is untouched.
     assert events.scrub("text", "play hades two") == "play hades two"

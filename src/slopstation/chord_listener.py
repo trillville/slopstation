@@ -10,16 +10,12 @@ from slopstation.haptics import PID, RID_INPUT, VID
 BTN_BYTE = 4
 CHORD = 0x01 | 0x80  # Steam + right-trigger click
 HOLD_S = 2.0
-# An argv prefix, not a path: the package is installed, so there is no script
-# on disk to point at.
 COUCH = [sys.executable, "-m", "slopstation.couch"]
 
 # Re-bench after controller firmware updates.
 HAPTIC_GAIN = 0  # s8 dB-ish; 0 = natural level, 120 = clamped max
-# a held chord re-validates every ~2s; don't machine-gun the busy buzz
 BUSY_COOLDOWN_S = 5.0
 FAIL_CHECK_S = 2.0  # how often to look for couch.py's last_error marker
-# rate limit for chord_partial; an idle hand on the controller must not flood the lane
 PARTIAL_COOLDOWN_S = 10.0
 ERR_STALE_S = 600  # failures older than this are history, not news
 STANDOFF_POLL_S = 0.5  # how often to ask the lock whether the Puck is spoken for
@@ -28,7 +24,7 @@ log = logbook.logger("listener")
 
 
 def buzz(dev, pattern, what):
-    """Best-effort: a haptic failure must never delay or block anything."""
+    """Play a haptic pattern without blocking on errors."""
     try:
         haptics.play_pattern(dev, pattern, HAPTIC_GAIN)
         log("buzz_sent", pattern=what)

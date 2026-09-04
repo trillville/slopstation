@@ -1,8 +1,4 @@
-"""Guard: the event vocabulary is frozen. Dashboards group by event name and
-alerts fire on it, so a name or a field key that disappears is a telemetry
-regression; a new one is fine (add it here). Scans the emitters from source
-(_events_scan), so it runs on any checkout.
-"""
+"""Verify that event names and fields used by telemetry remain available."""
 
 import re
 

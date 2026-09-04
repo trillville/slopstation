@@ -1,9 +1,4 @@
-"""Free space on the volumes a session writes to, found by polling.
-
-SMART is not here. Reading a raw device needs Administrator and this lane runs
-as the desktop user; smartd holds that half (smartd.conf) and reaches the
-same event stream through `events.py emit`.
-"""
+"""Poll free space on volumes used by Slopstation."""
 
 import shutil
 

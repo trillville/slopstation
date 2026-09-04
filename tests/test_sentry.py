@@ -1,7 +1,4 @@
-"""The agent lane's Sentry wiring - the DSN gate, the OTLP target
-built from it, the span shapes we own, and the fail-soft rule that telemetry
-must never cost a voice session.
-"""
+"""Test Sentry configuration and trace shapes."""
 
 import json
 
@@ -72,7 +69,7 @@ def test_everything_no_ops_while_tracing_is_off():
     sentry.capture(RuntimeError("boom"))  # no SDK, no raise
 
 
-# -- fail-soft -------------------------------------------------------------
+# -- Error handling --------------------------------------------------------
 
 
 @pytest.fixture

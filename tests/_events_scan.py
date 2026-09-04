@@ -1,5 +1,4 @@
-"""Scan the repo's emitters for event names and the field keys each call site
-passes. test_event_names freezes the result; nothing else imports this."""
+"""Scan source files for emitted event names and fields."""
 
 import re
 

@@ -1,7 +1,4 @@
-"""Radarr and Sonarr request/observation boundary.
-
-No release or indexer result crosses this module's public interface.
-"""
+"""Request and inspect media through Radarr and Sonarr."""
 
 import argparse
 import datetime

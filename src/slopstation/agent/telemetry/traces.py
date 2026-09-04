@@ -1,9 +1,4 @@
-"""Conversation traces: one JSON file per conversation under state/traces/.
-
-The voice pipeline dumps its context at session end, the REPL on exit.
-Best-effort - a trace must never cost a session. No scheduler: each write
-prunes anything older than TTL_DAYS.
-"""
+"""Store conversation traces and remove expired files."""
 
 import json
 import time
@@ -26,12 +21,9 @@ def _jsonable(o):
 
 
 def save(kind, messages, meta=None, stem=None):
-    """Write {stamp}-{kind}.json and prune expired traces. Fail-soft: a full
-    disk or an unserializable object costs the trace, not the caller.
+    """Write a trace and prune expired files.
 
-    `stem` replaces the stamp so a conversation that saves on every turn
-    rewrites ONE file instead of leaving one per turn. Pass the stamp taken
-    when the conversation opened, so the name still sorts by start time.
+    ``stem`` keeps repeated saves for one conversation in the same file.
     """
     if not messages:
         return

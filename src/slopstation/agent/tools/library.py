@@ -1,16 +1,12 @@
-"""Game-library index builder.
+"""Build the game-library index from the gaming PC and Steam APIs.
 
-Layer 1 (installed) comes from `ssh gamepc games`. Layers 2-3 (owned/playtime
-via the Steam Web API, metadata via appdetails + SteamSpy) merge into the same
-file. Layer 4 is live store data (deals, search, reviews, news,
-how-long-to-beat), not the catalog; it lives in steamstore.py.
-
-Output: state/library.json, written atomically. sync() runs on a background
-thread at startup, every SYNC_S while the lane is up, and after each voice
-session.
+Installed games, collections, owned games, playtime, and metadata are stored
+in state/library.json. Live store data is handled by steamstore.py. ``sync()``
+runs at startup, after each voice session, and periodically while the service
+is running.
 
 CLI:
-    python -m slopstation.agent.tools.library sync                        (every layer, as the agent does)
+    python -m slopstation.agent.tools.library sync
     python -m slopstation.agent.tools.library refresh [--owned] [--meta [N]]
     python -m slopstation.agent.tools.library show
     python -m slopstation.agent.tools.library catalog
@@ -34,11 +30,11 @@ def library_file():
 log = logbook.logger("library")
 
 
-# --- layer 1 sources ----------------------------------------------------------
+# --- Gaming PC data -----------------------------------------------------------
 
 
 def fetch_installed_ssh() -> list[dict]:
-    """Production path (K15): the gaming PC enumerates its own ACFs."""
+    """Return the games installed on the gaming PC."""
     from slopstation import gamepc
 
     return parse_games_json(gamepc.games())
@@ -67,10 +63,7 @@ def installed_name(appid: int) -> str | None:
 
 
 class Catalog:
-    """One read of the index for one voice session - the pipeline's vocabulary,
-    resolvers and gate all see the same snapshot while the background sync
-    may be rewriting the file. Per-operation readers (dispatch, the tools)
-    keep reading the file."""
+    """A consistent library snapshot for one voice session."""
 
     def __init__(self, index: dict) -> None:
         self.installed = index.get("installed", [])
@@ -107,7 +100,7 @@ def fetch_collections_ssh() -> list[dict]:
 
 
 def refresh_collections() -> int:
-    """Collection name->id into the index. Fail-soft when the PC is asleep."""
+    """Refresh collection names and IDs when the gaming PC is reachable."""
     try:
         rows = fetch_collections_ssh()
     except Exception as e:
@@ -139,7 +132,7 @@ def show() -> int:
     return 0
 
 
-# --- layers 2-3: owned/playtime + metadata ------------------------------------
+# --- Steam account and metadata -----------------------------------------------
 
 
 def meta_cache_file():
@@ -150,8 +143,7 @@ _CTRL = {28: "full", 18: "partial"}  # Steam category ids
 
 
 def fetch_owned(api_key: str, steamid: str) -> dict:
-    """Account-global playtime + recency (appmanifest LastPlayed is
-    per-machine). One call, own key only."""
+    """Return account-wide playtime and recency data."""
     import requests
 
     r = requests.get(
@@ -178,8 +170,7 @@ def fetch_owned(api_key: str, steamid: str) -> dict:
 
 
 def fetch_meta_one(appid: int) -> dict:
-    """appdetails (genres/controller/desc/score/year) + SteamSpy tags. Caller
-    paces the requests."""
+    """Fetch store metadata and SteamSpy tags for one game."""
     import requests
 
     meta = {}
@@ -221,9 +212,10 @@ def _save_meta(cache: dict) -> None:
 
 
 def refresh_meta(appids: list[int], limit: int = 200) -> dict:
-    """Top up NEW appids only, ~1 req/2 s (appdetails' unofficial ceiling).
-    Saves after EACH fetch: the daemon crawl thread dies with the agent, so
-    batching would re-crawl from zero every restart. Cached forever."""
+    """Fetch uncached metadata at about one request every two seconds.
+
+    Save each result immediately so an interrupted refresh can resume.
+    """
     cache = load_meta()
     todo = [a for a in appids if str(a) not in cache][:limit]
     for i, appid in enumerate(todo):
@@ -256,35 +248,27 @@ NOT_GAMES = {228980}  # Steamworks Common Redistributables
 
 
 def ascii_only(s: str | None) -> str:
-    """ASCII-only: encoding-proof across every hop, (tm) glyphs are noise."""
+    """Strip non-ASCII characters from a display string."""
     return re.sub(r"[^\x20-\x7E]", "", s or "").strip()
 
 
 def fuzzy_key(name: str | None) -> str:
-    """Letters and digits only: rogue-like == Roguelike, 'co op' == Co-op,
-    and the hltb-cache key."""
+    """Normalize a name to lowercase ASCII letters and digits."""
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 
 def steam_creds() -> tuple[str, str] | None:
-    """(steamApiKey, steamId64) when both are real, else None. Logs nothing:
-    each caller decides whether a missing key is news."""
+    """Return the configured Steam API key and account ID, if valid."""
     s = config.secrets()
     key, sid = s.get("steamApiKey"), str(s.get("steamId64", ""))
     return (key, sid) if config.real_key(key) and sid.isdigit() else None
 
 
-# --- the sync orchestrator (all layers, staleness- and key-gated) ------------
-# Layer 1 needs the PC awake and fail-softs when asleep; layers 2-3 come from
-# the Steam cloud, so the catalog stays current while the rig sleeps.
-OWNED_MAX_AGE_S = 6 * 3600  # playtime/recency drift slowly; one call/6h
-# The catalog a session speaks from is snapshotted at session OPEN, so a sync
-# that runs at open is already too late for that conversation: the ceiling
-# below is how stale a just-installed game can be when the user asks about it.
+# --- Background refresh -------------------------------------------------------
+OWNED_MAX_AGE_S = 6 * 3600
+# Maximum age of installed-game data while the service is running.
 SYNC_S = 300
-# Layer 1 is the only one that needs the PC, and it fail-softs with a
-# sync_skipped per try. Holding off after one keeps a sleeping night at ~20
-# of those instead of ~290, which is the difference between signal and noise.
+# Wait longer after the gaming PC is unavailable.
 SYNC_ASLEEP_S = 1800
 _sync_lock = threading.Lock()
 
@@ -298,40 +282,34 @@ def _iso_age(index: dict, key: str) -> float | None:
 
 
 def sync() -> bool | None:
-    """Full catalog refresh for the background thread: installed every call,
-    owned when stale >6h, metadata top-up for new appids. Steam layers are
-    skipped without keys. Non-reentrant, so calls can't stack meta crawls.
+    """Refresh available library data without overlapping another refresh.
 
-    True when layer 1 refreshed, False when the PC was unreachable, None when
-    this call learned nothing about the PC - another sync held the lock, or a
-    local failure (an unwritable state dir) raised before the answer meant
-    anything. periodic_sync backs off on False only."""
+    Return whether installed games refreshed, or ``None`` if no result was
+    obtained.
+    """
     if not _sync_lock.acquire(blocking=False):
         return None
-    # Stays None if layer 1 RAISES rather than fail-softing: that is a broken
-    # disk, not a sleeping PC, and sync_failed below is where it is reported.
     installed: bool | None = None
     try:
-        # Layer 1b only when layer 1 SUCCEEDED - both need the PC awake, so
-        # gating spares a sleeping sync (and the blind test) a 15 s ssh wait.
-        installed = refresh() == 0  # layer 1 (fail-softs asleep)
+        # Both calls need the gaming PC, so skip the second SSH timeout if the
+        # first call fails.
+        installed = refresh() == 0
         if installed:
-            refresh_collections()  # layer 1b (PC-dependent too)
-        # Layer 4 is keyless, so it runs BEFORE the key gate.
+            refresh_collections()
         from slopstation.agent.tools import steamstore
 
         d_age = _iso_age(steamstore.load_deals(), "refreshed")
         if d_age is None or d_age > steamstore.DEALS_MAX_AGE_S:
             steamstore.refresh_deals()
-        if steam_creds():  # without a key: layers 1+4 only
+        if steam_creds():
             age = _iso_age(load(), "ownedRefreshed")
             if age is None or age > OWNED_MAX_AGE_S:
-                refresh_owned()  # layer 2
+                refresh_owned()
             index = load()
             appids = {r["appid"] for r in index.get("installed", [])}
             appids.update(int(a) for a in index.get("owned", {}))
             if any(str(a) not in load_meta() for a in appids):
-                refresh_meta(list(appids))  # layer 3 (top-up only)
+                refresh_meta(list(appids))
     except Exception as e:
         log.error("sync_failed", err=str(e))
     finally:
@@ -340,29 +318,20 @@ def sync() -> bool | None:
 
 
 def periodic_sync():
-    """Tick body for an events.Ticker on SYNC_S. Off the wake path entirely,
-    so a session pays nothing for a fresh catalog.
-
-    The ticker's own interval paces the normal case; this gate exists only to
-    EXTEND it after an unreachable PC, and arms nothing otherwise. A tick that
-    lands on the hold-off's expiry may wait one more interval, which for a
-    back-off does not matter."""
+    """Return a refresh callback that waits longer after an unreachable PC."""
     held = {"until": 0.0}
 
     def tick() -> None:
         if time.monotonic() < held["until"]:
             return
-        if sync() is False:  # None is a held lock, and says nothing about the PC
+        if sync() is False:  # None means another refresh owns the lock.
             held["until"] = time.monotonic() + SYNC_ASLEEP_S
 
     return tick
 
 
 def query_terms(limit: int | None = 30) -> list[str]:
-    """Distinct tags/genres, frequency-ranked: the raw material for the STT
-    vocabulary ("mech games" -> "met games"); None for the whole ranking.
-    Ranking is all this owes - keyterms.query_keyterms picks the spoken
-    form and drops the generic words."""
+    """Return tags and genres ranked by frequency."""
     counts: dict[str, int] = {}
     for m in load_meta().values():
         for term in (m.get("tags") or []) + (m.get("genres") or []):
@@ -377,8 +346,7 @@ def catalog_lines() -> list[str]:
     index = load()
     meta = load_meta()
     owned = {k: v for k, v in index.get("owned", {}).items() if int(k) not in NOT_GAMES}
-    # appid -> when its content last finished changing, 0 when the PC did not
-    # say (a row synced before the games verb carried it).
+    # Map installed app IDs to their last update time.
     installed_at = {
         r["appid"]: r.get("updated", 0)
         for r in index.get("installed", [])
@@ -403,8 +371,7 @@ def catalog_lines() -> list[str]:
             if o.get("last")
             else "never"
         )
-        # Dated when the PC said so: this is the only record of when a game
-        # arrived, so "what did I just download" is answerable from the row.
+        # Include the update date when Steam provides it.
         if appid not in installed_at:
             inst = "notinst"
         elif installed_at[appid]:
