@@ -19,7 +19,7 @@ receivers:
     include:
       # Set this to events.LOG_DIR using forward slashes:
       #   .venv\Scripts\python -c "from slopstation import events; print(events.LOG_DIR)"
-      - C:/Users/minipc/Desktop/slopstation/logs/k15-*.jsonl
+      - C:/path/to/slopstation/logs/k15-*.jsonl
     start_at: beginning
     storage: file_storage
     poll_interval: 10s

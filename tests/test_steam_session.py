@@ -32,7 +32,7 @@ def two_clients():
         {"client_instanceid": "999", "machine_name": "LAPTOP", "os_name": "Windows"},
         {
             "client_instanceid": "111",
-            "machine_name": "TILLMAN-DESKTOP",
+            "machine_name": "GAMING-PC",
             "os_name": "Windows",
         },
     ]
@@ -144,7 +144,7 @@ def session(make_session):
 @pytest.fixture
 def pinned(make_session, monkeypatch):
     """Pinned to the rig by machine name, its token pre-minted."""
-    s = make_session(machine_name="TILLMAN-DESKTOP")
+    s = make_session(machine_name="GAMING-PC")
     monkeypatch.setattr(s, "_access", "tok")  # skip minting
     monkeypatch.setattr(s, "_access_exp", time.time() + 3600)
     return s
@@ -416,7 +416,7 @@ def test_a_dropped_read_is_retried(log, refresh, monkeypatch):
     """GET requests retry transient connection failures."""
     calls = []
     s = bare_session(log, refresh, monkeypatch, calls, fail_first=2)
-    assert [c["machine_name"] for c in s.sessions()] == ["LAPTOP", "TILLMAN-DESKTOP"]
+    assert [c["machine_name"] for c in s.sessions()] == ["LAPTOP", "GAMING-PC"]
     assert len(calls) == 3, calls
     # Log each retry at info level.
     retries = log.find("steam_read_retried")

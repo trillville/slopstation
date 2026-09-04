@@ -61,4 +61,4 @@ jobs:
         run: |
           & "$env:SLOP_HOME\.venv\Scripts\python.exe" -m slopstation.deploy --sha $env:SHA --wait-minutes $env:WAIT_MINUTES
         env:
-          SLOP_HOME: ${{ vars.K15_CHECKOUT || 'C:\Users\minipc\Desktop\slopstation' }}
+          SLOP_HOME: ${{ vars.K15_CHECKOUT || 'C:\slopstation' }}

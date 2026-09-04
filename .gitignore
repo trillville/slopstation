@@ -31,17 +31,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Voice: wake-word model binaries. The PRETRAINED set is fetched on first run
-# into the venv and stays out of here; a hand-trained model has no upstream to
-# re-fetch from, so it is vendored and travels with the repo. Contents are
-# ignored rather than the directory itself - git cannot re-include a file whose
-# parent directory is excluded, so the directory itself would beat the negation.
+# Voice: wake-word model binaries. Pretrained models are fetched into the venv;
+# custom models are local artifacts supplied by the operator.
 src/slopstation/agent/models/*
-!src/slopstation/agent/models/*.onnx
-# The custom verifier travels for the same reason:
-# it is fitted against ONE .onnx from clips off this couch, so losing it means
-# re-labelling the clips, not re-downloading anything.
-!src/slopstation/agent/models/*.pkl
 
 # Voice: room recordings for wake-word training - tens of MB of the TV, and
 # the gaming PC is where they are consumed, not here

@@ -19,4 +19,4 @@
 #
 # Quote the script path only when it contains spaces. Use an absolute path
 # because smartd runs from system32.
-/dev/pd1 -d sat -a -o on -S on -s (S/../.././02|L/../01/./03) -W 2,50,55 -m <nomailer> -M exec C:\Users\minipc\Desktop\slopstation\smart-alert.bat
+/dev/pd1 -d sat -a -o on -S on -s (S/../.././02|L/../01/./03) -W 2,50,55 -m <nomailer> -M exec C:\path\to\slopstation\smart-alert.bat
