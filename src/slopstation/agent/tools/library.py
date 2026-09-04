@@ -372,8 +372,12 @@ def catalog_lines() -> list[str]:
     index = load()
     meta = load_meta()
     owned = {k: v for k, v in index.get("owned", {}).items() if int(k) not in NOT_GAMES}
-    installed_ids = {
-        r["appid"] for r in index.get("installed", []) if r["appid"] not in NOT_GAMES
+    # appid -> when its content last finished changing, 0 when the PC did not
+    # say (a row synced before the games verb carried it).
+    installed_at = {
+        r["appid"]: r.get("updated", 0)
+        for r in index.get("installed", [])
+        if r["appid"] not in NOT_GAMES
     }
     rows = {
         r["appid"]: r["name"]
@@ -394,15 +398,24 @@ def catalog_lines() -> list[str]:
             if o.get("last")
             else "never"
         )
+        # Dated when the PC said so: this is the only record of when a game
+        # arrived, so "what did I just download" is answerable from the row.
+        if appid not in installed_at:
+            inst = "notinst"
+        elif installed_at[appid]:
+            inst = "inst:" + time.strftime(
+                "%Y-%m-%d", time.localtime(installed_at[appid])
+            )
+        else:
+            inst = "inst"
         lines.append(
             (
-                appid in installed_ids,
+                appid in installed_at,
                 o.get("hours", 0),
                 (
                     f"{appid}|{name}|{','.join(m.get('tags', [])[:5])}"
                     f"|{','.join(m.get('genres', [])[:3])}|{o.get('hours', 0)}h"
-                    f"|{last}|{'inst' if appid in installed_ids else 'notinst'}"
-                    f"|{m.get('controller', '?')}"
+                    f"|{last}|{inst}|{m.get('controller', '?')}"
                 ),
             )
         )
