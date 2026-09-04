@@ -120,8 +120,6 @@ function Get-TvNames {
     ForEach-Object { -join [char[]]($_.UserFriendlyName | Where-Object { $_ -ne 0 }) }
 }
 
-function Test-TvListed { [bool](@(Get-TvNames) -match $CG.TvEdid) }
-
 # Use Windows device enumeration to verify VirtualHere claim state.
 function Test-PuckPresent {
     [bool](Get-PnpDevice -ErrorAction SilentlyContinue |

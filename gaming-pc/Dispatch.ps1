@@ -6,9 +6,6 @@ $turnFile = 'C:\ProgramData\CouchGaming\turn'
 $launchMarker = 'C:\ProgramData\CouchGaming\launch-app'
 $navMarker = 'C:\ProgramData\CouchGaming\nav-target'
 $stopMarker = 'C:\ProgramData\CouchGaming\stop-app'
-# The TV's EDID name as Windows reports it: common.ps1's $CG.TvEdid, kept
-# equal by test_ps_parse.
-$tvEdid = 'QCQ90S'
 
 # The anchored lowercase turn pattern prevents path traversal in marker names.
 # Use \z because .NET's $ also matches before a trailing newline. Set the turn
@@ -46,12 +43,6 @@ function Get-SteamRoots {
     }
   }
   $roots | ForEach-Object { $_.ToLower() } | Select-Object -Unique
-}
-
-# Monitor names Windows lists (common.ps1's Get-TvNames, inlined).
-function Get-MonitorNames {
-  Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue |
-  ForEach-Object { -join [char[]]($_.UserFriendlyName | Where-Object { $_ -ne 0 }) }
 }
 
 # Steam's RunningAppID as stored: $null when the value is absent, 0 when
@@ -104,17 +95,6 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
                Set-Turn $turn
                Write-Answer 'exit' (Start-CgTask 'Exit') $turn
                break }
-  # Re-enumerate the TV when Windows has it parked at Unknown (a driver
-  # rebuild, a dropped cable): the PnP scan needs elevation, which only this
-  # file has. LISTED means nothing needed doing.
-  '^rescan( --turn ((?-i:[0-9a-f]{1,8})))?\z'
-             { $turn = $Matches[2]
-               Set-Turn $turn
-               $ans = if (@(Get-MonitorNames) -match $tvEdid) { 'LISTED' }
-                      else { pnputil /scan-devices | Out-Null
-                             if ($LASTEXITCODE -eq 0) { 'OK' } else { "FAILED:$LASTEXITCODE" } }
-               Write-Answer 'rescan' $ans $turn
-               break }
   '^status\z' { if (Test-Path $ready) { Get-Content $ready } else { 'NOTREADY' }
                break }
   # Distinguish an active Enter task from one that stopped before READY.
@@ -130,7 +110,6 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       $v = Get-RunningAppId
       if ($null -eq $v) { '0' } else { "$v" }
       break }
-  '^displays\z' { @(Get-MonitorNames) -join ','; break }
   '^games\z' {
       $roots = Get-SteamRoots
       if (-not $roots) { '[]'; break }

@@ -196,10 +196,3 @@ def test_ps_parse():
     assert on_disk <= checked, (
         f"Doctor.ps1 $files does not check {sorted(on_disk - checked)}"
     )
-
-    # 8. The TV's EDID name: Dispatch's literal == common.ps1's $CG.TvEdid.
-    d = re.search(r"^\$tvEdid\s*=\s*'([^']+)'", dispatch, re.M)
-    c = re.search(r"TvEdid\s*=\s*'([^']+)'", common)
-    assert d and c and d.group(1) == c.group(1), (
-        f"TvEdid drift: Dispatch {d and d.group(1)!r} vs common {c and c.group(1)!r}"
-    )

@@ -20,11 +20,8 @@ try {
     Start-Process -WindowStyle Hidden $CG.Vh -ArgumentList '-t','LIST','-r',$CG.VhNudge
     Log ("primary height at start: {0}" -f (Get-PrimaryHeight))
 
-    # 1. TV listed by Windows. A set waking from deep off can take 20 s; a
-    #    node parked at Unknown (driver rebuild, dropped cable) comes back only
-    #    via the K15's `rescan` verb once the set is on - PnP scans need
-    #    elevation this task does not have.
-    if (-not (Wait-For { Test-TvListed } 30 'TV detected')) {
+    # 1. TV EDID visible (the K15 just powered it on)
+    if (-not (Wait-For { (Get-TvNames) -match $CG.TvEdid } 30 'TV detected')) {
         throw "S90C never appeared over HDMI (Windows lists: $(@(Get-TvNames) -join ', ')) - aborting, office display untouched"
     }
 

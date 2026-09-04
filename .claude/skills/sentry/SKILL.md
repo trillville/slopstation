@@ -114,11 +114,6 @@ them together with the heartbeat count:
     console; `err=Cancelled` is a voice "end the session" against an in-flight
     launch (the `state/cancel` marker), and `cancelled_by` carries the
     cancelling utterance's turn.
-  - `enter_died` also carries `pc_displays`: the monitor names Windows on the
-    PC listed at that moment (empty = it listed none; absent = the PC predates
-    the `displays` verb). Since 2026-09-03 the input switch goes out with
-    `power_on`, so `exlink_send cmd=hdmi4` precedes `enter_dispatched` and
-    repeats on `tv_on` and after `host_ready` (`again=true`).
 - **manual**: `exlink_send` `exlink_nak` `tvremote_send` `tvremote_fail` — the
   same events from a hand-run `python exlink.py <cmd>`, kept off the launch
   lane so operator probing does not skew launch metrics. Drop the lane to see
@@ -202,11 +197,6 @@ them together with the heartbeat count:
   never answered at boot).
 - **voice, also**: `tool_error` (a tool impl raised; pairs with the `tool_call
   ok=false` for the same call).
-- **launch, also**: `pc_rescan` — the K15 asking the PC to re-enumerate its
-  monitors, once at `tv_on` and again before a redispatch. `answer` LISTED =
-  Windows already listed the TV, OK = it scanned, FAILED:<rc> = the scan
-  failed; `err` = the ssh call did. On `lane:dispatch` it is the `rescan`
-  verb. `enter_failed` "never appeared over HDMI" names what Windows listed.
 - **gamepc, also**: `profile_applied` / `profile_apply_failed` on
   `lane:office-safety` (a logon that had to restore OFFICE), `wake_cleanup` on
   `lane:wake-safety`.

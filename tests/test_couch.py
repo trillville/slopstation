@@ -122,7 +122,7 @@ def test_release_refuses_a_successors_lock():
 # --- Successful launch --------------------------------------------------------
 
 
-def test_happy_path_switches_the_input_with_power_on_and_reasserts_after_ready(wire):
+def test_happy_path_switches_the_input_with_power_on(wire):
     sessionlock.last_error_file().write_text("old failure")  # success must supersede it
     log, sent = wire(
         [
@@ -145,9 +145,7 @@ def test_happy_path_switches_the_input_with_power_on_and_reasserts_after_ready(w
         for i, r in enumerate(log.records)
         if r["event"] == "exlink_send" and r["cmd"] == "hdmi4"
     ]
-    # Input goes out with power_on, before Enter; re-asserted after READY.
     assert switches[0] < ev.index("enter_dispatched"), (ev, switches)
-    assert switches[-1] > ev.index("host_ready"), (ev, switches)
     assert sent == ["power_on", "hdmi4", "hdmi4", "power_off"], sent
     assert "game_launch" in ev and "session_ended" in ev and "session_idle" in ev
     assert log.find("game_launch")[0]["level"] == "info"  # OK: a clean launch
@@ -231,9 +229,7 @@ def test_a_stale_lock_is_recycled_and_a_failing_enter_releases_it(wire):
     assert couch.start() == 1
     ev = log.events()
     assert "lock_recycled" in ev and "launch_failed" in ev, ev
-    assert sent == ["power_on", "hdmi4", "power_off"], (
-        f"failure restores power only: {sent}"
-    )
+    assert sent == ["power_on", "hdmi4", "power_off"], f"failure restores power: {sent}"
     assert not sessionlock.lock_file().exists(), "failure must release the lock"
     assert "Enter" in sessionlock.last_error_file().read_text()
     # the refusal is logged once per distinct answer, not per retry
@@ -275,8 +271,6 @@ def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypat
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),  # twice = really dead
-            ("displays", "ULTRAWIDE"),  # logged on enter_died
-            ("rescan", "OK"),  # the PC re-reads the TV before the retry
             ("enter", "OK"),  # so run it again
             ("status", "ab12cd"),  # the TV woke this time
             ("status", "NOTREADY"),  # watch(): session ends
@@ -290,10 +284,7 @@ def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypat
         f"re-poke must precede the retry: {sent}"
     )
     assert log.find("exlink_send")[2]["again"] is True, log.records
-    assert log.find("enter_died")[0]["pc_displays"] == "ULTRAWIDE", (
-        "enter_died carries what the PC listed"
-    )
-    assert sent[-2:] == ["hdmi4", "power_off"], "READY re-asserts the input"
+    assert "hdmi4" in sent, "a rescued launch still switches the input"
 
 
 def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
@@ -306,14 +297,11 @@ def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
-            ("displays", ""),
-            ("rescan", "OK"),
             ("enter", "OK"),  # the one rescue
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),  # gone again
-            ("displays", ""),
         ]
     )
     t0 = time.time()
@@ -323,9 +311,7 @@ def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
     assert ev.count("enter_died") == 2, ev
     assert ev.count("enter_redispatched") == 1, ev
     assert "launch_failed" in ev
-    assert sent == ["power_on", "hdmi4", "power_on", "power_off"], (
-        f"a launch that woke the set turns it off: {sent}"
-    )
+    assert sent == ["power_on", "hdmi4", "power_on", "power_off"], sent
     assert (
         not sessionlock.lock_file().exists()
         and "READY" in sessionlock.last_error_file().read_text()
@@ -499,7 +485,6 @@ def test_a_set_that_keeps_answering_standby_is_refusing(wire, tv_rig, monkeypatc
     assert log.find("launch_start")[0]["tv"] == "standby"
     assert set(sent) == {"power_on", "hdmi4", "power_off"}, sent
     assert sent[-1] == "power_off", f"the evidence re-pokes while not-on: {sent}"
-    assert sent.count("hdmi4") == 1, f"no tv_on, no repeat: {sent}"
     assert not sessionlock.lock_file().exists()
 
 
@@ -518,7 +503,6 @@ def test_the_evidence_rides_the_ready_wait(wire, tv_rig, monkeypatch):
             ("enter", "OK"),
             ("status", "NOTREADY"),
             ("status", "NOTREADY"),
-            ("rescan", "LISTED"),  # asked once, the moment the set says on
             ("status", "ab12cd"),
             ("status", "NOTREADY"),
         ]
@@ -526,19 +510,10 @@ def test_the_evidence_rides_the_ready_wait(wire, tv_rig, monkeypatch):
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_on" in ev and "host_ready" in ev, ev
-    assert ev.index("tv_on") < ev.index("pc_rescan") < ev.index("host_ready"), ev
-    assert log.find("pc_rescan")[0]["answer"] == "LISTED"
     assert ev.index("enter_dispatched") < ev.index("tv_on"), (
         "Enter must not wait for the set - the evidence rides the READY wait"
     )
-    assert sent.count("power_on") == 1, sent
-    # Repeated at tv_on, before READY.
-    again = [
-        i
-        for i, r in enumerate(log.records)
-        if r["event"] == "exlink_send" and r["cmd"] == "hdmi4" and r.get("again")
-    ]
-    assert again and ev.index("tv_on") < again[0] < ev.index("host_ready"), (ev, again)
+    assert "hdmi4" in sent and sent.count("power_on") == 1, sent
 
 
 def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
@@ -551,13 +526,10 @@ def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
     log, sent = wire(
         [
             ("enter", "OK"),
-            ("rescan", "LISTED"),  # the set was on from the first read
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
-            ("displays", "QCQ90S"),
-            ("rescan", "OK"),  # and again before the retry
             ("enter", "OK"),
             ("status", "ab12cd"),
             ("status", "NOTREADY"),
@@ -566,7 +538,6 @@ def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_on" in ev and "enter_died" in ev and "enter_redispatched" in ev, ev
-    assert [r["answer"] for r in log.find("pc_rescan")] == ["LISTED", "OK"]
     assert log.find("host_ready")[0]["verified"] is True
 
 
@@ -577,10 +548,7 @@ def test_a_set_found_on_stays_on(wire, tv_rig, monkeypatch):
     log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
     assert couch.start() == 1
     assert "launch_failed" in log.events()
-    assert sent[0] == "power_on" and "power_off" not in sent, (
-        f"a set found on stays on: {sent}"
-    )
-    assert "hdmi4" in sent, "switched to the PC anyway"
+    assert sent == ["power_on", "hdmi4"], f"a set found on stays on: {sent}"
     assert not sessionlock.lock_file().exists()
 
 

@@ -91,26 +91,6 @@ def wait_port(timeout: float = PORT_WAIT_S) -> bool:
     return False
 
 
-def pc_displays() -> str | None:
-    """What Windows on the PC lists as monitors; None when it cannot say
-    (DENIED from an older Dispatch, or an ssh blip)."""
-    try:
-        ans = gamepc.displays()
-    except Exception:
-        return None
-    return None if ans == "DENIED" else ans
-
-
-def pc_rescan() -> None:
-    """Have the PC re-enumerate its monitors. A node parked at Unknown (driver
-    rebuild, dropped cable) comes back only with a PnP scan, which needs the
-    elevation Dispatch has and Enter does not; asked once the set is on."""
-    try:
-        log("pc_rescan", answer=gamepc.rescan())
-    except Exception as e:
-        log.warn("pc_rescan", err=str(e))
-
-
 class TvEvidence:
     """Track the TV's reported power state while the gaming PC starts."""
 
@@ -137,9 +117,6 @@ class TvEvidence:
         if self.last == "on":
             self.confirmed = True
             log("tv_on", dur_ms=self._ms())
-            # Insurance only - measured 2026-09-03, the frame sent 0.1 s
-            # after power_on already executes.
-            exlink(config.current()["tvGamingCmd"], again=True)
             return
         if self.last is None:
             self._unknowns += 1
@@ -164,7 +141,6 @@ def wait_ready(
     ready = False
     foreign_seen = None
     redispatches = ENTER_REDISPATCH
-    rescanned = False
     idle_seen = 0
     settle_at = time.time() + ENTER_SETTLE_S
     repoke_at: float | None = time.time() + WAKE_RETRY_S
@@ -172,9 +148,6 @@ def wait_ready(
         sessionlock.touch()
         raise_if_cancelled()
         evidence.poll()
-        if evidence.confirmed and not rescanned:
-            rescanned = True
-            pc_rescan()
         # Retry once in case the TV missed the initial power command.
         if repoke_at and time.time() >= repoke_at:
             exlink("power_on", again=True)
@@ -208,7 +181,7 @@ def wait_ready(
             # Require two idle checks to avoid racing the READY marker write.
             idle_seen += 1
             if idle_seen >= 2:
-                log.warn("enter_died", dur_ms=ms(), pc_displays=pc_displays())
+                log.warn("enter_died", dur_ms=ms())
                 raise_if_cancelled()
                 if not redispatches:
                     raise RuntimeError("Enter exited without READY")
@@ -227,7 +200,6 @@ def wait_ready(
                     evidence.poll()
                     time.sleep(1)
                 exlink("power_on", again=True)
-                pc_rescan()
                 if not dispatch_enter("enter_redispatched", attempts=5):
                     raise RuntimeError("Enter died and could not be re-triggered")
                 redispatches -= 1
@@ -290,8 +262,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
         )
         exlink("power_on")
-        # On AND this input, like HDMI-CEC One Touch Play: the PC can only
-        # see the set on its active input, so this precedes Enter.
+        # With power, not after READY: the set wakes on HDMI 4 (measured 2026-09-03).
         exlink(config.current()["tvGamingCmd"])
         # Only restore power on failure if this launch woke the TV.
         tv_woken = tv0 != "on"
@@ -327,8 +298,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
         sessionlock.last_error_file().unlink(missing_ok=True)  # success supersedes it
-        # Re-assert: a remote pressed mid-launch loses to READY.
-        exlink(config.current()["tvGamingCmd"], again=True)
+        exlink(config.current()["tvGamingCmd"])
         if appid:
             try:
                 answer = gamepc.launch(appid)
