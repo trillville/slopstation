@@ -17,13 +17,12 @@ repository. It is not a framework.
 
 ```mermaid
 flowchart LR
-    chord[Controller chord] --> k15
-    voice[Voice, text, MCP] --> k15
-    k15[Mini PC<br/>couch.py, assistant] -->|serial, WebSocket| tv[Samsung TV]
-    k15 -->|Wake-on-LAN, SSH forced command| pc[Gaming PC<br/>Dispatch.ps1, scheduled tasks]
-    pc -->|display profile, USB over IP| tv
-    k15 --> media[Steam, Radarr, Sonarr]
-    k15 & pc -->|JSONL events with one turn id| sentry[Sentry]
+    chord[Controller chord] --> mini[Mini PC]
+    voice[Voice and text] --> mini
+    mini -->|serial, WebSocket| tv[Samsung TV]
+    mini -->|Wake-on-LAN, SSH, controller over USB/IP| pc[Gaming PC]
+    pc -->|HDMI| tv
+    mini --> media[Steam, Radarr, Sonarr]
 ```
 
 1. The mini PC powers on the TV, switches it to the PC's input, and wakes the
@@ -37,34 +36,6 @@ flowchart LR
 
 A failed launch that woke the TV turns it off again. Controller input and
 voice run as separate processes, so either can restart on its own.
-
-## What is interesting about it
-
-**Deploys that respect the couch.** Both machines run self-hosted GitHub
-runners. A green `ci` on `main` deploys to each, but a deploy waits up to two
-hours for a live session to end and fails rather than interrupting one. It
-never rolls back. Each leg ends with a doctor whose exit code is its failure
-count, so a broken deploy is red with a diagnosis instead of a silent
-half-install.
-
-**One turn id across two machines.** Every launch and voice command gets a
-short hex id. It rides the SSH verb as `--turn`, the gaming PC writes it to a
-marker, the PC's scheduled tasks stamp it into their events and transcript
-filenames, and both machines ship logs to one Sentry project. One query shows
-a launch from the chord to Big Picture.
-
-**A narrow SSH surface.** The mini PC's key on the gaming PC is bound to a forced
-command. `Dispatch.ps1` accepts a dozen anchored verbs such as `enter`,
-`launch <appid>`, `nav library`, and `status`, and denies everything else.
-The turn id is validated by an anchored regex before it can become part of a
-filename. Interactive Steam work runs through scheduled tasks in the logged-in
-session, never in the SSH session.
-
-**Durable operations.** Steam installs and media requests are long-running
-work done by other services. Slopstation records each one in
-`state/operations.json` with a small state machine, reports progress from
-that file, and reconciles it after a restart, so "what is downloading?" has an
-answer even if the voice process was just restarted.
 
 ## Reference hardware
 
