@@ -81,7 +81,6 @@ Then read `src/slopstation/couch.py` for the launch,
 | [docs/setup.md](docs/setup.md) | installing the mini PC and the gaming PC, and the CD runners |
 | [docs/configuration.md](docs/configuration.md) | every value an operator sets, the file that owns it, and what breaks without it |
 | [docs/operations.md](docs/operations.md) | deploying, the doctors, diagnosing with the turn id, recovery |
-| [docs/decisions.md](docs/decisions.md) | the choices that shape the repository, and what is deferred |
 | [media/README.md](media/README.md) | the optional Radarr, Sonarr, and qBittorrent stack |
 | [CLAUDE.md](CLAUDE.md) | process rules for agent sessions working in this repository |
 
@@ -101,7 +100,7 @@ Then read `src/slopstation/couch.py` for the launch,
 | `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
 | `gaming-pc/` | Gaming-PC scripts, the SSH command allowlist, and the installer |
 | `media/` | Optional media stack and its setup guide |
-| `docs/` | Setup, configuration, operations, and decisions |
+| `docs/` | Setup, configuration, and operations |
 | `tests/` | Python and PowerShell tests |
 
 Runtime configuration, secrets, media state, VirtualHere files,
