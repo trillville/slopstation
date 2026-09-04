@@ -160,13 +160,13 @@ of tools.
    at the desktop:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 -K15Address <K15 address> -K15PublicKey '<the K15 public key line>'
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 -K15Address <mini PC address> -K15PublicKey '<the mini PC public key line>'
    ```
 
    The first run creates `C:\CouchGaming\config.psd1` from
    `gaming-pc\config.example.psd1` and stops so you can check the values.
    The second run deploys the scripts, registers the seven `CouchGaming`
-   scheduled tasks, allows SSH from the K15 only, binds the K15's key to
+   scheduled tasks, allows SSH from the mini PC only, binds the mini PC's key to
    `Dispatch.ps1`, and ends with the doctor. It can be re-run at any time.
 
 4. Later deploys need only `gaming-pc\Deploy.ps1` from a checkout, or CD.
