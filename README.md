@@ -11,16 +11,16 @@ voice and text commands, and tracks Steam and media downloads.
 
 A controller chord starts a session:
 
-1. The K15 powers on the TV and wakes the gaming PC.
+1. The K15 powers on the TV, switches it to HDMI 4, and wakes the gaming PC.
 2. The gaming PC switches to its TV display profile, claims the controller,
    and opens Steam Big Picture.
 3. The gaming PC returns `READY` with the request ID.
-4. The K15 switches the TV to HDMI 4.
+4. The K15 confirms the TV input.
 5. Slopstation watches the session until it ends.
 6. The gaming PC restores the office display and releases the controller.
 
-A failed launch never changes the TV input. Controller input and voice run in
-separate processes, so either can restart independently.
+A failed launch that woke the TV turns it off. Controller input and voice run
+in separate processes, so either can restart independently.
 
 The assistant is available through voice, a local text client, and an optional
 MCP endpoint. Fixed commands are handled locally; other requests use the same

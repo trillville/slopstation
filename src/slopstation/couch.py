@@ -262,6 +262,8 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
         )
         exlink("power_on")
+        # With power, not after READY: the set wakes on HDMI 4 (measured 2026-09-03).
+        exlink(config.current()["tvGamingCmd"])
         # Only restore power on failure if this launch woke the TV.
         tv_woken = tv0 != "on"
         wol()
