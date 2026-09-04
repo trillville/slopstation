@@ -53,10 +53,6 @@ Samsung's serial control protocol, and the remote and volume ducking use
 Samsung's WebSocket API, so another make of TV means replacing `tv.py` and
 `agent/tools/tv_remote.py`.
 
-The gaming PC's per-installation values (controller name and hardware id,
-the TV's EDID name, the display height that identifies the TV) live in
-`C:\CouchGaming\config.psd1`; see `gaming-pc/config.example.psd1`.
-
 The custom wake model in `src/slopstation/agent/models` was trained by the
 author on recordings from this room with
 [slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab).
@@ -78,6 +74,16 @@ Then read `src/slopstation/couch.py` for the launch,
 `gaming-pc/Dispatch.ps1` for the PC side, and
 `src/slopstation/agent/dispatch.py` for the assistant's actions.
 
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/setup.md](docs/setup.md) | installing the mini PC and the gaming PC, and the CD runners |
+| [docs/configuration.md](docs/configuration.md) | every value an operator sets, the file that owns it, and what breaks without it |
+| [docs/operations.md](docs/operations.md) | deploying, the doctors, diagnosing with the turn id, recovery |
+| [media/README.md](media/README.md) | the optional Radarr, Sonarr, and qBittorrent stack |
+| [CLAUDE.md](CLAUDE.md) | process rules for agent sessions working in this repository |
+
 ## Repository layout
 
 | Path | Purpose |
@@ -92,157 +98,10 @@ Then read `src/slopstation/couch.py` for the launch,
 | `src/slopstation/agent/dispatch.py` | Actions shared by voice and text commands |
 | `src/slopstation/agent/tools/` | Steam, media, operation, and TV tools |
 | `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
-| `gaming-pc/` | Gaming-PC scripts and the SSH command allowlist |
-| `media/` | Optional media stack and its [setup guide](media/README.md) |
+| `gaming-pc/` | Gaming-PC scripts, the SSH command allowlist, and the installer |
+| `media/` | Optional media stack and its setup guide |
+| `docs/` | Setup, configuration, and operations |
 | `tests/` | Python and PowerShell tests |
-
-## Install the mini PC
-
-1. Clone the repository, for example to `C:\slopstation`.
-2. Copy `config.example.json` to `config.json` and
-   `secrets.example.json` to `secrets.json`, then fill in device names,
-   addresses, API keys, and tokens. Both destination files are ignored by Git.
-3. Create the virtual environment and install the package:
-
-   ```powershell
-   python -m venv .venv
-   .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
-   ```
-
-4. Install VirtualHere Server, reserve the mini PC's address in DHCP, and allow its
-   port on the private LAN:
-
-   ```powershell
-   New-NetFirewallRule -DisplayName 'VirtualHere USB hub (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 7575 -Profile Private -RemoteAddress LocalSubnet
-   ```
-
-5. Connect the TV's Ex-Link adapter and set its COM port in `config.json`.
-6. Register and start the controller and voice tasks from a non-administrator
-   PowerShell window:
-
-   ```powershell
-   .\Setup-K15-Tasks.ps1
-   .\Start-Slopstation.bat
-   ```
-
-7. If volume ducking is enabled, pair the TV remote and accept the TV prompt:
-
-   ```powershell
-   .venv\Scripts\python -m slopstation.agent.tools.tv_remote pair
-   ```
-
-8. Run `.venv\Scripts\slopstation-doctor` until no checks fail.
-
-### Optional MCP access
-
-MCP forwards requests to the existing text interface.
-
-1. Set `textInterfaceToken` and `remoteInterfaceToken` in `secrets.json`.
-   Each token should contain at least 32 random bytes.
-2. Enable `textInterface` and `remoteInterface` in `config.json`. Keep the
-   remote interface on `127.0.0.1:8766`.
-3. Route a Cloudflare named tunnel to `http://127.0.0.1:8766` and restrict the
-   public hostname to the connector's documented source addresses.
-4. Add a custom connector for `https://<host>/mcp` with
-   `Authorization: Bearer <remoteInterfaceToken>`.
-5. Restart Slopstation and run the doctor.
-
-The MCP endpoint holds no assistant state and does not expose a separate set
-of tools.
-
-## Install the gaming PC
-
-1. Install Steam, DisplayMagician, VirtualHere Client, and Windows OpenSSH
-   Server.
-2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles
-   in `C:\CouchGaming`, and put `vhui64.exe` there.
-3. From an elevated PowerShell in a repository checkout, as the user who sits
-   at the desktop:
-
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 -K15Address <mini PC address> -K15PublicKey '<the mini PC public key line>'
-   ```
-
-   The first run creates `C:\CouchGaming\config.psd1` from
-   `gaming-pc\config.example.psd1` and stops so you can check the values.
-   The second run deploys the scripts, registers the seven `CouchGaming`
-   scheduled tasks, allows SSH from the mini PC only, binds the mini PC's key to
-   `Dispatch.ps1`, and ends with the doctor. It can be re-run at any time.
-
-4. Later deploys need only `gaming-pc\Deploy.ps1` from a checkout, or CD.
-   `C:\CouchGaming\Doctor.ps1` reports the state at any time.
-
-For Radarr, Sonarr, and qBittorrent setup, see
-[media/README.md](media/README.md).
-
-## Deployment
-
-A successful `ci` run on `main` starts `cd`. The mini PC deploys immediately; the
-gaming-PC job waits until that machine wakes. Both machines use self-hosted
-runners because they do not accept inbound deployment connections.
-
-Deployments wait for active couch sessions to finish. They fail instead of
-interrupting a session or rolling back automatically. Because this repository
-is public, `cd` only deploys commits pushed to `main`; pull-request code never
-runs on either machine.
-
-Register repository runners with the labels `k15` and `gamepc`. Run them in the
-logged-in desktop session, not as services. The mini PC runner executes the live
-checkout directly; set the `K15_CHECKOUT` repository variable to that
-checkout's path.
-
-To update the mini PC manually:
-
-```powershell
-git pull
-.\Start-Slopstation.bat
-.venv\Scripts\slopstation-doctor
-```
-
-## Common commands
-
-```powershell
-# Text interface
-.venv\Scripts\slopstation-text
-.venv\Scripts\slopstation-text "what is downloading?"
-
-# Tracked Steam and media work
-.venv\Scripts\python -m slopstation.agent.tools.operations list --active
-.venv\Scripts\python -m slopstation.agent.tools.operations show <operation-id>
-.venv\Scripts\python -m slopstation.agent.tools.operations reconcile
-```
-
-`operations abandon <operation-id> --execute` removes a tracked media request
-through Radarr or Sonarr.
-
-For LAN text access, bind the text endpoint to `0.0.0.0`, restrict its firewall
-rule to `LocalSubnet` on the Private profile, and set `SLOPSTATION_URL` and
-`SLOPSTATION_TOKEN` on each client. MCP remains on localhost behind its tunnel.
-
-## Telemetry
-
-Structured events are written to:
-
-- Mini PC: `logs\k15-YYYYMMDD.jsonl`
-- Gaming-PC tasks: `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`
-- Gaming-PC SSH dispatcher: `C:\CouchGaming\logs\pc-dispatch-YYYYMMDD.jsonl`
-
-The OpenTelemetry Collector configurations in `otelcol/config.yaml.example`
-and `gaming-pc/otelcol/config.yaml.example` send those logs to Sentry. The
-voice process also sends errors and traces when `sentryDsn` is configured.
-
-## Development
-
-Run the same checks as CI:
-
-```powershell
-.venv\Scripts\pytest
-.venv\Scripts\ruff check .
-.venv\Scripts\mypy
-```
-
-Tests that require a local Steam installation skip when it is absent. Tests
-that open real audio devices require `SLOPSTATION_TEST_AUDIO=1`.
 
 Runtime configuration, secrets, media state, VirtualHere files,
 DisplayMagician shortcuts, scheduled tasks, logs, and the virtual environment
