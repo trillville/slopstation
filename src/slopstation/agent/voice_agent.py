@@ -49,7 +49,9 @@ log = logbook.logger("voice")
 
 def refresh_library_bg():
     """Catalog sync off the wake loop: a slow/asleep PC (30 s ssh timeout)
-    must not delay a wake. Fail-soft; no-ops if one is running."""
+    must not delay a wake. Fail-soft; no-ops if one is running. Session close
+    calls this so an install made DURING a session lands at once, ahead of the
+    periodic sync."""
     threading.Thread(target=library.sync, daemon=True).start()
 
 
@@ -265,7 +267,9 @@ def main():
 
     # Grammar built once: a YAML typo fails here, not per-wake.
     matcher = GrammarMatcher(voice)
-    refresh_library_bg()
+    # Ticks immediately, then every SYNC_S: the catalog a wake snapshots is
+    # minutes old rather than one-session-behind, and no wake waits on ssh.
+    events.Ticker("library-sync", library.SYNC_S, library.periodic_sync()).start()
     prewarm_imports_bg(voice["assistantProvider"])
     if brain_live:
         from slopstation.agent.brain.assistant import default_model

@@ -169,3 +169,27 @@ def test_refresh_reports_sync_done_and_sync_skipped(monkeypatch):
     assert library.refresh() == 1
     skipped = log.find("sync_skipped")[0]
     assert skipped["layer"] == "installed" and skipped["level"] == "warn"
+
+
+def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
+    # One sync per tick while the PC answers; after a skip, ticks no-op until
+    # SYNC_ASLEEP_S has passed, so a sleeping night is quiet.
+    now = {"t": 0.0}
+    monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+    keyed.state["meta_cache"] = {"1": {}}
+    tick = library.periodic_sync()
+
+    tick()
+    assert keyed.calls["installed"] == 1
+    now["t"] += library.SYNC_S
+    keyed.state["refresh_rc"] = 1  # PC asleep from here
+    tick()
+    assert keyed.calls["installed"] == 2
+
+    now["t"] += library.SYNC_S  # too soon after a skip
+    tick()
+    assert keyed.calls["installed"] == 2, "a skip should hold off SYNC_ASLEEP_S"
+    now["t"] += library.SYNC_ASLEEP_S
+    tick()
+    assert keyed.calls["installed"] == 3

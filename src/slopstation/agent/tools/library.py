@@ -6,7 +6,8 @@ file. Layer 4 is live store data (deals, search, reviews, news,
 how-long-to-beat), not the catalog; it lives in steamstore.py.
 
 Output: state/library.json, written atomically. sync() runs on a background
-thread at startup and after each voice session.
+thread at startup, every SYNC_S while the lane is up, and after each voice
+session.
 
 CLI:
     python -m slopstation.agent.tools.library sync                        (every layer, as the agent does)
@@ -277,6 +278,14 @@ def steam_creds() -> tuple[str, str] | None:
 # Layer 1 needs the PC awake and fail-softs when asleep; layers 2-3 come from
 # the Steam cloud, so the catalog stays current while the rig sleeps.
 OWNED_MAX_AGE_S = 6 * 3600  # playtime/recency drift slowly; one call/6h
+# The catalog a session speaks from is snapshotted at session OPEN, so a sync
+# that runs at open is already too late for that conversation: the ceiling
+# below is how stale a just-installed game can be when the user asks about it.
+SYNC_S = 300
+# Layer 1 is the only one that needs the PC, and it fail-softs with a
+# sync_skipped per try. Holding off after one keeps a sleeping night at ~20
+# of those instead of ~290, which is the difference between signal and noise.
+SYNC_ASLEEP_S = 1800
 _sync_lock = threading.Lock()
 
 
@@ -288,16 +297,21 @@ def _iso_age(index: dict, key: str) -> float | None:
         return None
 
 
-def sync() -> None:
+def sync() -> bool:
     """Full catalog refresh for the background thread: installed every call,
     owned when stale >6h, metadata top-up for new appids. Steam layers are
-    skipped without keys. Non-reentrant, so calls can't stack meta crawls."""
+    skipped without keys. Non-reentrant, so calls can't stack meta crawls.
+
+    Answers whether layer 1 refreshed - false when the PC was unreachable or
+    another sync held the lock, which is what periodic_sync backs off on."""
     if not _sync_lock.acquire(blocking=False):
-        return
+        return False
+    installed = False
     try:
         # Layer 1b only when layer 1 SUCCEEDED - both need the PC awake, so
         # gating spares a sleeping sync (and the blind test) a 15 s ssh wait.
-        if refresh() == 0:  # layer 1 (fail-softs asleep)
+        installed = refresh() == 0  # layer 1 (fail-softs asleep)
+        if installed:
             refresh_collections()  # layer 1b (PC-dependent too)
         # Layer 4 is keyless, so it runs BEFORE the key gate.
         from slopstation.agent.tools import steamstore
@@ -305,20 +319,34 @@ def sync() -> None:
         d_age = _iso_age(steamstore.load_deals(), "refreshed")
         if d_age is None or d_age > steamstore.DEALS_MAX_AGE_S:
             steamstore.refresh_deals()
-        if not steam_creds():
-            return  # no Steam key: layers 1+4 only
-        age = _iso_age(load(), "ownedRefreshed")
-        if age is None or age > OWNED_MAX_AGE_S:
-            refresh_owned()  # layer 2
-        index = load()
-        appids = {r["appid"] for r in index.get("installed", [])}
-        appids.update(int(a) for a in index.get("owned", {}))
-        if any(str(a) not in load_meta() for a in appids):
-            refresh_meta(list(appids))  # layer 3 (top-up only)
+        if steam_creds():  # without a key: layers 1+4 only
+            age = _iso_age(load(), "ownedRefreshed")
+            if age is None or age > OWNED_MAX_AGE_S:
+                refresh_owned()  # layer 2
+            index = load()
+            appids = {r["appid"] for r in index.get("installed", [])}
+            appids.update(int(a) for a in index.get("owned", {}))
+            if any(str(a) not in load_meta() for a in appids):
+                refresh_meta(list(appids))  # layer 3 (top-up only)
     except Exception as e:
         log.error("sync_failed", err=str(e))
     finally:
         _sync_lock.release()
+    return installed
+
+
+def periodic_sync():
+    """Tick body for an events.Ticker on SYNC_S: sync, then hold off until
+    SYNC_ASLEEP_S has passed instead when the PC was unreachable. Off the wake
+    path entirely, so a session pays nothing for a fresh catalog."""
+    held = {"until": 0.0}
+
+    def tick() -> None:
+        if time.monotonic() < held["until"]:
+            return
+        held["until"] = time.monotonic() + (SYNC_S if sync() else SYNC_ASLEEP_S)
+
+    return tick
 
 
 def query_terms(limit: int | None = 30) -> list[str]:
