@@ -1,4 +1,4 @@
-"""Test voice-agent startup, modes, event order, and error handling."""
+"""Test voice-service startup, modes, event order, and error handling."""
 
 import json
 import sys
@@ -10,7 +10,7 @@ import pytest
 import helpers
 from helpers import CapturingLog
 from slopstation import config, events, logbook
-from slopstation.agent import voice_agent as va
+from slopstation.agent import voice
 from slopstation.agent.speech import announce
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import (
@@ -201,14 +201,16 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(FakeListener, "wakes", [])
     monkeypatch.setattr(FakeAnnouncer, "submitted", [])
     monkeypatch.setattr(FakeSteam, "available_answer", False)
-    monkeypatch.setattr(va, "open_audio", lambda voice: ("PA", 0, 1))
-    monkeypatch.setattr(va, "rebuild_audio", lambda pa, voice, listener: ("PA2", 0, 1))
-    monkeypatch.setattr(va, "WakeListener", FakeListener)
-    monkeypatch.setattr(va, "play_pcm", lambda pa, pcm, idx=None: None)
-    monkeypatch.setattr(va, "refresh_library_bg", lambda: None)
-    monkeypatch.setattr(va, "prewarm_imports_bg", lambda provider: None)
-    monkeypatch.setattr(va, "GrammarMatcher", lambda voice: "MATCHER")
-    monkeypatch.setattr(va, "TvDucker", FakeDucker)
+    monkeypatch.setattr(voice, "open_audio", lambda voice: ("PA", 0, 1))
+    monkeypatch.setattr(
+        voice, "rebuild_audio", lambda pa, voice, listener: ("PA2", 0, 1)
+    )
+    monkeypatch.setattr(voice, "WakeListener", FakeListener)
+    monkeypatch.setattr(voice, "play_pcm", lambda pa, pcm, idx=None: None)
+    monkeypatch.setattr(voice, "refresh_library_bg", lambda: None)
+    monkeypatch.setattr(voice, "prewarm_imports_bg", lambda provider: None)
+    monkeypatch.setattr(voice, "GrammarMatcher", lambda voice: "MATCHER")
+    monkeypatch.setattr(voice, "TvDucker", FakeDucker)
     monkeypatch.setattr(events, "start_heartbeat", lambda lane, **kw: None)
     monkeypatch.setattr(logbook, "rotate", lambda: None)
     monkeypatch.setattr(config, "secrets", lambda: dict(SECRETS))
@@ -247,7 +249,7 @@ def run(monkeypatch, stubbed):
         FakeListener.wakes.extend(wakes)
         monkeypatch.setattr(config, "_current", cfg)
         log = CtxLog("voice")
-        monkeypatch.setattr(va, "log", log)
+        monkeypatch.setattr(voice, "log", log)
         calls = []
 
         class FakeSession:
@@ -282,10 +284,10 @@ def run(monkeypatch, stubbed):
                 if session is not None:
                     session()
 
-        monkeypatch.setattr(va, "Session", FakeSession)
-        monkeypatch.setattr(sys, "argv", ["voice_agent.py"] + argv)
+        monkeypatch.setattr(voice, "Session", FakeSession)
+        monkeypatch.setattr(sys, "argv", ["voice.py"] + argv)
         try:
-            rc = va.main()
+            rc = voice.main()
         except EndOfTest:
             rc = "ended"
         return rc, log, calls
@@ -400,7 +402,7 @@ def test_audio_opens_last(monkeypatch, run):
         at_audio["monitors"] = len(FakeSteamMonitor.made) + len(FakeMediaMonitor.made)
         return ("PA", 0, 1)
 
-    monkeypatch.setattr(va, "open_audio", counting_open)
+    monkeypatch.setattr(voice, "open_audio", counting_open)
     cfg = make_config()
     cfg["media"] = {"enabled": True}
     rc, log, calls = run(["--once"], cfg, wakes=one_wake())

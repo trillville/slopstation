@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from slopstation import sessionlock
-from slopstation.agent.brain import media_tools, prompts
+from slopstation.agent.llm import media_tools, prompts
 
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry

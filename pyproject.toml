@@ -38,10 +38,11 @@ dev = [
 ]
 
 [project.scripts]
-# Scheduled-task entry points.
+# Command-line entry points.
 slopstation-lane = "slopstation.supervise:lane_main"
 slopstation-start = "slopstation.supervise:start"
 slopstation-doctor = "slopstation.doctor:main"
+slopstation-text = "slopstation.text_client:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

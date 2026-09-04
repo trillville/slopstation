@@ -9,8 +9,8 @@ import urllib.request
 import pytest
 
 import helpers
-from slopstation.agent.brain import backends
 from slopstation.agent.interfaces import text
+from slopstation.agent.llm import backends
 from slopstation.agent.telemetry import traces
 
 TOKEN = "t" * 64

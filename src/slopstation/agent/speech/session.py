@@ -36,7 +36,7 @@ def _make_tts(voice, secrets):
 
 def _make_llm(voice, secrets, system_text):
     """Create the configured assistant provider."""
-    from slopstation.agent.brain.assistant import default_model
+    from slopstation.agent.llm.assistant import default_model
 
     provider = voice["assistantProvider"]
     if provider == "openai":
@@ -119,8 +119,8 @@ class Session:
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
         from pipecat.workers.runner import WorkerRunner
 
-        from slopstation.agent.brain.assistant import PROVIDER_KEY
-        from slopstation.agent.brain.dispatch import Dispatch
+        from slopstation.agent.dispatch import Dispatch
+        from slopstation.agent.llm.assistant import PROVIDER_KEY
         from slopstation.agent.speech.audio import wake_phrase as _wake_phrase
         from slopstation.agent.speech.grammar_gate import GrammarGate
         from slopstation.agent.speech.preroll import PrerollFeeder
@@ -298,7 +298,7 @@ class Session:
         )
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
-        from slopstation.agent.brain.assistant import (
+        from slopstation.agent.llm.assistant import (
             function_schemas,
             server_tools,
             system_instruction,
@@ -352,7 +352,7 @@ class Session:
             # Pipecat (still in 1.8.1) has no handling for provider-executed
             # tools: a web_search never reaches the context, so the model
             # cannot tell that it searched.
-            from slopstation.agent.brain import llm_audit
+            from slopstation.agent.llm import llm_audit
 
             if llm_audit.install(llm, log, spans=sentry, context=self.context):
                 log("lane_up", what="search_audit", tools=len(native))

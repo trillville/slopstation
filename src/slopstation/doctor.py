@@ -541,7 +541,7 @@ def check_voice_keys():
             WARN,
             "voice secrets",
             f"unreadable ({e})",
-            "recreate from secrets.template.json",
+            "recreate from secrets.example.json",
         )
         secrets = {}
     lanes = {

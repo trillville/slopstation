@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 import helpers
-from slopstation.agent.interfaces import remote
+from slopstation.agent.interfaces import mcp
 
 INNER_TOKEN = "i" * 64
 OUTER_TOKEN = "o" * 64
@@ -123,7 +123,7 @@ def cfg(inner):
 @pytest.fixture
 def server(cfg, log):
     """The MCP wrapper on a free port, forwarding to `inner`."""
-    server = remote.start(cfg, SECRETS, log)
+    server = mcp.start(cfg, SECRETS, log)
     assert server is not None
     yield server
     server.shutdown()
@@ -137,7 +137,7 @@ def base(server):
 
 
 def test_start_needs_a_reachable_text_interface(cfg, log):
-    disabled = remote.start(cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log)
+    disabled = mcp.start(cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log)
     assert disabled is None, "started without a reachable text interface"
     assert log.find("lane_disabled")[0]["what"] == "remote_interface"
 
@@ -166,7 +166,7 @@ def test_initialize_negotiates_the_protocol_version(base):
             "params": {"protocolVersion": "1999-01-01"},
         },
     )[1]
-    assert unknown["result"]["protocolVersion"] == remote.PROTOCOL_VERSIONS[0]
+    assert unknown["result"]["protocolVersion"] == mcp.PROTOCOL_VERSIONS[0]
 
 
 def test_a_notification_gets_an_empty_202(base):
@@ -239,7 +239,7 @@ def test_an_oversized_body_is_drained_then_refused(server):
     # A refused body is drained, answered, then closed. Without the drain
     # the close RSTs mid-send and the client reads an abort, not the 413.
     big = connection(server)
-    big.request("POST", "/mcp", "x" * (remote.MAX_BODY + 1), HEADERS)
+    big.request("POST", "/mcp", "x" * (mcp.MAX_BODY + 1), HEADERS)
     oversized = big.getresponse()
     oversized.read()
     assert oversized.status == 413
@@ -249,7 +249,7 @@ def test_an_oversized_body_is_drained_then_refused(server):
 
 def test_the_rate_cap(base, log, monkeypatch):
     # The rate cap, driven at a small limit so the real one stays unspent.
-    monkeypatch.setattr(remote, "RATE_LIMIT", 3)
+    monkeypatch.setattr(mcp, "RATE_LIMIT", 3)
     codes = [rpc(base, PING)[0] for _ in range(4)]
     assert codes == [200, 200, 200, 429], codes
     assert len(log.find("remote_throttled")) == 1
@@ -298,12 +298,12 @@ def test_a_refusal_leaves_the_connection_reusable(server):
 def test_consecutive_failures_lock_the_door(base, log):
     # One good token clears the counter, so the failures before it do not
     # count toward the lockout: it fires on the fifth of the run after it.
-    for _ in range(remote.LOCKOUT_AFTER - 1):
+    for _ in range(mcp.LOCKOUT_AFTER - 1):
         rpc(base, PING, token="wrong")
     assert rpc(base, PING)[0] == 200
-    for _ in range(remote.LOCKOUT_AFTER):
+    for _ in range(mcp.LOCKOUT_AFTER):
         rpc(base, PING, token="wrong")
     lockout = log.find("remote_lockout")
     assert len(lockout) == 1, "lockout did not fire on the fifth failure"
-    assert lockout[0]["lock_s"] == remote.LOCKOUT_S
+    assert lockout[0]["lock_s"] == mcp.LOCKOUT_S
     assert rpc(base, PING)[0] == 429

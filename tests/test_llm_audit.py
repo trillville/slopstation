@@ -6,7 +6,7 @@ import types
 import pytest
 
 from helpers import CapturingLog
-from slopstation.agent.brain import llm_audit
+from slopstation.agent.llm import llm_audit
 
 
 def ev(kind, item=None):

@@ -5,7 +5,7 @@ import asyncio
 import helpers
 from helpers import CapturingLog
 from slopstation import config
-from slopstation.agent.brain.dispatch import Dispatch
+from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.speech.grammar_gate import GrammarGate, GrammarMatcher
 from slopstation.agent.speech.preroll import WakeAck
 
@@ -108,7 +108,7 @@ async def run():
     assert folded == 1, f"{folded} acks folded, want exactly the first"
 
 
-async def test_session_pipeline():
+async def test_voice_session_pipeline():
     """On the K15 only: real devices, and the live config.json."""
     helpers.wants("audio")
     await run()

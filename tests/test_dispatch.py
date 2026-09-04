@@ -7,7 +7,7 @@ import pytest
 
 from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, tv
-from slopstation.agent.brain import dispatch as dp
+from slopstation.agent import dispatch as dp
 from slopstation.agent.tools import library
 
 CFG = {
