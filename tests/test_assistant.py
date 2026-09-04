@@ -321,7 +321,9 @@ def test_catalog_dates_the_rows_the_pc_stamped(catalog):
     assert rows["1245620"].split("|")[6] == "inst"
     assert rows[str(OWNED_ONLY)].split("|")[6] == "notinst"
     # And the header says what the token means, or the model invents one.
-    assert "inst:YYYY-MM-DD" in assistant.system_instruction(CFG_MIN)
+    assert "inst[:YYYY-MM-DD last install or update]" in assistant.system_instruction(
+        CFG_MIN
+    )
 
 
 # -- the base tools ------------------------------------------------------------
