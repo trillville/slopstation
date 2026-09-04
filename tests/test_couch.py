@@ -276,6 +276,7 @@ def test_an_enter_that_dies_mid_wait_is_repoked_and_redispatched(wire, monkeypat
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),  # twice = really dead
             ("displays", "ULTRAWIDE"),  # logged on enter_died
+            ("rescan", "OK"),  # the PC re-reads the TV before the retry
             ("enter", "OK"),  # so run it again
             ("status", "ab12cd"),  # the TV woke this time
             ("status", "NOTREADY"),  # watch(): session ends
@@ -306,6 +307,7 @@ def test_a_retry_that_dies_too_fails_now_not_at_the_window(wire, monkeypatch):
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
             ("displays", ""),
+            ("rescan", "OK"),
             ("enter", "OK"),  # the one rescue
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
@@ -516,6 +518,7 @@ def test_the_evidence_rides_the_ready_wait(wire, tv_rig, monkeypatch):
             ("enter", "OK"),
             ("status", "NOTREADY"),
             ("status", "NOTREADY"),
+            ("rescan", "LISTED"),  # asked once, the moment the set says on
             ("status", "ab12cd"),
             ("status", "NOTREADY"),
         ]
@@ -523,6 +526,8 @@ def test_the_evidence_rides_the_ready_wait(wire, tv_rig, monkeypatch):
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_on" in ev and "host_ready" in ev, ev
+    assert ev.index("tv_on") < ev.index("pc_rescan") < ev.index("host_ready"), ev
+    assert log.find("pc_rescan")[0]["answer"] == "LISTED"
     assert ev.index("enter_dispatched") < ev.index("tv_on"), (
         "Enter must not wait for the set - the evidence rides the READY wait"
     )
@@ -546,11 +551,13 @@ def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
     log, sent = wire(
         [
             ("enter", "OK"),
+            ("rescan", "LISTED"),  # the set was on from the first read
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
             ("status", "NOTREADY"),
             ("enterstate", "IDLE"),
             ("displays", "QCQ90S"),
+            ("rescan", "OK"),  # and again before the retry
             ("enter", "OK"),
             ("status", "ab12cd"),
             ("status", "NOTREADY"),
@@ -559,6 +566,7 @@ def test_a_set_that_answered_on_lets_the_rescue_redispatch_at_once(
     assert couch.start(turn="ab12cd") == 0
     ev = log.events()
     assert "tv_on" in ev and "enter_died" in ev and "enter_redispatched" in ev, ev
+    assert [r["answer"] for r in log.find("pc_rescan")] == ["LISTED", "OK"]
     assert log.find("host_ready")[0]["verified"] is True
 
 

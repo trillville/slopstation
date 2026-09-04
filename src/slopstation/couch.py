@@ -101,6 +101,16 @@ def pc_displays() -> str | None:
     return None if ans == "DENIED" else ans
 
 
+def pc_rescan() -> None:
+    """Have the PC re-enumerate its monitors. A node parked at Unknown (driver
+    rebuild, dropped cable) comes back only with a PnP scan, which needs the
+    elevation Dispatch has and Enter does not; asked once the set is on."""
+    try:
+        log("pc_rescan", answer=gamepc.rescan())
+    except Exception as e:
+        log.warn("pc_rescan", err=str(e))
+
+
 class TvEvidence:
     """Track the TV's reported power state while the gaming PC starts."""
 
@@ -154,6 +164,7 @@ def wait_ready(
     ready = False
     foreign_seen = None
     redispatches = ENTER_REDISPATCH
+    rescanned = False
     idle_seen = 0
     settle_at = time.time() + ENTER_SETTLE_S
     repoke_at: float | None = time.time() + WAKE_RETRY_S
@@ -161,6 +172,9 @@ def wait_ready(
         sessionlock.touch()
         raise_if_cancelled()
         evidence.poll()
+        if evidence.confirmed and not rescanned:
+            rescanned = True
+            pc_rescan()
         # Retry once in case the TV missed the initial power command.
         if repoke_at and time.time() >= repoke_at:
             exlink("power_on", again=True)
@@ -213,6 +227,7 @@ def wait_ready(
                     evidence.poll()
                     time.sleep(1)
                 exlink("power_on", again=True)
+                pc_rescan()
                 if not dispatch_enter("enter_redispatched", attempts=5):
                     raise RuntimeError("Enter died and could not be re-triggered")
                 redispatches -= 1

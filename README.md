@@ -12,9 +12,9 @@ voice and text commands, and tracks Steam and media downloads.
 A controller chord starts a session:
 
 1. The K15 powers on the TV, switches it to HDMI 4, and wakes the gaming PC.
-2. The gaming PC waits for Windows to list the TV (asking the GPU to rescan
-   its ports if it does not), switches to its TV display profile, claims the
-   controller, and opens Steam Big Picture.
+2. The gaming PC waits for Windows to list the TV (once the TV reports on,
+   the K15 has the PC re-scan its devices if it is not), switches to its TV
+   display profile, claims the controller, and opens Steam Big Picture.
 3. The gaming PC returns `READY` with the request ID.
 4. The K15 confirms the TV input.
 5. Slopstation watches the session until it ends.

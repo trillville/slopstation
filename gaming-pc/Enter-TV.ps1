@@ -20,22 +20,13 @@ try {
     Start-Process -WindowStyle Hidden $CG.Vh -ArgumentList '-t','LIST','-r',$CG.VhNudge
     Log ("primary height at start: {0}" -f (Get-PrimaryHeight))
 
-    # 1. TV listed by Windows. Usually already is; if not, only a rescan
-    #    brings it back. Keep asking while the set wakes (up to 20 s).
-    $rescans = 0
-    while (-not (Test-TvListed)) {
-        $seen = @(Get-TvNames) -join ', '
-        if ($rescans -ge $CG.TvRescans) {
-            throw "S90C never appeared over HDMI after $rescans rescans (Windows lists: $seen) - aborting, office display untouched"
-        }
-        $rescans++
-        $rc = Invoke-DisplayRescan
-        Log "TV not listed (Windows lists: $seen) - rescan $rescans, rc=$rc"
-        # Poll: a rescan that works answers in under a second.
-        Wait-For { Test-TvListed } 3 "TV listed after rescan $rescans" | Out-Null
+    # 1. TV listed by Windows. A set waking from deep off can take 20 s; a
+    #    node parked at Unknown (driver rebuild, dropped cable) comes back only
+    #    via the K15's `rescan` verb once the set is on - PnP scans need
+    #    elevation this task does not have.
+    if (-not (Wait-For { Test-TvListed } 30 'TV detected')) {
+        throw "S90C never appeared over HDMI (Windows lists: $(@(Get-TvNames) -join ', ')) - aborting, office display untouched"
     }
-    if ($rescans) { Write-CgEvent 'display_rescan' @{ tries = $rescans } 'warn' }
-    Log 'TV detected'
 
     # 2. Launch the TV-only profile without waiting - it settles during the USB work
     Start-Process $CG.TvGamingLnk

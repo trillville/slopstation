@@ -12,7 +12,6 @@ $CG = @{
     SteamWindow = 'Steam'                  # EXACT title of the desktop library window
     BpmWindow   = 'Steam Big Picture Mode' # EXACT title of the Big Picture window
     TvHeight    = 2160                     # see Test-TvIsPrimary
-    TvRescans   = 10                       # x3 s; the set can take 20 s to wake
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
     StateDir    = 'C:\ProgramData\CouchGaming'   # cross-context state, not under Root
@@ -122,17 +121,6 @@ function Get-TvNames {
 }
 
 function Test-TvListed { [bool](@(Get-TvNames) -match $CG.TvEdid) }
-
-# Re-probe the GPU's ports. A driver install or deep-off drops the TV's
-# monitor device, and nothing re-lists it without a topology apply. Extend
-# is a no-op with one display. Returns the API status, 0 = ok.
-function Invoke-DisplayRescan {
-    if (-not ('CG.Display' -as [type])) {
-        Add-Type -Namespace CG -Name Display -MemberDefinition '[DllImport("user32.dll")] public static extern int SetDisplayConfig(uint nPaths, IntPtr paths, uint nModes, IntPtr modes, uint flags);'
-    }
-    $SDC_TOPOLOGY_EXTEND = 0x4; $SDC_APPLY = 0x80
-    [CG.Display]::SetDisplayConfig(0, [IntPtr]::Zero, 0, [IntPtr]::Zero, ($SDC_TOPOLOGY_EXTEND -bor $SDC_APPLY))
-}
 
 # Use Windows device enumeration to verify VirtualHere claim state.
 function Test-PuckPresent {

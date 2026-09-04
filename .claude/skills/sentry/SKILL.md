@@ -202,10 +202,11 @@ them together with the heartbeat count:
   never answered at boot).
 - **voice, also**: `tool_error` (a tool impl raised; pairs with the `tool_call
   ok=false` for the same call).
-- **gamepc, Enter step 1**: `display_rescan` (warn, carries `tries`) — Windows
-  did not list the S90C when Enter started, and Enter asked the GPU to re-probe
-  its ports; `tries` is how many 3 s rounds it took. `enter_failed` with
-  "never appeared over HDMI" names what Windows listed instead.
+- **launch, also**: `pc_rescan` — the K15 asking the PC to re-enumerate its
+  monitors, once at `tv_on` and again before a redispatch. `answer` LISTED =
+  Windows already listed the TV, OK = it scanned, FAILED:<rc> = the scan
+  failed; `err` = the ssh call did. On `lane:dispatch` it is the `rescan`
+  verb. `enter_failed` "never appeared over HDMI" names what Windows listed.
 - **gamepc, also**: `profile_applied` / `profile_apply_failed` on
   `lane:office-safety` (a logon that had to restore OFFICE), `wake_cleanup` on
   `lane:wake-safety`.

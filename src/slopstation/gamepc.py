@@ -82,6 +82,11 @@ def displays() -> str:
     return ssh("displays", timeout=5)
 
 
+def rescan(turn: str | None = None) -> str:
+    """Have the PC re-enumerate its monitors when the TV is not listed."""
+    return ssh_intent("rescan", turn, timeout=30)
+
+
 def games() -> str:
     return ssh("games", timeout=30)
 
@@ -115,6 +120,7 @@ VERBS = (
     "version",
     "playing",
     "displays",
+    "rescan",
     "games",
     "collections",
     "launch",
@@ -122,5 +128,5 @@ VERBS = (
     "nav",
 )
 
-# Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE DENIED, and
+# Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE LISTED DENIED, and
 # BUSY:<appid> NOTASK:<name> FAILED:<code> with an argument after the colon.
