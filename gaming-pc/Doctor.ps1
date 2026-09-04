@@ -51,9 +51,7 @@ if (Test-Path $ak) {
 
 # 4. Wake-on-LAN. The K15 wakes this PC with a magic packet (couch.py wol()),
 # so MagicPacket must stay 1. Pattern must stay 0: at 1 the NIC wakes on
-# ordinary LAN broadcast traffic, seconds after every sleep - measured
-# 2026-09-04, 15 sleep attempts in 8 h holding 2 s each. Both keywords default
-# to 1, and a NIC driver reinstall restores those defaults.
+# ordinary LAN broadcast traffic
 function Get-WolKeyword([string]$Adapter, [string]$Keyword) {
     $p = Get-NetAdapterAdvancedProperty -Name $Adapter -RegistryKeyword $Keyword -ErrorAction SilentlyContinue
     if ($p) { return "$($p.RegistryValue)" }
