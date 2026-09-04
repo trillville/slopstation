@@ -34,9 +34,12 @@ long-running work while Slopstation records progress in
 |---|---|
 | `src/slopstation/couch.py` | Start, watch, and end couch sessions |
 | `src/slopstation/chord_listener.py` | Listen for the controller chord |
+| `src/slopstation/text_client.py` | Send text commands from a terminal |
 | `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | TV, controller, and gaming-PC access |
+| `src/slopstation/agent/voice.py` | Run the voice service |
 | `src/slopstation/agent/speech/` | Wake word, audio, and fixed voice commands |
-| `src/slopstation/agent/brain/` | Assistant prompts, providers, and tools |
+| `src/slopstation/agent/llm/` | Assistant prompts and model providers |
+| `src/slopstation/agent/dispatch.py` | Actions shared by voice and text commands |
 | `src/slopstation/agent/tools/` | Steam, media, operation, and TV tools |
 | `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
 | `gaming-pc/` | Gaming-PC scripts and SSH command allowlist |
@@ -50,7 +53,7 @@ The custom wake model comes from
 
 1. Clone the repository to `C:\Users\minipc\Desktop\slopstation`.
 2. Copy `config.example.json` to `config.json` and
-   `secrets.template.json` to `secrets.json`, then fill in device names,
+   `secrets.example.json` to `secrets.json`, then fill in device names,
    addresses, API keys, and tokens. Both destination files are ignored by Git.
 3. Create the virtual environment and install the package:
 
@@ -151,8 +154,8 @@ git pull
 
 ```powershell
 # Text interface
-.venv\Scripts\python -m slopstation.slop
-.venv\Scripts\python -m slopstation.slop "what is downloading?"
+.venv\Scripts\slopstation-text
+.venv\Scripts\slopstation-text "what is downloading?"
 
 # Tracked Steam and media work
 .venv\Scripts\python -m slopstation.agent.tools.operations list --active

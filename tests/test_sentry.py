@@ -52,7 +52,7 @@ def test_otlp_target_comes_from_the_sdk_dsn_helper():
 
 def test_everything_no_ops_while_tracing_is_off():
     # This is also what keeps the --text REPL out of production Conversations:
-    # voice_agent returns before setup() runs.
+    # The voice service returns before setup() runs.
     assert sentry.is_on() is False
     assert sentry.tool_span("web_search", "hades reviews") is None
     with sentry.chat_span("anthropic", "claude-haiku-4-5") as span:
@@ -99,7 +99,7 @@ def test_setup_without_a_dsn_is_disabled_quietly(_tracing_off):
 
 
 def test_an_exploding_sdk_is_an_error_event_and_a_false(_tracing_off, monkeypatch):
-    # voice_agent calls setup() BARE, before the wake loop, so anything that
+    # The voice service calls setup() before the wake loop, so anything that
     # escapes it is an agent that will not start. A DSN present and the SDK
     # exploding must be an error event and a False, never a raise.
     log = CapturingLog("voice")

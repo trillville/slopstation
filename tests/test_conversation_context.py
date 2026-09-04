@@ -1,6 +1,6 @@
 """Test trimming carried context to complete exchanges."""
 
-from slopstation.agent.speech.session_runtime import _trim_carry
+from slopstation.agent.speech.session import _trim_carry
 
 U = {"role": "user", "content": "what racing games do i have"}
 A = {"role": "assistant", "content": "Three."}

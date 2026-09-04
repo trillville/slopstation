@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 
 from slopstation import config
-from slopstation.agent.brain import assistant, llm_audit
+from slopstation.agent.llm import assistant, llm_audit
 from slopstation.agent.telemetry import sentry, traces
 
 # Keep provider timeouts shorter than the HTTP interface timeout.
@@ -207,7 +207,7 @@ BACKENDS: dict[str, Callable[..., Backend]] = {
 
 def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None):
     """Run the text interface with the base assistant tools."""
-    from slopstation.agent.brain.dispatch import Dispatch
+    from slopstation.agent.dispatch import Dispatch
 
     provider = provider or cfg["voice"]["assistantProvider"]
     if provider not in BACKENDS:

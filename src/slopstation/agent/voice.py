@@ -7,10 +7,10 @@ Modes:
   --announce-test       speak a canned operation announcement and exit
   --dry-run             full pipeline; side effects logged, not executed
   --once                exactly one session, then exit (bench)
-  --text                the assistant REPL (brain/backends.py); --provider,
+  --text                the assistant REPL (llm/backends.py); --provider,
                         --model, --effort pick the A/B side
 
-Audio handling lives in audio.py and session execution in session_runtime.py.
+Audio handling lives in audio.py and session execution in session.py.
 """
 
 import argparse
@@ -30,7 +30,7 @@ from slopstation.agent.speech.audio import (
 )
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.speech.preroll import WakeAck
-from slopstation.agent.speech.session_runtime import Session
+from slopstation.agent.speech.session import Session
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import library
 from slopstation.agent.tools.tv_remote import TvDucker
@@ -99,7 +99,7 @@ def bench_mode(args, cfg, secrets):
         return 0
 
     if args.text:
-        from slopstation.agent.brain.backends import repl
+        from slopstation.agent.llm.backends import repl
 
         return repl(
             cfg,
@@ -232,10 +232,10 @@ def main():
     stt_live = config.real_key(secrets.get("deepgramApiKey"))
     if not stt_live:
         log.warn("lane_disabled", what="stt", reason="deepgram key is a placeholder")
-    from slopstation.agent.brain.assistant import PROVIDER_KEY
+    from slopstation.agent.llm.assistant import PROVIDER_KEY
 
-    brain_key = PROVIDER_KEY.get(voice["assistantProvider"])
-    brain_live = bool(brain_key and config.real_key(secrets.get(brain_key)))
+    provider_key = PROVIDER_KEY.get(voice["assistantProvider"])
+    provider_live = bool(provider_key and config.real_key(secrets.get(provider_key)))
     warn_config(voice)
 
     # Grammar built once: a YAML typo fails here, not per-wake.
@@ -243,8 +243,8 @@ def main():
     # Refresh periodically without blocking wake detection.
     events.Ticker("library-sync", library.SYNC_S, library.periodic_sync()).start()
     prewarm_imports_bg(voice["assistantProvider"])
-    if brain_live:
-        from slopstation.agent.brain.assistant import default_model
+    if provider_live:
+        from slopstation.agent.llm.assistant import default_model
 
         provider = voice["assistantProvider"]
         log(
@@ -369,9 +369,9 @@ def main():
 
     # Forwards to the text interface over localhost, so it takes no tools and
     # no dry_run of its own - both ride along inside that hop.
-    from slopstation.agent.interfaces import remote
+    from slopstation.agent.interfaces import mcp
 
-    remote.start(cfg, secrets, log)
+    mcp.start(cfg, secrets, log)
 
     # Configure tracing before the first session.
     sentry.setup(cfg, log)
