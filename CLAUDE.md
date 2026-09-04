@@ -79,13 +79,13 @@ into the whole session.
 Several rules here are tests: `test_event_names` (the frozen vocabulary - a new
 event is added there, a rename is a deliberate edit there), `test_imports`
 (every module imports in a fresh interpreter with no config.json - run it after
-any move), `test_ps_parse` (every `.ps1` parses; the PC-side contract agrees
-with itself; every gaming-pc script is in `Deploy.ps1`'s set - one that is not
-deploys green and is simply absent). `test_turn.py` reads the SHIPPING
-`Dispatch.ps1`, so gaming-pc regex changes are drilled from here. mypy runs
+any move), `test_gaming_pc_scripts` (every `.ps1` parses; the PC-side contract
+agrees with itself; every gaming-pc script is included in `Deploy.ps1`, so one
+cannot be omitted from a successful deployment). `test_turn_ids.py` reads the
+SHIPPING `Dispatch.ps1`, so gaming-pc regex changes are drilled from here. mypy runs
 with `check_untyped_defs`, so a moved attribute fails there even in unannotated
 code.
-`test_library` needs a local Steam (the gaming PC); `test_session_pipeline`
+`test_library` needs a local Steam (the gaming PC); `test_voice_session`
 needs audio devices (the K15); both skip themselves. The python in `ci.yml` and
 `pyproject.toml` MIRRORS the K15's interpreter and is not a floor:
 `constraints.txt` is frozen from that venv, so a cp313 pin has no wheel for an

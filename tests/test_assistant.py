@@ -9,8 +9,8 @@ import pytest
 
 from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, statefile
-from slopstation.agent.brain import assistant, backends, media_tools
-from slopstation.agent.brain.dispatch import Dispatch
+from slopstation.agent.dispatch import Dispatch
+from slopstation.agent.llm import assistant, backends, media_tools
 from slopstation.agent.tools import library, steamstore
 
 CFG_MIN = {
@@ -856,7 +856,7 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, log, impls):
     # `reasoning`, which only live inference rejects.
     from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 
-    from slopstation.agent.speech import session_runtime
+    from slopstation.agent.speech import session
 
     schemas = assistant.function_schemas(impls, log)
     si = assistant.system_instruction(CFG_MIN)
@@ -867,14 +867,14 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, log, impls):
         "assistantModelAnthropic": "claude-haiku-4-5",
         "assistantModelOpenai": "gpt-5.6-luna",
     }
-    session_runtime._make_llm(voice_a, dummy, si)
+    session._make_llm(voice_a, dummy, si)
     voice_o = {
         **voice_a,
         "assistantProvider": "openai",
         "assistantModelOpenai": "gpt-5.6-luna",
         "assistantReasoningEffort": "low",
     }
-    llm_o = session_runtime._make_llm(voice_o, dummy, si)
+    llm_o = session._make_llm(voice_o, dummy, si)
     # The inference path's model_dump() call, which a plain dict would fail.
     assert llm_o._settings.reasoning.model_dump(exclude_none=True) == {
         "effort": "low"
@@ -892,7 +892,7 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, log, impls):
 
 def test_the_sdk_clients_carry_deadlines():
     # The SDK clients carry explicit deadlines: without them a stalled
-    # provider stream outlives remote.py's 280 s forwarding budget.
+    # provider stream outlives mcp.py's 280 s forwarding budget.
     real = backends.AnthropicBackend({"anthropicApiKey": "a" * 64}, "claude-test")
     assert real.client.timeout == backends.LLM_TIMEOUT_S
     assert real.client.max_retries == backends.LLM_MAX_RETRIES

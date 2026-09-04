@@ -68,6 +68,10 @@ if ($h -gt 0) {
     else { Report PASS 'display' "probe ok (primary height $h, office topology)" }
 } else { Report FAIL 'display' 'probe returned 0' 'Get-PrimaryHeight broken - PowerShell/DPI issue' }
 
+$tv = @(Get-TvNames)
+if ($tv -match $CG.TvEdid) { Report PASS 'tv link' "$($CG.TvEdid) listed by Windows" }
+else { Report WARN 'tv link' "Windows lists: $($tv -join ', ')" 'Device Manager > Scan for hardware changes; else re-seat the HDMI cable at the GPU' }
+
 # 6. Session state + logs
 if (Test-ReadyMarker) { Report WARN 'ready marker' 'present - a session is (or looks) active' 'stale after a crash? Exit task or Office-Safety clears it' }
 else { Report PASS 'ready marker' 'absent (idle)' }

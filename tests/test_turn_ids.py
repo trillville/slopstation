@@ -7,7 +7,7 @@ import pytest
 import helpers
 from helpers import CapturingLog
 from slopstation import couch, events, gamepc
-from slopstation.agent.brain import dispatch as dp
+from slopstation.agent import dispatch as dp
 
 DISPATCH = helpers.REPO / "gaming-pc" / "Dispatch.ps1"
 

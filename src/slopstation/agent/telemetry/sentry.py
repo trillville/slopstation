@@ -209,12 +209,12 @@ def conversation_id():
 
 
 # --- the text lane's own LLM calls -------------------------------------------
-# brain/backends.py drives the Anthropic and OpenAI SDKs directly, outside
+# llm/backends.py drives the Anthropic and OpenAI SDKs directly, outside
 # pipecat, so nothing else traces it. These build the same spans genai.reshape
 # rewrites pipecat's into - shaped at creation, because we own them.
 #
 # All of it no-ops while _on is False, which is what keeps the --text REPL out
-# of production Conversations: voice_agent returns before setup() runs.
+# of production Conversations: the voice service returns before setup() runs.
 
 # Short key -> Sentry attribute. The caller flattens its SDK's usage object,
 # so nothing here knows an Anthropic field from an OpenAI one.

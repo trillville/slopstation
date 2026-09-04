@@ -21,7 +21,7 @@ from slopstation import logbook, paths, statefile
 # What each lane runs. Module invocations, not paths: the package is installed.
 LANES = {
     "listener": [sys.executable, "-m", "slopstation.chord_listener"],
-    "voice": [sys.executable, "-m", "slopstation.agent.voice_agent"],
+    "voice": [sys.executable, "-m", "slopstation.agent.voice"],
 }
 TASKS = {lane: f"\\Slopstation\\{lane}" for lane in LANES}
 

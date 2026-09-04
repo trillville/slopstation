@@ -10,8 +10,8 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from slopstation import config
-from slopstation.agent.brain import assistant, backends
-from slopstation.agent.brain.dispatch import Dispatch
+from slopstation.agent.dispatch import Dispatch
+from slopstation.agent.llm import assistant, backends
 from slopstation.agent.telemetry import traces
 
 MAX_BODY = 64 * 1024
@@ -184,7 +184,7 @@ class TextHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
             self._json(400, {"ok": False, "error": str(e)})
         except SessionBusy as e:
-            # 503 with the reason: remote.py surfaces an HTTP error's
+            # 503 with the reason: mcp.py surfaces an HTTP error's
             # `error` field to the caller, so the busy text reaches the app.
             self._json(503, {"ok": False, "error": str(e)})
         except Exception as e:

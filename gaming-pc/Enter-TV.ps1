@@ -22,7 +22,7 @@ try {
 
     # 1. TV EDID visible (the K15 just powered it on)
     if (-not (Wait-For { (Get-TvNames) -match $CG.TvEdid } 30 'TV detected')) {
-        throw 'S90C never appeared over HDMI - aborting, office display untouched'
+        throw "S90C never appeared over HDMI (Windows lists: $(@(Get-TvNames) -join ', ')) - aborting, office display untouched"
     }
 
     # 2. Launch the TV-only profile without waiting - it settles during the USB work

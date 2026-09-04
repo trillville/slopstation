@@ -23,7 +23,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from rapidfuzz import fuzz
 
 from slopstation import events
-from slopstation.agent.brain.dispatch import Result
+from slopstation.agent.dispatch import Result
 from slopstation.agent.speech import earcons
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import titles

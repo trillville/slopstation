@@ -105,7 +105,7 @@ def owned(text, fn):
     return re.findall(r"'(\w+)'", m.group(1))
 
 
-def test_ps_parse():
+def test_gaming_pc_scripts_parse():
     if not shutil.which("powershell"):
         pytest.skip("powershell not on PATH")
     dispatch, common, nav = read(DISPATCH), read(COMMON), read(NAV)
