@@ -85,6 +85,7 @@ there for now.
 The custom wake model in `src/slopstation/agent/models` was trained by the
 author on recordings from this room with
 [slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab).
+It is the author's own work and is covered by this repository's MIT license.
 The stock `hey_jarvis_v0.1` model in `config.example.json` works without it.
 
 ## Evaluating without the hardware
