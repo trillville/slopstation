@@ -77,6 +77,11 @@ answer even if the voice process was just restarted.
 | Audio | Samsung HW-Q990C soundbar over eARC |
 | Speech | openWakeWord, Deepgram for speech to text and text to speech, Anthropic or OpenAI for the assistant |
 
+The TV is the one hard dependency on a brand. Power and input go over Ex-Link,
+Samsung's serial control protocol, and the remote and volume ducking use
+Samsung's WebSocket API, so another make of TV means replacing `tv.py` and
+`agent/tools/tv_remote.py`.
+
 The gaming-PC scripts still carry a few of this house's values in
 `gaming-pc/CouchGaming.common.ps1`: the controller name and hardware id, the
 TV's EDID name, and the display height that identifies the TV. Edit them
