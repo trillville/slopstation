@@ -246,13 +246,16 @@ def test_config_example_is_what_common_requires():
         "TvEdid": "string",
         "TvHeight": "int",
     }
-    got = dict(
-        ln.split("=", 1)
-        for ln in powershell(
-            f"$c = Import-PowerShellDataFile '{CONFIG_EXAMPLE}'; "
-            "foreach ($k in $c.Keys) { '{0}={1}' -f $k, $c[$k].GetType().Name }"
-        )
+    # The same read as common.ps1's Import-CgConfig.
+    parse = (
+        "$e = $null; $ast = [System.Management.Automation.Language.Parser]"
+        f"::ParseFile('{CONFIG_EXAMPLE}', [ref]$null, [ref]$e); "
+        "$c = $ast.Find({ $args[0] -is "
+        "[System.Management.Automation.Language.HashtableAst] }, $false)"
+        ".SafeGetValue(); "
+        "foreach ($k in $c.Keys) { '{0}={1}' -f $k, $c[$k].GetType().Name }"
     )
+    got = dict(ln.split("=", 1) for ln in powershell(parse))
     want = {k: {"string": "String", "int": "Int32"}[t] for k, t in keys.items()}
     assert got == want
 

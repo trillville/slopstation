@@ -10,7 +10,13 @@ function Import-CgConfig {
     if (-not (Test-Path $path)) {
         throw "$path is missing - copy config.example.psd1 there and edit it (Install.ps1 does this)"
     }
-    $cfg = Import-PowerShellDataFile $path
+    # The file's one hashtable, evaluated without running code: what
+    # Import-PowerShellDataFile does, on hosts that lack the cmdlet too.
+    $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+    $table = $ast.Find({ $args[0] -is [System.Management.Automation.Language.HashtableAst] }, $false)
+    if ($errs -or -not $table) { throw "config.psd1 does not parse as one hashtable - see config.example.psd1" }
+    $cfg = $table.SafeGetValue()
     foreach ($k in $script:CgConfigKeys.Keys) {
         if (-not $cfg.ContainsKey($k) -or "$($cfg[$k])" -eq '') {
             throw "config.psd1: $k is missing - see config.example.psd1"
