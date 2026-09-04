@@ -122,23 +122,24 @@ tunnel; do not expose the local media services directly to the internet.
    Server.
 2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles in
    `C:\CouchGaming`.
-3. Configure the seven `\CouchGaming\` scheduled tasks and restrict the mini
-   PC's SSH key to `Dispatch.ps1` in
-   `C:\ProgramData\ssh\administrators_authorized_keys`.
-4. Deploy from a repository checkout:
+3. Run the installer from an administrator PowerShell. Supplying the mini PC's
+   public key installs the restricted SSH entry; omitting it prints the exact
+   entry to install manually.
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 `
+       -K15Address '192.0.2.30' -K15PublicKeyPath 'C:\path\to\id_ed25519.pub'
+   ```
+
+4. On its first run, the installer creates
+   `C:\CouchGaming\config.psd1` and stops. Replace the TV EDID placeholder,
+   then rerun the same command. The installer registers all seven tasks,
+   restricts SSH to the mini PC, and finishes by running the deployed doctor.
+5. After later code changes, deploy without changing local configuration:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Deploy.ps1
    ```
-
-5. Run the deployed doctor:
-
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
-   ```
-
-The reproducible gaming-PC installer is the next change in the publication
-series. Until then, these tasks remain the only underspecified setup step.
 
 For Radarr, Sonarr, and qBittorrent setup, see the co-located
 [media guide](media/README.md).
@@ -150,6 +151,10 @@ For Radarr, Sonarr, and qBittorrent setup, see the co-located
 remain at the repository root because the runtime, doctor, and deployment path
 already agree on that contract. `SLOPSTATION_HOME` relocates configuration,
 state, and logs together when the checkout is not the runtime home.
+
+The gaming PC keeps its machine-specific display and controller values in
+`C:\CouchGaming\config.psd1`. Deployments update the committed example but
+preserve that live file.
 
 The example uses IANA documentation addresses and a locally administered MAC
 address. They are not usable deployment values.

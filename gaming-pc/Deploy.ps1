@@ -3,8 +3,8 @@
 # Run from a checkout, on the PC:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Deploy.ps1
 #
-# ``-WaitMinutes`` waits for active sessions. This script and local runtime
-# files are not copied.
+# ``-WaitMinutes`` waits for active sessions. This script, Install.ps1 and
+# local runtime files are not copied.
 param([string]$Dest = 'C:\CouchGaming', [int]$WaitMinutes = 0)
 
 $scripts = @(
@@ -13,6 +13,7 @@ $scripts = @(
     'Nav-BigPicture.ps1', 'Stop-Game.ps1',
     'Office-Safety.ps1', 'Wake-Safety.ps1'
 )
+$examples = @('config.example.psd1')
 
 # This emitter writes directly to the runtime log directory being deployed.
 function Write-CgEvent([string]$Event, [hashtable]$Fields = @{}, [string]$Level = 'info') {
@@ -55,7 +56,7 @@ function Test-SessionLive {
 }
 
 # Refuse incomplete script sets.
-$missing = $scripts | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) }
+$missing = @($scripts + $examples) | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) }
 if ($missing) {
     Write-Host "ABORT: this checkout is missing $($missing -join ', ') - nothing copied"
     exit 1
@@ -83,6 +84,10 @@ foreach ($f in $scripts) {
     Copy-Item (Join-Path $PSScriptRoot $f) (Join-Path $Dest $f) -Force
     Write-Host "  $f"
 }
+foreach ($f in $examples) {
+    Copy-Item (Join-Path $PSScriptRoot $f) (Join-Path $Dest $f) -Force
+    Write-Host "  $f"
+}
 
 # Record the short revision and whether deployed files have local changes.
 $rev = ''
@@ -104,6 +109,9 @@ foreach ($f in 'vhui64.exe', 'OFFICE.lnk', 'TV-GAMING.lnk') {
     if (-not (Test-Path (Join-Path $Dest $f))) {
         Write-Host "WARNING: $Dest\$f is missing - install it on this machine (VirtualHere client / DisplayMagician shortcuts)"
     }
+}
+if (-not (Test-Path (Join-Path $Dest 'config.psd1'))) {
+    Write-Host "WARNING: $Dest\config.psd1 is missing - copy config.example.psd1 and edit it"
 }
 Write-CgEvent 'deploy_done' @{ scripts = $scripts.Count; build_id = $stamp }
 Write-Host "deployed $($scripts.Count) scripts to $Dest"

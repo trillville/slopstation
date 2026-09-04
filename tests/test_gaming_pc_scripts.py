@@ -15,6 +15,8 @@ MEDIA_START = ROOT / "media" / "Start-Media.ps1"
 DISPATCH = PC / "Dispatch.ps1"
 COMMON = PC / "CouchGaming.common.ps1"
 NAV = PC / "Nav-BigPicture.ps1"
+INSTALL = PC / "Install.ps1"
+CONFIG_EXAMPLE = PC / "config.example.psd1"
 
 # Prints one 'FILE|LINE|MESSAGE' per parse error, then 'PARSED <n>'.
 PARSE_PS = r"""
@@ -56,7 +58,7 @@ def parse_all():
     parsed = [ln for ln in lines if ln.startswith("PARSED ")]
     assert parsed, f"parser run produced no summary: {r.stderr[:400]}"
     n = int(parsed[0].split()[1])
-    assert n >= 11, f"only {n} scripts parsed - path bug, not a real pass"
+    assert n >= 12, f"only {n} scripts parsed - path bug, not a real pass"
     assert not errors, (
         f"{len(errors)} parse error(s) in gaming-pc/*.ps1:\n" + "\n".join(errors)
     )
@@ -185,7 +187,7 @@ def test_gaming_pc_scripts_parse():
     #    a new script would deploy green and simply be absent on the PC. It
     #    does not copy itself. Doctor.ps1 keeps its own list and must check
     #    everything that ships.
-    on_disk = {p.name for p in PC.glob("*.ps1")} - {"Deploy.ps1"}
+    on_disk = {p.name for p in PC.glob("*.ps1")} - {"Deploy.ps1", "Install.ps1"}
     shipped = name_list(read(PC / "Deploy.ps1"), "scripts", "Deploy.ps1")
     assert shipped == on_disk, (
         f"Deploy.ps1 ships {len(shipped)} of {len(on_disk)} scripts: "
@@ -196,3 +198,68 @@ def test_gaming_pc_scripts_parse():
     assert on_disk <= checked, (
         f"Doctor.ps1 $files does not check {sorted(on_disk - checked)}"
     )
+
+
+def test_gaming_pc_config_and_installer_contract():
+    common = read(COMMON)
+    deploy = read(PC / "Deploy.ps1")
+    doctor = read(PC / "Doctor.ps1")
+    install = read(INSTALL)
+    example = read(CONFIG_EXAMPLE)
+
+    for key in ("PuckName", "PuckHwId", "TvEdid", "TvHeight"):
+        assert re.search(r"^\s*" + key + r"\s*=", example, re.M), key
+        assert f"$localConfig.{key}" in common, key
+
+    assert name_list(deploy, "examples", "Deploy.ps1") == {"config.example.psd1"}
+    assert "gaming-pc/config.psd1" in read(ROOT / ".gitignore")
+    assert "config.psd1" not in name_list(deploy, "scripts", "Deploy.ps1")
+
+    expected = {
+        "Enter": "Enter-TV.ps1",
+        "Exit": "Exit-TV.ps1",
+        "ForceOfficeAtLogon": "Office-Safety.ps1",
+        "WakeSafety": "Wake-Safety.ps1",
+        "LaunchGame": "Launch-Game.ps1",
+        "Nav": "Nav-BigPicture.ps1",
+        "StopGame": "Stop-Game.ps1",
+    }
+    for name, script in expected.items():
+        assert f"'{name}'" in install and f"'{script}'" in install
+        assert re.search(
+            rf"^\s*{name}\s*=\s*@\{{\s*Script\s*=\s*'{re.escape(script)}'",
+            doctor,
+            re.M,
+        ), name
+    assert "-RemoteAddress $parsedAddress.IPAddressToString" in install
+    assert 'command="powershell.exe' in install and "no-port-forwarding" in install
+    assert "before-slopstation" in install
+    assert "not one forced-command key" in doctor
+
+
+def test_deploy_preserves_live_gaming_pc_config(tmp_path):
+    if not shutil.which("powershell"):
+        pytest.skip("powershell not on PATH")
+    dest = tmp_path / "runtime"
+    dest.mkdir()
+    live = dest / "config.psd1"
+    live.write_text("@{ Sentinel = 'keep me' }\n", encoding="utf-8")
+    r = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(PC / "Deploy.ps1"),
+            "-Dest",
+            str(dest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert r.returncode == 0, r.stderr or r.stdout
+    assert live.read_text(encoding="utf-8") == "@{ Sentinel = 'keep me' }\n"
+    assert (dest / "config.example.psd1").exists()
+    assert not (dest / "Install.ps1").exists()

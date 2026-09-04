@@ -6,7 +6,12 @@ if (-not (Test-Path $libPath)) {
     Write-Host "[FAIL] CouchGaming.common.ps1 missing beside this script - partial deploy; re-copy all files from the repo" -ForegroundColor Red
     exit 1
 }
-. $libPath
+try {
+    . $libPath
+} catch {
+    Write-Host "[FAIL] config.psd1: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
 
 $script:Counts = @{ PASS = 0; WARN = 0; FAIL = 0 }
 function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = '') {
@@ -18,16 +23,46 @@ function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = 
 }
 
 # 1. Deployed files
-$files = @('CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
+$files = @('config.psd1','config.example.psd1','CouchGaming.common.ps1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
 $missing = $files | Where-Object { -not (Test-Path (Join-Path $CG.Root $_)) }
 if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 're-copy from repo gaming-pc/; recreate .lnk files from DisplayMagician' }
 else { Report PASS 'files' "$($files.Count)/$($files.Count) present" }
 
+Report PASS 'config.psd1' "Puck '$($CG.PuckName)' ($($CG.PuckHwId)); TV '$($CG.TvEdid)', height $($CG.TvHeight)"
+
 # 2. Scheduled tasks
-foreach ($t in 'Enter','Exit','ForceOfficeAtLogon','WakeSafety','LaunchGame','Nav','StopGame') {
-    schtasks /Query /TN "\CouchGaming\$t" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { Report PASS "task $t" 'registered' }
-    else { Report FAIL "task $t" 'not registered' 'register it with schtasks /Create as an interactive task for this user' }
+$taskSpecs = [ordered]@{
+    Enter                = @{ Script = 'Enter-TV.ps1';       RunLevel = 'Limited'; Trigger = '' }
+    Exit                 = @{ Script = 'Exit-TV.ps1';        RunLevel = 'Limited'; Trigger = '' }
+    ForceOfficeAtLogon   = @{ Script = 'Office-Safety.ps1';  RunLevel = 'Highest'; Trigger = 'MSFT_TaskLogonTrigger' }
+    WakeSafety           = @{ Script = 'Wake-Safety.ps1';    RunLevel = 'Limited'; Trigger = 'MSFT_TaskEventTrigger' }
+    LaunchGame           = @{ Script = 'Launch-Game.ps1';    RunLevel = 'Limited'; Trigger = '' }
+    Nav                  = @{ Script = 'Nav-BigPicture.ps1'; RunLevel = 'Limited'; Trigger = '' }
+    StopGame             = @{ Script = 'Stop-Game.ps1';      RunLevel = 'Limited'; Trigger = '' }
+}
+foreach ($name in $taskSpecs.Keys) {
+    $want = $taskSpecs[$name]
+    $task = Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName $name -ErrorAction SilentlyContinue
+    if (-not $task) {
+        Report FAIL "task $name" 'not registered' 'run Install.ps1 from an administrator PowerShell'
+        continue
+    }
+    $action = @($task.Actions)[0]
+    $actionOk = $action.Execute -match '(?i)(^|\\)powershell\.exe$' -and
+                $action.Arguments -like "*\$($want.Script)*"
+    $triggers = @($task.Triggers)
+    $triggerOk = if ($want.Trigger) {
+        $triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq $want.Trigger
+    } else { $triggers.Count -eq 0 }
+    $runLevelOk = "$($task.Principal.RunLevel)" -eq $want.RunLevel
+    $principalOk = "$($task.Principal.LogonType)" -eq 'Interactive' -and $task.Principal.UserId
+    $limitOk = "$($task.Settings.ExecutionTimeLimit)" -eq 'PT5M'
+    if ($actionOk -and $triggerOk -and $runLevelOk -and $principalOk -and $limitOk) {
+        $triggerName = if ($want.Trigger) { $want.Trigger -replace '^MSFT_Task|Trigger$' } else { 'on demand' }
+        Report PASS "task $name" "$($want.Script), $($want.RunLevel), $triggerName"
+    } else {
+        Report FAIL "task $name" 'definition differs from Install.ps1' 're-run Install.ps1 from an administrator PowerShell'
+    }
 }
 
 # 3. SSH surface
@@ -37,16 +72,25 @@ else { Report FAIL 'sshd' "service $(if ($sshd) { $sshd.Status } else { 'missing
 
 try {
     $rule = Get-NetFirewallRule -Name 'sshd-k15' -ErrorAction Stop
-    if ($rule.Enabled -eq 'True') { Report PASS 'firewall' 'sshd-k15 rule enabled' }
-    else { Report WARN 'firewall' 'sshd-k15 rule disabled' 'Enable-NetFirewallRule -Name sshd-k15' }
+    $port = $rule | Get-NetFirewallPortFilter
+    $address = @($rule | Get-NetFirewallAddressFilter).RemoteAddress
+    $scoped = $address.Count -eq 1 -and $address[0] -notin 'Any','LocalSubnet','Internet','Intranet'
+    if ($rule.Enabled -eq 'True' -and $port.Protocol -eq 'TCP' -and $port.LocalPort -eq '22' -and $scoped) {
+        Report PASS 'firewall' "sshd-k15 allows TCP/22 from $($address[0])"
+    } else {
+        Report FAIL 'firewall' 'sshd-k15 is disabled, broad, or not TCP/22' 're-run Install.ps1 with the K15 address'
+    }
 } catch { Report FAIL 'firewall' 'sshd-k15 rule missing' 'add an inbound TCP/22 allow rule named sshd-k15' }
 
 $ak = 'C:\ProgramData\ssh\administrators_authorized_keys'
 if (Test-Path $ak) {
     $acl = (icacls $ak 2>$null | Out-String)
     $unexpected = ($acl -split "`n" | Where-Object { $_ -match ':\(' -and $_ -notmatch 'SYSTEM|Administrators' })
-    if ($unexpected) { Report WARN 'authorized_keys' 'unexpected ACL entries' 'reset the ACL with icacls to Administrators + SYSTEM only' }
-    else { Report PASS 'authorized_keys' 'present, ACL sane' }
+    $entry = (Get-Content $ak -Raw).Trim()
+    $restricted = $entry -match '^command="powershell\.exe -NoProfile -ExecutionPolicy Bypass -File C:\\CouchGaming\\Dispatch\.ps1",no-port-forwarding,no-agent-forwarding,no-x11-forwarding,no-pty ssh-'
+    if ($unexpected) { Report FAIL 'authorized_keys' 'unexpected ACL entries' 're-run Install.ps1 to restrict the ACL' }
+    elseif (-not $restricted -or $entry -match "`n") { Report FAIL 'authorized_keys' 'not one forced-command key' 're-run Install.ps1 with -K15PublicKeyPath' }
+    else { Report PASS 'authorized_keys' 'one forced-command key, ACL sane' }
 } else { Report FAIL 'authorized_keys' 'missing' 'sshd ignores keys without this file' }
 
 # 4. Wake-on-LAN. The K15 wakes this PC with a magic packet (couch.py wol()),

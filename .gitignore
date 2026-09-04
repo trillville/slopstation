@@ -21,6 +21,7 @@ couch.log.*
 # `git pull` for updates without tuning/keys ever fighting the merge.
 secrets.json
 config.json
+gaming-pc/config.psd1
 media/.env
 
 # The venv, the editable install's metadata, and tool caches

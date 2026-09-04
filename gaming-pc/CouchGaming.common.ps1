@@ -1,17 +1,36 @@
 # Shared functions for couch-gaming scripts.
 
+$configPath = Join-Path $PSScriptRoot 'config.psd1'
+if (-not (Test-Path $configPath)) {
+    throw "gaming-PC config missing: copy config.example.psd1 to $configPath and edit it"
+}
+try {
+    $localConfig = Microsoft.PowerShell.Utility\Import-PowerShellDataFile $configPath
+} catch {
+    throw "gaming-PC config is invalid: $($_.Exception.Message)"
+}
+foreach ($key in 'PuckName','PuckHwId','TvEdid') {
+    $value = $localConfig[$key]
+    if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value) -or $value -match '^<.+>$') {
+        throw "gaming-PC config '$key' must be a non-placeholder string"
+    }
+}
+if ($localConfig.TvHeight -isnot [int] -or $localConfig.TvHeight -le 0) {
+    throw "gaming-PC config 'TvHeight' must be a positive integer"
+}
+
 $CG = @{
     Root        = $PSScriptRoot
     LogDir      = Join-Path $PSScriptRoot 'logs'
     Vh          = Join-Path $PSScriptRoot 'vhui64.exe'
     VhResult    = Join-Path $PSScriptRoot 'logs\vh-last.txt'
     VhNudge     = Join-Path $PSScriptRoot 'logs\vh-nudge.txt'
-    PuckName    = 'Steam Controller Puck'  # the hub's device NAME; addresses are resolved per use
-    PuckHwId    = 'VID_28DE&PID_1304'      # Valve Steam Controller Puck
-    TvEdid      = 'QCQ90S'                 # S90C's EDID name as Windows reports it
+    PuckName    = $localConfig.PuckName    # the hub's device NAME; addresses are resolved per use
+    PuckHwId    = $localConfig.PuckHwId
+    TvEdid      = $localConfig.TvEdid
     SteamWindow = 'Steam'                  # EXACT title of the desktop library window
     BpmWindow   = 'Steam Big Picture Mode' # EXACT title of the Big Picture window
-    TvHeight    = 2160                     # see Test-TvIsPrimary
+    TvHeight    = $localConfig.TvHeight    # see Test-TvIsPrimary
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
     StateDir    = 'C:\ProgramData\CouchGaming'   # cross-context state, not under Root
