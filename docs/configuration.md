@@ -82,8 +82,10 @@ disables. A malformed file disables every keyed feature and prints
 | `TvEdid` | the TV's EDID name as Windows reports it |
 | `TvHeight` | the primary-display height that means the TV profile is active |
 
-`CouchGaming.common.ps1` validates the file on load. A missing or mistyped key
-stops every task with one message, and is the first line `Doctor.ps1` prints.
+`CouchGaming.common.ps1` validates the file on load. A missing, blank or
+mistyped key stops every task with one message, and is the first line
+`Doctor.ps1` prints. The example ships `TvEdid` as a placeholder in angle
+brackets, and a value still in that form stops the tasks the same way.
 `Install.ps1` creates the file from the example once; `Deploy.ps1` never
 writes it.
 
