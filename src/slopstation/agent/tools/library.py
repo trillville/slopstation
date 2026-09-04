@@ -297,15 +297,16 @@ def _iso_age(index: dict, key: str) -> float | None:
         return None
 
 
-def sync() -> bool:
+def sync() -> bool | None:
     """Full catalog refresh for the background thread: installed every call,
     owned when stale >6h, metadata top-up for new appids. Steam layers are
     skipped without keys. Non-reentrant, so calls can't stack meta crawls.
 
-    Answers whether layer 1 refreshed - false when the PC was unreachable or
-    another sync held the lock, which is what periodic_sync backs off on."""
+    True when layer 1 refreshed, False when the PC was unreachable, None when
+    another sync held the lock and this call did nothing. periodic_sync backs
+    off on False only: a held lock says nothing about the PC."""
     if not _sync_lock.acquire(blocking=False):
-        return False
+        return None
     installed = False
     try:
         # Layer 1b only when layer 1 SUCCEEDED - both need the PC awake, so
@@ -344,7 +345,10 @@ def periodic_sync():
     def tick() -> None:
         if time.monotonic() < held["until"]:
             return
-        held["until"] = time.monotonic() + (SYNC_S if sync() else SYNC_ASLEEP_S)
+        ran = sync()
+        if ran is None:
+            return  # a session-close sync holds the lock; retry next tick
+        held["until"] = time.monotonic() + (SYNC_S if ran else SYNC_ASLEEP_S)
 
     return tick
 

@@ -193,3 +193,23 @@ def test_periodic_sync_holds_off_while_the_pc_is_asleep(keyed, monkeypatch):
     now["t"] += library.SYNC_ASLEEP_S
     tick()
     assert keyed.calls["installed"] == 3
+
+
+def test_periodic_sync_does_not_back_off_on_a_held_lock(keyed, monkeypatch):
+    # A session-close sync holding the lock says nothing about the PC, so the
+    # next tick must still be SYNC_S away, not SYNC_ASLEEP_S.
+    now = {"t": 0.0}
+    monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+    keyed.state["meta_cache"] = {"1": {}}
+    tick = library.periodic_sync()
+
+    library._sync_lock.acquire()
+    try:
+        tick()
+        assert keyed.calls["installed"] == 0, "the held lock should have won"
+    finally:
+        library._sync_lock.release()
+    # No clock movement: a tick that armed ANY hold-off would no-op here.
+    tick()
+    assert keyed.calls["installed"] == 1
