@@ -3,300 +3,143 @@
 [![ci](https://github.com/trillville/slopstation/actions/workflows/ci.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/ci.yml)
 [![cd](https://github.com/trillville/slopstation/actions/workflows/cd.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/cd.yml)
 
-Slopstation turns a Windows gaming PC, a Samsung S90C, and a Steam Controller
-into a couch console. A GMKtec K15 mini PC owns orchestration: it can start a
-session from a controller chord, accept voice, text, and MCP requests, and
-track long-running Steam and media work across restarts.
+Slopstation turns a Windows gaming PC, Samsung S90C, and Steam Controller into
+a couch console. A GMKtec K15 mini PC controls the TV and gaming PC, accepts
+voice and text commands, and tracks Steam and media downloads.
 
+## How it works
 
-## Architecture
+A controller chord starts a session:
 
-```mermaid
-flowchart LR
-    controller[Controller]
-    microphone[Microphone]
-    command[Local or LAN text]
-    remote[Claude app via MCP]
+1. The K15 powers on the TV and wakes the gaming PC.
+2. The gaming PC switches to its TV display profile, claims the controller,
+   and opens Steam Big Picture.
+3. The gaming PC returns `READY` with the request ID.
+4. The K15 switches the TV to HDMI 4.
+5. Slopstation watches the session until it ends.
+6. The gaming PC restores the office display and releases the controller.
 
-    chord[K15 controller chord<br/>start-session gesture]
-    assistant[K15 assistant<br/>voice, text, MCP · intent and tools]
-    control[K15 room and session control]
-    operations[K15 operation tracking<br/>Steam and media progress]
+A failed launch never changes the TV input. Controller input and voice run in
+separate processes, so either can restart independently.
 
-    tv[Samsung TV<br/>power, input, volume]
-    pc[Gaming PC execution<br/>allowlisted automation · display<br/>controller · Steam and Big Picture]
-    media[K15 media subsystem<br/>search, download, import]
+The assistant is available through voice, a local text client, and an optional
+MCP endpoint. Fixed commands are handled locally; other requests use the same
+assistant tools on every interface. Steam, Radarr, and Sonarr perform
+long-running work while Slopstation records progress in
+`state/operations.json`.
 
-    controller --> chord
-    microphone --> assistant
-    command --> assistant
-    remote --> assistant
+## Repository layout
 
-    chord -->|start session| control
-    assistant -->|TV, game, and session actions| control
-    control --> tv
-    control -->|commands| pc
-    pc -. launch confirmed and status .-> control
-    assistant -->|media requests| media
-    assistant ---|tracks long-running work| operations
-    media -. observed state .-> operations
-```
-
-The system has three operating constraints:
-
-- **Nothing switches the TV to HDMI 4 until the gaming PC confirms a successful
-  launch.** That acknowledgement is named `READY` in the protocol. A failed
-  launch leaves the viewer’s current input unchanged.
-- **The chord lane is independent of voice.** The two are separate processes
-  under separate supervisors, so the voice agent may fail without taking
-  down controller launch.
-- **External systems own long-running work.** Steam, Radarr, and Sonarr execute
-  operations. Slopstation records correlation and progress, then resumes
-  observation after a restart.
-
-## Couch session lifecycle
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant K as K15
-    participant T as TV
-    participant P as Gaming PC
-
-    U->>K: Steam + right trigger
-    K->>T: Power on over Ex-Link
-    K->>P: Wake-on-LAN, then SSH enter
-    P->>P: Apply TV-only profile
-    P->>P: Claim controller Puck
-    P->>P: Open and focus Big Picture
-    P-->>K: Launch confirmed (READY + matching turn ID)
-    K->>T: Switch to HDMI 4
-    K->>P: Watch session health
-    U->>K: End session
-    K->>P: Restore office display and release Puck
-    K->>T: Restore idle input or power off
-```
-
-`couch.py` owns the launch lock and watch loop. The gaming PC performs display,
-USB, and Steam mutations through scheduled tasks. Teardown wins over launch;
-launch waits for an active teardown and aborts if it cannot obtain a clean
-starting state.
-
-## The agent: voice, text, and MCP
-
-One agent answers on three front-ends. The voice one listens locally for the
-wake word, streams speech to Deepgram, and sends each final transcript through
-two paths:
-
-1. `grammar_gate.py` handles deterministic room and gaming commands.
-2. `assistant.py` handles open-ended requests through typed tools.
-
-Shared room and gaming actions use `dispatch.py`; assistant tools add Steam and
-media integrations. The authenticated text client, `src/slopstation/slop.py`, reaches the
-same assistant and tools through `agent/interfaces/text.py`, which builds one
-`agent/brain/backends.py` backend per chat session.
-
-`agent/interfaces/remote.py` is a small MCP adapter for a Claude custom connector. It
-exposes one tool, `ask_slopstation`, and forwards each call to the text
-interface over localhost. It owns no assistant state or separate action
-surface. Voice, text, and MCP therefore share media resolution, Steam actions,
-deletion guards, operation status, and turn correlation.
-
-Long-running work is stored in `state/operations.json`. Each record names
-the originating turn, authority, external resource, state, progress, and
-announcement status. Background monitors reconcile active records every 30
-seconds. An unreachable authority becomes `UNKNOWN`, not failed. Terminal
-results remain pending until spoken or retrieved through the assistant.
-
-See [the media runbook](media/README.md) for the Radarr/Sonarr pipeline.
-
-## Runtime layout
-
-| Area | Host | Runtime | Update path |
-|---|---|---|---|
-| `slopstation/` | `K15` | Repository clone on the Desktop | The `cd` workflow, or `git pull` then `Start-Slopstation.bat` |
-| `gaming-pc/` | `TILLMAN-DESKTOP` | `C:\CouchGaming` | The `cd` workflow, or `gaming-pc\Deploy.ps1` from a PC checkout |
-
-The gaming PC is deployed by copy because its runtime also contains
-machine-generated DisplayMagician shortcuts and the VirtualHere client.
-`Deploy.ps1` copies one checked script set and stamps `build-id`; K15 doctor
-compares that stamp with its own checkout to detect skew.
-
-The forced SSH surface is intentionally small: `enter`, `exit`, `status`,
-`enterstate`, `version`, `games`, `playing`, `collections`, `launch`, `stop`,
-and constrained `nav` targets. Mutating verbs also accept a `--turn <hex>`
-correlation suffix; every other command returns `DENIED`.
-
-### Repository map
-
-| Path | Responsibility |
+| Path | Purpose |
 |---|---|
-| `src/slopstation/couch.py`, `chord_listener.py` | Session orchestration and controller input |
-| `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Hardware and gaming-PC boundaries |
-| `src/slopstation/events.py`, `logbook.py`, `config.py`, `sessionlock.py`, `statefile.py`, `doctor.py` | Telemetry, the per-lane logger, configuration, the session lock, state files, and diagnostics |
-| `src/slopstation/supervise.py`, `deploy.py`, `paths.py` | Lane supervision, the CD deployer, and where runtime data lives |
-| `src/slopstation/agent/` | The voice/assistant half of the package |
-| `src/slopstation/agent/voice_agent.py`, `speech/` (`audio.py`, `earcons.py`, `preroll.py`, `announce.py`, `session_runtime.py`, `keyterms.py`, `grammar_gate.py`) | Wake word, capture, earcons, and the speech pipeline |
-| `src/slopstation/agent/brain/` (`assistant.py`, `prompts.py`, `media_tools.py`, `backends.py`, `dispatch.py`, `llm_audit.py`) | The agent brain and the action surface, shared by all three front-ends |
-| `src/slopstation/agent/tools/` (`media*.py`, `operations*.py`, `steam_session.py`, `tv_remote.py`, `titles.py`, `library.py`, `steamstore.py`) | Domain tools: Radarr/Sonarr, the durable ledger, the Steam catalogue and store, the TV |
-| `src/slopstation/agent/interfaces/` (`text.py`, `remote.py`) | Front-ends: LAN HTTP, and the MCP adapter over localhost |
-| `src/slopstation/agent/telemetry/` (`sentry.py`, `genai.py`, `traces.py`) | Sentry wiring, the pipecat-to-Sentry span adapter, and per-turn trace dumps |
-| `tests/` | The whole repository's suite, not just the agent lane's: it also covers `couch.py`, `doctor.py`, `exlink.py`, and the gaming-PC scripts |
-| `media/` | Docker Compose media services and their runbook |
-| `gaming-pc/` | Forced SSH dispatcher and scheduled-task implementations |
+| `src/slopstation/couch.py` | Start, watch, and end couch sessions |
+| `src/slopstation/chord_listener.py` | Listen for the controller chord |
+| `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | TV, controller, and gaming-PC access |
+| `src/slopstation/agent/speech/` | Wake word, audio, and fixed voice commands |
+| `src/slopstation/agent/brain/` | Assistant prompts, providers, and tools |
+| `src/slopstation/agent/tools/` | Steam, media, operation, and TV tools |
+| `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
+| `gaming-pc/` | Gaming-PC scripts and SSH command allowlist |
+| `media/` | Optional media stack and its [setup guide](media/README.md) |
+| `tests/` | Python and PowerShell tests |
 
-The wake model in `src/slopstation/agent/models` is vendored, not trained
-here. It is produced and measured in
-[slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab),
-which also holds the speech-to-text benchmarks: research code that runs on a
-GPU machine and a live microphone, so it is kept out of the lane that has to
-survive a reboot.
+The custom wake model comes from
+[slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab).
 
-## Bootstrap
+## Install the K15
 
-### K15
-
-1. Clone the repository to `C:\Users\minipc\Desktop\slopstation` and ensure
-   Python is on `PATH`.
+1. Clone the repository to `C:\Users\minipc\Desktop\slopstation`.
 2. Copy `config.example.json` to `config.json` and
-   `secrets.template.json` to `secrets.json`. Set device names,
-   addresses, API keys, and local tokens; both destination files are ignored by
-   Git. `tvIp` enables TV-state evidence and is required for volume ducking.
-3. Install the VirtualHere server and give the K15 a DHCP reservation. Allow
-   its USB hub from the private LAN:
-
-   ```powershell
-   New-NetFirewallRule -DisplayName 'VirtualHere USB hub (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 7575 -Profile Private -RemoteAddress LocalSubnet
-   ```
-
-   `doctor.py` verifies the service, listener, and firewall rule. Zero connected
-   clients is normal while the gaming PC sleeps.
-4. Connect the TV’s Ex-Link adapter. The configured COM port must identify the
-   Ex-Link device.
-5. Create the environment and install the package:
+   `secrets.template.json` to `secrets.json`, then fill in device names,
+   addresses, API keys, and tokens. Both destination files are ignored by Git.
+3. Create the virtual environment and install the package:
 
    ```powershell
    python -m venv .venv
    .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
    ```
 
-6. Register the two lanes as scheduled tasks, then start them - both from a
-   normal (not administrator) window, since an elevated lane cannot be
-   stopped from the normal window the deployer uses:
+4. Install VirtualHere Server, reserve the K15's address in DHCP, and allow its
+   port on the private LAN:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName 'VirtualHere USB hub (LAN)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 7575 -Profile Private -RemoteAddress LocalSubnet
+   ```
+
+5. Connect the TV's Ex-Link adapter and set its COM port in `config.json`.
+6. Register and start the controller and voice tasks from a non-administrator
+   PowerShell window:
 
    ```powershell
    .\Setup-K15-Tasks.ps1
    .\Start-Slopstation.bat
    ```
 
-   The tasks start at logon; a crashed lane is back ten seconds later, and
-   each launch reinstalls by itself whenever the pins change.
-7. If TV volume ducking is enabled, run
-   `.venv\Scripts\python -m slopstation.agent.tools.tv_remote pair`
-   and accept the TV prompt.
+7. If volume ducking is enabled, pair the TV remote and accept the TV prompt:
+
+   ```powershell
+   .venv\Scripts\python -m slopstation.agent.tools.tv_remote pair
+   ```
+
 8. Run `.venv\Scripts\slopstation-doctor` until no checks fail.
 
-#### Optional MCP access
+### Optional MCP access
 
-MCP adds remote access to the existing assistant; it does not create another
-assistant or tool implementation. The request path is:
+MCP forwards requests to the existing text interface.
 
-```text
-Claude app → Cloudflare tunnel → interfaces/remote.py → interfaces/text.py → assistant tools
-```
-
-1. Set real `textInterfaceToken` and `remoteInterfaceToken` values in
-   `secrets.json`; each should contain at least 32 random bytes.
-2. Enable both `textInterface` and `remoteInterface` in `config.json`.
-   Keep the remote interface on `127.0.0.1:8766`. The text interface may also
-   remain on localhost unless another LAN client needs it.
-3. Route a Cloudflare named tunnel to `http://127.0.0.1:8766`, install
-   `cloudflared` as a Windows service, and restrict the public hostname to
-   Anthropic’s documented connector egress range (currently
-   `160.79.104.0/21`).
-4. Add a Claude custom connector at `https://<host>/mcp` using
+1. Set `textInterfaceToken` and `remoteInterfaceToken` in `secrets.json`.
+   Each token should contain at least 32 random bytes.
+2. Enable `textInterface` and `remoteInterface` in `config.json`. Keep the
+   remote interface on `127.0.0.1:8766`.
+3. Route a Cloudflare named tunnel to `http://127.0.0.1:8766` and restrict the
+   public hostname to the connector's documented source addresses.
+4. Add a custom connector for `https://<host>/mcp` with
    `Authorization: Bearer <remoteInterfaceToken>`.
-5. Reload with `Start-Slopstation.bat`, then run `.venv\Scripts\slopstation-doctor`. The voice agent
-   hosts both local interfaces automatically when they are enabled.
+5. Restart Slopstation and run the doctor.
 
-The outer token authenticates the connector and never reaches the assistant;
-`textInterfaceToken` stays on the K15. The MCP adapter holds no conversation
-state, so its tool passes a session ID explicitly and asks the connector to
-make each request self-contained.
+The MCP endpoint holds no assistant state and does not expose a separate set
+of tools.
 
-### Gaming PC
+## Install the gaming PC
 
 1. Install Steam, DisplayMagician, VirtualHere Client, and Windows OpenSSH
-   Server. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician
-   profiles.
-2. Configure the `CouchGaming` scheduled tasks and the forced SSH command in
-   `C:\ProgramData\ssh\administrators_authorized_keys`. The exposed command
-   surface is the allowlist in `Dispatch.ps1`.
-3. From a repository checkout on the PC, run:
+   Server.
+2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles.
+3. Configure the `CouchGaming` scheduled tasks and set `Dispatch.ps1` as the
+   forced command for the K15's key in
+   `C:\ProgramData\ssh\administrators_authorized_keys`.
+4. Deploy from a repository checkout:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Deploy.ps1
    ```
 
-4. Run the deployed doctor until no checks fail:
+5. Run the deployed doctor:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
    ```
 
-Media acquisition is optional and has a separate ordered bootstrap in
-[`media/README.md`](media/README.md).
+For Radarr, Sonarr, and qBittorrent setup, see
+[media/README.md](media/README.md).
 
-## Continuous deployment
+## Deployment
 
-A green `ci` run on `main` triggers `cd`, which deploys each machine and runs
-its doctor. Neither machine accepts inbound connections, so each runs a
-self-hosted GitHub Actions runner that polls outbound.
+A successful `ci` run on `main` starts `cd`. The K15 deploys immediately; the
+gaming-PC job waits until that machine wakes. Both machines use self-hosted
+runners because they do not accept inbound deployment connections.
 
-The two legs are independent. The gaming PC sleeps, so its runner is offline
-most of the time and its job waits in the queue - GitHub cancels one nothing
-claims within about a day - while the K15 deploys immediately. Until the PC
-catches up on its own next wake, `doctor.py` reports the skew as a WARN.
+Deployments wait for active couch sessions to finish. They fail instead of
+interrupting a session or rolling back automatically. Because this repository
+is public, `cd` only deploys commits pushed to `main`; pull-request code never
+runs on either machine.
 
-Both legs park rather than interrupt a session. The PC waits while its READY
-marker exists or an Enter/Exit task is running; the K15 waits while the session
-lock is fresh. The budget is `WAIT_MINUTES` in `.github/workflows/cd.yml`; past
-it the run fails and the next green commit retries. A failing doctor fails the
-run and changes nothing else - there is no automatic rollback.
+Register repository runners with the labels `k15` and `gamepc`. Run them in the
+logged-in desktop session, not as services. The K15 runner executes the live
+checkout directly; set the `K15_CHECKOUT` repository variable if it is not at
+the default path above.
 
-This repository is public and the runners are self-hosted, so `cd` runs only
-for a `push` that reached `main`. A fork's pull request runs `ci` here too, and
-its head branch can be called anything, so the branch filter alone would not
-keep a stranger's commit off the gaming PC.
-
-Runner setup, once per machine:
-
-1. Add a repository runner (Settings, Actions, Runners) labelled `gamepc` on
-   `TILLMAN-DESKTOP` and `k15` on the K15. The PC also needs `git` on `PATH`:
-   without it the checkout arrives as a plain tarball and `Deploy.ps1` stamps
-   `nogit` instead of a rev, which is the one thing the skew check reads.
-2. Run it interactively - `run.cmd` with a shortcut in `shell:startup` - not as
-   a service. The K15's lanes must relaunch inside the logged-in session or
-   they reach neither the Puck nor the audio devices, and the PC's doctor reads
-   display state that session 0 does not have.
-3. On the K15 the runner never checks the repository out: it runs
-   `python -m slopstation.deploy` from the live checkout, which must already be on `main`,
-   clean, and current. Set the repository variable `K15_CHECKOUT` if that
-   checkout is not at `C:\Users\minipc\Desktop\slopstation`.
-
-`deploy.py` fast-forwards the checkout, kills each running agent so its
-supervisor relaunches it on the new code, then runs `doctor.py`. It never
-starts a lane: an agent that does not come back is reported, not restarted. The
-chord lane must be running when it finishes - `doctor.py` only WARNs about a
-dead one, so without that check a deploy onto a K15 with no supervisors would
-report success. Where `media.enabled` is true it also runs
-`media\Start-Media.ps1` before the doctor: containers keep the compose
-file they were created with, so a landed `compose.yaml` edit is inert until
-something runs `up`. A stack that will not come up fails the deploy.
-
-## Operate and diagnose
-
-After updating the K15 checkout:
+To update the K15 manually:
 
 ```powershell
 git pull
@@ -304,57 +147,41 @@ git pull
 .venv\Scripts\slopstation-doctor
 ```
 
-`Start-Slopstation.bat` starts a lane task that is down and ends-and-reruns one
-that is up. It does not replace an active couch-session watch loop, and it
-does not start the optional media Compose stack. Docker Desktop restores those
-containers independently after their initial setup.
-
-Useful commands:
+## Common commands
 
 ```powershell
-# General text interface
+# Text interface
 .venv\Scripts\python -m slopstation.slop
 .venv\Scripts\python -m slopstation.slop "what is downloading?"
 
-# Durable Steam and media work
-.venv\Scripts\python -m slopstation.agent.tools.operations list
+# Tracked Steam and media work
 .venv\Scripts\python -m slopstation.agent.tools.operations list --active
 .venv\Scripts\python -m slopstation.agent.tools.operations show <operation-id>
 .venv\Scripts\python -m slopstation.agent.tools.operations reconcile
 ```
 
-`operations abandon <operation-id> --execute` performs authoritative media
-cleanup through Radarr or Sonarr.
+`operations abandon <operation-id> --execute` removes a tracked media request
+through Radarr or Sonarr.
 
-The text endpoint requires `textInterfaceToken`. Bind it to `0.0.0.0` only for
-LAN access, allow its port on the Windows **Private** profile for `LocalSubnet`,
-and provide `SLOPSTATION_URL` and `SLOPSTATION_TOKEN` on LAN clients. MCP needs
-no inbound firewall rule: its server stays on localhost behind the tunnel.
+For LAN text access, bind the text endpoint to `0.0.0.0`, restrict its firewall
+rule to `LocalSubnet` on the Private profile, and set `SLOPSTATION_URL` and
+`SLOPSTATION_TOKEN` on each client. MCP remains on localhost behind its tunnel.
 
 ## Telemetry
 
-Every intent carries a `turn` ID through K15 and gaming-PC events. Local JSONL
-is the source of truth:
+Structured events are written to:
 
-- K15: `logs\k15-YYYYMMDD.jsonl` under the checkout
-- Gaming PC tasks: `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`
-- Forced SSH dispatcher: `C:\CouchGaming\logs\pc-dispatch-YYYYMMDD.jsonl`
+- K15: `logs\k15-YYYYMMDD.jsonl`
+- Gaming-PC tasks: `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`
+- Gaming-PC SSH dispatcher: `C:\CouchGaming\logs\pc-dispatch-YYYYMMDD.jsonl`
 
-One Sentry project, `slopstation`, holds all of it. An OpenTelemetry
-Collector (contrib) on each machine tails those files into Sentry Logs —
-install it from `otelcol/config.yaml.example` and
-`gaming-pc/otelcol/config.yaml.example`. The voice lane adds the rest from
-`config.json`'s `sentryDsn` alone: crashes as Issues, the pipeline as traces,
-and the LLM calls as agent monitoring. Each lane checks in to its own cron
-monitor every minute, so a dead lane pages without the shipper's help.
-
-Use the repository’s `sentry` skill for remote diagnosis; it documents the
-attribute model and the event vocabulary.
+The OpenTelemetry Collector configurations in `otelcol/config.yaml.example`
+and `gaming-pc/otelcol/config.yaml.example` send those logs to Sentry. The
+voice process also sends errors and traces when `sentryDsn` is configured.
 
 ## Development
 
-One venv at the checkout root, created by the bootstrap above. The three
-checks CI runs:
+Run the same checks as CI:
 
 ```powershell
 .venv\Scripts\pytest
@@ -362,35 +189,22 @@ checks CI runs:
 .venv\Scripts\mypy
 ```
 
-A change reaches the K15 through `cd` after it merges: the deployer
-fast-forwards the live checkout, ends and re-runs each lane's task, and runs
-the doctor. Anything that touches the lanes' lifecycle is accepted by a
-watched `workflow_dispatch` of that workflow, with the lane consoles in view.
-On the K15 itself, always work from a normal window: a lane started elevated
-is invisible to a normal one.
+Tests that require a local Steam installation skip when it is absent. Tests
+that open real audio devices require `SLOPSTATION_TEST_AUDIO=1`.
 
-Hardware-bound Steam and audio tests skip themselves when the machine lacks
-what they need: a local Steam install for the library tests, and
-`SLOPSTATION_TEST_AUDIO=1` on the K15 for the ones that open real devices.
-GitHub Actions runs all three for every pull request and every push to
-`main`.
+## Hardware assumptions
 
-## Fixed rig contract
-
-| Component | Current value |
+| Component | Value |
 |---|---|
 | Gaming PC | `TILLMAN-DESKTOP`, `192.168.68.67`, user `tillm` |
 | K15 | `K15`, `192.168.68.75`, user `minipc` |
-| TV | Samsung S90C, HDMI 4 for PC, Ex-Link on K15 `COM3` |
-| Controller Puck | VirtualHere device `Steam Controller Puck`, resolved by name because its address can change; VID `28DE`, PID `1304` |
-| Audio | HW-Q990C over eARC; volume writes use TV WebSocket remote keys |
-| TV-primary probe | Primary display height equals `2160` |
+| TV | Samsung S90C, gaming PC on HDMI 4, Ex-Link on K15 `COM3` |
+| Controller | VirtualHere device `Steam Controller Puck`, VID `28DE`, PID `1304` |
+| Audio | HW-Q990C over eARC |
+| TV detection | Primary display height is `2160` |
 
-Revisit the display probe before adding another 2160-pixel-high desk display.
-The TV acknowledges unsupported Ex-Link volume commands but does not apply
-them; `agent/tools/tv_remote.py` is the working volume path.
+Revisit the display check before adding another 2160-pixel-high monitor.
 
-Runtime-only state is intentionally absent from Git: real config, secrets, the
-media `.env`, VirtualHere binaries and PINs, DisplayMagician shortcuts,
-scheduled-task registrations, SSH/firewall state, logs, operation state, the
-and the virtual environment.
+Runtime configuration, secrets, media state, VirtualHere files,
+DisplayMagician shortcuts, scheduled tasks, logs, and the virtual environment
+are not stored in Git.
