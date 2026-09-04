@@ -73,113 +73,34 @@ The reference deployment uses:
 Equivalent hardware may work, but the current implementation intentionally
 does not claim generic TV or controller support.
 
-## Install the mini PC
+## Install
 
-1. Clone the repository to a stable path such as `C:\slopstation`.
-2. Copy `config.example.json` to `config.json` and `secrets.example.json` to
-   `secrets.json`. Replace every documentation address and add the credentials
-   for the features you enable. Both live files are ignored by Git.
-3. Create the environment and install the package:
+Start with the [setup guide](docs/setup.md). It covers both Windows machines,
+the restricted automation key, scheduled tasks, health checks, and the
+hardware acceptance test.
 
-   ```powershell
-   python -m venv .venv
-   .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
-   ```
+The first-run outline is:
 
-4. Install VirtualHere Server. Reserve the mini PC's address in DHCP and allow
-   TCP port 7575 from the private LAN.
-5. Connect the TV's Ex-Link adapter and set its COM port in `config.json`.
-6. Register the controller and voice tasks from a non-administrator PowerShell
-   window:
+1. Install the mini-PC prerequisites, create a Python 3.13 environment, and
+   copy the example configuration and secrets files.
+2. Install and test Steam, DisplayMagician, VirtualHere Client, and OpenSSH on
+   the gaming PC.
+3. Run `gaming-pc\Install.ps1` from an administrator PowerShell, fill the four
+   machine-specific values it creates, and run it again.
+4. Run both doctors and exercise one complete enter-and-exit session.
 
-   ```powershell
-   .\Setup-K15-Tasks.ps1
-   .\Start-Slopstation.bat
-   ```
+For the optional Radarr, Sonarr, Prowlarr, and qBittorrent stack, follow the
+co-located [media guide](media/README.md).
 
-7. If volume ducking is enabled, pair the TV remote:
+## Documentation
 
-   ```powershell
-   .venv\Scripts\python -m slopstation.agent.tools.tv_remote pair
-   ```
-
-8. Run `.venv\Scripts\slopstation-doctor` until no checks fail.
-
-### Optional remote assistant access
-
-The Model Context Protocol (MCP) endpoint forwards requests to the existing
-authenticated text interface. Keep it on localhost behind an authenticated
-tunnel; do not expose the local media services directly to the internet.
-
-1. Set `textInterfaceToken` and `remoteInterfaceToken` in `secrets.json`.
-2. Enable `textInterface` and `remoteInterface` in `config.json`.
-3. Route an authenticated tunnel to `http://127.0.0.1:8766`.
-4. Restart Slopstation and run the doctor.
-
-## Install the gaming PC
-
-1. Install Steam, DisplayMagician, VirtualHere Client, and Windows OpenSSH
-   Server.
-2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles in
-   `C:\CouchGaming`.
-3. Run the installer from an administrator PowerShell. Supplying the mini PC's
-   public key installs the restricted SSH entry; omitting it prints the exact
-   entry to install manually.
-
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 `
-       -K15Address '192.0.2.30' -K15PublicKeyPath 'C:\path\to\id_ed25519.pub'
-   ```
-
-4. On its first run, the installer creates
-   `C:\CouchGaming\config.psd1` and stops. Replace the TV EDID placeholder,
-   then rerun the same command. The installer registers all seven tasks,
-   restricts SSH to the mini PC, and finishes by running the deployed doctor.
-5. After later code changes, deploy without changing local configuration:
-
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Deploy.ps1
-   ```
-
-For Radarr, Sonarr, and qBittorrent setup, see the co-located
-[media guide](media/README.md).
-
-## Configuration
-
-`config.json` contains device names, addresses, and feature settings.
-`secrets.json` contains credentials and authentication tokens. Both live files
-remain at the repository root because the runtime, doctor, and deployment path
-already agree on that contract. `SLOPSTATION_HOME` relocates configuration,
-state, and logs together when the checkout is not the runtime home.
-
-The gaming PC keeps its machine-specific display and controller values in
-`C:\CouchGaming\config.psd1`. Deployments update the committed example but
-preserve that live file.
-
-The example uses IANA documentation addresses and a locally administered MAC
-address. They are not usable deployment values.
-
-The default wake word is an upstream openWakeWord model downloaded into the
-virtual environment. Custom `.onnx` and verifier files are local operator
-artifacts under `src/slopstation/agent/models/`; recordings and custom models
-are not distributed by this repository.
-
-## Deployment
-
-Continuous deployment runs only after continuous integration succeeds for a
-push to `main`. Pull-request code never reaches either self-hosted runner. The
-mini PC updates its live checkout; the gaming PC copies a checked script set to
-`C:\CouchGaming`. Both paths wait for an active couch session to finish.
-
-Register the runners with the labels `k15` and `gamepc`. Set the repository
-variable `K15_CHECKOUT` when the mini PC checkout is not `C:\slopstation`.
-
-## Telemetry
-
-Structured events are written to `logs\k15-YYYYMMDD.jsonl` on the mini PC and
-`C:\CouchGaming\logs` on the gaming PC. The example OpenTelemetry Collector
-configurations ship those logs to Sentry. Telemetry is optional and never lies
-on the session's control path.
+- [Setup](docs/setup.md) installs and validates both machines.
+- [Configuration](docs/configuration.md) describes settings, secrets, and
+  environment variables.
+- [Operations](docs/operations.md) covers deployment, diagnosis, recovery,
+  state, logs, and the public-release gate.
+- [Design decisions](docs/decisions.md) records the boundaries behind the
+  architecture.
 
 ## Repository layout
 

@@ -2,6 +2,8 @@
 
 Read `README.md` first — it describes the machines, the components, and how to
 run and deploy them. This file holds the process rules an agent session needs.
+Public installation, configuration, and recovery instructions live in
+`docs/setup.md`, `docs/configuration.md`, and `docs/operations.md`.
 
 ## Working on the live system
 
@@ -100,18 +102,11 @@ the MAIN checkout's code. To run a module from a worktree, set
 
 ## Deploying
 
-- K15: `git pull`, then `Start-Slopstation.bat` (ends and re-runs both lane
-  tasks on current code). From a NORMAL window, never an elevated one: an
-  elevated lane cannot be seen or stopped from the window the deployer uses.
-- Gaming PC: `gaming-pc\Deploy.ps1` from a checkout on the PC — never
-  hand-copy; it ships the set atomically and stamps `build-id`, which
-  `doctor.py` compares (`ssh gamepc version`) to catch skew.
-- After either: `.venv\Scripts\slopstation-doctor` on the K15 should end
-  `0 fail`.
-- CD (`.github/workflows/cd.yml`) does both of the above and both
-  doctors on self-hosted runners after a green `ci` on `main`. It parks
-  while a session is live and never rolls back. Hand-deploying stays
-  valid - it is the same two scripts.
+Use the commands and recovery procedures in `docs/operations.md`. On the K15,
+run `Start-Slopstation.bat` from a normal, never elevated, window; an elevated
+lane cannot be seen or stopped by the deployer. On the gaming PC, always use
+`gaming-pc\Deploy.ps1` rather than hand-copying scripts.
+
 - PRs are SQUASH-merged. A push that races the user's merge loses - what
   lands is the head GitHub had cached, not the branch tip. Push, then let
   them merge; never force-push a PR that is theirs to land.
@@ -129,27 +124,3 @@ Two properties of the K15 leg that change what a session may leave behind:
 - It runs the PREVIOUS commit's copy of itself, because it is the thing that
   updates the checkout. A change to `deploy.py` takes effect one deploy later,
   and a new deployer has to be pulled by hand once before CD can use it.
-
-### What CD does not do
-
-Land the change, then TELL THE USER which of these it needs. Each fails at
-`doctor.py` rather than at the thing that broke, so the deploy goes red with a
-diagnosis - but nobody fixes it automatically.
-
-- **`constraints.txt`** is a `pip freeze` on the K15, committed by hand: it
-  records the cp313 venv's transitives, and no other machine can produce it.
-  The supervisor's install gate hashes `pyproject.toml` AND `constraints.txt`
-  against a `deps-ok` sentinel in the venv, so a change to either installs
-  itself on the next deploy. Regenerate it there with
-  `.venv\Scripts\pip freeze --exclude-editable | Out-File -Encoding ascii constraints.txt`
-  - not `>`, whose output under PowerShell 5.1 is UTF-16, which pip cannot
-  read.
-- **`config.json` keys.** Growing `config.REQUIRED` needs a hand edit on
-  the K15; the file is gitignored, and it sits at the repo root beside
-  `secrets.json`, `state/` and `logs/` (see `paths.py`).
-- **Scheduled tasks**, on both machines. The K15's two lane tasks point at
-  `.venv\Scripts\slopstation-lane.exe` by absolute path, so moving the
-  checkout or renaming that entry point means re-running
-  `Setup-K15-Tasks.ps1` there. The gaming PC's tasks, and the runtime pieces
-  `Deploy.ps1` warns about but never touches (`vhui64.exe`, the
-  DisplayMagician `.lnk`s), are the same kind of hand step.
