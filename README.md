@@ -53,10 +53,9 @@ Samsung's serial control protocol, and the remote and volume ducking use
 Samsung's WebSocket API, so another make of TV means replacing `tv.py` and
 `agent/tools/tv_remote.py`.
 
-The gaming-PC scripts still carry a few of this house's values in
-`gaming-pc/CouchGaming.common.ps1`: the controller name and hardware id, the
-TV's EDID name, and the display height that identifies the TV. Edit them
-there for now.
+The gaming PC's per-installation values (controller name and hardware id,
+the TV's EDID name, the display height that identifies the TV) live in
+`C:\CouchGaming\config.psd1`; see `gaming-pc/config.example.psd1`.
 
 The custom wake model in `src/slopstation/agent/models` was trained by the
 author on recordings from this room with
@@ -155,22 +154,23 @@ of tools.
 
 1. Install Steam, DisplayMagician, VirtualHere Client, and Windows OpenSSH
    Server.
-2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles.
-3. Configure the `CouchGaming` scheduled tasks and set `Dispatch.ps1` as the
-   forced command for the mini PC's key in
-   `C:\ProgramData\ssh\administrators_authorized_keys`. `Doctor.ps1` lists
-   the seven tasks and the firewall rule it expects.
-4. Deploy from a repository checkout:
+2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles
+   in `C:\CouchGaming`, and put `vhui64.exe` there.
+3. From an elevated PowerShell in a repository checkout, as the user who sits
+   at the desktop:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Deploy.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\gaming-pc\Install.ps1 -K15Address <mini PC address> -K15PublicKey '<the mini PC public key line>'
    ```
 
-5. Run the deployed doctor:
+   The first run creates `C:\CouchGaming\config.psd1` from
+   `gaming-pc\config.example.psd1` and stops so you can check the values.
+   The second run deploys the scripts, registers the seven `CouchGaming`
+   scheduled tasks, allows SSH from the mini PC only, binds the mini PC's key to
+   `Dispatch.ps1`, and ends with the doctor. It can be re-run at any time.
 
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File C:\CouchGaming\Doctor.ps1
-   ```
+4. Later deploys need only `gaming-pc\Deploy.ps1` from a checkout, or CD.
+   `C:\CouchGaming\Doctor.ps1` reports the state at any time.
 
 For Radarr, Sonarr, and qBittorrent setup, see
 [media/README.md](media/README.md).

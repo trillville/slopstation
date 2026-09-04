@@ -1,17 +1,49 @@
 # Shared functions for couch-gaming scripts.
 
+# Per-installation values come from config.psd1 beside this file; see
+# config.example.psd1. A missing or incomplete file stops every task here,
+# with one message, instead of running against another house's hardware.
+$script:CgConfigKeys = @{ PuckName = [string]; PuckHwId = [string]; TvEdid = [string]; TvHeight = [int] }
+
+function Import-CgConfig {
+    $path = Join-Path $PSScriptRoot 'config.psd1'
+    if (-not (Test-Path $path)) {
+        throw "$path is missing - copy config.example.psd1 there and edit it (Install.ps1 does this)"
+    }
+    # The file's one hashtable, evaluated without running code: what
+    # Import-PowerShellDataFile does, on hosts that lack the cmdlet too.
+    $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errs)
+    $table = $ast.Find({ $args[0] -is [System.Management.Automation.Language.HashtableAst] }, $false)
+    if ($errs -or -not $table) { throw "config.psd1 does not parse as one hashtable - see config.example.psd1" }
+    $cfg = $table.SafeGetValue()
+    foreach ($k in $script:CgConfigKeys.Keys) {
+        if (-not $cfg.ContainsKey($k) -or "$($cfg[$k])" -eq '') {
+            throw "config.psd1: $k is missing - see config.example.psd1"
+        }
+        if ($cfg[$k] -isnot $script:CgConfigKeys[$k]) {
+            throw "config.psd1: $k must be a $($script:CgConfigKeys[$k].Name)"
+        }
+        if ($cfg[$k] -is [string] -and $cfg[$k] -match '^<.+>$') {
+            throw "config.psd1: $k is still the example placeholder - see config.example.psd1"
+        }
+    }
+    $cfg
+}
+$script:CgConfig = Import-CgConfig
+
 $CG = @{
     Root        = $PSScriptRoot
     LogDir      = Join-Path $PSScriptRoot 'logs'
     Vh          = Join-Path $PSScriptRoot 'vhui64.exe'
     VhResult    = Join-Path $PSScriptRoot 'logs\vh-last.txt'
     VhNudge     = Join-Path $PSScriptRoot 'logs\vh-nudge.txt'
-    PuckName    = 'Steam Controller Puck'  # the hub's device NAME; addresses are resolved per use
-    PuckHwId    = 'VID_28DE&PID_1304'      # Valve Steam Controller Puck
-    TvEdid      = 'QCQ90S'                 # S90C's EDID name as Windows reports it
+    PuckName    = $script:CgConfig.PuckName  # the hub's device NAME; addresses are resolved per use
+    PuckHwId    = $script:CgConfig.PuckHwId
+    TvEdid      = $script:CgConfig.TvEdid
     SteamWindow = 'Steam'                  # EXACT title of the desktop library window
     BpmWindow   = 'Steam Big Picture Mode' # EXACT title of the Big Picture window
-    TvHeight    = 2160                     # see Test-TvIsPrimary
+    TvHeight    = $script:CgConfig.TvHeight  # see Test-TvIsPrimary
     OfficeLnk   = Join-Path $PSScriptRoot 'OFFICE.lnk'
     TvGamingLnk = Join-Path $PSScriptRoot 'TV-GAMING.lnk'
     StateDir    = 'C:\ProgramData\CouchGaming'   # cross-context state, not under Root
@@ -22,6 +54,30 @@ $CG.TurnMarker   = Join-Path $CG.StateDir 'turn'
 $CG.LaunchMarker = Join-Path $CG.StateDir 'launch-app'
 $CG.NavMarker    = Join-Path $CG.StateDir 'nav-target'
 $CG.StopMarker   = Join-Path $CG.StateDir 'stop-app'
+
+# The scheduled tasks. Install.ps1 registers them from this table and
+# Doctor.ps1 checks what is registered against it. Trigger 'logon' fires at
+# the user's logon, 'wake' on the resume-from-sleep event below, and 'none'
+# means Dispatch.ps1 starts the task on demand. Delay (logon triggers only)
+# and TimeLimit are ISO 8601 durations. Office-Safety keeps the 72-hour limit
+# it has always had; narrowing it is a separate change.
+$CG.TaskPath = '\CouchGaming\'
+$CG.Tasks = @(
+    @{ Name = 'Enter';              Script = 'Enter-TV.ps1';       Hidden = $true;  Elevated = $true;  Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'Exit';               Script = 'Exit-TV.ps1';        Hidden = $true;  Elevated = $true;  Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'ForceOfficeAtLogon'; Script = 'Office-Safety.ps1';  Hidden = $true;  Elevated = $true;  Trigger = 'logon'; TimeLimit = 'PT72H'; Delay = 'PT20S' }
+    @{ Name = 'WakeSafety';         Script = 'Wake-Safety.ps1';    Hidden = $true;  Elevated = $false; Trigger = 'wake';  TimeLimit = 'PT5M'  }
+    @{ Name = 'LaunchGame';         Script = 'Launch-Game.ps1';    Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'Nav';                Script = 'Nav-BigPicture.ps1'; Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
+    @{ Name = 'StopGame';           Script = 'Stop-Game.ps1';      Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
+)
+$CG.WakeEventQuery = "<QueryList><Query><Select Path='System'>*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]</Select></Query></QueryList>"
+
+# What a task runs: its script from this directory.
+function Get-CgTaskArguments([hashtable]$Task) {
+    $hidden = if ($Task.Hidden) { ' -WindowStyle Hidden' } else { '' }
+    "-NoProfile$hidden -ExecutionPolicy Bypass -File " + (Join-Path $CG.Root $Task.Script)
+}
 
 $script:CgStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
@@ -123,7 +179,7 @@ function Get-TvNames {
 # Use Windows device enumeration to verify VirtualHere claim state.
 function Test-PuckPresent {
     [bool](Get-PnpDevice -ErrorAction SilentlyContinue |
-           Where-Object { $_.InstanceId -match $CG.PuckHwId -and $_.Status -eq 'OK' })
+           Where-Object { $_.InstanceId -match [regex]::Escape($CG.PuckHwId) -and $_.Status -eq 'OK' })
 }
 
 # Redirect console-less VirtualHere calls to prevent GUI error dialogs.
@@ -314,10 +370,10 @@ function Request-PuckRelease([int]$Attempts = 3) {
 
 # Query task state through the locale-independent ScheduledTasks API.
 function Test-CgTaskRunning([string]$Name) {
-    (Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName $Name -ErrorAction SilentlyContinue).State -eq 'Running'
+    (Get-ScheduledTask -TaskPath $CG.TaskPath -TaskName $Name -ErrorAction SilentlyContinue).State -eq 'Running'
 }
 
-function Stop-CgTask([string]$Name) { schtasks /End /TN "\CouchGaming\$Name" | Out-Null }
+function Stop-CgTask([string]$Name) { schtasks /End /TN "$($CG.TaskPath)$Name" | Out-Null }
 
 # Transcript retention; called from Office-Safety (logon) and Wake-Safety (wake).
 function Clear-OldLogs([int]$Days = 30, [int]$ArchiveAfterDays = 2) {

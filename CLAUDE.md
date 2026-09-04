@@ -12,7 +12,7 @@ matters is not where a command runs but what it reaches:
 - **On the K15** — restarting a lane, editing `config.json`, clearing
   `state\session.lock`.
 - **On the gaming PC** — applying a display profile, recycling the Puck claim,
-  `Deploy.ps1`.
+  `Deploy.ps1`, `Install.ps1`.
 - **From anywhere on the LAN** — the `ssh gamepc` verbs reach the PC whether or
   not you are sitting at it.
 
@@ -147,9 +147,13 @@ diagnosis - but nobody fixes it automatically.
 - **`config.json` keys.** Growing `config.REQUIRED` needs a hand edit on
   the K15; the file is gitignored, and it sits at the repo root beside
   `secrets.json`, `state/` and `logs/` (see `paths.py`).
+- **`gaming-pc\config.psd1`** is the same thing on the PC: gitignored, created
+  by `Install.ps1` at `C:\CouchGaming\config.psd1`, never written by a
+  deploy. A new key in `config.example.psd1` is a hand edit there.
 - **Scheduled tasks**, on both machines. The K15's two lane tasks point at
   `.venv\Scripts\slopstation-lane.exe` by absolute path, so moving the
   checkout or renaming that entry point means re-running
-  `Setup-K15-Tasks.ps1` there. The gaming PC's tasks, and the runtime pieces
-  `Deploy.ps1` warns about but never touches (`vhui64.exe`, the
-  DisplayMagician `.lnk`s), are the same kind of hand step.
+  `Setup-K15-Tasks.ps1` there. The gaming PC's tasks are re-registered by
+  `gaming-pc\Install.ps1`, run elevated from a checkout on the PC. The
+  runtime pieces `Deploy.ps1` warns about but never touches (`vhui64.exe`,
+  the DisplayMagician `.lnk`s) stay hand steps.

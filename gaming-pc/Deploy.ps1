@@ -3,15 +3,16 @@
 # Run from a checkout, on the PC:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Deploy.ps1
 #
-# ``-WaitMinutes`` waits for active sessions. This script and local runtime
-# files are not copied.
+# ``-WaitMinutes`` waits for active sessions. This script, Install.ps1 and
+# local runtime files are not copied, and config.psd1 is never written.
 param([string]$Dest = 'C:\CouchGaming', [int]$WaitMinutes = 0)
 
 $scripts = @(
     'CouchGaming.common.ps1', 'Dispatch.ps1', 'Doctor.ps1',
     'Enter-TV.ps1', 'Exit-TV.ps1', 'Launch-Game.ps1',
     'Nav-BigPicture.ps1', 'Stop-Game.ps1',
-    'Office-Safety.ps1', 'Wake-Safety.ps1'
+    'Office-Safety.ps1', 'Wake-Safety.ps1',
+    'config.example.psd1'
 )
 
 # This emitter writes directly to the runtime log directory being deployed.
@@ -106,4 +107,6 @@ foreach ($f in 'vhui64.exe', 'OFFICE.lnk', 'TV-GAMING.lnk') {
     }
 }
 Write-CgEvent 'deploy_done' @{ scripts = $scripts.Count; build_id = $stamp }
-Write-Host "deployed $($scripts.Count) scripts to $Dest"
+Write-Host "deployed $($scripts.Count) files to $Dest"
+# The optional git call above may have left a non-zero $LASTEXITCODE.
+exit 0
