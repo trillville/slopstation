@@ -30,11 +30,11 @@ Slopstation only selects a configured profile.
 | Downloads | `<MEDIA_ROOT>\torrents` |
 | Movies | `/data/Movies` → `<MEDIA_ROOT>\Movies` |
 | TV | `/data/TV` → `<MEDIA_ROOT>\TV` |
-| Prowlarr | `http://192.168.68.75:9696` |
-| Radarr | `http://192.168.68.75:7878` |
-| Sonarr | `http://192.168.68.75:8989` |
-| qBittorrent | `http://192.168.68.75:8080` |
-| Homarr | `http://192.168.68.75:8575` |
+| Prowlarr | `http://192.168.1.10:9696` |
+| Radarr | `http://192.168.1.10:7878` |
+| Sonarr | `http://192.168.1.10:8989` |
+| qBittorrent | `http://192.168.1.10:8080` |
+| Homarr | `http://192.168.1.10:8575` |
 | FlareSolverr, internal only | `http://flaresolverr:8191` |
 | Glances, internal only | `http://glances:61208` |
 
@@ -157,7 +157,7 @@ New-NetFirewallRule -DisplayName 'qBittorrent Web UI (LAN)' -Direction Inbound -
 Complete Homarr setup at `http://127.0.0.1:8575`. Configure Radarr, Sonarr,
 Prowlarr, and qBittorrent with their K15 LAN URLs from the table above; use
 `http://glances:61208` for Glances. Use a direct public board URL for
-anonymous viewing: `http://192.168.68.75:8575/boards/<name>`.
+anonymous viewing: `http://192.168.1.10:8575/boards/<name>`.
 
 ## Requests and cleanup
 

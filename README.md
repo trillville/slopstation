@@ -3,30 +3,104 @@
 [![ci](https://github.com/trillville/slopstation/actions/workflows/ci.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/ci.yml)
 [![cd](https://github.com/trillville/slopstation/actions/workflows/cd.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/cd.yml)
 
-Slopstation turns a Windows gaming PC, Samsung S90C, and Steam Controller into
-a couch console. A GMKtec K15 mini PC controls the TV and gaming PC, accepts
-voice and text commands, and tracks Steam and media downloads.
+Slopstation turns a Windows gaming PC, a Samsung TV, and a Steam Controller
+into a couch console. A small always-on PC (a GMKtec K15) controls the TV and
+the gaming PC, takes voice and text commands, and tracks Steam and media
+downloads. Press a controller chord on the couch and the TV comes on, the PC
+wakes, and Steam Big Picture is on screen with the controller working. Say
+"hey Alfred, play Hades" and it launches.
 
-## How it works
+It is one household's system, run every day and deployed from this
+repository. It is not a framework.
 
-A controller chord starts a session:
+## How a session starts
 
-1. The K15 powers on the TV, switches it to HDMI 4, and wakes the gaming PC.
-2. The gaming PC switches to its TV display profile, claims the controller,
-   and opens Steam Big Picture.
-3. The gaming PC returns `READY` with the request ID.
-4. The K15 confirms the TV input.
-5. Slopstation watches the session until it ends.
-6. The gaming PC restores the office display and releases the controller.
+```mermaid
+flowchart LR
+    chord[Controller chord] --> k15
+    voice[Voice, text, MCP] --> k15
+    k15[K15 mini PC<br/>couch.py, assistant] -->|serial, WebSocket| tv[Samsung TV]
+    k15 -->|Wake-on-LAN, SSH forced command| pc[Gaming PC<br/>Dispatch.ps1, scheduled tasks]
+    pc -->|display profile, USB over IP| tv
+    k15 --> media[Steam, Radarr, Sonarr]
+    k15 & pc -->|JSONL events with one turn id| sentry[Sentry]
+```
 
-A failed launch that woke the TV turns it off. Controller input and voice run
-in separate processes, so either can restart independently.
+1. The K15 powers on the TV, switches it to the PC's input, and wakes the
+   gaming PC.
+2. Over SSH, the K15 tells the gaming PC to enter. The PC switches to its TV
+   display profile, claims the controller over USB-over-IP, and opens Steam
+   Big Picture.
+3. The gaming PC returns `READY` with the request's turn id.
+4. The K15 confirms the TV input and watches the session until it ends.
+5. The gaming PC restores the office display and releases the controller.
 
-The assistant is available through voice, a local text client, and an optional
-MCP endpoint. Fixed commands are handled locally; other requests use the same
-assistant tools on every interface. Steam, Radarr, and Sonarr perform
-long-running work while Slopstation records progress in
-`state/operations.json`.
+A failed launch that woke the TV turns it off again. Controller input and
+voice run as separate processes, so either can restart on its own.
+
+## What is interesting about it
+
+**Deploys that respect the couch.** Both machines run self-hosted GitHub
+runners. A green `ci` on `main` deploys to each, but a deploy waits up to two
+hours for a live session to end and fails rather than interrupting one. It
+never rolls back. Each leg ends with a doctor whose exit code is its failure
+count, so a broken deploy is red with a diagnosis instead of a silent
+half-install.
+
+**One turn id across two machines.** Every launch and voice command gets a
+short hex id. It rides the SSH verb as `--turn`, the gaming PC writes it to a
+marker, the PC's scheduled tasks stamp it into their events and transcript
+filenames, and both machines ship logs to one Sentry project. One query shows
+a launch from the chord to Big Picture.
+
+**A narrow SSH surface.** The K15's key on the gaming PC is bound to a forced
+command. `Dispatch.ps1` accepts a dozen anchored verbs such as `enter`,
+`launch <appid>`, `nav library`, and `status`, and denies everything else.
+The turn id is validated by an anchored regex before it can become part of a
+filename. Interactive Steam work runs through scheduled tasks in the logged-in
+session, never in the SSH session.
+
+**Durable operations.** Steam installs and media requests are long-running
+work done by other services. Slopstation records each one in
+`state/operations.json` with a small state machine, reports progress from
+that file, and reconciles it after a restart, so "what is downloading?" has an
+answer even if the voice process was just restarted.
+
+## Reference hardware
+
+| Component | Used here |
+|---|---|
+| Gaming PC | Windows 11, wired Ethernet with Wake-on-LAN, Steam, DisplayMagician, VirtualHere client, Windows OpenSSH server |
+| K15 | GMKtec K15 mini PC, Windows 11, always on. Runs Slopstation, the VirtualHere server, and the optional media stack |
+| TV | Samsung S90C. Gaming PC on HDMI 4, Ex-Link serial adapter on the K15 |
+| Controller | Steam Controller, its Puck receiver plugged into the K15 and shared to the gaming PC over VirtualHere |
+| Audio | Samsung HW-Q990C soundbar over eARC |
+| Speech | openWakeWord, Deepgram for speech to text and text to speech, Anthropic or OpenAI for the assistant |
+
+The gaming-PC scripts still carry a few of this house's values in
+`gaming-pc/CouchGaming.common.ps1`: the controller name and hardware id, the
+TV's EDID name, and the display height that identifies the TV. Edit them
+there for now.
+
+The custom wake model in `src/slopstation/agent/models` was trained by the
+author on recordings from this room with
+[slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab).
+The stock `hey_jarvis_v0.1` model in `config.example.json` works without it.
+
+## Evaluating without the hardware
+
+Clone, create the virtual environment, and run the tests. Tests that need a
+local Steam installation or real audio devices skip themselves.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev]" -c constraints.txt
+.venv\Scripts\pytest
+```
+
+Then read `src/slopstation/couch.py` for the launch,
+`gaming-pc/Dispatch.ps1` for the PC side, and
+`src/slopstation/agent/dispatch.py` for the assistant's actions.
 
 ## Repository layout
 
@@ -42,16 +116,13 @@ long-running work while Slopstation records progress in
 | `src/slopstation/agent/dispatch.py` | Actions shared by voice and text commands |
 | `src/slopstation/agent/tools/` | Steam, media, operation, and TV tools |
 | `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
-| `gaming-pc/` | Gaming-PC scripts and SSH command allowlist |
+| `gaming-pc/` | Gaming-PC scripts and the SSH command allowlist |
 | `media/` | Optional media stack and its [setup guide](media/README.md) |
 | `tests/` | Python and PowerShell tests |
 
-The custom wake model comes from
-[slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab).
-
 ## Install the K15
 
-1. Clone the repository to `C:\Users\minipc\Desktop\slopstation`.
+1. Clone the repository, for example to `C:\slopstation`.
 2. Copy `config.example.json` to `config.json` and
    `secrets.example.json` to `secrets.json`, then fill in device names,
    addresses, API keys, and tokens. Both destination files are ignored by Git.
@@ -110,7 +181,8 @@ of tools.
 2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles.
 3. Configure the `CouchGaming` scheduled tasks and set `Dispatch.ps1` as the
    forced command for the K15's key in
-   `C:\ProgramData\ssh\administrators_authorized_keys`.
+   `C:\ProgramData\ssh\administrators_authorized_keys`. `Doctor.ps1` lists
+   the seven tasks and the firewall rule it expects.
 4. Deploy from a repository checkout:
 
    ```powershell
@@ -139,8 +211,8 @@ runs on either machine.
 
 Register repository runners with the labels `k15` and `gamepc`. Run them in the
 logged-in desktop session, not as services. The K15 runner executes the live
-checkout directly; set the `K15_CHECKOUT` repository variable if it is not at
-the default path above.
+checkout directly; set the `K15_CHECKOUT` repository variable to that
+checkout's path.
 
 To update the K15 manually:
 
@@ -195,19 +267,10 @@ Run the same checks as CI:
 Tests that require a local Steam installation skip when it is absent. Tests
 that open real audio devices require `SLOPSTATION_TEST_AUDIO=1`.
 
-## Hardware assumptions
-
-| Component | Value |
-|---|---|
-| Gaming PC | `TILLMAN-DESKTOP`, `192.168.68.67`, user `tillm` |
-| K15 | `K15`, `192.168.68.75`, user `minipc` |
-| TV | Samsung S90C, gaming PC on HDMI 4, Ex-Link on K15 `COM3` |
-| Controller | VirtualHere device `Steam Controller Puck`, VID `28DE`, PID `1304` |
-| Audio | HW-Q990C over eARC |
-| TV detection | Primary display height is `2160` |
-
-Revisit the display check before adding another 2160-pixel-high monitor.
-
 Runtime configuration, secrets, media state, VirtualHere files,
 DisplayMagician shortcuts, scheduled tasks, logs, and the virtual environment
 are not stored in Git.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
