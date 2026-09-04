@@ -49,7 +49,41 @@ if (Test-Path $ak) {
     else { Report PASS 'authorized_keys' 'present, ACL sane' }
 } else { Report FAIL 'authorized_keys' 'missing' 'sshd ignores keys without this file' }
 
-# 4. VirtualHere
+# 4. Wake-on-LAN. The K15 wakes this PC with a magic packet (couch.py wol()),
+# so MagicPacket must stay 1. Pattern must stay 0: at 1 the NIC wakes on
+# ordinary LAN broadcast traffic, seconds after every sleep - measured
+# 2026-09-04, 15 sleep attempts in 8 h holding 2 s each. Both keywords default
+# to 1, and a NIC driver reinstall restores those defaults.
+function Get-WolKeyword([string]$Adapter, [string]$Keyword) {
+    $p = Get-NetAdapterAdvancedProperty -Name $Adapter -RegistryKeyword $Keyword -ErrorAction SilentlyContinue
+    if ($p) { return "$($p.RegistryValue)" }
+    return ''
+}
+$wolNic = Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -eq 'Up' -and (Get-WolKeyword $_.Name '*WakeOnMagicPacket') -ne '' } |
+    Select-Object -First 1
+if (-not $wolNic) {
+    Report WARN 'wake-on-lan' 'no connected wired adapter exposes the WoL keywords' 'Wi-Fi only? the K15 cannot WoL this PC'
+} else {
+    $n = $wolNic.Name
+    if ((Get-WolKeyword $n '*WakeOnMagicPacket') -eq '1') { Report PASS 'wol magic packet' "$n enabled" }
+    else { Report FAIL 'wol magic packet' "$n disabled" "the K15 cannot wake this PC: Set-NetAdapterAdvancedProperty -Name '$n' -RegistryKeyword '*WakeOnMagicPacket' -RegistryValue 1" }
+
+    if ((Get-WolKeyword $n '*WakeOnPattern') -eq '0') { Report PASS 'wol pattern match' 'disabled (PC can hold sleep)' }
+    else { Report WARN 'wol pattern match' "$n enabled" "LAN broadcast wakes the PC seconds after each sleep: Set-NetAdapterAdvancedProperty -Name '$n' -RegistryKeyword '*WakeOnPattern' -RegistryValue 0" }
+
+    $s5 = Get-WolKeyword $n 'S5WakeOnLan'
+    if ($s5 -eq '' -or $s5 -eq '1') { Report PASS 'wol from shutdown' 'S5 wake available' }
+    else { Report WARN 'wol from shutdown' 'S5WakeOnLan disabled' 'the K15 can wake this PC from sleep but not from a full shutdown' }
+
+    if ((powercfg /devicequery wake_armed 2>$null | Out-String) -match [regex]::Escape($wolNic.InterfaceDescription)) {
+        Report PASS 'wol armed' 'NIC armed to wake the system'
+    } else {
+        Report WARN 'wol armed' 'NIC absent from wake_armed' "Device Manager > $n > Power Management > allow this device to wake the computer"
+    }
+}
+
+# 5. VirtualHere
 if (Get-Process vhui64 -ErrorAction SilentlyContinue) {
     Report PASS 'virtualhere' 'client running'
     # The Puck's own address, not just the hub name: a hub that answers while
@@ -61,7 +95,7 @@ if (Get-Process vhui64 -ErrorAction SilentlyContinue) {
     Report FAIL 'virtualhere' 'client not running' 'launch vhui64.exe (Startup shortcut missing?)'
 }
 
-# 5. Display probe
+# 6. Display probe
 $h = Get-PrimaryHeight
 if ($h -gt 0) {
     if (Test-TvIsPrimary) { Report WARN 'display' "primary height $h = TV topology" 'expected at a desk? run Office-Safety or Ctrl+Alt+E' }
@@ -72,7 +106,7 @@ $tv = @(Get-TvNames)
 if ($tv -match $CG.TvEdid) { Report PASS 'tv link' "$($CG.TvEdid) listed by Windows" }
 else { Report WARN 'tv link' "Windows lists: $($tv -join ', ')" 'Device Manager > Scan for hardware changes; else re-seat the HDMI cable at the GPU' }
 
-# 6. Session state + logs
+# 7. Session state + logs
 if (Test-ReadyMarker) { Report WARN 'ready marker' 'present - a session is (or looks) active' 'stale after a crash? Exit task or Office-Safety clears it' }
 else { Report PASS 'ready marker' 'absent (idle)' }
 
