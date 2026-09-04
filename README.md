@@ -4,11 +4,11 @@
 [![cd](https://github.com/trillville/slopstation/actions/workflows/cd.yml/badge.svg)](https://github.com/trillville/slopstation/actions/workflows/cd.yml)
 
 Slopstation turns a Windows gaming PC, a Samsung TV, and a Steam Controller
-into a couch console. A small always-on PC (a GMKtec K15) controls the TV and
-the gaming PC, takes voice and text commands, and tracks Steam and media
-downloads. Press a controller chord on the couch and the TV comes on, the PC
-wakes, and Steam Big Picture is on screen with the controller working. Say
-"hey Alfred, play Hades" and it launches.
+into a couch console. An always-on mini PC controls the TV and the gaming PC,
+takes voice and text commands, and tracks Steam and media downloads. Press a
+controller chord on the couch and the TV comes on, the PC wakes, and Steam Big
+Picture is on screen with the controller working. Say "hey Alfred, play Hades"
+and it launches.
 
 It is one household's system, run every day and deployed from this
 repository. It is not a framework.
@@ -19,20 +19,20 @@ repository. It is not a framework.
 flowchart LR
     chord[Controller chord] --> k15
     voice[Voice, text, MCP] --> k15
-    k15[K15 mini PC<br/>couch.py, assistant] -->|serial, WebSocket| tv[Samsung TV]
+    k15[Mini PC<br/>couch.py, assistant] -->|serial, WebSocket| tv[Samsung TV]
     k15 -->|Wake-on-LAN, SSH forced command| pc[Gaming PC<br/>Dispatch.ps1, scheduled tasks]
     pc -->|display profile, USB over IP| tv
     k15 --> media[Steam, Radarr, Sonarr]
     k15 & pc -->|JSONL events with one turn id| sentry[Sentry]
 ```
 
-1. The K15 powers on the TV, switches it to the PC's input, and wakes the
+1. The mini PC powers on the TV, switches it to the PC's input, and wakes the
    gaming PC.
-2. Over SSH, the K15 tells the gaming PC to enter. The PC switches to its TV
+2. Over SSH, the mini PC tells the gaming PC to enter. The PC switches to its TV
    display profile, claims the controller over USB-over-IP, and opens Steam
    Big Picture.
 3. The gaming PC returns `READY` with the request's turn id.
-4. The K15 confirms the TV input and watches the session until it ends.
+4. The mini PC confirms the TV input and watches the session until it ends.
 5. The gaming PC restores the office display and releases the controller.
 
 A failed launch that woke the TV turns it off again. Controller input and
@@ -53,7 +53,7 @@ marker, the PC's scheduled tasks stamp it into their events and transcript
 filenames, and both machines ship logs to one Sentry project. One query shows
 a launch from the chord to Big Picture.
 
-**A narrow SSH surface.** The K15's key on the gaming PC is bound to a forced
+**A narrow SSH surface.** The mini PC's key on the gaming PC is bound to a forced
 command. `Dispatch.ps1` accepts a dozen anchored verbs such as `enter`,
 `launch <appid>`, `nav library`, and `status`, and denies everything else.
 The turn id is validated by an anchored regex before it can become part of a
@@ -71,9 +71,9 @@ answer even if the voice process was just restarted.
 | Component | Used here |
 |---|---|
 | Gaming PC | Windows 11, wired Ethernet with Wake-on-LAN, Steam, DisplayMagician, VirtualHere client, Windows OpenSSH server |
-| K15 | GMKtec K15 mini PC, Windows 11, always on. Runs Slopstation, the VirtualHere server, and the optional media stack |
-| TV | Samsung S90C. Gaming PC on HDMI 4, Ex-Link serial adapter on the K15 |
-| Controller | Steam Controller, its Puck receiver plugged into the K15 and shared to the gaming PC over VirtualHere |
+| Mini PC | GMKtec K15, Windows 11, always on. Runs Slopstation, the VirtualHere server, and the optional media stack. The code calls this machine the K15: in task names, the runner label, log file names and `K15_CHECKOUT` |
+| TV | Samsung S90C. Gaming PC on HDMI 4, Ex-Link serial adapter on the mini PC |
+| Controller | Steam Controller, its Puck receiver plugged into the mini PC and shared to the gaming PC over VirtualHere |
 | Audio | Samsung HW-Q990C soundbar over eARC |
 | Speech | openWakeWord, Deepgram for speech to text and text to speech, Anthropic or OpenAI for the assistant |
 
@@ -121,7 +121,7 @@ Then read `src/slopstation/couch.py` for the launch,
 | `media/` | Optional media stack and its [setup guide](media/README.md) |
 | `tests/` | Python and PowerShell tests |
 
-## Install the K15
+## Install the mini PC
 
 1. Clone the repository, for example to `C:\slopstation`.
 2. Copy `config.example.json` to `config.json` and
@@ -134,7 +134,7 @@ Then read `src/slopstation/couch.py` for the launch,
    .venv\Scripts\pip install -e ".[dev]" -c constraints.txt
    ```
 
-4. Install VirtualHere Server, reserve the K15's address in DHCP, and allow its
+4. Install VirtualHere Server, reserve the mini PC's address in DHCP, and allow its
    port on the private LAN:
 
    ```powershell
@@ -181,7 +181,7 @@ of tools.
    Server.
 2. Create working `OFFICE.lnk` and `TV-GAMING.lnk` DisplayMagician profiles.
 3. Configure the `CouchGaming` scheduled tasks and set `Dispatch.ps1` as the
-   forced command for the K15's key in
+   forced command for the mini PC's key in
    `C:\ProgramData\ssh\administrators_authorized_keys`. `Doctor.ps1` lists
    the seven tasks and the firewall rule it expects.
 4. Deploy from a repository checkout:
@@ -201,7 +201,7 @@ For Radarr, Sonarr, and qBittorrent setup, see
 
 ## Deployment
 
-A successful `ci` run on `main` starts `cd`. The K15 deploys immediately; the
+A successful `ci` run on `main` starts `cd`. The mini PC deploys immediately; the
 gaming-PC job waits until that machine wakes. Both machines use self-hosted
 runners because they do not accept inbound deployment connections.
 
@@ -211,11 +211,11 @@ is public, `cd` only deploys commits pushed to `main`; pull-request code never
 runs on either machine.
 
 Register repository runners with the labels `k15` and `gamepc`. Run them in the
-logged-in desktop session, not as services. The K15 runner executes the live
+logged-in desktop session, not as services. The mini PC runner executes the live
 checkout directly; set the `K15_CHECKOUT` repository variable to that
 checkout's path.
 
-To update the K15 manually:
+To update the mini PC manually:
 
 ```powershell
 git pull
@@ -247,7 +247,7 @@ rule to `LocalSubnet` on the Private profile, and set `SLOPSTATION_URL` and
 
 Structured events are written to:
 
-- K15: `logs\k15-YYYYMMDD.jsonl`
+- Mini PC: `logs\k15-YYYYMMDD.jsonl`
 - Gaming-PC tasks: `C:\CouchGaming\logs\pc-YYYYMMDD.jsonl`
 - Gaming-PC SSH dispatcher: `C:\CouchGaming\logs\pc-dispatch-YYYYMMDD.jsonl`
 

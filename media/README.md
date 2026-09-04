@@ -1,4 +1,4 @@
-# Media acquisition on the K15
+# Media acquisition on the mini PC
 
 Slopstation sends movie requests to Radarr and series requests to Sonarr.
 Prowlarr supplies indexers, qBittorrent downloads and seeds, and Slopstation
@@ -141,7 +141,7 @@ Validate the installation:
 ```
 
 Configure Docker Desktop, Proton, and qBittorrent to start at login. Compose
-services already use `restart: unless-stopped`. K15 deployments rerun
+services already use `restart: unless-stopped`. Mini PC deployments rerun
 `Start-Media.ps1` while media is enabled.
 
 ### 7. Optional Homarr dashboard
@@ -155,7 +155,7 @@ New-NetFirewallRule -DisplayName 'qBittorrent Web UI (LAN)' -Direction Inbound -
 ```
 
 Complete Homarr setup at `http://127.0.0.1:8575`. Configure Radarr, Sonarr,
-Prowlarr, and qBittorrent with their K15 LAN URLs from the table above; use
+Prowlarr, and qBittorrent with their mini PC LAN URLs from the table above; use
 `http://glances:61208` for Glances. Use a direct public board URL for
 anonymous viewing: `http://192.168.1.10:8575/boards/<name>`.
 
