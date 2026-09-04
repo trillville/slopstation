@@ -125,7 +125,7 @@ if ($h -gt 0) {
 } else { Report FAIL 'display' 'probe returned 0' 'Get-PrimaryHeight broken - PowerShell/DPI issue' }
 
 $tv = @(Get-TvNames)
-if ($tv -match $CG.TvEdid) { Report PASS 'tv link' "$($CG.TvEdid) listed by Windows" }
+if ($tv -match [regex]::Escape($CG.TvEdid)) { Report PASS 'tv link' "$($CG.TvEdid) listed by Windows" }
 else { Report WARN 'tv link' "Windows lists: $($tv -join ', ')" 'Device Manager > Scan for hardware changes; else re-seat the HDMI cable at the GPU' }
 
 # 7. Session state + logs

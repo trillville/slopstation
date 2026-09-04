@@ -179,7 +179,7 @@ function Get-TvNames {
 # Use Windows device enumeration to verify VirtualHere claim state.
 function Test-PuckPresent {
     [bool](Get-PnpDevice -ErrorAction SilentlyContinue |
-           Where-Object { $_.InstanceId -match $CG.PuckHwId -and $_.Status -eq 'OK' })
+           Where-Object { $_.InstanceId -match [regex]::Escape($CG.PuckHwId) -and $_.Status -eq 'OK' })
 }
 
 # Redirect console-less VirtualHere calls to prevent GUI error dialogs.
