@@ -303,11 +303,14 @@ def sync() -> bool | None:
     skipped without keys. Non-reentrant, so calls can't stack meta crawls.
 
     True when layer 1 refreshed, False when the PC was unreachable, None when
-    another sync held the lock and this call did nothing. periodic_sync backs
-    off on False only: a held lock says nothing about the PC."""
+    this call learned nothing about the PC - another sync held the lock, or a
+    local failure (an unwritable state dir) raised before the answer meant
+    anything. periodic_sync backs off on False only."""
     if not _sync_lock.acquire(blocking=False):
         return None
-    installed = False
+    # Stays None if layer 1 RAISES rather than fail-softing: that is a broken
+    # disk, not a sleeping PC, and sync_failed below is where it is reported.
+    installed: bool | None = None
     try:
         # Layer 1b only when layer 1 SUCCEEDED - both need the PC awake, so
         # gating spares a sleeping sync (and the blind test) a 15 s ssh wait.

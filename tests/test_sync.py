@@ -217,3 +217,24 @@ def test_periodic_sync_does_not_back_off_on_a_held_lock(keyed, monkeypatch):
     # No clock movement: a tick that armed ANY hold-off would no-op here.
     tick()
     assert keyed.calls["installed"] == 1
+
+
+def test_periodic_sync_does_not_back_off_on_a_local_failure(keyed, monkeypatch):
+    """A raise from layer 1 is a broken disk, not a sleeping PC. It is already
+    reported as sync_failed; it must not also buy a 30-minute hold-off."""
+    now = {"t": 0.0}
+    monkeypatch.setattr(library.time, "monotonic", lambda: now["t"])
+    keyed.state["index"] = {"installed": [{"appid": 1}]}
+
+    def boom(**k):
+        keyed.calls["installed"] += 1
+        raise OSError("state/ is unwritable")
+
+    monkeypatch.setattr(library, "refresh", boom)
+    tick = library.periodic_sync()
+
+    tick()
+    assert keyed.calls["installed"] == 1
+    # No clock movement: an armed hold-off of any length would swallow this.
+    tick()
+    assert keyed.calls["installed"] == 2
