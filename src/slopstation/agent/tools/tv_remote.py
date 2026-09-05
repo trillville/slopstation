@@ -73,34 +73,59 @@ class TvRemote:
 class TvVolume:
     """Set soundbar volume directly and verify it through readback."""
 
-    POLLS = 24
+    POLLS = 24  # readback budget per move, 0.1 s apart
     POLL_GAP_S = 0.1
+    WRITES = 3  # bounded: a set that ignores every write gets three, not a storm
+    RETRY_AFTER = 5  # polls of an unmoved readback before the write goes again
 
     def __init__(self, tv_ip, log, read=None, write=None, pause=None):
         self.log = log
         self.read = read or (lambda: tv.tv_volume(tv_ip))
         self.write = write or (lambda level: tv.tv_set_volume(tv_ip, level))
         self.pause = pause
+        self.last_writes = 0  # writes the last move() sent
 
-    def _settle(self, target):
-        """Allow delayed readback without sending more volume changes."""
-        for _ in range(self.POLLS):
+    def _settle(self, target, polls):
+        """Poll the readback up to `polls` times. Returns the level last read,
+        or None when no read answered."""
+        seen = None
+        for i in range(polls):
             v = self.read()
+            if v is not None:
+                seen = v
             if v == target:
                 return v
-            (self.pause or time.sleep)(self.POLL_GAP_S)
-        return self.read()
+            if i + 1 < polls:
+                (self.pause or time.sleep)(self.POLL_GAP_S)
+        return seen
 
     def move(self, now, target):
-        """Write once, then verify even if the HTTP reply was lost."""
+        """Write, then verify by readback; write again if the level has not
+        moved. The set can accept a SetVolume (HTTP 200) and not apply it -
+        seen 2026-09-05: the readback sat at 30 for 2.4 s, and the next
+        session's identical write took in 0.3 s. A raised write is retried
+        too, since a lost reply can still have landed. Returns the last level
+        SEEN - `now` if nothing verified."""
+        self.last_writes = 0
         if now == target:
             return now
-        try:
-            self.write(target)
-        except Exception as e:
-            self.log.warn("tv_duck_failed", stage="write", err=str(e))
-        final = self._settle(target)
-        return now if final is None else final
+        seen = now
+        left = self.POLLS
+        for attempt in range(1, self.WRITES + 1):
+            try:
+                self.write(target)
+            except Exception as e:
+                self.log.warn("tv_duck_failed", stage="write", err=str(e))
+            self.last_writes = attempt
+            polls = left if attempt == self.WRITES else min(left, self.RETRY_AFTER)
+            left -= polls
+            v = self._settle(target, polls)
+            if v is None:
+                break  # readback gone: nothing more can be verified
+            seen = v
+            if seen == target or left <= 0:
+                break
+        return seen
 
 
 class TvDucker(TvVolume):
@@ -167,7 +192,14 @@ class TvDucker(TvVolume):
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
-        self.log("tv_ducked", steps=landed, asked=asked, vol=final, ok=final == target)
+        self.log(
+            "tv_ducked",
+            steps=landed,
+            asked=asked,
+            vol=final,
+            ok=final == target,
+            writes=self.last_writes,
+        )
 
     def unduck(self):
         """Restore the ledger: this session's duck plus any earlier debt."""
@@ -202,7 +234,14 @@ class TvDucker(TvVolume):
         restored = max(0, final - now)
         self.out = max(0, self.out - restored)
         self.expect = final if self.out else None
-        self.log("tv_unducked", steps=restored, asked=want, vol=final, ok=self.out == 0)
+        self.log(
+            "tv_unducked",
+            steps=restored,
+            asked=want,
+            vol=final,
+            ok=self.out == 0,
+            writes=self.last_writes,
+        )
         if self.out:
             self.log.warn("tv_duck_deficit", steps=self.out)
 

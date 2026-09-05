@@ -16,6 +16,7 @@ class FakeRoom:
     power: str | None = "on"
     vol: int = 14
     drop: int = 0  # steps a write fails to move
+    ignore: int = 0  # writes the set accepts (HTTP 200) and does not apply
     readback_dead: bool = False
     write_error: Exception | None = None
     writes: list = dataclasses.field(default_factory=list)  # requested absolute levels
@@ -38,6 +39,9 @@ class FakeRoom:
         n = abs(target - self.vol)
         if self.write_error:
             raise self.write_error
+        if self.ignore:
+            self.ignore -= 1
+            return
         landed = max(0, n - self.drop)
         self.drop -= min(n, self.drop)
         if target < self.vol:
@@ -84,6 +88,15 @@ def test_no_readback_means_no_duck():
     )
 
 
+def test_readback_dying_after_the_write_stops_the_retries():
+    # Nothing more can be verified, so the remaining writes are not sent.
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99))
+    dk.read = lambda: None if room.writes else room.vol  # dies after the write
+    dk.duck()
+    assert room.writes == [4] and dk.out == 0, room.writes
+    assert log.find("tv_ducked")[0]["writes"] == 1
+
+
 def test_happy_pair_down_to_target_and_back_to_the_exact_start():
     dk, room, log = ducker(steps=10)  # vol 14
     dk.duck()
@@ -106,14 +119,38 @@ def test_clamp_at_zero_ok_is_intent_achieved_and_the_delta_stays_honest():
     assert room.vol == 6 and dk.out == 0
 
 
-def test_incomplete_write_restores_only_verified_movement():
+def test_incomplete_write_is_topped_up_by_the_retry():
     dk, room, log = ducker(steps=10, room=FakeRoom(drop=3))
-    dk.duck()
-    assert room.vol == 7 and dk.out == 7
-    assert room.writes == [4], room.writes
-    assert log.find("tv_ducked")[0]["ok"] is False
+    dk.duck()  # the first write moves 7; the readback stops short, so it goes again
+    assert room.vol == 4 and dk.out == 10
+    assert room.writes == [4, 4], room.writes
+    d0 = log.find("tv_ducked")[0]
+    assert d0["ok"] is True and d0["writes"] == 2, d0
     dk.unduck()
     assert room.vol == 14 and dk.out == 0
+
+
+def test_a_write_the_set_accepted_but_ignored_is_sent_again():
+    # 2026-09-05: SetVolume answered 200, the bar stayed at 30, and the next
+    # session's identical write took at once. One retry covers it.
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=1))
+    dk.duck()
+    assert room.vol == 4 and dk.out == 10
+    assert room.writes == [4, 4], room.writes
+    d0 = log.find("tv_ducked")[0]
+    assert d0["steps"] == 10 and d0["ok"] is True and d0["writes"] == 2, d0
+    assert not log.find("tv_duck_failed"), "an accepted write is not a failure"
+
+
+def test_a_set_that_ignores_every_write_gets_three_not_a_storm():
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99))
+    dk.duck()
+    assert room.vol == 14 and dk.out == 0
+    assert room.writes == [4, 4, 4], room.writes
+    d0 = log.find("tv_ducked")[0]
+    assert d0["steps"] == 0 and d0["ok"] is False and d0["writes"] == 3, d0
+    dk.unduck()  # ledger empty: no-op
+    assert [e for e in log.events() if e == "tv_unducked"] == []
 
 
 def test_write_failure_verifies_nothing_and_owes_nothing():
@@ -121,8 +158,8 @@ def test_write_failure_verifies_nothing_and_owes_nothing():
     dk.duck()
     assert room.vol == 14 and dk.out == 0
     d0 = log.find("tv_ducked")[0]
-    assert d0["steps"] == 0 and d0["ok"] is False, d0
-    assert log.find("tv_duck_failed"), log.records
+    assert d0["steps"] == 0 and d0["ok"] is False and d0["writes"] == 3, d0
+    assert len(log.find("tv_duck_failed")) == 3, log.records
     dk.unduck()  # ledger empty: no-op
     assert [e for e in log.events() if e == "tv_unducked"] == []
 

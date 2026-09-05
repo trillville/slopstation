@@ -120,7 +120,9 @@ them together with the heartbeat count:
   every frame whoever sent it.
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat` `checkin` `checkin_failed`
   - Room ducking (TvDucker): `tv_ducked` / `tv_unducked` (both carry `steps` =
-    verified movement vs `asked`, plus `vol` and `ok`; `tv_unducked` may carry
+    verified movement vs `asked`, plus `vol`, `ok` and `writes` - the SetVolume
+    requests one move took, 2+ meaning the set ignored a write it had
+    accepted; `tv_unducked` may carry
     `reason=user_adjusted|no_readback`), `tv_duck_skipped` (the on-gate:
     `state=standby|unknown` or `reason=no_readback`), `tv_duck_failed` (a key
     burst or the whole op raised), `tv_duck_deficit` (warn: steps still owed —
