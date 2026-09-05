@@ -71,8 +71,7 @@ def ducker(steps=10, room=None, **kw):
 
 
 def test_a_hung_readback_cannot_hold_the_move_past_its_budget():
-    # Each read answers 14 (unmoved) after a full HTTP timeout: the deadline
-    # ends the move after the 2.4 s budget, not after 24 x the timeout.
+    # Every read costs a full HTTP timeout: the deadline, not 24 x it, ends the move.
     now = [0.0]
     reads = [0]
 
@@ -159,8 +158,7 @@ def test_clamp_at_zero_ok_is_intent_achieved_and_the_delta_stays_honest():
 
 
 def test_a_write_that_moved_but_stopped_short_is_left_alone():
-    # A level that moved is verified movement, and possibly a hand on the
-    # remote: no second absolute write over it.
+    # Movement is verified, and possibly a hand on the remote: no write over it.
     dk, room, log = ducker(steps=10, room=FakeRoom(drop=3))
     dk.duck()
     assert room.vol == 7 and dk.out == 7
@@ -172,8 +170,7 @@ def test_a_write_that_moved_but_stopped_short_is_left_alone():
 
 
 def test_a_hand_on_the_remote_during_the_verify_is_not_overwritten():
-    # Restore 4->14 ignored by the set; the person turns it to 8 meanwhile.
-    # The retry must not write 14 over their 8.
+    # Restore 4->14 ignored; a hand turns it to 8 meanwhile. No 14 over their 8.
     dk, room, log = ducker(steps=10)
     dk.duck()
     assert room.vol == 4
@@ -193,8 +190,7 @@ def test_a_hand_on_the_remote_during_the_verify_is_not_overwritten():
 
 
 def test_a_write_the_set_accepted_but_ignored_is_sent_again():
-    # 2026-09-05: SetVolume answered 200, the bar stayed at 30, and the next
-    # session's identical write took at once. One retry covers it.
+    # The set answers 200 and does nothing; the same write again lands.
     dk, room, log = ducker(steps=10, room=FakeRoom(ignore=1))
     dk.duck()
     assert room.vol == 4 and dk.out == 10

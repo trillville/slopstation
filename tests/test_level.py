@@ -27,9 +27,8 @@ def live(floor_db=0, log=None, loud=None, talker=8000):
 
 
 def test_the_first_live_turn_is_the_reference_not_the_pre_roll():
-    # The pre-roll was recorded before the duck: its peak is the un-ducked TV
-    # (8000), the talker on the couch 20 dB under it. That must not be the
-    # reference, or the gate would mute the person.
+    # The pre-roll predates the duck: its peak is the TV (8000), the talker
+    # 20 dB under. The gate must not measure the person against that.
     lvl = RoomLevel(floor_db=15)
     lvl.hear(chunk(8000), now=0.0)  # replay: TV
     lvl.hear(chunk(800), now=0.1)  # replay: the wake phrase

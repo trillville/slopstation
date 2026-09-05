@@ -133,16 +133,15 @@ def warn_config(voice):
 
 
 class RoomState:
-    """What the duck found, filled in off-thread: `loud` is True once a duck
-    was wanted and did not land, so the room is as loud as it was."""
+    """Filled in off-thread: `loud` once a duck was tried and did not land."""
 
     def __init__(self):
         self.loud = False
 
 
 def make_ducker(cfg, dry_run):
-    """Return a session volume controller or a no-op. Calling it with
-    restore=False returns a RoomState (None when ducking is off)."""
+    """Return a session volume controller or a no-op. restore=False hands
+    back a RoomState; None when ducking is off."""
     voice = cfg["voice"]
     duck_steps = int(voice.get("duckSteps", 0) or 0)
     duck_to_pct = int(voice.get("duckToPct", 0) or 0)

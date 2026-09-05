@@ -39,8 +39,7 @@ _PUNCT = ",.!?"
 # "alfred"), so the bar sits above 80.
 _WHOLE_ANCHOR = 90
 
-# Words that carry nothing when they surround a closer: "okay thanks",
-# "alright, that's all", "yeah, never mind".
+# Carry nothing around a closer: "okay thanks", "yeah, never mind".
 FILLERS = GREETINGS | {
     "alright",
     "all",
@@ -55,10 +54,8 @@ FILLERS = GREETINGS | {
     "uh",
     "please",
 }
-CLOSER_RATIO = 85  # "thank" ~91, "go way" ~92 against their closers
-# A closer arrives on its own, give or take fillers. Longer is content
-# ("what time is it, thanks" wants an answer).
-CLOSER_MAX_WORDS = 5
+CLOSER_RATIO = 85  # "go way" ~92 against "go away"
+CLOSER_MAX_WORDS = 5  # longer is content
 
 
 def _anchor_len(toks: list[str], i: int, anchor: str) -> int:
@@ -85,11 +82,10 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
     ~67); greeting optional at the front; repeated, so a stuttered "hey jarvis
     hey jarvis volume up" still cleans up.
 
-    A GREETED anchor anywhere marks where the user started addressing the
-    room: the pre-roll can carry a sentence already in progress ("what I
-    mean. Hey, Alfred. What time is it?") and a loud room can carry two
-    attempts. Everything through the last one goes. A bare mid-sentence
-    "jarvis" is content.
+    A GREETED anchor anywhere is where the user started addressing the room
+    (the pre-roll can hold a sentence in progress: "what I mean. Hey, Alfred.
+    What time is it?"); everything through the last one with content after
+    it goes. A bare mid-sentence "jarvis" is content.
 
     STT can split the anchor across two tokens ("hey alfred" -> "Hey, all.
     Fred,") and neither half clears 80 alone, so the two tokens are also
@@ -100,7 +96,7 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
     for i in range(len(toks) - 1):
         if toks[i].strip(_PUNCT).lower() in GREETINGS:
             n = _anchor_len(toks, i + 1, anchor)
-            if n and i + 1 + n < len(toks):  # content after it, or it is a tail
+            if n and i + 1 + n < len(toks):  # a trailing one is content
                 cut = i + 1 + n
     if cut:
         text = " ".join(toks[cut:])
@@ -113,27 +109,23 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
         text = " ".join(toks[i + n :])
 
 
-# Mishears of a one-word closer. One-word windows match exactly (plus these):
-# a fuzzy bar lets "tanks" in as "thanks", and a bare title is an answer.
+# One-word closers match exactly, plus these: fuzzy would take "tanks".
 MISHEARS = {"thank": "thanks"}
 
 
 def closer_in(
     text: str, closers: list[str], anchor: str | None = None, loud: bool = False
 ) -> str | None:
-    """The closing phrase ("thanks", "go away") that ends a short utterance;
-    None otherwise.
+    """The closing phrase ("thanks", "go away") ending a short utterance, or
+    None. The grammar wants the whole utterance; a closer rarely arrives
+    clean ("Alright. Thanks.", "thanks alfred"), so fillers and the anchor
+    are ignored around it. "cancel the download" and "what's the weather,
+    thanks" are content and stay.
 
-    The grammar matches whole utterances, and a closer rarely arrives clean:
-    "Alright. Thanks." after an answer, "thanks alfred". Fillers and the wake
-    anchor are ignored around it. A closer at the head of a longer utterance
-    is content ("cancel the download") and a long utterance ending in one
-    wants its answer first, so those stay.
-
-    In a loud room (`loud`: the duck did not land) the TV finishes the user's
-    sentences - "The Alfred go away. Only hands exactly." - so a closer right
-    after a wake anchor counts whatever follows it. Only there: in a quiet
-    room "actually alfred cancel the download" is a command."""
+    `loud` (the duck did not land): the TV finishes the user's sentences
+    ("The Alfred go away. Only hands exactly."), so a closer right after
+    the anchor counts whatever follows. Only there: in a quiet room
+    "actually alfred cancel the download" is a command."""
     words = [w for w in (t.strip(_PUNCT).lower() for t in text.split()) if w]
     if not words:
         return None
@@ -166,9 +158,8 @@ def closer_in(
             hit = match(core[-k:])
             if not hit:
                 continue
-            # What is left must be nothing much ("no thanks") or another
-            # closer ("never mind, cancel") - not a question ("what's the
-            # weather, thanks").
+            # The rest is a word ("no thanks") or another closer ("never
+            # mind, cancel"), not a question.
             rest = core[:-k]
             if len(rest) <= 1 or closer_in(" ".join(rest), closers):
                 return hit
@@ -270,8 +261,8 @@ class GrammarGate(FrameProcessor):
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word  # strip anchor ("jarvis"); None = off
         self.ack = ack  # preroll.WakeAck; None = no chime
-        # True while the room is loud (the duck did not land): every turn
-        # then needs the wake prefix, or it is the TV. None = never strict.
+        # callable, True while the duck did not land: every turn then needs
+        # the wake prefix, or it is the TV. None = never strict.
         self.loud = loud
         self.closers = closers if closers is not None else load_closers()
         self.level = level  # level.RoomLevel; None = unmeasured
@@ -282,11 +273,9 @@ class GrammarGate(FrameProcessor):
         self._ended = False
 
     def request_stop(self) -> None:
-        """End the session now. Called from the stop_listening tool on a
-        worker thread, so the end frame goes on the next frame through the
-        gate (audio passes through, so that is within a hop). Nothing is said
-        first: the tool result runs no second model turn, and the sleep
-        chime after teardown is the goodbye."""
+        """End the session now. Called off-thread by stop_listening; the end
+        frame goes on the next frame through the gate (audio passes through,
+        so within a hop). The sleep chime is the goodbye."""
         self._stop_pending = True
         self.log("session_stop_requested")
 
@@ -436,16 +425,15 @@ class GrammarGate(FrameProcessor):
         ):
             text = frame.text.strip()
             conf = stt_confidence(frame)
-            # The room around this turn: how far under the talker it peaked,
-            # and how long after they went quiet it arrived. Not taken for an
-            # empty final, which would rob the next turn of its peak.
+            # The room around this turn. Not for an empty final: that would
+            # rob the next turn of its peak.
             room = (
                 self.level.snapshot()
                 if self.level is not None and text
                 else {"level_db": None, "quiet_ms": None}
             )
             if text and self._stop_pending:
-                # The mic is closing; whatever this is, it is not for us.
+                # The mic is closing.
                 self.log(
                     "turn_dropped",
                     text=text,

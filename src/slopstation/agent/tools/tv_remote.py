@@ -77,9 +77,8 @@ class TvVolume:
     POLL_GAP_S = 0.1
     WRITES = 3  # bounded: a set that ignores every write gets three, not a storm
     RETRY_AFTER = 5  # polls of an unmoved readback before the write goes again
-    # The whole move must fit the poll budget in wall time too: a renderer
-    # that hangs rather than refuses would otherwise hold it for
-    # POLLS x the HTTP timeout. Requests answer in ~0.1 s when they answer.
+    # A move fits the poll budget in wall time too, or a renderer that hangs
+    # holds it for POLLS x this. Requests answer in ~0.1 s when they answer.
     HTTP_TIMEOUT_S = 1.0
 
     def __init__(self, tv_ip, log, read=None, write=None, pause=None, clock=None):
@@ -94,8 +93,8 @@ class TvVolume:
         self._deadline = 0.0
 
     def _settle(self, target, polls):
-        """Poll the readback up to `polls` times, or until the move's
-        deadline. Returns the level last read, or None when no read answered."""
+        """Poll the readback up to `polls` times or the deadline. The level
+        last read; None when no read answered."""
         seen = None
         for i in range(polls):
             v = self.read()
@@ -108,15 +107,12 @@ class TvVolume:
         return seen
 
     def move(self, now, target):
-        """Write, then verify by readback; write again only while the level
-        has not moved from `now`. The set can accept a SetVolume (HTTP 200)
-        and not apply it - seen 2026-09-05 (session 84aa98): the readback sat
-        at 30 for 2.4 s, and the next session's identical write took in
-        0.3 s. A raised write is retried the same way, since a lost reply can
-        still have landed. A level that moved but stopped short is left
-        where it is: it may be a hand on the remote, and writing an absolute
-        target over that would take their level away. Returns the last level
-        SEEN - `now` if nothing verified."""
+        """Write, verify by readback, and write again only while the level
+        has not moved from `now`: the set can answer a SetVolume 200 and not
+        apply it, and a lost reply can still have landed. A level that moved
+        but stopped short is left alone - a hand on the remote, and an
+        absolute write over it takes their level away. Returns the last
+        level SEEN - `now` if nothing verified."""
         self.last_writes = 0
         if now == target:
             return now
@@ -136,7 +132,7 @@ class TvVolume:
                 break  # readback gone: nothing more can be verified
             seen = v
             if seen != now or left <= 0 or self.clock() >= self._deadline:
-                break  # landed, moved (stop: a hand may be on it), or out of time
+                break  # landed, moved (a hand may be on it), or out of time
         return seen
 
 
@@ -172,10 +168,9 @@ class TvDucker(TvVolume):
         self.expect = None  # the readback our last op left behind
 
     def duck(self):
-        """Returns True when the room is at the ducked level (landed, or
-        still down from an unpaid restore), False when a duck was tried and
-        verifiably did not land (the room is loud), None when nothing is
-        known: the set is not on, or its readback is not answering."""
+        """True: the room is at the ducked level (landed, or still down from
+        an unpaid restore). False: tried and did not land, so the room is
+        loud. None: unknown - the set is off or its readback is silent."""
         state = self.probe()
         if state != "on":
             self.log("tv_duck_skipped", state=state or "unknown", debt=self.out)

@@ -1,29 +1,18 @@
 """Judge the room against the talker who said the wake word.
 
-Sits between the pre-roll feeder and the STT, so it hears exactly what the
-recogniser hears. Two things come out of it:
+Sits between the pre-roll feeder and the STT. The talker's level is the
+reference; each transcript is stamped with level_db (its peak against the
+reference) and quiet_ms (how long after the talker went quiet it arrived).
 
-- Measurement. Every transcript the gate handles is stamped with level_db
-  (how far under the reference the loudest moment of that turn was) and
-  quiet_ms (how long after the talker went quiet the transcript arrived).
-- The mic gate. Once the talker has been quiet for QUIET_MS, whatever is
-  still coming in under the floor (the ducked TV, someone across the room,
-  the assistant's own voice back off the soundbar) is replaced with silence
-  before it reaches the STT. Flux then hears the talker stop and closes the
-  turn on its own, rather than transcribing the room until eot_timeout_ms;
-  and chatter under the floor never becomes a turn at all. A hop back near
-  the floor reopens the gate at once.
+With chatterFloorDb set, the mic gate replaces the room with silence once the
+talker has been quiet for QUIET_MS and the level is under the floor: Flux
+closes the turn on the talker's silence, and chatter under the floor never
+becomes a turn. A hop back near the floor reopens it.
 
-The reference is the talker, and it is taken from the first LIVE turn, after
-the pre-roll replay: the pre-roll was recorded before the duck, when the
-un-ducked TV reaches the mic 10-20 dB above a talker on the couch, so its
-peak is the TV, not the person. Until the reference exists, and whenever the
-duck did not land (the room is still loud), the gate stays open and only
-measures.
-
-The gate is the one thing here that can go wrong for a real person: someone
-on the couch speaking well under the reference is muted with the room.
-chatterFloorDb sets the floor; 0 turns the gate off and keeps the numbers.
+The reference is the first LIVE turn, after the replay: the pre-roll is
+recorded before the duck, when the TV reaches the mic 10-20 dB above a
+talker. No reference, or a duck that did not land, means measure only.
+Someone speaking well under the reference is muted with the room; 0 is off.
 """
 
 from __future__ import annotations
@@ -45,22 +34,20 @@ def dbfs(level: float) -> float | None:
 
 
 class RoomLevel(FrameProcessor):
-    """Per-turn level and end-of-speech timing relative to the talker, and
-    the mic gate that silences the room under the floor."""
+    """Per-turn level and quiet timing against the talker; the mic gate."""
 
-    QUIET_MS = 350  # WakeCapture's bar: this much under the line is a gap
-    QUIET_RATIO = 0.18  # the measurement line with no floor set (~ -15 dB)
-    REOPEN_RATIO = 0.5  # a closed gate reopens 6 dB under the floor: onsets
-    LOG_MIN_MS = 1000  # shorter mutes are the gaps between words
+    QUIET_MS = 350  # WakeCapture's bar for a gap
+    QUIET_RATIO = 0.18  # the line with no floor set (~ -15 dB)
+    REOPEN_RATIO = 0.5  # reopen 6 dB under the floor, so onsets pass
+    LOG_MIN_MS = 1000  # shorter mutes are gaps between words
 
     def __init__(self, floor_db: float = 0.0, log=None, loud=None) -> None:
         super().__init__()
-        # The room is this far under the talker. 0 = measure only, never mute.
-        self.floor_db = float(floor_db)
+        self.floor_db = float(floor_db)  # 0 = measure only
         self.log = log
         self.loud = loud  # callable; True while the duck did not land
         self.reference = 0.0  # RMS of the talker; 0 = not yet known
-        self.live = False  # past the pre-roll replay
+        self.live = False  # past the replay
         self._peak = 0.0  # loudest hop since the last snapshot
         self._loud_at: float | None = None  # last hop over the line
         self._gated_since: float | None = None  # the gate closed at
@@ -71,8 +58,7 @@ class RoomLevel(FrameProcessor):
         return self._gated_since is not None
 
     def go_live(self) -> None:
-        """The replay is over: what follows is the room now, and the first
-        turn of it sets the reference."""
+        """The replay is over; the first turn from here sets the reference."""
         self.live = True
         self._peak = 0.0
 
@@ -89,8 +75,7 @@ class RoomLevel(FrameProcessor):
         )
 
     def hear(self, chunk: bytes, now: float | None = None) -> bytes:
-        """One hop of mic audio. Returns what the STT should hear: the hop,
-        or silence while the gate is closed."""
+        """One hop in; the hop, or silence while gated, out."""
         now = time.monotonic() if now is None else now
         level = _rms(chunk)
         self._peak = max(self._peak, level)
@@ -130,9 +115,8 @@ class RoomLevel(FrameProcessor):
         )
 
     def snapshot(self, now: float | None = None) -> dict:
-        """The turn that just ended: level_db (peak vs the reference, <= 0
-        means quieter than the talker; None before the reference exists) and
-        quiet_ms (since the talker went quiet; None while they are still
+        """The turn that just ended: level_db (peak vs the reference; None
+        before one exists) and quiet_ms (None while the talker is still
         talking). Resets the peak."""
         now = time.monotonic() if now is None else now
         if not self.reference and self.live and self._peak:

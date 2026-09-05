@@ -80,7 +80,7 @@ class WakeCapture:
 
     @property
     def peak(self) -> float:
-        """Loudest hop so far (RMS): the talker's level, wake phrase included."""
+        """Loudest hop so far (RMS), wake phrase included."""
         return self._peak
 
     def disarm_deadline(self) -> None:
@@ -132,7 +132,7 @@ class PrerollFeeder(FrameProcessor):
         super().__init__()
         self._log = log
         self.capture = None  # WakeCapture, stopped on StartFrame
-        # Called once the replay is fed; live audio follows.
+        # Called once the replay is fed.
         self.on_replayed: Callable[[], None] | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):

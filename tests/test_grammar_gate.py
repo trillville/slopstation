@@ -163,10 +163,9 @@ STRIP_ALFRED = [
     ("Hey, all. Fred, take me home.", "take me home."),  # joined "allfred" ~92
     ("alfred play hades", "play hades"),
     ("all for one", "all for one"),  # joined "allfor" ~67
-    # The pre-roll caught a sentence in progress (session 82abe2): a greeted
-    # anchor mid-text is where the user started addressing the room.
+    # The pre-roll caught a sentence in progress.
     ("what I mean. Hey, Alfred. What time is it?", "What time is it?"),
-    # A loud room carried two attempts (session 84aa98): the last one counts.
+    # A loud room carried two attempts: the last one counts.
     (
         "that's who you are. Hey, Alfred. What's up. Hey, Alfred. What time is it?",
         "What time is it?",
@@ -196,8 +195,7 @@ CLOSERS = [
     ("", None),
 ]
 
-# The same matcher in a loud room (the duck did not land): the TV finishes
-# the user's sentences, so a closer right after the anchor counts.
+# A loud room: the TV finishes the sentence, so a closer after the anchor counts.
 CLOSERS_LOUD = [
     ("The Alfred go away. Only hands exactly.", "go away"),
     ("actually alfred cancel the download", "cancel"),  # the price of it
@@ -337,9 +335,8 @@ def test_is_busy_defers_idle_until_the_assistant_turn_expires(matcher, monkeypat
     assert not g.is_busy(), "expired assistant turn must not pin the session"
 
 
-# The stop_listening tool runs on a worker thread; the gate ends the session
-# on the very next frame through it, whatever that frame is, and nothing
-# said after the ask gets through.
+# stop_listening runs off-thread; the gate ends the session on the next
+# frame through it, and nothing said after the ask gets through.
 
 
 def test_a_stop_ends_the_session_on_the_next_frame(drive):

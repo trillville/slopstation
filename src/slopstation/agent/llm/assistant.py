@@ -20,7 +20,7 @@ def system_instruction(cfg, interface="voice"):
     # A day with no zone resolves toward UTC and dates an evening brief
     # tomorrow. Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
-    # The clock too: without it the model has searched the web for the time.
+    # The clock too, or the model searches the web for the time.
     tail = [
         f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}"
         + (f" in {tz}." if tz else " local time.")
@@ -227,7 +227,7 @@ def tool_impls(
                 "close - nothing is listening in the first place",
             }
         on_stop_listening()
-        # end_turn: no second model turn, so nothing is spoken after this.
+        # end_turn: no second model turn, nothing spoken after this.
         return {
             "ok": True,
             "detail": "the mic is closed - the wake word is what reopens it",
@@ -592,9 +592,7 @@ def function_schemas(impls, log):
             )
             end_turn = isinstance(out, dict) and bool(out.get("end_turn"))
             if end_turn:
-                # The session is ending on this call (stop_listening): a
-                # second model turn would only be a goodbye spoken to a
-                # closing mic.
+                # The session ends on this call: no goodbye to a closing mic.
                 await params.result_callback(
                     out, properties=FunctionCallResultProperties(run_llm=False)
                 )

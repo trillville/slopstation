@@ -166,18 +166,14 @@ class Session:
                 ),
                 numerals=True,
                 keyterm=terms,
-                # Flux's own cap on a turn once speech stops (its default is
-                # 5 s). With the mic gate feeding it silence when the talker
-                # goes quiet, 2000 is a good value; unset keeps Flux's own.
+                # Flux's cap on a turn after speech stops; unset is its own 5 s.
                 eot_timeout_ms=(
                     int(voice["eotTimeoutMs"]) if voice.get("eotTimeoutMs") else None
                 ),
             ),
         )
 
-        # The talker's level comes from the first live turn (see level.py);
-        # 0 dB of floor is measure-only, the inert default for a config
-        # written before the key existed.
+        # Floor 0 (a config from before the key) measures and never mutes.
         loud = (lambda: self.room.loud) if self.room is not None else None
         level = RoomLevel(
             floor_db=float(voice.get("chatterFloorDb", 0) or 0), log=log, loud=loud
