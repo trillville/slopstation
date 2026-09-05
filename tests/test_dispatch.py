@@ -8,7 +8,7 @@ from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, tv
 from slopstation.agent import dispatch as dp
 from slopstation.agent.tools import library
-from slopstation.agent.tools.tv_remote import TvRemote
+from slopstation.tv import Tv
 
 CFG = {
     "tvIp": "192.0.2.1",
@@ -89,7 +89,7 @@ def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     keys = []
     monkeypatch.setattr(tv, "tv_volume", lambda ip: next(readings))
     monkeypatch.setattr(tv, "tv_set_volume", lambda ip, level: levels.append(level))
-    monkeypatch.setattr(TvRemote, "press", lambda self, key, n: keys.append((key, n)))
+    monkeypatch.setattr(Tv, "toggle_mute", lambda self: keys.append(("mute", 1)))
     d, _ = harness()
     assert d.volume_up().ok
     assert levels.pop() == 23

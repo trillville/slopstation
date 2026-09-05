@@ -28,12 +28,13 @@ from slopstation.agent.speech.audio import (
     play_pcm,
     rebuild_audio,
 )
+from slopstation.agent.speech.ducking import TvDucker
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.speech.preroll import WakeAck
 from slopstation.agent.speech.session import Session
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import library
-from slopstation.agent.tools.tv_remote import VOLUME_LOCK, TvDucker
+from slopstation.tv import Tv
 
 log = logbook.logger("voice")
 
@@ -155,23 +156,23 @@ def make_ducker(cfg, dry_run):
             "(power and volume requests need the TV's address)",
         )
     ducker = (
-        TvDucker(duck_steps, tv_ip, log, dry_run=dry_run, to_pct=duck_to_pct or None)
+        TvDucker(
+            duck_steps, Tv(cfg, log), log, dry_run=dry_run, to_pct=duck_to_pct or None
+        )
         if (duck_steps or duck_to_pct) and tv_ip
         else None
     )
 
     def duck(restore):
-        """Off-thread so the session never waits on the TV; the lock keeps
-        duck and unduck from interleaving."""
+        """Off-thread so the session never waits on the TV."""
         if ducker is None:
             return
 
         def run():
-            with VOLUME_LOCK:
-                try:
-                    (ducker.unduck if restore else ducker.duck)()
-                except Exception as e:
-                    log.warn("tv_duck_failed", restore=restore, err=str(e))
+            try:
+                (ducker.unduck if restore else ducker.duck)()
+            except Exception as e:
+                log.warn("tv_duck_failed", restore=restore, err=str(e))
 
         threading.Thread(target=run, daemon=True).start()
 

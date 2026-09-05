@@ -53,19 +53,23 @@ def raise_if_cancelled() -> None:
     raise Cancelled(by)
 
 
-def exlink(name: str, **fields) -> None:
+def tv_command(name: str, **fields) -> None:
     try:
-        ack = tv.exlink_send(name, config.current()["tvComPort"])
-        # Ex-Link acknowledges receipt, not the resulting TV state.
-        log("exlink_send", cmd=name, ack=ack or "no-ack", **fields)
-    except Exception as e:
-        log.error("exlink_nak", cmd=name, err=str(e), **fields)
+        device = tv.Tv(config.current(), log)
+        if name == "power_on":
+            device.power_on(**fields)
+        elif name == "power_off":
+            device.power_off(**fields)
+        else:
+            device.select_input(name, **fields)
+    except Exception:
+        pass  # Device logs the failure; launch readiness handles the outcome.
 
 
 def restore_tv() -> None:
     """Put the TV back the way a finished session leaves it."""
     cfg = config.current()
-    exlink("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
+    tv_command("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
 
 
 def finish_session(restore: bool, exit_reason: str | None = None) -> bool:
@@ -129,7 +133,7 @@ class TvEvidence:
         """Poll the TV, retry power when off, and stop after repeated errors."""
         if self.ip is None or not self.undecided():
             return
-        self.last = tv.tv_power_state(self.ip, timeout=0.5, raw=True)
+        self.last = tv.Tv({"tvIp": self.ip}, log).power_state(timeout=0.5, raw=True)
         if self.last == "on":
             self.confirmed = True
             log("tv_on", dur_ms=self._ms())
@@ -142,7 +146,7 @@ class TvEvidence:
             return
         self._unknowns = 0
         if time.time() >= self._poke_at:
-            exlink("power_on", again=True)
+            tv_command("power_on", again=True)
             self._poke_at = time.time() + TV_POKE_S
 
 
@@ -164,7 +168,7 @@ def wait_ready(
         evidence.poll()
         # Retry once in case the TV missed the initial power command.
         if repoke_at and time.time() >= repoke_at:
-            exlink("power_on", again=True)
+            tv_command("power_on", again=True)
             repoke_at = None
         try:
             st = gamepc.status()
@@ -210,7 +214,7 @@ def wait_ready(
                     raise_if_cancelled()
                     evidence.poll()
                     time.sleep(1)
-                exlink("power_on", again=True)
+                tv_command("power_on", again=True)
                 if not dispatch_enter("enter_redispatched", attempts=5):
                     raise RuntimeError("Enter died and could not be re-triggered")
                 redispatches -= 1
@@ -265,15 +269,15 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
     try:
         tv_ip = config.current().get("tvIp")
         # Use an explicit value to distinguish an unreachable TV from no tvIp.
-        tv0 = tv.tv_power_state(tv_ip, timeout=0.5, raw=True) if tv_ip else None
+        tv0 = tv.Tv(config.current(), log).power_state(timeout=0.5, raw=True)
         log(
             "launch_start",
             appid=appid,
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
         )
-        exlink("power_on")
+        tv_command("power_on")
         # With power, not after READY: the set wakes on HDMI 4 (measured 2026-09-03).
-        exlink(config.current()["tvGamingCmd"])
+        tv_command(config.current()["tvGamingCmd"])
         # Only restore power on failure if this launch woke the TV.
         tv_woken = tv0 != "on"
         wol()
@@ -307,7 +311,7 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             raise RuntimeError("could not trigger Enter task")
         wait_ready(turn, evidence, dispatch_enter, ms)
         sessionlock.last_error_file().unlink(missing_ok=True)  # success supersedes it
-        exlink(config.current()["tvGamingCmd"])
+        tv_command(config.current()["tvGamingCmd"])
         if appid:
             try:
                 answer = gamepc.launch(appid)
