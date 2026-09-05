@@ -20,8 +20,9 @@ def system_instruction(cfg, interface="voice"):
     # A day with no zone resolves toward UTC and dates an evening brief
     # tomorrow. Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
+    # The clock too: without it the model has searched the web for the time.
     tail = [
-        f"Today is {time.strftime('%Y-%m-%d')}"
+        f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}"
         + (f" in {tz}." if tz else " local time.")
     ]
     if inputs:

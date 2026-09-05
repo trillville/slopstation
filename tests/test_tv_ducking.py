@@ -63,9 +63,27 @@ def ducker(steps=10, room=None, **kw):
         read=room.read,
         write=room.write,
         pause=lambda s: None,
+        clock=kw.pop("clock", lambda: 0.0),
         **kw,
     )
     return dk, room, log
+
+
+def test_a_hung_readback_cannot_hold_the_move_past_its_budget():
+    # Each read costs a full HTTP timeout: the deadline ends the move after
+    # the budget, not after 24 x the timeout.
+    now = [0.0]
+
+    def slow_read():
+        now[0] += tv_remote.TvVolume.HTTP_TIMEOUT_S
+        return None if now[0] > 0.5 else 14
+
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99), clock=lambda: now[0])
+    dk.read = slow_read
+    dk.duck()
+    assert now[0] <= tv_remote.TvVolume.POLLS * tv_remote.TvVolume.POLL_GAP_S + 2 * (
+        tv_remote.TvVolume.HTTP_TIMEOUT_S
+    ), f"{now[0]:.1f} s of reads for a 2.4 s budget"
 
 
 def test_gate_a_set_that_is_not_on_is_not_touched():

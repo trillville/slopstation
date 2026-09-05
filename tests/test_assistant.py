@@ -287,6 +287,7 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     assert "find_media" in si and "Never guess an id" in si
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
+    assert f"It is {time.strftime('%H:%M')}" in flat(si), "the clock, not only the date"
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
     assert "local time" in flat(si)

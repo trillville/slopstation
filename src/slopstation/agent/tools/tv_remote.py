@@ -77,24 +77,32 @@ class TvVolume:
     POLL_GAP_S = 0.1
     WRITES = 3  # bounded: a set that ignores every write gets three, not a storm
     RETRY_AFTER = 5  # polls of an unmoved readback before the write goes again
+    # The whole move must fit the poll budget in wall time too: a renderer
+    # that hangs rather than refuses would otherwise hold it for
+    # POLLS x the HTTP timeout. Requests answer in ~0.1 s when they answer.
+    HTTP_TIMEOUT_S = 1.0
 
-    def __init__(self, tv_ip, log, read=None, write=None, pause=None):
+    def __init__(self, tv_ip, log, read=None, write=None, pause=None, clock=None):
         self.log = log
-        self.read = read or (lambda: tv.tv_volume(tv_ip))
-        self.write = write or (lambda level: tv.tv_set_volume(tv_ip, level))
+        self.read = read or (lambda: tv.tv_volume(tv_ip, timeout=self.HTTP_TIMEOUT_S))
+        self.write = write or (
+            lambda level: tv.tv_set_volume(tv_ip, level, timeout=self.HTTP_TIMEOUT_S)
+        )
         self.pause = pause
+        self.clock = clock or time.monotonic
         self.last_writes = 0  # writes the last move() sent
+        self._deadline = 0.0
 
     def _settle(self, target, polls):
-        """Poll the readback up to `polls` times. Returns the level last read,
-        or None when no read answered."""
+        """Poll the readback up to `polls` times, or until the move's
+        deadline. Returns the level last read, or None when no read answered."""
         seen = None
         for i in range(polls):
             v = self.read()
             if v is not None:
                 seen = v
-            if v == target:
-                return v
+            if v == target or self.clock() >= self._deadline:
+                return seen
             if i + 1 < polls:
                 (self.pause or time.sleep)(self.POLL_GAP_S)
         return seen
@@ -109,6 +117,7 @@ class TvVolume:
         self.last_writes = 0
         if now == target:
             return now
+        self._deadline = self.clock() + self.POLLS * self.POLL_GAP_S
         seen = now
         left = self.POLLS
         for attempt in range(1, self.WRITES + 1):
@@ -123,7 +132,7 @@ class TvVolume:
             if v is None:
                 break  # readback gone: nothing more can be verified
             seen = v
-            if seen == target or left <= 0:
+            if seen == target or left <= 0 or self.clock() >= self._deadline:
                 break
         return seen
 
@@ -147,12 +156,13 @@ class TvDucker(TvVolume):
         read=None,
         write=None,
         pause=None,
+        clock=None,
     ):
         # to_pct (1-99) wins over steps: duck TO that percent of the pre-duck
         # level, so the drop scales with how loud the room is.
         self.steps = int(steps)
         self.to_pct = int(to_pct) if to_pct else None
-        super().__init__(tv_ip, log, read, write, pause)
+        super().__init__(tv_ip, log, read, write, pause, clock)
         self.dry_run = dry_run
         self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
         self.out = 0  # verified steps down, not yet restored
