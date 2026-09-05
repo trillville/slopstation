@@ -33,7 +33,7 @@ from slopstation.agent.speech.preroll import WakeAck
 from slopstation.agent.speech.session import Session
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import library
-from slopstation.agent.tools.tv_remote import TvDucker
+from slopstation.agent.tools.tv_remote import VOLUME_LOCK, TvDucker
 
 log = logbook.logger("voice")
 
@@ -159,7 +159,6 @@ def make_ducker(cfg, dry_run):
         if (duck_steps or duck_to_pct) and tv_ip
         else None
     )
-    duck_lock = threading.Lock()
 
     def duck(restore):
         """Off-thread so the session never waits on the TV; the lock keeps
@@ -168,7 +167,7 @@ def make_ducker(cfg, dry_run):
             return
 
         def run():
-            with duck_lock:
+            with VOLUME_LOCK:
                 try:
                     (ducker.unduck if restore else ducker.duck)()
                 except Exception as e:

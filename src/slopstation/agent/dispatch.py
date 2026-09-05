@@ -8,18 +8,25 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import time
-from collections import namedtuple
+from typing import NamedTuple
 
 from slopstation import events, gamepc, sessionlock, tv
 from slopstation.agent.tools import library
+from slopstation.agent.tools.tv_remote import VOLUME_LOCK, TvRemote, TvVolume
 
 COUCH = [sys.executable, "-m", "slopstation.couch"]
 
-Result = namedtuple("Result", "ok earcon detail")
+
+class Result(NamedTuple):
+    ok: bool
+    earcon: str
+    detail: str
+
 
 # ContextVars do not propagate changes between sibling pipeline tasks.
-Utterance = namedtuple("Utterance", "turn asked")
+class Utterance(NamedTuple):
+    turn: str | None
+    asked: str | None
 
 
 def _ok(detail: str, earcon: str = "ok") -> Result:
@@ -264,41 +271,57 @@ class Dispatch:
 
     # -- TV --------------------------------------------------------------------
 
-    # CAUTION: with audio on the eARC soundbar the TV acks
-    # every Ex-Link volume/mute frame and then refuses it on screen ("Not
-    # Available"), so these four verbs move nothing the couch can hear. The
-    # write path that works is remote keys over CEC (tv_remote.py).
-    def _vol_steps(self, name: str) -> Result:
-        step = int(self.voice["volumeStep"])
+    def _volume(self, level: int | None = None, steps: int = 0) -> Result:
         if self.dry_run:
-            return self._would(f"{name} x{step}")
-        for _ in range(step):
-            r = self._exlink(name, tv.EXLINK_FRAMES[name])
-            if not r.ok:
-                return r
-            time.sleep(0.05)
-        return _ok(f"{name} x{step}")
+            return self._would(
+                f"volume {level if level is not None else f'{steps:+d}'}"
+            )
+        ip = self.cfg.get("tvIp")
+        if not ip:
+            return _fail("volume control needs tvIp and TV pairing - see setup.md")
+        volume = TvVolume(ip, self.log)
+        try:
+            with VOLUME_LOCK:
+                now = volume.read()
+                if now is None:
+                    return _fail("couldn't read the soundbar volume - nothing changed")
+                asked = level if level is not None else now + steps
+                target = max(0, min(100, int(self.voice["volumeMax"]), asked))
+                if target != asked:
+                    self.log(
+                        "volume_clamped",
+                        asked=asked,
+                        set=target,
+                        max=self.voice["volumeMax"],
+                    )
+                final = volume.move(now, target)
+        except Exception as e:
+            return _fail(f"volume control failed ({e})")
+        if final != target:
+            return _fail(f"volume {target} wasn't verified (last read: {final})")
+        return _ok(f"volume is {final}")
 
     def volume_up(self) -> Result:
-        return self._vol_steps("vol_up")
+        return self._volume(steps=int(self.voice["volumeStep"]))
 
     def volume_down(self) -> Result:
-        return self._vol_steps("vol_down")
+        return self._volume(steps=-int(self.voice["volumeStep"]))
 
     def volume_set(self, level: int) -> Result:
-        """Absolute set, clamped to volumeMax so a misheard number cannot
-        blast the room."""
-        vmax = int(self.voice["volumeMax"])
-        clamped = max(0, min(vmax, int(level)))
-        if clamped != int(level):
-            self.log("volume_clamped", asked=int(level), set=clamped, max=vmax)
-        return self._exlink(f"vol_set {clamped}", tv.vol_set_frame(clamped))
+        return self._volume(level=int(level))
 
     def mute_toggle(self) -> Result:
-        """Blind toggle: the S90C has no discrete mute on/off and its status
-        query returns a canned echo, byte-identical across volume and mute
-        states, so no state is trackable."""
-        return self._exlink("mute_toggle", tv.EXLINK_FRAMES["mute_toggle"])
+        """Send a remote toggle; the TV does not expose reliable mute readback."""
+        if self.dry_run:
+            return self._would("remote mute toggle")
+        ip = self.cfg.get("tvIp")
+        if not ip:
+            return _fail("mute control needs tvIp and TV pairing - see setup.md")
+        try:
+            TvRemote(ip).press("mute", 1)
+        except Exception as e:
+            return _fail(f"the mute command failed ({e})")
+        return _ok("sent mute toggle")
 
     def switch_input(self, spoken_name: str) -> Result:
         """Config owns the spoken-name -> input map. The GAMING input means

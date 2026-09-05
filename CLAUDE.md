@@ -107,7 +107,7 @@ are in `docs/operations.md`. The rules that matter to a session:
   window, never an elevated one: an elevated lane cannot be seen or stopped
   from the window the deployer uses.
 - Gaming PC: `gaming-pc\Deploy.ps1` from a checkout on the PC, never a hand
-  copy; it ships the set atomically and stamps `build-id`, which `doctor.py`
+  copy; it verifies each copied file before stamping `build-id`, which `doctor.py`
   compares (`ssh gamepc version`) to catch skew. `gaming-pc\Install.ps1`,
   elevated, is the same for the scheduled tasks.
 - After either: `.venv\Scripts\slopstation-doctor` on the K15 should end

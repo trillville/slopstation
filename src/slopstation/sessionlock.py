@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 
-from slopstation import paths
+from slopstation import paths, statefile
 
 LOCK_STALE_S = 300  # a live session touches the lock every few seconds
 
@@ -44,91 +45,48 @@ def active(age_s: float | None = None) -> bool:
     return age_s is not None and age_s < LOCK_STALE_S
 
 
-def _recycle_stale(content: str) -> bool:
-    """Atomically replace a stale lock and return whether this call won."""
-    guard = lock_file().with_name("session.lock.recycle")
-    try:
-        if time.time() - guard.stat().st_mtime > 10:
-            guard.unlink(missing_ok=True)
-    except OSError:
-        pass
-    try:
-        f = open(guard, "x", encoding="utf-8")
-    except OSError:
-        return False  # someone else is recycling right now
-    swapped = False
-    try:
-        with f:
-            if active():
-                return False  # a racer took it while we opened the guard
-            f.write(content)
-        # Windows cannot replace an open file. Recheck ownership after a
-        # collision so a live lock is never replaced.
-        for _ in range(8):
-            try:
-                os.replace(guard, lock_file())
-                swapped = True
-                return True
-            except OSError:
-                if active():
-                    return False
-        return False
-    except OSError:
-        return False  # the guard write failed; nothing was touched
-    finally:
-        if not swapped:
-            try:
-                guard.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
 def acquire(content: str = "") -> bool:
-    """Acquire the session lock and store its owner note."""
-    lock_file().parent.mkdir(exist_ok=True)
-    denied = None
-    for attempt in (1, 2, 3):
-        try:
-            with open(lock_file(), "x", encoding="utf-8") as f:
-                f.write(content)
-            return True
-        except FileExistsError:
-            denied = None
-        except PermissionError as e:
-            # Windows may report a racing create as a sharing violation.
-            denied = e
-        if active() or attempt == 3:
-            break
-        if _recycle_stale(content):
-            return True
-    if denied is not None and not lock_file().exists():
-        raise denied
-    return False
-
-
-def touch() -> None:
-    """Freshen the mtime without rewriting the owner note."""
-    try:
-        os.utime(lock_file())
-    except OSError:
-        pass
-
-
-def adopt(content: str) -> None:
-    """Replace an existing lock's owner note and refresh its timestamp."""
-    try:
+    """Acquire an absent or stale session under the shared Windows byte lock."""
+    with statefile.guard(lock_file()):
+        if active():
+            return False
         lock_file().write_text(content, encoding="utf-8")
-    except OSError:
-        pass
+        return True
 
 
-def release() -> bool:
-    """Remove the lock if this process still owns it."""
+def _owned() -> bool:
+    """Called under guard; notes without a PID predate ownership tracking."""
     try:
         parts = lock_file().read_text(encoding="utf-8").split()
     except OSError:
-        return False  # already gone: nothing to release
-    if len(parts) >= 2 and parts[1] != str(os.getpid()):
         return False
-    lock_file().unlink(missing_ok=True)
-    return True
+    return len(parts) < 2 or parts[1] == str(os.getpid())
+
+
+def touch() -> bool:
+    """Freshen only our lock; False means the caller must stand down."""
+    with statefile.guard(lock_file()):
+        if not _owned():
+            return False
+        os.utime(lock_file())
+        return True
+
+
+def adopt(content: str, previous: str) -> bool:
+    """Take over an existing lock when resuming a session after boot."""
+    with statefile.guard(lock_file()):
+        if lock_file().read_text(encoding="utf-8") != previous:
+            return False
+        lock_file().write_text(content, encoding="utf-8")
+        return True
+
+
+def release(before: Callable[[], None] | None = None) -> bool:
+    """Finish our teardown before letting another process acquire the session."""
+    with statefile.guard(lock_file()):
+        if not _owned():
+            return False
+        if before is not None:
+            before()
+        lock_file().unlink(missing_ok=True)
+        return True

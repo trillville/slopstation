@@ -18,10 +18,13 @@ independent jobs run on the self-hosted runners:
   checkout copies the script set into `C:\CouchGaming`, stamps `build-id`,
   and runs `Doctor.ps1`. It never writes `config.psd1`.
 
-Both wait for a live session and fail rather than interrupt one. Neither rolls
-back. The gaming-PC job queues while that machine is asleep and runs when it
-wakes. Because the repository is public, `cd` deploys only commits pushed to
-`main`; pull-request code never reaches either runner.
+Both jobs wait for a live session to end. A hand run of `Deploy.ps1` refuses
+an active session unless given a wait budget. PC files are copied sequentially,
+not atomically: a failed copy stops deployment, and `build-id` is absent until
+all copies pass hash verification. Neither deployer rolls back. Run the deploy
+again to repair an interrupted copy. The gaming-PC job queues while asleep
+and runs when it wakes. Because the repository is public, `cd` deploys only
+commits pushed to `main`; pull-request code never reaches either runner.
 
 Hand deploys are the same two scripts:
 
@@ -76,8 +79,10 @@ deploy goes red with a diagnosis, and someone does the step by hand.
 
 ## Doctors
 
-Both doctors are read-only, print one row per check, and exit with their
-failure count.
+Both doctors print one row per check and exit with their failure count. The
+mini-PC doctor also emits a haptic chirp when the controller listener is idle.
+Voice and media warnings do not make its exit code nonzero; `0 fail` verifies
+the controller launch chain, not every optional feature.
 
 - Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, imports, the
   Ex-Link port, the controller, both lanes, SSH to the gaming PC and the

@@ -44,7 +44,7 @@ def guard(path: pathlib.Path):
 def write(path: pathlib.Path, obj: Any, indent: int = 1) -> None:
     """tmp + os.replace, so a reader never sees a partial file. The replace
     retries: Windows denies a rename onto a file another process holds open
-    (doctor reads operations.json) - see sessionlock._recycle_stale."""
+    (doctor reads operations.json). Callers serialize writers with guard()."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=indent), encoding="utf-8")
