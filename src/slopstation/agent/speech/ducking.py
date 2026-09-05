@@ -63,7 +63,7 @@ class TvDucker:
             self.out += v0 - target
             self.expect = target
             return
-        final = self.tv.set_volume(target).after
+        final = self.tv.set_volume(target, before=v0).after
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
@@ -102,7 +102,7 @@ class TvDucker:
             self.out, self.expect = 0, None
             return
         target = min(100, now + want)
-        final = self.tv.set_volume(target).after
+        final = self.tv.set_volume(target, before=now).after
         restored = max(0, final - now)
         self.out = max(0, self.out - restored)
         self.expect = final if self.out else None

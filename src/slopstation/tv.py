@@ -70,17 +70,20 @@ class Tv:
         with self.volume_transaction():
             return tv_volume(self.ip) if self.ip else None
 
-    def set_volume(self, level: int, maximum: int = 100) -> VolumeChange:
-        return self._change_volume(level, 0, maximum)
+    def set_volume(
+        self, level: int, maximum: int = 100, *, before: int | None = None
+    ) -> VolumeChange:
+        """Set a level; reuse before only within the same volume_transaction."""
+        return self._change_volume(level, 0, maximum, before)
 
     def adjust_volume(self, steps: int, maximum: int = 100) -> VolumeChange:
         return self._change_volume(None, steps, maximum)
 
-    def _change_volume(self, level, steps, maximum):
+    def _change_volume(self, level, steps, maximum, before=None):
         with self.volume_transaction():
             if not self.ip:
                 raise ValueError("volume control needs tvIp - see setup.md")
-            now = self.volume()
+            now = self.volume() if before is None else before
             if now is None:
                 raise RuntimeError(
                     "couldn't read the soundbar volume - nothing changed"
