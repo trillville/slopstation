@@ -14,7 +14,7 @@ NOT_EVENTS = {"event"}  # logbook's docstring example
 DYNAMIC = {
     "enter_dispatched": {"dur_ms"},
     "enter_redispatched": {"dur_ms"},
-    "exlink_send": {"again"},  # couch.exlink(**fields) passthrough
+    "exlink_send": {"again"},  # couch.tv_command(**fields) passthrough
 }
 PC_DYNAMIC = {
     f"{t}_start": set()

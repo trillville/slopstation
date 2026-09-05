@@ -144,7 +144,7 @@ class FakeSteam:
 class FakeDucker:
     made = []
 
-    def __init__(self, steps, tv_ip, log, dry_run=False, to_pct=None):
+    def __init__(self, steps, device, log, dry_run=False, to_pct=None):
         self.dry_run = dry_run
         FakeDucker.made.append(self)
 

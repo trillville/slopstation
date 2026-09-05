@@ -51,7 +51,7 @@ voice run as separate processes, so either can restart on its own.
 The TV is the one hard dependency on a brand. Power and input go over Ex-Link,
 Samsung's serial control protocol. Volume ducking uses UPnP over HTTP, and
 remote keys use Samsung's WebSocket API. Another make of TV means adapting
-`tv.py` and `agent/tools/tv_remote.py`.
+`tv.py`.
 
 The custom wake model in `src/slopstation/agent/models` was trained by the
 author on recordings from this room with
@@ -91,7 +91,7 @@ Then read `src/slopstation/couch.py` for the launch,
 | `src/slopstation/couch.py` | Start, watch, and end couch sessions |
 | `src/slopstation/chord_listener.py` | Listen for the controller chord |
 | `src/slopstation/text_client.py` | Send text commands from a terminal |
-| `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | TV, controller, and gaming-PC access |
+| `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Device interfaces for the TV, controller, and gaming PC |
 | `src/slopstation/agent/voice.py` | Run the voice service |
 | `src/slopstation/agent/speech/` | Wake word, audio, and fixed voice commands |
 | `src/slopstation/agent/llm/` | Assistant prompts and model providers |
