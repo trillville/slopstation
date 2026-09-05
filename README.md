@@ -37,24 +37,6 @@ flowchart LR
 A failed launch that woke the TV turns it off again. Controller input and
 voice run as separate processes, so either can restart on its own.
 
-## Engineering decisions
-
-- **Keep the controller path independent of speech and cloud services.** The
-  mini PC can listen while the gaming PC sleeps; a voice-service restart does
-  not restart the controller listener.
-- **Separate receipt from readiness.** SSH accepting `enter` starts a task.
-  Its matching `READY` marker identifies the launch that completed setup.
-  Manual tasks can return a timestamp, explicitly logged as unverified.
-- **Keep ownership local and explicit.** A session lock carries a request ID
-  and process ID. A Windows byte lock serializes acquisition, heartbeat, and
-  teardown so a successor cannot start while the old owner restores the TV.
-- **Use each device's working control path.** TV power and input use serial;
-  soundbar volume uses remote keys with readback. An acknowledgment alone
-  cannot establish that the room changed.
-- **Make failures inspectable.** The same request ID crosses Python, SSH,
-  PowerShell markers, and logs. [Operations](docs/operations.md) describes
-  recovery and the limits of the deployment checks.
-
 ## Reference hardware
 
 | Component | Used here |
