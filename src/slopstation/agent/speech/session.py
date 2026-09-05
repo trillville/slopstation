@@ -88,6 +88,7 @@ class Session:
         steam=None,
         media=None,
         on_end_session=None,
+        room=None,
     ):
         self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
         self.dry_run = dry_run
@@ -96,6 +97,7 @@ class Session:
         self.operations, self.ack, self.steam = operations, ack, steam
         self.media = media
         self.on_end_session = on_end_session  # the room ducker's restore
+        self.room = room  # voice.RoomState, or None when ducking is off
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None  # the LLM lane's, once built
@@ -187,6 +189,8 @@ class Session:
             assistant_enabled=assistant_live,
             wake_word=wake_phrase.split()[-1],  # "jarvis" - the strip anchor
             ack=self.ack,  # wake chime, if still unplayed
+            # The duck runs off-thread; read it per turn, not at build.
+            loud=(lambda: self.room.loud) if self.room is not None else None,
         )
 
         feeder = PrerollFeeder(log)

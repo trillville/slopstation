@@ -159,10 +159,13 @@ class TvDucker(TvVolume):
         self.expect = None  # the readback our last op left behind
 
     def duck(self):
+        """Returns True when the room is at the ducked level (landed, or
+        still down from an unpaid restore), False when a duck was wanted and
+        did not land (the room is loud), None when the set is not on."""
         state = self.probe()
         if state != "on":
             self.log("tv_duck_skipped", state=state or "unknown", debt=self.out)
-            return
+            return None
         # Owed a duck already: the last close could not reach the set, so the
         # bar is still that far below the baseline - as far as a fresh duck
         # would take it. Ducking again lands on the 0-clamp (silence);
@@ -172,11 +175,11 @@ class TvDucker(TvVolume):
             self.log(
                 "tv_duck_skipped", state="on", reason="already_ducked", debt=self.out
             )
-            return
+            return True
         v0 = self.read()
         if v0 is None:
             self.log("tv_duck_skipped", state="on", reason="no_readback", debt=self.out)
-            return
+            return False
         if self.to_pct:
             target = min(v0, round(v0 * self.to_pct / 100))
             asked = v0 - target  # scales with v0; never clamps below 0
@@ -187,7 +190,7 @@ class TvDucker(TvVolume):
             self.log("dry_run_would", action=f"duck vol {v0}->{target}")
             self.out += v0 - target
             self.expect = target
-            return
+            return True
         final = self.move(v0, target)
         landed = max(0, v0 - final)
         self.out += landed
@@ -200,6 +203,7 @@ class TvDucker(TvVolume):
             ok=final == target,
             writes=self.last_writes,
         )
+        return final == target
 
     def unduck(self):
         """Restore the ledger: this session's duck plus any earlier debt."""

@@ -582,6 +582,25 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     assert {"install_error", "download_status_error"} <= set(log.events())
 
 
+def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
+    results = []
+    schema = assistant.function_schemas(
+        {"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log
+    )[0]
+
+    class Params:
+        arguments = {}
+        pipeline_worker = None
+
+        async def result_callback(self, out, *, properties=None):
+            results.append((out, properties))
+
+    asyncio.run(schema.handler(Params()))
+    out, props = results[0]
+    assert out["ok"] and props is not None and props.run_llm is False, results
+    assert props.on_context_updated is None, "nothing is spoken to a closing mic"
+
+
 def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
     spoken = []
     receipt_result = []

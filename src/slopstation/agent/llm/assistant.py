@@ -226,10 +226,11 @@ def tool_impls(
                 "close - nothing is listening in the first place",
             }
         on_stop_listening()
+        # end_turn: no second model turn, so nothing is spoken after this.
         return {
             "ok": True,
-            "detail": "going quiet once you've said your "
-            "goodbye - the wake word is what reopens the mic",
+            "detail": "the mic is closed - the wake word is what reopens it",
+            "end_turn": True,
         }
 
     def get_now_playing(args):
@@ -588,7 +589,15 @@ def function_schemas(impls, log):
             acknowledgment = (
                 out.get("acknowledgment") if isinstance(out, dict) else None
             )
-            if acknowledgment:
+            end_turn = isinstance(out, dict) and bool(out.get("end_turn"))
+            if end_turn:
+                # The session is ending on this call (stop_listening): a
+                # second model turn would only be a goodbye spoken to a
+                # closing mic.
+                await params.result_callback(
+                    out, properties=FunctionCallResultProperties(run_llm=False)
+                )
+            elif acknowledgment:
 
                 async def speak():
                     await params.pipeline_worker.queue_frame(

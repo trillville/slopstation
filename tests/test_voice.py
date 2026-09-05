@@ -267,6 +267,7 @@ def run(monkeypatch, stubbed):
                 steam=None,
                 media=None,
                 on_end_session=None,
+                room=None,
             ):
                 calls.append(
                     dict(
@@ -277,6 +278,7 @@ def run(monkeypatch, stubbed):
                         capture=capture,
                         matcher=matcher,
                         on_end_session=on_end_session,
+                        room=room,
                     )
                 )
 
@@ -331,6 +333,7 @@ def test_full_lanes_run_one_dry_session(run):
     # dry_run reaches the room side effects and the session
     assert calls and calls[0]["dry_run"] is True
     assert FakeDucker.made and FakeDucker.made[0].dry_run is True
+    assert calls[0]["room"] is not None and calls[0]["room"].loud is False
     store = FakeOperationStore.made[0]
     assert not FakeAnnouncer.made, "a dry run must not construct a live announcer"
     assert store.on_terminal is None and store.on_notification is None

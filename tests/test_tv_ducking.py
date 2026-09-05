@@ -70,7 +70,7 @@ def ducker(steps=10, room=None, **kw):
 
 def test_gate_a_set_that_is_not_on_is_not_touched():
     dk, room, log = ducker(room=FakeRoom(power="standby"))
-    dk.duck()
+    assert dk.duck() is None, "a set that is off leaves the room quiet"
     assert room.writes == [] and log.events() == ["tv_duck_skipped"], log.records
     dk.unduck()
     assert room.writes == [] and log.events() == ["tv_duck_skipped"]
@@ -82,7 +82,7 @@ def test_gate_a_set_that_is_not_on_is_not_touched():
 
 def test_no_readback_means_no_duck():
     dk, room, log = ducker(room=FakeRoom(readback_dead=True))
-    dk.duck()
+    assert dk.duck() is False, "no readback: the room may be loud"
     assert (
         room.writes == [] and log.find("tv_duck_skipped")[0]["reason"] == "no_readback"
     )
@@ -99,7 +99,7 @@ def test_readback_dying_after_the_write_stops_the_retries():
 
 def test_happy_pair_down_to_target_and_back_to_the_exact_start():
     dk, room, log = ducker(steps=10)  # vol 14
-    dk.duck()
+    assert dk.duck() is True
     assert room.vol == 4 and dk.out == 10
     d0 = log.find("tv_ducked")[0]
     assert d0["steps"] == 10 and d0["asked"] == 10 and d0["ok"] is True, d0
@@ -144,7 +144,7 @@ def test_a_write_the_set_accepted_but_ignored_is_sent_again():
 
 def test_a_set_that_ignores_every_write_gets_three_not_a_storm():
     dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99))
-    dk.duck()
+    assert dk.duck() is False, "a duck that did not land leaves the room loud"
     assert room.vol == 14 and dk.out == 0
     assert room.writes == [4, 4, 4], room.writes
     d0 = log.find("tv_ducked")[0]
@@ -184,7 +184,7 @@ def test_debt_when_readback_dies_at_close_a_later_close_restores_exactly():
     assert log.find("tv_unducked")[0]["reason"] == "no_readback"
     assert log.find("tv_duck_deficit")[0]["steps"] == 10
     room.set(readback_dead=False)
-    dk.duck()  # already down 10: left alone, debt unchanged
+    assert dk.duck() is True  # already down 10: left alone, debt unchanged
     assert dk.out == 10 and room.vol == 4, (dk.out, room.vol)
     assert log.find("tv_duck_skipped")[-1]["reason"] == "already_ducked"
     dk.unduck()
