@@ -6,6 +6,7 @@
 # ``-WaitMinutes`` waits for active sessions. This script, Install.ps1 and
 # local runtime files are not copied, and config.psd1 is never written.
 param([string]$Dest = 'C:\CouchGaming', [int]$WaitMinutes = 0)
+$ErrorActionPreference = 'Stop'
 
 $scripts = @(
     'CouchGaming.common.ps1', 'Dispatch.ps1', 'Doctor.ps1',
@@ -64,7 +65,8 @@ if ($missing) {
 
 if (Test-SessionLive) {
     if ($WaitMinutes -le 0) {
-        Write-Host 'WARNING: a session is live - copying anyway (pass -WaitMinutes to park instead)'
+        Write-Host 'DEFERRED: a session is live - nothing copied (pass -WaitMinutes to wait)'
+        exit 1
     } else {
         Write-CgEvent 'deploy_deferred' @{ reason = 'session_live'; budget_s = $WaitMinutes * 60 } 'warn'
         Write-Host "a session is live - waiting up to $WaitMinutes min"
@@ -80,8 +82,18 @@ if (Test-SessionLive) {
 
 Write-CgEvent 'deploy_start' @{ dest = $Dest }
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+# A failed or interrupted copy must not retain a previous successful build ID.
+$buildId = Join-Path $Dest 'build-id'
+if (Test-Path $buildId) { Remove-Item $buildId -Force }
 foreach ($f in $scripts) {
-    Copy-Item (Join-Path $PSScriptRoot $f) (Join-Path $Dest $f) -Force
+    $source = Join-Path $PSScriptRoot $f
+    $target = Join-Path $Dest $f
+    Copy-Item $source $target -Force
+    $expected = [Convert]::ToBase64String([IO.File]::ReadAllBytes($source))
+    $actual = [Convert]::ToBase64String([IO.File]::ReadAllBytes($target))
+    if ($actual -cne $expected) {
+        throw "Deployed file differs from source: $f"
+    }
     Write-Host "  $f"
 }
 
@@ -97,7 +109,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 }
 $stamp = if ($rev) { "$rev $(Get-Date -Format yyyy-MM-dd)" }
          else      { "nogit $(Get-Date -Format yyyy-MM-ddTHH:mm)" }
-Set-Content (Join-Path $Dest 'build-id') $stamp
+Set-Content $buildId $stamp
 Write-Host "build-id: $stamp"
 
 # Runtime pieces that cannot come from the repo - warn, never touch.

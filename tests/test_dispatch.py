@@ -1,7 +1,6 @@
 """Test command dispatch with side effects mocked."""
 
 import subprocess
-import time
 
 import pytest
 
@@ -9,8 +8,10 @@ from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, tv
 from slopstation.agent import dispatch as dp
 from slopstation.agent.tools import library
+from slopstation.agent.tools.tv_remote import TvRemote
 
 CFG = {
+    "tvIp": "192.0.2.1",
     "tvComPort": "COMX",
     "tvGamingCmd": "hdmi4",
     "voice": {
@@ -83,19 +84,20 @@ def test_lock_arbiter():
 
 
 def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
-    monkeypatch.setattr(time, "sleep", lambda s: None)  # the inter-step pause
+    readings = iter([20, 23, 23, 40, 40, 25])
+    keys = []
+    monkeypatch.setattr(tv, "tv_volume", lambda ip: next(readings))
+    monkeypatch.setattr(TvRemote, "press", lambda self, key, n: keys.append((key, n)))
     d, _ = harness()
     assert d.volume_up().ok
-    assert sent == [tv.EXLINK_FRAMES["vol_up"]] * 3, sent  # volumeStep=3
+    assert keys.pop() == ("up", 3)
 
-    sent.clear()
     r = d.volume_set(80)  # clamps to volumeMax 40
-    assert r.ok and sent == [tv.vol_set_frame(40)], sent
-    sent.clear()
-    assert d.volume_set(25).ok and sent == [tv.vol_set_frame(25)]
+    assert r.ok and keys.pop() == ("up", 17)
+    assert d.volume_set(25).ok and keys.pop() == ("down", 15)
 
-    sent.clear()
-    assert d.mute_toggle().ok and sent == [tv.EXLINK_FRAMES["mute_toggle"]]
+    assert d.mute_toggle().ok and keys.pop() == ("mute", 1)
+    assert not sent
 
 
 def test_a_serial_send_that_raises_is_a_fail_earcon(monkeypatch):
@@ -105,7 +107,7 @@ def test_a_serial_send_that_raises_is_a_fail_earcon(monkeypatch):
 
     monkeypatch.setattr(tv, "exlink_send_hex", always_down)
     d, _ = harness()
-    r = d.mute_toggle()
+    r = d.switch_input("apple tv")
     assert not r.ok and r.earcon == "fail"
 
 

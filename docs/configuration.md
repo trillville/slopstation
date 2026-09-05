@@ -37,7 +37,7 @@ group is for.
 | Key | Meaning | Without it |
 |---|---|---|
 | `steamMachineName` | which signed-in Steam client is the gaming PC | needed only with more than one PC on the account |
-| `tvIp` | the TV's address, best with a DHCP reservation | no volume ducking, and a launch cannot read whether the TV came on |
+| `tvIp` | the TV's address, best with a DHCP reservation | no volume commands or ducking, and a launch cannot read whether the TV came on |
 | `sentryDsn` | the voice agent's errors, traces and check-ins | nothing leaves the machine; log shipping is the collector's own config |
 | `media` | the media stack; `enabled` gates every media tool | media verbs off. Keys are described in `media/README.md` |
 | `textInterface`, `remoteInterface` | HTTP chat and the MCP endpoint | off. Each needs its token in `secrets.json` |
@@ -57,6 +57,12 @@ agent does not start. Every other voice key has a default in code, so a
 | `assistantProvider`, `assistantModelAnthropic`, `assistantModelOpenai`, `assistantReasoningEffort`, `assistantWebSearch`, `assistantSearchMaxUses` | the assistant model and its tools |
 | `inputs`, `navTargets` | spoken names for TV inputs and for Big Picture destinations |
 | `volumeStep`, `volumeMax`, `earconGain`, `location`, `followUpAfterAnnounce`, `steamDataTools` | volume verbs, earcon level, the assistant's time zone and locale, and whether an announcement opens a follow-up window |
+
+Volume changes use WebSocket remote keys and verify the resulting soundbar
+level through readback. `volumeMax` caps both absolute and relative commands.
+Mute sends a remote toggle; the TV provides no reliable mute-state readback.
+Ex-Link remains the power and input path: its volume acknowledgments do not
+mean the soundbar changed.
 
 ## secrets.json
 

@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import Callable
 
-from slopstation import config, events, gamepc, logbook, sessionlock, tv
+from slopstation import config, events, gamepc, logbook, sessionlock, statefile, tv
 
 PORT_WAIT_S = 90  # PC power-on/resume until sshd answers
 ENTER_ATTEMPTS = 60  # ~1/s; also covers waiting out logon after a cold boot
@@ -33,8 +33,14 @@ class Cancelled(BaseException):
         super().__init__(by)
 
 
+class Superseded(BaseException):
+    """The session belongs to another process; stop without sending Exit."""
+
+
 def raise_if_cancelled() -> None:
     """Consume a cancellation marker and stop the current launch."""
+    if not sessionlock.touch():
+        raise Superseded
     try:
         by = sessionlock.cancel_file().read_text().strip()
     except OSError:
@@ -62,10 +68,20 @@ def restore_tv() -> None:
     exlink("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
 
 
-def abort_teardown(tv_woken: bool) -> None:
-    """Release the session lock and restore a TV this launch woke."""
-    if sessionlock.release() and tv_woken:
-        restore_tv()
+def finish_session(restore: bool, exit_reason: str | None = None) -> bool:
+    """Teardown only while we own the session, then let the next launch acquire it."""
+
+    def teardown():
+        if exit_reason:
+            try:
+                if gamepc.exit() == "OK":
+                    log("exit_dispatched", reason=exit_reason)
+            except Exception:
+                pass
+        if restore:
+            restore_tv()
+
+    return sessionlock.release(teardown)
 
 
 def wol() -> None:
@@ -138,14 +154,12 @@ def wait_ready(
 ) -> None:
     """Wait for the matching READY marker and retry a stopped Enter task."""
     end = time.time() + READY_WAIT_S
-    ready = False
     foreign_seen = None
     redispatches = ENTER_REDISPATCH
     idle_seen = 0
     settle_at = time.time() + ENTER_SETTLE_S
     repoke_at: float | None = time.time() + WAKE_RETRY_S
     while time.time() < end:
-        sessionlock.touch()
         raise_if_cancelled()
         evidence.poll()
         # Retry once in case the TV missed the initial power command.
@@ -156,8 +170,7 @@ def wait_ready(
             st = gamepc.status()
             if st == turn:
                 log("host_ready", status=st, dur_ms=ms(), verified=True)
-                ready = True
-                break
+                return
             if st != "NOTREADY":
                 if events.valid_turn(st):
                     # A marker for another launch does not make this one ready.
@@ -167,8 +180,7 @@ def wait_ready(
                 else:
                     # Accept legacy timestamp markers, but mark them unverified.
                     log("host_ready", status=st, dur_ms=ms(), verified=False)
-                    ready = True
-                    break
+                    return
         except Exception as e:
             log.warn("status_poll_failed", err=str(e))
             time.sleep(1)
@@ -195,7 +207,6 @@ def wait_ready(
                             "- the set is refusing the wake, not "
                             "missing the frame"
                         )
-                    sessionlock.touch()
                     raise_if_cancelled()
                     evidence.poll()
                     time.sleep(1)
@@ -209,8 +220,7 @@ def wait_ready(
         else:
             idle_seen = 0
         time.sleep(1)
-    if not ready:
-        raise RuntimeError("host never reported READY")
+    raise RuntimeError("host never reported READY")
 
 
 def start(appid: str | None = None, turn: str | None = None) -> int:
@@ -278,7 +288,6 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             nonlocal enter_sent
             refused = set()
             for _ in range(attempts):
-                sessionlock.touch()
                 raise_if_cancelled()
                 try:
                     answer = gamepc.enter()
@@ -314,20 +323,16 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
             sessionlock.last_error_file().write_text(str(e))
         except OSError:
             pass
-        abort_teardown(tv_woken)
+        finish_session(tv_woken)
         return 1
     except BaseException as e:
         # Cancellation and Ctrl-C still need to release the session lock.
         by = {"cancelled_by": e.by} if isinstance(e, Cancelled) and e.by else {}
         log.warn("launch_aborted", err=type(e).__name__, dur_ms=ms(), **by)
-        if isinstance(e, Cancelled) and enter_sent:
-            # Stop an Enter task that started after the original cancel request.
-            try:
-                gamepc.exit()
-                log("exit_dispatched", reason="cancel_after_enter")
-            except Exception:
-                pass
-        abort_teardown(tv_woken)
+        finish_session(
+            tv_woken,
+            "cancel_after_enter" if isinstance(e, Cancelled) and enter_sent else None,
+        )
         return 1
     return 0
 
@@ -338,7 +343,9 @@ def watch(expected: str | None = None) -> None:
     died_by_fails = False
     while True:
         time.sleep(WATCH_POLL_S)
-        sessionlock.touch()
+        if not sessionlock.touch():
+            log.warn("session_ended", reason="superseded")
+            return
         try:
             st = gamepc.status()
             fails = 0
@@ -354,15 +361,10 @@ def watch(expected: str | None = None) -> None:
                 log.warn("session_ended", reason="ssh_fails", fails=fails)
                 died_by_fails = True
                 break
-    if died_by_fails:
-        # Ask the PC to release the controller after losing SSH contact.
-        try:
-            if gamepc.exit() == "OK":
-                log("exit_dispatched", reason="release_puck_after_ssh_fails")
-        except Exception:
-            pass
-    restore_tv()
-    if not sessionlock.release():
+
+    if not finish_session(
+        True, "release_puck_after_ssh_fails" if died_by_fails else None
+    ):
         log.warn("lock_kept", reason="owned_by_successor")
     log("session_idle")
 
@@ -370,7 +372,9 @@ def watch(expected: str | None = None) -> None:
 def reconcile() -> int:
     """Resume monitoring a live session or clear an abandoned lock at startup."""
     logbook.rotate()
-    if sessionlock.age() is None:
+    try:
+        previous = sessionlock.lock_file().read_text(encoding="utf-8")
+    except FileNotFoundError:
         return 0
     events.context(turn=events.new_turn())
     log("reconcile_found")
@@ -381,15 +385,23 @@ def reconcile() -> int:
             answered = True
             if st != "NOTREADY":
                 log("reconcile_resumed")
-                sessionlock.adopt(f"{events.current().get('turn')} {os.getpid()}")
-                watch(expected=st if events.valid_turn(st) else None)
+                if sessionlock.adopt(
+                    f"{events.current().get('turn')} {os.getpid()}", previous
+                ):
+                    watch(expected=st if events.valid_turn(st) else None)
                 return 0
             break  # definitive NOTREADY - session is dead
         except Exception:
             time.sleep(2)
     log.warn("reconcile_cleared", reason="dead_session" if answered else "unreachable")
     # The abandoned lock belongs to another process, so release() cannot own it.
-    sessionlock.lock_file().unlink(missing_ok=True)
+    # Acquisition and stale-lock cleanup must not race each other.
+    with statefile.guard(sessionlock.lock_file()):
+        try:
+            if sessionlock.lock_file().read_text(encoding="utf-8") == previous:
+                sessionlock.lock_file().unlink()
+        except FileNotFoundError:
+            pass
     return 0
 
 

@@ -53,7 +53,8 @@ replacing `tv.py` and `agent/tools/tv_remote.py`.
    .\Start-Slopstation.bat
    ```
 
-8. For volume ducking, pair with the TV and accept its on-screen prompt:
+8. For volume commands and ducking, set `tvIp`, pair with the TV, and accept
+   its on-screen prompt:
 
    ```powershell
    .venv\Scripts\python -m slopstation.agent.tools.tv_remote pair

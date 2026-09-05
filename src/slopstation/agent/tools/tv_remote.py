@@ -10,11 +10,14 @@ CLI (lane=manual):
 """
 
 import sys
+import threading
 import time
 
 from slopstation import config, events, paths, tv
 
-KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP"}
+KEYS = {"down": "KEY_VOLDOWN", "up": "KEY_VOLUP", "mute": "KEY_MUTE"}
+# Voice ducking and text commands share the same soundbar and readback.
+VOLUME_LOCK = threading.Lock()
 
 
 class TvRemote:
@@ -67,7 +70,51 @@ class TvRemote:
         ws.close()
 
 
-class TvDucker:
+class TvVolume:
+    """Move soundbar volume with remote keys and verify it through readback."""
+
+    TOPUPS = 2
+    POLLS = 6
+    POLL_GAP_S = 0.4
+
+    def __init__(self, tv_ip, log, read=None, press=None, pause=None):
+        self.log = log
+        self.read = read or (lambda: tv.tv_volume(tv_ip))
+        self.press = press or (lambda d, n: TvRemote(tv_ip).press(d, n))
+        self.pause = pause
+
+    def _settle(self, target):
+        """Poll the readback toward target; the relay lands in ~1 s."""
+        for _ in range(self.POLLS):
+            v = self.read()
+            if v == target:
+                return v
+            (self.pause or time.sleep)(self.POLL_GAP_S)
+        return self.read()
+
+    def move(self, now, target):
+        """Press toward target, verify by readback, top up what got lost.
+        Returns the last level actually SEEN - `now` if nothing verified.
+        Rounds are bounded so a dead relay gets bursts, not a storm."""
+        best = now
+        for _ in range(1 + self.TOPUPS):
+            need = abs(target - best)
+            if not need:
+                break
+            try:
+                self.press("up" if target > best else "down", need)
+            except Exception as e:
+                self.log.warn("tv_duck_failed", stage="press", err=str(e))
+            final = self._settle(target)
+            if final is None:
+                break
+            if final == best:
+                break  # keys verifiably bought nothing: stop
+            best = final
+        return best
+
+
+class TvDucker(TvVolume):
     """Drop the room's volume for a voice session; restore it on close. A
     talker on the couch reaches the mic 10-20 dB below TV dialogue.
 
@@ -75,10 +122,6 @@ class TvDucker:
     ground truth. The ledger holds only VERIFIED movement, so a shortfall
     carries as debt to the next close and a human moving the remote
     mid-session is detected. It dies with the process."""
-
-    TOPUPS = 2  # extra key rounds when the readback comes up short
-    POLLS = 6  # readback polls per settle, POLL_GAP_S apart
-    POLL_GAP_S = 0.4
 
     def __init__(
         self,
@@ -96,44 +139,11 @@ class TvDucker:
         # level, so the drop scales with how loud the room is.
         self.steps = int(steps)
         self.to_pct = int(to_pct) if to_pct else None
-        self.log = log
+        super().__init__(tv_ip, log, read, press, pause)
         self.dry_run = dry_run
         self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
-        self.read = read or (lambda: tv.tv_volume(tv_ip))
-        self.press = press or (lambda d, n: TvRemote(tv_ip).press(d, n))
-        self.pause = pause  # None: time.sleep, looked up at call time
         self.out = 0  # verified steps down, not yet restored
         self.expect = None  # the readback our last op left behind
-
-    def _settle(self, target):
-        """Poll the readback toward target; the relay lands in ~1 s."""
-        for _ in range(self.POLLS):
-            v = self.read()
-            if v == target:
-                return v
-            (self.pause or time.sleep)(self.POLL_GAP_S)
-        return self.read()
-
-    def _drive(self, direction, now, target):
-        """Press toward target, verify by readback, top up what got lost.
-        Returns the last level actually SEEN - `now` if nothing verified.
-        Rounds are bounded so a dead relay gets bursts, not a storm."""
-        best = now
-        for _ in range(1 + self.TOPUPS):
-            need = abs(target - best)
-            if not need:
-                break
-            try:
-                self.press(direction, need)
-            except Exception as e:
-                self.log.warn("tv_duck_failed", stage="press", err=str(e))
-            final = self._settle(target)
-            if final is None:
-                break
-            if final == best:
-                break  # keys verifiably bought nothing: stop
-            best = final
-        return best
 
     def duck(self):
         state = self.probe()
@@ -165,7 +175,7 @@ class TvDucker:
             self.out += v0 - target
             self.expect = target
             return
-        final = self._drive("down", v0, target)
+        final = self.move(v0, target)
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
@@ -201,7 +211,7 @@ class TvDucker:
             self.out, self.expect = 0, None
             return
         target = min(100, now + want)
-        final = self._drive("up", now, target)
+        final = self.move(now, target)
         restored = max(0, final - now)
         self.out = max(0, self.out - restored)
         self.expect = final if self.out else None
@@ -230,7 +240,7 @@ def main(argv):
             events.emit("manual", "tvremote_fail", events.ERROR, cmd="pair", err=str(e))
             print(f"pairing FAILED - {e}")
             return 1
-    if argv and argv[0] in KEYS:
+    if argv and argv[0] in ("up", "down"):
         n = int(argv[1]) if len(argv) > 1 else 1
         before = tv.tv_volume(ip)
         try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 
 from slopstation import config, events
 
@@ -62,7 +63,16 @@ def exit(turn: str | None = None) -> str:
 
 
 def status() -> str:
-    return ssh("status")
+    answer = ssh("status")
+    if answer != "NOTREADY" and not events.valid_turn(answer):
+        # Manual Enter tasks and older deployments write an ISO timestamp.
+        try:
+            if "T" not in answer:
+                raise ValueError
+            datetime.fromisoformat(answer)
+        except ValueError:
+            raise ValueError(f"invalid gaming-PC status: {answer!r}") from None
+    return answer
 
 
 def enterstate() -> str:
