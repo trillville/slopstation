@@ -290,14 +290,14 @@ class Dispatch:
         return self._volume(level=int(level))
 
     def mute_toggle(self) -> Result:
-        """Send a remote toggle; the TV does not expose reliable mute readback."""
+        """Toggle from the observed mute state and verify the result."""
         if self.dry_run:
-            return self._would("remote mute toggle")
+            return self._would("mute toggle")
         try:
-            self.tv.toggle_mute()
+            muted = self.tv.toggle_mute()
         except Exception as e:
             return _fail(f"the mute command failed ({e})")
-        return _ok("sent mute toggle")
+        return _ok("muted" if muted else "unmuted")
 
     def switch_input(self, spoken_name: str) -> Result:
         """Config owns the spoken-name -> input map. The GAMING input means
