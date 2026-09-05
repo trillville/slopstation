@@ -88,6 +88,7 @@ class Session:
         steam=None,
         media=None,
         on_end_session=None,
+        room=None,
     ):
         self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
         self.dry_run = dry_run
@@ -96,6 +97,7 @@ class Session:
         self.operations, self.ack, self.steam = operations, ack, steam
         self.media = media
         self.on_end_session = on_end_session  # the room ducker's restore
+        self.room = room  # voice.RoomState, or None when ducking is off
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None  # the LLM lane's, once built
@@ -123,6 +125,7 @@ class Session:
         from slopstation.agent.llm.assistant import PROVIDER_KEY
         from slopstation.agent.speech.audio import wake_phrase as _wake_phrase
         from slopstation.agent.speech.grammar_gate import GrammarGate
+        from slopstation.agent.speech.level import RoomLevel
         from slopstation.agent.speech.preroll import PrerollFeeder
 
         cfg, secrets, voice = self.cfg, self.secrets, self.voice
@@ -163,9 +166,18 @@ class Session:
                 ),
                 numerals=True,
                 keyterm=terms,
+                # Flux's cap on a turn after speech stops; unset is its own 5 s.
+                eot_timeout_ms=(
+                    int(voice["eotTimeoutMs"]) if voice.get("eotTimeoutMs") else None
+                ),
             ),
         )
 
+        # Floor 0 (a config from before the key) measures and never mutes.
+        loud = (lambda: self.room.loud) if self.room is not None else None
+        level = RoomLevel(
+            floor_db=float(voice.get("chatterFloorDb", 0) or 0), log=log, loud=loud
+        )
         dispatcher = Dispatch(
             cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
         )
@@ -187,9 +199,13 @@ class Session:
             assistant_enabled=assistant_live,
             wake_word=wake_phrase.split()[-1],  # "jarvis" - the strip anchor
             ack=self.ack,  # wake chime, if still unplayed
+            # The duck runs off-thread; read it per turn, not at build.
+            loud=loud,
+            level=level,
         )
 
         feeder = PrerollFeeder(log)
+        feeder.on_replayed = level.go_live
         # Flux only PROPOSES turn edges since pipecat 1.8, and its stop
         # proposal is a queued ControlFrame - resolved downstream of a gate
         # whose queue blocks on dispatch, a stale stop can land after the next
@@ -198,7 +214,7 @@ class Session:
         turns = UserTurnProcessor(
             user_turn_strategies=ExternalUserTurnStrategies(enable_interruptions=True)
         )
-        stages = [transport.input(), feeder, stt, turns, gate]
+        stages = [transport.input(), feeder, level, stt, turns, gate]
         if assistant_live:
             stages += self._assistant_stages(transport, dispatcher, gate)
         else:

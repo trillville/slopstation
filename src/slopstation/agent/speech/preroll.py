@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 from pipecat.frames.frames import Frame, InputAudioRawFrame, StartFrame
@@ -78,6 +78,11 @@ class WakeCapture:
             fn, self._on_quiet = self._on_quiet, None
             threading.Thread(target=fn, daemon=True).start()
 
+    @property
+    def peak(self) -> float:
+        """Loudest hop so far (RMS), wake phrase included."""
+        return self._peak
+
     def disarm_deadline(self) -> None:
         """Disable the chime deadline after handing audio to the session."""
         self._chime_deadline = False
@@ -127,6 +132,8 @@ class PrerollFeeder(FrameProcessor):
         super().__init__()
         self._log = log
         self.capture = None  # WakeCapture, stopped on StartFrame
+        # Called once the replay is fed.
+        self.on_replayed: Callable[[], None] | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -138,3 +145,5 @@ class PrerollFeeder(FrameProcessor):
                 self._log("preroll_fed", audio_s=round(len(pcm) / BYTES_PER_S, 1))
                 for f in _frames(pcm):
                     await self.push_frame(f)
+        if isinstance(frame, StartFrame) and self.on_replayed is not None:
+            self.on_replayed()

@@ -287,6 +287,7 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     assert "find_media" in si and "Never guess an id" in si
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
+    assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
     assert "local time" in flat(si)
@@ -580,6 +581,25 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     dl = rimpls["list_games"]({"source": "downloading"})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())
+
+
+def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
+    results = []
+    schema = assistant.function_schemas(
+        {"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log
+    )[0]
+
+    class Params:
+        arguments = {}
+        pipeline_worker = None
+
+        async def result_callback(self, out, *, properties=None):
+            results.append((out, properties))
+
+    asyncio.run(schema.handler(Params()))
+    out, props = results[0]
+    assert out["ok"] and props is not None and props.run_llm is False, results
+    assert props.on_context_updated is None, "nothing is spoken to a closing mic"
 
 
 def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):

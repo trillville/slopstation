@@ -9,13 +9,15 @@ from slopstation.agent.tools import tv_remote
 @dataclasses.dataclass
 class FakeRoom:
     """TV+bar as the ducker sees them: power state, volume reads and writes -
-    with scriptable incomplete writes, readback death, and a hand on the remote. A
+    with scriptable short writes (drop), writes the set accepts and ignores
+    (ignore), a raising write, readback death, and a hand on the remote. A
     scenario sets the knobs up front by keyword and turns them mid-session
     through set()."""
 
     power: str | None = "on"
     vol: int = 14
     drop: int = 0  # steps a write fails to move
+    ignore: int = 0  # writes the set accepts (HTTP 200) and does not apply
     readback_dead: bool = False
     write_error: Exception | None = None
     writes: list = dataclasses.field(default_factory=list)  # requested absolute levels
@@ -38,6 +40,9 @@ class FakeRoom:
         n = abs(target - self.vol)
         if self.write_error:
             raise self.write_error
+        if self.ignore:
+            self.ignore -= 1
+            return
         landed = max(0, n - self.drop)
         self.drop -= min(n, self.drop)
         if target < self.vol:
@@ -59,14 +64,50 @@ def ducker(steps=10, room=None, **kw):
         read=room.read,
         write=room.write,
         pause=lambda s: None,
+        clock=kw.pop("clock", lambda: 0.0),
         **kw,
     )
     return dk, room, log
 
 
+def test_a_hung_readback_cannot_hold_the_move_past_its_budget():
+    # Every read costs a full HTTP timeout: the deadline, not 24 x it, ends the move.
+    now = [0.0]
+    reads = [0]
+
+    def slow_read():
+        now[0] += tv_remote.TvVolume.HTTP_TIMEOUT_S
+        reads[0] += 1
+        return 14
+
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99), clock=lambda: now[0])
+    dk.read = slow_read
+    dk.duck()
+    d0 = log.find("tv_ducked")[0]
+    assert d0["steps"] == 0 and d0["ok"] is False, d0
+    budget = tv_remote.TvVolume.POLLS * tv_remote.TvVolume.POLL_GAP_S
+    assert reads[0] <= budget / tv_remote.TvVolume.HTTP_TIMEOUT_S + 2, reads
+    assert now[0] <= budget + 2 * tv_remote.TvVolume.HTTP_TIMEOUT_S, now
+
+
+def test_the_retry_waits_half_a_second_and_the_budget_is_24_polls():
+    pauses = []
+    room = FakeRoom(ignore=1)
+    dk, room, log = ducker(steps=10, room=room)
+    dk.pause = pauses.append
+    dk.duck()
+    # RETRY_AFTER polls after the first write, the second lands on its first poll.
+    assert len(pauses) == tv_remote.TvVolume.RETRY_AFTER - 1, pauses
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99))
+    pauses.clear()
+    dk.pause = pauses.append
+    dk.duck()
+    assert len(pauses) == tv_remote.TvVolume.POLLS - 3, "three settles, 24 polls"
+
+
 def test_gate_a_set_that_is_not_on_is_not_touched():
     dk, room, log = ducker(room=FakeRoom(power="standby"))
-    dk.duck()
+    assert dk.duck() is None, "a set that is off leaves the room quiet"
     assert room.writes == [] and log.events() == ["tv_duck_skipped"], log.records
     dk.unduck()
     assert room.writes == [] and log.events() == ["tv_duck_skipped"]
@@ -78,22 +119,32 @@ def test_gate_a_set_that_is_not_on_is_not_touched():
 
 def test_no_readback_means_no_duck():
     dk, room, log = ducker(room=FakeRoom(readback_dead=True))
-    dk.duck()
+    assert dk.duck() is None, "no readback says nothing about the room"
     assert (
         room.writes == [] and log.find("tv_duck_skipped")[0]["reason"] == "no_readback"
     )
 
 
+def test_readback_dying_after_the_write_stops_the_retries():
+    # Nothing more can be verified, so the remaining writes are not sent.
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99))
+    dk.read = lambda: None if room.writes else room.vol  # dies after the write
+    dk.duck()
+    assert room.writes == [4] and dk.out == 0, room.writes
+    assert log.find("tv_ducked")[0]["writes"] == 1
+
+
 def test_happy_pair_down_to_target_and_back_to_the_exact_start():
     dk, room, log = ducker(steps=10)  # vol 14
-    dk.duck()
+    assert dk.duck() is True
     assert room.vol == 4 and dk.out == 10
     d0 = log.find("tv_ducked")[0]
     assert d0["steps"] == 10 and d0["asked"] == 10 and d0["ok"] is True, d0
+    assert d0["writes"] == 1, "the good path is one write"
     dk.unduck()
     assert room.vol == 14 and dk.out == 0
     u0 = log.find("tv_unducked")[0]
-    assert u0["steps"] == 10 and u0["ok"] is True, u0
+    assert u0["steps"] == 10 and u0["ok"] is True and u0["writes"] == 1, u0
 
 
 def test_clamp_at_zero_ok_is_intent_achieved_and_the_delta_stays_honest():
@@ -106,14 +157,58 @@ def test_clamp_at_zero_ok_is_intent_achieved_and_the_delta_stays_honest():
     assert room.vol == 6 and dk.out == 0
 
 
-def test_incomplete_write_restores_only_verified_movement():
+def test_a_write_that_moved_but_stopped_short_is_left_alone():
+    # Movement is verified, and possibly a hand on the remote: no write over it.
     dk, room, log = ducker(steps=10, room=FakeRoom(drop=3))
     dk.duck()
     assert room.vol == 7 and dk.out == 7
     assert room.writes == [4], room.writes
-    assert log.find("tv_ducked")[0]["ok"] is False
+    d0 = log.find("tv_ducked")[0]
+    assert d0["ok"] is False and d0["writes"] == 1, d0
     dk.unduck()
     assert room.vol == 14 and dk.out == 0
+
+
+def test_a_hand_on_the_remote_during_the_verify_is_not_overwritten():
+    # Restore 4->14 ignored; a hand turns it to 8 meanwhile. No 14 over their 8.
+    dk, room, log = ducker(steps=10)
+    dk.duck()
+    assert room.vol == 4
+    room.set(ignore=1)
+    polls = [0]
+
+    def read():
+        polls[0] += 1
+        if polls[0] == 2:
+            room.set(vol=8)
+        return room.vol
+
+    dk.read = read
+    dk.unduck()
+    assert room.vol == 8, "their level survived"
+    assert room.writes == [4, 14], room.writes
+
+
+def test_a_write_the_set_accepted_but_ignored_is_sent_again():
+    # The set answers 200 and does nothing; the same write again lands.
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=1))
+    dk.duck()
+    assert room.vol == 4 and dk.out == 10
+    assert room.writes == [4, 4], room.writes
+    d0 = log.find("tv_ducked")[0]
+    assert d0["steps"] == 10 and d0["ok"] is True and d0["writes"] == 2, d0
+    assert not log.find("tv_duck_failed"), "an accepted write is not a failure"
+
+
+def test_a_set_that_ignores_every_write_gets_three_not_a_storm():
+    dk, room, log = ducker(steps=10, room=FakeRoom(ignore=99))
+    assert dk.duck() is False, "a duck that did not land leaves the room loud"
+    assert room.vol == 14 and dk.out == 0
+    assert room.writes == [4, 4, 4], room.writes
+    d0 = log.find("tv_ducked")[0]
+    assert d0["steps"] == 0 and d0["ok"] is False and d0["writes"] == 3, d0
+    dk.unduck()  # ledger empty: no-op
+    assert [e for e in log.events() if e == "tv_unducked"] == []
 
 
 def test_write_failure_verifies_nothing_and_owes_nothing():
@@ -121,8 +216,8 @@ def test_write_failure_verifies_nothing_and_owes_nothing():
     dk.duck()
     assert room.vol == 14 and dk.out == 0
     d0 = log.find("tv_ducked")[0]
-    assert d0["steps"] == 0 and d0["ok"] is False, d0
-    assert log.find("tv_duck_failed"), log.records
+    assert d0["steps"] == 0 and d0["ok"] is False and d0["writes"] == 3, d0
+    assert len(log.find("tv_duck_failed")) == 3, log.records
     dk.unduck()  # ledger empty: no-op
     assert [e for e in log.events() if e == "tv_unducked"] == []
 
@@ -147,7 +242,7 @@ def test_debt_when_readback_dies_at_close_a_later_close_restores_exactly():
     assert log.find("tv_unducked")[0]["reason"] == "no_readback"
     assert log.find("tv_duck_deficit")[0]["steps"] == 10
     room.set(readback_dead=False)
-    dk.duck()  # already down 10: left alone, debt unchanged
+    assert dk.duck() is True  # already down 10: left alone, debt unchanged
     assert dk.out == 10 and room.vol == 4, (dk.out, room.vol)
     assert log.find("tv_duck_skipped")[-1]["reason"] == "already_ducked"
     dk.unduck()

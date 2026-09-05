@@ -10,7 +10,6 @@ import yaml
 from hassil import Intents, SlotList, TextSlotList, recognize
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
-    BotStoppedSpeakingFrame,
     EndWorkerFrame,
     ErrorFrame,
     Frame,
@@ -40,37 +39,131 @@ _PUNCT = ",.!?"
 # "alfred"), so the bar sits above 80.
 _WHOLE_ANCHOR = 90
 
+# Carry nothing around a closer: "okay thanks", "yeah, never mind".
+FILLERS = GREETINGS | {
+    "alright",
+    "all",
+    "right",
+    "yeah",
+    "yep",
+    "cool",
+    "great",
+    "well",
+    "so",
+    "um",
+    "uh",
+    "please",
+}
+CLOSER_RATIO = 85  # "go way" ~92 against "go away"
+CLOSER_MAX_WORDS = 5  # longer is content
+
+
+def _anchor_len(toks: list[str], i: int, anchor: str) -> int:
+    """Tokens the wake anchor occupies at toks[i]: 1, 2 for a split anchor
+    ("al fred"), 0 for none."""
+    if i < len(toks) and fuzz.ratio(toks[i].strip(_PUNCT).lower(), anchor) >= 80:
+        return 1
+    if (
+        i + 1 < len(toks)
+        and fuzz.ratio(toks[i + 1].strip(_PUNCT).lower(), anchor) < _WHOLE_ANCHOR
+        and fuzz.ratio(
+            (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(), anchor
+        )
+        >= 80
+    ):
+        return 2
+    return 0
+
 
 def strip_wake(text: str, anchor: str = "jarvis") -> str:
-    """Remove a leading wake phrase ("hey jarvis", "jarvis", mishears like
-    "jervis") from a transcript; the pre-roll buffer includes it. Fuzzy on the
-    anchor word only, >=80 (mishears like "jervis" ~83; real words like
-    "travis" ~67); greeting optional; repeated, so a stuttered "hey jarvis hey
-    jarvis volume up" still cleans up. Leading only - a mid-sentence "jarvis"
-    is content.
+    """Remove the wake phrase ("hey jarvis", "jarvis", mishears like "jervis")
+    from a transcript; the pre-roll buffer includes it. Fuzzy on the anchor
+    word only, >=80 (mishears like "jervis" ~83; real words like "travis"
+    ~67); greeting optional at the front; repeated, so a stuttered "hey jarvis
+    hey jarvis volume up" still cleans up.
+
+    A GREETED anchor anywhere is where the user started addressing the room
+    (the pre-roll can hold a sentence in progress: "what I mean. Hey, Alfred.
+    What time is it?"); everything through the last one with content after
+    it goes. A bare mid-sentence "jarvis" is content.
 
     STT can split the anchor across two tokens ("hey alfred" -> "Hey, all.
-    Fred,") and neither half clears 80 alone, so the two leading
-    tokens are also tried JOINED - "allfred" ~92 against "alfred", non-wake
-    pairs under the bar ("all for" ~67, "play jarvis" ~75), guarded by
-    _WHOLE_ANCHOR."""
+    Fred,") and neither half clears 80 alone, so the two tokens are also
+    tried JOINED - "allfred" ~92 against "alfred", non-wake pairs under the
+    bar ("all for" ~67, "play jarvis" ~75), guarded by _WHOLE_ANCHOR."""
+    toks = text.split()
+    cut = 0
+    for i in range(len(toks) - 1):
+        if toks[i].strip(_PUNCT).lower() in GREETINGS:
+            n = _anchor_len(toks, i + 1, anchor)
+            if n and i + 1 + n < len(toks):  # a trailing one is content
+                cut = i + 1 + n
+    if cut:
+        text = " ".join(toks[cut:])
     while True:
         toks = text.split()
         i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
-        if i < len(toks) and fuzz.ratio(toks[i].strip(_PUNCT).lower(), anchor) >= 80:
-            text = " ".join(toks[i + 1 :])
-            continue
-        if (
-            i + 1 < len(toks)
-            and fuzz.ratio(toks[i + 1].strip(_PUNCT).lower(), anchor) < _WHOLE_ANCHOR
-            and fuzz.ratio(
-                (toks[i].strip(_PUNCT) + toks[i + 1].strip(_PUNCT)).lower(), anchor
-            )
-            >= 80
-        ):
-            text = " ".join(toks[i + 2 :])
-            continue
-        return text
+        n = _anchor_len(toks, i, anchor)
+        if not n:
+            return text
+        text = " ".join(toks[i + n :])
+
+
+# One-word closers match exactly, plus these: fuzzy would take "tanks".
+MISHEARS = {"thank": "thanks"}
+
+
+def closer_in(
+    text: str, closers: list[str], anchor: str | None = None, loud: bool = False
+) -> str | None:
+    """The closing phrase ("thanks", "go away") ending a short utterance, or
+    None. The grammar wants the whole utterance; a closer rarely arrives
+    clean ("Alright. Thanks.", "thanks alfred"), so fillers and the anchor
+    are ignored around it. "cancel the download" and "what's the weather,
+    thanks" are content and stay.
+
+    `loud` (the duck did not land): the TV finishes the user's sentences
+    ("The Alfred go away. Only hands exactly."), so a closer right after
+    the anchor counts whatever follows. Only there: in a quiet room
+    "actually alfred cancel the download" is a command."""
+    words = [w for w in (t.strip(_PUNCT).lower() for t in text.split()) if w]
+    if not words:
+        return None
+    longest = max(len(c.split()) for c in closers)
+
+    def match(window: list[str]) -> str | None:
+        phrase = " ".join(window)
+        if len(window) == 1:
+            if phrase in closers:
+                return phrase
+            return MISHEARS.get(phrase)
+        for c in closers:
+            if fuzz.ratio(phrase, c) >= CLOSER_RATIO:
+                return c
+        return None
+
+    def is_anchor(w: str) -> bool:
+        return anchor is not None and fuzz.ratio(w, anchor) >= 80
+
+    if loud and anchor:
+        for i, w in enumerate(words[:-1]):
+            if is_anchor(w):
+                for k in range(1, longest + 1):
+                    hit = match(words[i + 1 : i + 1 + k])
+                    if hit:
+                        return hit
+    core = [w for w in words if w not in FILLERS and not is_anchor(w)]
+    if 0 < len(core) <= CLOSER_MAX_WORDS:
+        for k in range(1, min(longest, len(core)) + 1):
+            hit = match(core[-k:])
+            if not hit:
+                continue
+            # The rest is a word ("no thanks") or another closer ("never
+            # mind, cancel"), not a question.
+            rest = core[:-k]
+            if len(rest) <= 1 or closer_in(" ".join(rest), closers):
+                return hit
+    return None
 
 
 def stt_confidence(frame) -> float | None:
@@ -89,6 +182,17 @@ def stt_confidence(frame) -> float | None:
 
 def load_intents() -> Intents:
     return Intents.from_dict(yaml.safe_load(GRAMMAR.read_text(encoding="utf-8")))
+
+
+def load_closers() -> list[str]:
+    """ExitSession's sentences, reused literally by closer_in - so that intent
+    stays plain phrases, no template syntax."""
+    data = yaml.safe_load(GRAMMAR.read_text(encoding="utf-8"))
+    return [
+        s
+        for block in data["intents"]["ExitSession"]["data"]
+        for s in block["sentences"]
+    ]
 
 
 class GrammarMatcher:
@@ -144,6 +248,9 @@ class GrammarGate(FrameProcessor):
         wake_word=None,
         ack=None,
         resolve_collection=None,
+        loud=None,
+        closers=None,
+        level=None,
     ):
         super().__init__()
         self.matcher = matcher
@@ -154,23 +261,23 @@ class GrammarGate(FrameProcessor):
         self.assistant_enabled = assistant_enabled
         self.wake_word = wake_word  # strip anchor ("jarvis"); None = off
         self.ack = ack  # preroll.WakeAck; None = no chime
+        # callable, True while the duck did not land: every turn then needs
+        # the wake prefix, or it is the TV. None = never strict.
+        self.loud = loud
+        self.closers = closers if closers is not None else load_closers()
+        self.level = level  # level.RoomLevel; None = unmeasured
         self._speaking = 0.0  # ts of the open user turn; 0 = closed
         self._dispatching = 0  # blocking calls in flight
         self._assistant_pending = 0.0  # ts of a transcript handed to the LLM
-        self._stop_after_reply = False  # stop_listening tool armed one
+        self._stop_pending = False  # stop_listening asked; ends on the next frame
+        self._ended = False
 
     def request_stop(self) -> None:
-        """End the session after the current assistant reply."""
-        self._stop_after_reply = True
+        """End the session now. Called off-thread by stop_listening; the end
+        frame goes on the next frame through the gate (audio passes through,
+        so within a hop). The sleep chime is the goodbye."""
+        self._stop_pending = True
         self.log("session_stop_requested")
-
-    async def _stop_if_armed(self, reason):
-        """End the session if stop_listening armed one. Two different frames
-        can prove the goodbye is over."""
-        if not self._stop_after_reply:
-            return
-        self._stop_after_reply = False
-        await self.push_frame(EndWorkerFrame(reason=reason))
 
     def is_busy(self) -> bool:
         """True while the user is mid-turn, a dispatch is running, or an
@@ -295,6 +402,9 @@ class GrammarGate(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+        if self._stop_pending and not self._ended:
+            self._ended = True
+            await self.push_frame(EndWorkerFrame(reason="stop listening"))
         # The turn resolver emits these speaking frames.
         if isinstance(frame, UserStartedSpeakingFrame):
             self._speaking = time.time()
@@ -303,23 +413,37 @@ class GrammarGate(FrameProcessor):
             await self._ack_wake()  # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._assistant_pending = 0.0  # answer arrived; idle clock owns it now
-        elif isinstance(frame, BotStoppedSpeakingFrame):
-            # Wait for the goodbye to finish before ending the session.
-            await self._stop_if_armed("stop listening")
         elif isinstance(frame, ErrorFrame):
             # Copy Pipecat service errors into couch.log.
             self.log.error("pipeline_error", err=str(frame.error))
             if self._assistant_pending:
                 self._assistant_pending = 0.0
                 await self._earcon("fail")
-            # Do not wait for a goodbye after the response failed.
-            await self._stop_if_armed("stop listening (answer failed)")
         if (
             isinstance(frame, TranscriptionFrame)
             and direction == FrameDirection.DOWNSTREAM
         ):
             text = frame.text.strip()
             conf = stt_confidence(frame)
+            # The room around this turn. Not for an empty final: that would
+            # rob the next turn of its peak.
+            room = (
+                self.level.snapshot()
+                if self.level is not None and text
+                else {"level_db": None, "quiet_ms": None}
+            )
+            if text and self._stop_pending:
+                # The mic is closing.
+                self.log(
+                    "turn_dropped",
+                    text=text,
+                    reason="after_stop",
+                    confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
+                )
+                return
+            addressed = False  # the transcript carried the wake prefix
             if text:
                 # Associate downstream events with this utterance.
                 turn = events.new_turn()
@@ -337,20 +461,64 @@ class GrammarGate(FrameProcessor):
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": swallow it, no earcon, no LLM turn.
                     self.log(
-                        "stt_final", text=text, outcome="wake_only", confidence=conf
+                        "stt_final",
+                        text=text,
+                        outcome="wake_only",
+                        confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
                     )
                     return
                 if stripped != text:
+                    addressed = True
                     self.log("wake_prefix_stripped", text=text, stripped=stripped)
                     frame.text = stripped  # both lanes see the command only
                     text = stripped
+            if text and not addressed and self.loud is not None and self.loud():
+                # Loud room: speech that did not address us is the TV.
+                self.log(
+                    "turn_dropped",
+                    text=text,
+                    reason="unaddressed",
+                    confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
+                )
+                return
             if text:
                 # The utterance snapshot (see dispatch.Utterance). `asked` is
                 # post-strip, so a queued job stores the command itself.
                 self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
+                if m is None:
+                    closer = closer_in(
+                        text,
+                        self.closers,
+                        self.wake_word,
+                        loud=self.loud is not None and self.loud(),
+                    )
+                    if closer:
+                        m = ("ExitSession", {})
+                        self.log(
+                            "gate_match",
+                            text=text,
+                            intent="ExitSession",
+                            closer=closer,
+                            confidence=conf,
+                            level_db=room["level_db"],
+                            quiet_ms=room["quiet_ms"],
+                        )
+                        await self._run_intent(*m)
+                        return
                 if m is not None:
-                    self.log("gate_match", text=text, intent=m[0], confidence=conf)
+                    self.log(
+                        "gate_match",
+                        text=text,
+                        intent=m[0],
+                        confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
+                    )
                     if await self._run_intent(*m):
                         return  # swallowed: the gate handled it
                 if not self.assistant_enabled:
@@ -360,6 +528,8 @@ class GrammarGate(FrameProcessor):
                         fallback="none",
                         reason="assistant_disabled",
                         confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
                     )
                     await self._earcon("fail")
                     return
@@ -372,6 +542,8 @@ class GrammarGate(FrameProcessor):
                     fallback="assistant",
                     reason="no_grammar_match",
                     confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
                 )
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

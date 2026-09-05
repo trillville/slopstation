@@ -9,6 +9,7 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     EndWorkerFrame,
     ErrorFrame,
+    TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
@@ -18,6 +19,8 @@ from helpers import CapturingLog
 from slopstation.agent.speech.grammar_gate import (
     GrammarGate,
     GrammarMatcher,
+    closer_in,
+    load_closers,
     strip_wake,
     stt_confidence,
 )
@@ -160,6 +163,43 @@ STRIP_ALFRED = [
     ("Hey, all. Fred, take me home.", "take me home."),  # joined "allfred" ~92
     ("alfred play hades", "play hades"),
     ("all for one", "all for one"),  # joined "allfor" ~67
+    # The pre-roll caught a sentence in progress.
+    ("what I mean. Hey, Alfred. What time is it?", "What time is it?"),
+    # A loud room carried two attempts: the last one counts.
+    (
+        "that's who you are. Hey, Alfred. What's up. Hey, Alfred. What time is it?",
+        "What time is it?",
+    ),
+    ("tell my alfred story", "tell my alfred story"),  # bare mid-anchor: content
+    # A greeted anchor with nothing after it is not where a command starts.
+    ("hey alfred play hades hey alfred", "play hades hey alfred"),
+    ("is that okay alfred", "is that okay alfred"),
+    ("what  time is it", "what  time is it"),  # nothing cut, nothing touched
+]
+
+# closer_in: (text, expected closer or None), anchor "alfred", quiet room.
+CLOSERS = [
+    ("Alright. Thanks.", "thanks"),  # fillers around it
+    ("Thank.", "thanks"),  # the one listed mishear
+    ("thanks alfred", "thanks"),  # the anchor is not content either
+    ("never mind, cancel", "cancel"),
+    ("yeah leave me alone please", "leave me alone"),
+    ("Okay. Thanks. Go ahead.", None),  # the tail is not a closer
+    ("what time is it, thanks", None),  # long: wants its answer first
+    ("what's the weather alfred thanks", None),  # same, anchor or not
+    ("cancel the download", None),  # a closer at the head is content
+    ("actually alfred cancel the download", None),  # still a command
+    ("world of tanks", None),  # a title is an answer, not "thanks"
+    ("The Alfred go away. Only hands exactly.", None),  # quiet room: content
+    ("hey alfred what time is it", None),
+    ("", None),
+]
+
+# A loud room: the TV finishes the sentence, so a closer after the anchor counts.
+CLOSERS_LOUD = [
+    ("The Alfred go away. Only hands exactly.", "go away"),
+    ("actually alfred cancel the download", "cancel"),  # the price of it
+    ("what time is it, thanks", None),
 ]
 
 # The two-token join, both directions: (text, anchor, want). The second group
@@ -246,6 +286,21 @@ def test_strip_wake_two_token_join(text, anchor, want):
     assert strip_wake(text, anchor) == want
 
 
+@pytest.mark.parametrize("text,want", CLOSERS, ids=[t[0] or "empty" for t in CLOSERS])
+def test_closer_in_finds_a_closing_phrase_with_company(text, want):
+    assert closer_in(text, load_closers(), "alfred") == want
+
+
+@pytest.mark.parametrize("text,want", CLOSERS_LOUD, ids=[t[0] for t in CLOSERS_LOUD])
+def test_a_loud_room_takes_a_closer_right_after_the_anchor(text, want):
+    assert closer_in(text, load_closers(), "alfred", loud=True) == want
+
+
+def test_exit_sentences_stay_plain_for_closer_matching():
+    for c in load_closers():
+        assert not any(ch in c for ch in "[]{}|"), c
+
+
 @dataclasses.dataclass
 class Frame:
     result: object
@@ -280,18 +335,14 @@ def test_is_busy_defers_idle_until_the_assistant_turn_expires(matcher, monkeypat
     assert not g.is_busy(), "expired assistant turn must not pin the session"
 
 
-# The stop_listening tool ARMS the gate; the session ends only once the
-# goodbye is spoken, since the tool runs before the model has said a word.
+# stop_listening runs off-thread; the gate ends the session on the next
+# frame through it, and nothing said after the ask gets through.
 
 
-def test_an_armed_stop_ends_the_session_once_the_goodbye_is_spoken(drive):
-    ended, glog, _ = drive([BotStoppedSpeakingFrame()], arm=True)
-    assert len(ended) == 1, (
-        f"an armed stop must end the session exactly once, got {len(ended)}"
-    )
-    assert "session_stop_requested" in glog.events(), (
-        "arming the stop must log session_stop_requested"
-    )
+def test_a_stop_ends_the_session_on_the_next_frame(drive):
+    ended, glog, _ = drive([BotStoppedSpeakingFrame(), ErrorFrame(error="x")], arm=True)
+    assert len(ended) == 1, f"a stop must end the session exactly once, got {ended}"
+    assert "session_stop_requested" in glog.events()
 
 
 def test_an_ordinary_answer_does_not_end_the_session(drive):
@@ -299,10 +350,70 @@ def test_an_ordinary_answer_does_not_end_the_session(drive):
     assert not ended, "finishing an ordinary answer must not end the session"
 
 
-def test_a_failed_answer_still_honours_an_armed_stop(drive):
-    # The goodbye can die between the model and the speaker; the ask stands.
-    ended, _, _ = drive([ErrorFrame(error="synthetic tts failure")], arm=True)
-    assert len(ended) == 1, "a failed answer must still honour an armed stop"
+class FakeDispatch:
+    def begin_utterance(self, turn, text):
+        pass
+
+
+@pytest.fixture
+def hear(matcher, monkeypatch):
+    """Feed transcripts to a gate with an "alfred" wake word; returns
+    (EndWorkerFrames pushed, log, gate)."""
+
+    def _hear(texts, loud=None, stop_first=False):
+        glog = CapturingLog("voice")
+        gate = GrammarGate(matcher, FakeDispatch(), glog, wake_word="alfred", loud=loud)
+        pushed = []
+
+        async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
+            pushed.append(frame)
+
+        monkeypatch.setattr(gate, "push_frame", fake_push)
+
+        async def run():
+            if stop_first:
+                gate.request_stop()
+            for t in texts:
+                await gate.process_frame(
+                    TranscriptionFrame(t, "u", "0"), FrameDirection.DOWNSTREAM
+                )
+
+        asyncio.run(run())
+        return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog, gate
+
+    return _hear
+
+
+def test_a_transcript_after_a_stop_is_dropped(hear):
+    ended, glog, _ = hear(["What time is it?"], stop_first=True)
+    assert len(ended) == 1
+    assert glog.find("turn_dropped")[0]["reason"] == "after_stop"
+    assert not glog.find("gate_miss"), "a dropped transcript reached the assistant"
+
+
+def test_a_closer_with_company_ends_the_session(hear):
+    ended, glog, _ = hear(["Alright. Thanks."])
+    assert len(ended) == 1, "a trailing closer must end the session"
+    hit = glog.find("gate_match")[0]
+    assert hit["intent"] == "ExitSession" and hit["closer"] == "thanks", hit
+    assert "session_exit_phrase" in glog.events()
+
+
+def test_a_loud_room_needs_the_wake_prefix_on_every_turn(hear):
+    ended, glog, _ = hear(
+        ["Hey Alfred, what time is it?", "enough to blow up the whole planet."],
+        loud=lambda: True,
+    )
+    assert not ended
+    heard = [r["text"] for r in glog.find("gate_miss")]
+    assert heard == ["what time is it?"], heard
+    dropped = glog.find("turn_dropped")
+    assert len(dropped) == 1 and dropped[0]["reason"] == "unaddressed", dropped
+
+
+def test_a_quiet_room_hears_every_turn(hear):
+    _, glog, _ = hear(["What time is it?"], loud=lambda: False)
+    assert [r["text"] for r in glog.find("gate_miss")] == ["What time is it?"]
 
 
 def test_turn_edges_defer_idle_claim_the_chime_and_expire(drive, monkeypatch):

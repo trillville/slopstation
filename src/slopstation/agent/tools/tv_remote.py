@@ -73,34 +73,67 @@ class TvRemote:
 class TvVolume:
     """Set soundbar volume directly and verify it through readback."""
 
-    POLLS = 24
+    POLLS = 24  # readback budget per move, 0.1 s apart
     POLL_GAP_S = 0.1
+    WRITES = 3  # bounded: a set that ignores every write gets three, not a storm
+    RETRY_AFTER = 5  # polls of an unmoved readback before the write goes again
+    # A move fits the poll budget in wall time too, or a renderer that hangs
+    # holds it for POLLS x this. Requests answer in ~0.1 s when they answer.
+    HTTP_TIMEOUT_S = 1.0
 
-    def __init__(self, tv_ip, log, read=None, write=None, pause=None):
+    def __init__(self, tv_ip, log, read=None, write=None, pause=None, clock=None):
         self.log = log
-        self.read = read or (lambda: tv.tv_volume(tv_ip))
-        self.write = write or (lambda level: tv.tv_set_volume(tv_ip, level))
+        self.read = read or (lambda: tv.tv_volume(tv_ip, timeout=self.HTTP_TIMEOUT_S))
+        self.write = write or (
+            lambda level: tv.tv_set_volume(tv_ip, level, timeout=self.HTTP_TIMEOUT_S)
+        )
         self.pause = pause
+        self.clock = clock or time.monotonic
+        self.last_writes = 0  # writes the last move() sent
+        self._deadline = 0.0
 
-    def _settle(self, target):
-        """Allow delayed readback without sending more volume changes."""
-        for _ in range(self.POLLS):
+    def _settle(self, target, polls):
+        """Poll the readback up to `polls` times or the deadline. The level
+        last read; None when no read answered."""
+        seen = None
+        for i in range(polls):
             v = self.read()
-            if v == target:
-                return v
-            (self.pause or time.sleep)(self.POLL_GAP_S)
-        return self.read()
+            if v is not None:
+                seen = v
+            if v == target or self.clock() >= self._deadline:
+                return seen
+            if i + 1 < polls:
+                (self.pause or time.sleep)(self.POLL_GAP_S)
+        return seen
 
     def move(self, now, target):
-        """Write once, then verify even if the HTTP reply was lost."""
+        """Write, verify by readback, and write again only while the level
+        has not moved from `now`: the set can answer a SetVolume 200 and not
+        apply it, and a lost reply can still have landed. A level that moved
+        but stopped short is left alone - a hand on the remote, and an
+        absolute write over it takes their level away. Returns the last
+        level SEEN - `now` if nothing verified."""
+        self.last_writes = 0
         if now == target:
             return now
-        try:
-            self.write(target)
-        except Exception as e:
-            self.log.warn("tv_duck_failed", stage="write", err=str(e))
-        final = self._settle(target)
-        return now if final is None else final
+        self._deadline = self.clock() + self.POLLS * self.POLL_GAP_S
+        seen = now
+        left = self.POLLS
+        for attempt in range(1, self.WRITES + 1):
+            try:
+                self.write(target)
+            except Exception as e:
+                self.log.warn("tv_duck_failed", stage="write", err=str(e))
+            self.last_writes = attempt
+            polls = left if attempt == self.WRITES else min(left, self.RETRY_AFTER)
+            left -= polls
+            v = self._settle(target, polls)
+            if v is None:
+                break  # readback gone: nothing more can be verified
+            seen = v
+            if seen != now or left <= 0 or self.clock() >= self._deadline:
+                break  # landed, moved (a hand may be on it), or out of time
+        return seen
 
 
 class TvDucker(TvVolume):
@@ -122,22 +155,26 @@ class TvDucker(TvVolume):
         read=None,
         write=None,
         pause=None,
+        clock=None,
     ):
         # to_pct (1-99) wins over steps: duck TO that percent of the pre-duck
         # level, so the drop scales with how loud the room is.
         self.steps = int(steps)
         self.to_pct = int(to_pct) if to_pct else None
-        super().__init__(tv_ip, log, read, write, pause)
+        super().__init__(tv_ip, log, read, write, pause, clock)
         self.dry_run = dry_run
         self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
         self.out = 0  # verified steps down, not yet restored
         self.expect = None  # the readback our last op left behind
 
     def duck(self):
+        """True: the room is at the ducked level (landed, or still down from
+        an unpaid restore). False: tried and did not land, so the room is
+        loud. None: unknown - the set is off or its readback is silent."""
         state = self.probe()
         if state != "on":
             self.log("tv_duck_skipped", state=state or "unknown", debt=self.out)
-            return
+            return None
         # Owed a duck already: the last close could not reach the set, so the
         # bar is still that far below the baseline - as far as a fresh duck
         # would take it. Ducking again lands on the 0-clamp (silence);
@@ -147,11 +184,11 @@ class TvDucker(TvVolume):
             self.log(
                 "tv_duck_skipped", state="on", reason="already_ducked", debt=self.out
             )
-            return
+            return True
         v0 = self.read()
         if v0 is None:
             self.log("tv_duck_skipped", state="on", reason="no_readback", debt=self.out)
-            return
+            return None
         if self.to_pct:
             target = min(v0, round(v0 * self.to_pct / 100))
             asked = v0 - target  # scales with v0; never clamps below 0
@@ -162,12 +199,20 @@ class TvDucker(TvVolume):
             self.log("dry_run_would", action=f"duck vol {v0}->{target}")
             self.out += v0 - target
             self.expect = target
-            return
+            return True
         final = self.move(v0, target)
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
-        self.log("tv_ducked", steps=landed, asked=asked, vol=final, ok=final == target)
+        self.log(
+            "tv_ducked",
+            steps=landed,
+            asked=asked,
+            vol=final,
+            ok=final == target,
+            writes=self.last_writes,
+        )
+        return final == target
 
     def unduck(self):
         """Restore the ledger: this session's duck plus any earlier debt."""
@@ -202,7 +247,14 @@ class TvDucker(TvVolume):
         restored = max(0, final - now)
         self.out = max(0, self.out - restored)
         self.expect = final if self.out else None
-        self.log("tv_unducked", steps=restored, asked=want, vol=final, ok=self.out == 0)
+        self.log(
+            "tv_unducked",
+            steps=restored,
+            asked=want,
+            vol=final,
+            ok=self.out == 0,
+            writes=self.last_writes,
+        )
         if self.out:
             self.log.warn("tv_duck_deficit", steps=self.out)
 
