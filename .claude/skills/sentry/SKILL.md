@@ -137,11 +137,17 @@ them together with the heartbeat count:
     `quiet_ms` how long after the talker went quiet the transcript arrived
     (large = Flux could not find the end of the turn over the room). `wake`
     carries `dbfs`, the talker's absolute level.
-  - `stt_final` outcomes: `wake_only` (the transcript was just the wake
-    phrase), `after_stop` (arrived after stop_listening; dropped),
-    `unaddressed` (a loud room — the duck did not land — and no wake prefix;
-    dropped). `gate_match` with `closer` is a closing phrase caught with
-    company ("alright, thanks") rather than by the whole-utterance grammar.
+  - `turn_dropped` is a transcript the gate refused, with `reason`:
+    `after_stop` (arrived after stop_listening) or `unaddressed` (a loud
+    room — the duck did not land — and no wake prefix). `stt_final
+    outcome=wake_only` is a transcript that was just the wake phrase.
+    `gate_match` with `closer` is a closing phrase caught with company
+    ("alright, thanks") rather than by the whole-utterance grammar.
+  - `mic_gated` is the mic gate reopening: for `gated_ms` the room sat under
+    `chatterFloorDb` after the talker went quiet and the STT heard silence
+    instead; `peak_db` is the loudest thing it silenced, relative to the wake
+    phrase. Many of these with `peak_db` near the floor means the floor is
+    close to someone real.
   - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
     session build. Deepgram's ceiling is 100 keyterms (documented, and
     measured; 110 is a 400 on connect) and `headroom` is what is left of it,

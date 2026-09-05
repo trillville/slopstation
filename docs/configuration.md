@@ -51,7 +51,8 @@ agent does not start. Every other voice key has a default in code, so a
 | `inputDeviceName`, `outputDeviceName` | the audio devices, by name |
 | `wakeModel`, `wakeThreshold`, `wakeNearMissFactor`, `wakeClipsKeep`, `wakeVadThreshold`, `wakePatience`, `wakeVerifier`, `wakeVerifierThreshold` | the wake word: a stock openWakeWord name or a `.onnx` vendored in `src/slopstation/agent/models`, and its tuning |
 | `duckSteps`, `duckToPct` | volume ducking during a voice session; needs `tvIp` |
-| `holdWindowS`, `followupCarryS`, `eotThreshold`, `eagerEotThreshold`, `eagerEnabled` | turn taking; `holdWindowS` is how long the mic stays open after an answer, and a closing phrase ("thanks", "go away") ends it early |
+| `holdWindowS`, `followupCarryS`, `eotThreshold`, `eotTimeoutMs`, `eagerEotThreshold`, `eagerEnabled` | turn taking; `holdWindowS` is how long the mic stays open after an answer, and a closing phrase ("thanks", "go away") ends it early |
+| `chatterFloorDb` | the mic gate: once the talker goes quiet, sound this far under the wake phrase's level is muted before speech recognition hears it. 0 turns it off. `mic_gated` in the logs says what it silenced; `level_db` on each turn says where the room sits |
 | `keytermCount`, `fuzzyTitleThreshold` | what the speech recogniser is told to expect, and how loosely a spoken title matches the library |
 | `ttsVoice` | the Deepgram voice |
 | `assistantProvider`, `assistantModelAnthropic`, `assistantModelOpenai`, `assistantReasoningEffort`, `assistantWebSearch`, `assistantSearchMaxUses` | the assistant model and its tools |

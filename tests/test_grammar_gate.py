@@ -369,7 +369,7 @@ def hear(matcher, monkeypatch):
 def test_a_transcript_after_a_stop_is_dropped(hear):
     ended, glog, _ = hear(["What time is it?"], stop_first=True)
     assert len(ended) == 1
-    assert glog.find("stt_final")[0]["outcome"] == "after_stop"
+    assert glog.find("turn_dropped")[0]["reason"] == "after_stop"
     assert not glog.find("gate_miss"), "a dropped transcript reached the assistant"
 
 
@@ -389,8 +389,8 @@ def test_a_loud_room_needs_the_wake_prefix_on_every_turn(hear):
     assert not ended
     heard = [r["text"] for r in glog.find("gate_miss")]
     assert heard == ["what time is it?"], heard
-    dropped = glog.find("stt_final")
-    assert len(dropped) == 1 and dropped[0]["outcome"] == "unaddressed", dropped
+    dropped = glog.find("turn_dropped")
+    assert len(dropped) == 1 and dropped[0]["reason"] == "unaddressed", dropped
 
 
 def test_a_quiet_room_hears_every_turn(hear):

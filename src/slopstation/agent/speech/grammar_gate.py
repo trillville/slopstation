@@ -420,9 +420,9 @@ class GrammarGate(FrameProcessor):
             if text and self._stop_pending:
                 # The mic is closing; whatever this is, it is not for us.
                 self.log(
-                    "stt_final",
+                    "turn_dropped",
                     text=text,
-                    outcome="after_stop",
+                    reason="after_stop",
                     confidence=conf,
                     level_db=room["level_db"],
                     quiet_ms=room["quiet_ms"],
@@ -462,9 +462,9 @@ class GrammarGate(FrameProcessor):
             if text and not addressed and self.loud is not None and self.loud():
                 # Loud room: speech that did not address us is the TV.
                 self.log(
-                    "stt_final",
+                    "turn_dropped",
                     text=text,
-                    outcome="unaddressed",
+                    reason="unaddressed",
                     confidence=conf,
                     level_db=room["level_db"],
                     quiet_ms=room["quiet_ms"],

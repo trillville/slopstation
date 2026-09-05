@@ -166,12 +166,20 @@ class Session:
                 ),
                 numerals=True,
                 keyterm=terms,
+                # Flux's own cap on a turn once speech stops. The mic gate
+                # feeds it silence when the talker goes quiet, so this is
+                # how long a hesitant end-of-turn model can hold a turn.
+                eot_timeout_ms=int(voice.get("eotTimeoutMs", 2000)),
             ),
         )
 
         # The wake phrase in the capture is the talker's level; a follow-up
         # open has no capture and the first turn stands in for it.
-        level = RoomLevel(self.capture.peak if self.capture is not None else 0.0)
+        level = RoomLevel(
+            self.capture.peak if self.capture is not None else 0.0,
+            floor_db=float(voice.get("chatterFloorDb", 15)),
+            log=log,
+        )
         dispatcher = Dispatch(
             cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
         )

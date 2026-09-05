@@ -84,3 +84,29 @@ def test_the_gate_stamps_every_transcript_with_the_room(monkeypatch):
     assert hit["level_db"] == -20.0 and "quiet_ms" in hit, hit
     miss = glog.find("gate_miss")[0]
     assert miss["level_db"] is None, "the second turn had no audio of its own"
+
+
+def test_the_gate_mutes_the_room_once_the_talker_goes_quiet():
+    glog = CapturingLog("voice")
+    lvl = RoomLevel(reference=8000, floor_db=15, log=glog)  # floor ~1422
+    talk, tv, silence = chunk(8000), chunk(800), bytes(len(chunk(0)))
+    assert lvl.hear(talk, now=1.0) == talk, "the talker always passes"
+    assert lvl.hear(tv, now=1.1) == tv, "inside the 350 ms gap the room still passes"
+    assert lvl.hear(tv, now=1.4) == silence, "past the gap the room is muted"
+    assert lvl.gated
+    assert lvl.hear(tv, now=3.0) == silence
+    # The first hop back over the floor reopens the gate at once.
+    assert lvl.hear(talk, now=3.1) == talk and not lvl.gated
+    gated = glog.find("mic_gated")
+    assert len(gated) == 1 and gated[0]["gated_ms"] == 1700, gated
+    assert gated[0]["peak_db"] == -20.0, "the loudest thing silenced, vs the talker"
+
+
+def test_no_floor_or_no_reference_never_mutes():
+    tv = chunk(800)
+    off = RoomLevel(reference=8000, floor_db=0)
+    off.hear(chunk(8000), now=1.0)
+    assert off.hear(tv, now=5.0) == tv and not off.gated
+    unknown = RoomLevel(reference=0, floor_db=15)  # a follow-up open
+    unknown.hear(chunk(8000), now=1.0)
+    assert unknown.hear(tv, now=5.0) == tv and not unknown.gated

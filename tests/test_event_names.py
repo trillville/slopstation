@@ -83,6 +83,7 @@ PYTHON = {
     "intent_unknown": {"intent"},
     "keyterms_capped": {"dropped", "first_dropped", "kept"},
     "lane_disabled": {"err", "reason", "what"},
+    "mic_gated": {"gated_ms", "peak_db"},
     "lane_reloaded": {"killed", "what"},
     "lane_started": {"what"},
     "lane_up": {
@@ -185,6 +186,7 @@ PYTHON = {
     "steam_read_retried": {"attempt", "err", "method"},
     "store_fetch_failed": {"err", "url"},
     "stt_final": {"confidence", "level_db", "outcome", "quiet_ms", "text"},
+    "turn_dropped": {"confidence", "level_db", "quiet_ms", "reason", "text"},
     "stt_vocabulary": {"headroom", "terms", "titles"},
     "sync_done": {"games", "layer", "n"},
     "sync_failed": {"err"},
