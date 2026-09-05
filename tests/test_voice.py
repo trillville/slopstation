@@ -29,6 +29,8 @@ class EndOfTest(BaseException):
 
 
 class FakeCapture:
+    peak = 0.0
+
     def __init__(self):
         self.stopped = 0
 

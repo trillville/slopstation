@@ -233,6 +233,7 @@ class GrammarGate(FrameProcessor):
         resolve_collection=None,
         loud=None,
         closers=None,
+        level=None,
     ):
         super().__init__()
         self.matcher = matcher
@@ -247,6 +248,7 @@ class GrammarGate(FrameProcessor):
         # then needs the wake prefix, or it is the TV. None = never strict.
         self.loud = loud
         self.closers = closers if closers is not None else load_closers()
+        self.level = level  # level.RoomLevel; None = unmeasured
         self._speaking = 0.0  # ts of the open user turn; 0 = closed
         self._dispatching = 0  # blocking calls in flight
         self._assistant_pending = 0.0  # ts of a transcript handed to the LLM
@@ -408,9 +410,23 @@ class GrammarGate(FrameProcessor):
         ):
             text = frame.text.strip()
             conf = stt_confidence(frame)
+            # The room around this turn: how far under the wake phrase it
+            # peaked, and how long after the talker went quiet it arrived.
+            room = (
+                self.level.snapshot()
+                if self.level is not None
+                else {"level_db": None, "quiet_ms": None}
+            )
             if text and self._stop_pending:
                 # The mic is closing; whatever this is, it is not for us.
-                self.log("stt_final", text=text, outcome="after_stop", confidence=conf)
+                self.log(
+                    "stt_final",
+                    text=text,
+                    outcome="after_stop",
+                    confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
+                )
                 return
             addressed = False  # the transcript carried the wake prefix
             if text:
@@ -430,7 +446,12 @@ class GrammarGate(FrameProcessor):
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": swallow it, no earcon, no LLM turn.
                     self.log(
-                        "stt_final", text=text, outcome="wake_only", confidence=conf
+                        "stt_final",
+                        text=text,
+                        outcome="wake_only",
+                        confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
                     )
                     return
                 if stripped != text:
@@ -440,7 +461,14 @@ class GrammarGate(FrameProcessor):
                     text = stripped
             if text and not addressed and self.loud is not None and self.loud():
                 # Loud room: speech that did not address us is the TV.
-                self.log("stt_final", text=text, outcome="unaddressed", confidence=conf)
+                self.log(
+                    "stt_final",
+                    text=text,
+                    outcome="unaddressed",
+                    confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
+                )
                 return
             if text:
                 # The utterance snapshot (see dispatch.Utterance). `asked` is
@@ -457,11 +485,20 @@ class GrammarGate(FrameProcessor):
                             intent="ExitSession",
                             closer=closer,
                             confidence=conf,
+                            level_db=room["level_db"],
+                            quiet_ms=room["quiet_ms"],
                         )
                         await self._run_intent(*m)
                         return
                 if m is not None:
-                    self.log("gate_match", text=text, intent=m[0], confidence=conf)
+                    self.log(
+                        "gate_match",
+                        text=text,
+                        intent=m[0],
+                        confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
+                    )
                     if await self._run_intent(*m):
                         return  # swallowed: the gate handled it
                 if not self.assistant_enabled:
@@ -471,6 +508,8 @@ class GrammarGate(FrameProcessor):
                         fallback="none",
                         reason="assistant_disabled",
                         confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
                     )
                     await self._earcon("fail")
                     return
@@ -483,6 +522,8 @@ class GrammarGate(FrameProcessor):
                     fallback="assistant",
                     reason="no_grammar_match",
                     confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
                 )
                 self._assistant_pending = time.time()
         await self.push_frame(frame, direction)

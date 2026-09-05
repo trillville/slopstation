@@ -29,6 +29,7 @@ from slopstation.agent.speech.audio import (
     rebuild_audio,
 )
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
+from slopstation.agent.speech.level import dbfs
 from slopstation.agent.speech.preroll import WakeAck
 from slopstation.agent.speech.session import Session
 from slopstation.agent.telemetry import sentry
@@ -455,7 +456,12 @@ def main():
             ack.claim()
             log("wake", trigger="follow_up")
         else:
-            log("wake", trigger="wake_word", score=round(score, 2))
+            log(
+                "wake",
+                trigger="wake_word",
+                score=round(score, 2),
+                dbfs=dbfs(capture.peak) if capture is not None else None,
+            )
             if announcer:
                 announcer.abort_current()  # user intent beats a bulletin
         if not stt_live:

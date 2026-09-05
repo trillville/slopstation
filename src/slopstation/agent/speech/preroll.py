@@ -78,6 +78,11 @@ class WakeCapture:
             fn, self._on_quiet = self._on_quiet, None
             threading.Thread(target=fn, daemon=True).start()
 
+    @property
+    def peak(self) -> float:
+        """Loudest hop so far (RMS): the talker's level, wake phrase included."""
+        return self._peak
+
     def disarm_deadline(self) -> None:
         """Disable the chime deadline after handing audio to the session."""
         self._chime_deadline = False

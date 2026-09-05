@@ -125,6 +125,7 @@ class Session:
         from slopstation.agent.llm.assistant import PROVIDER_KEY
         from slopstation.agent.speech.audio import wake_phrase as _wake_phrase
         from slopstation.agent.speech.grammar_gate import GrammarGate
+        from slopstation.agent.speech.level import RoomLevel
         from slopstation.agent.speech.preroll import PrerollFeeder
 
         cfg, secrets, voice = self.cfg, self.secrets, self.voice
@@ -168,6 +169,9 @@ class Session:
             ),
         )
 
+        # The wake phrase in the capture is the talker's level; a follow-up
+        # open has no capture and the first turn stands in for it.
+        level = RoomLevel(self.capture.peak if self.capture is not None else 0.0)
         dispatcher = Dispatch(
             cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
         )
@@ -191,6 +195,7 @@ class Session:
             ack=self.ack,  # wake chime, if still unplayed
             # The duck runs off-thread; read it per turn, not at build.
             loud=(lambda: self.room.loud) if self.room is not None else None,
+            level=level,
         )
 
         feeder = PrerollFeeder(log)
@@ -202,7 +207,7 @@ class Session:
         turns = UserTurnProcessor(
             user_turn_strategies=ExternalUserTurnStrategies(enable_interruptions=True)
         )
-        stages = [transport.input(), feeder, stt, turns, gate]
+        stages = [transport.input(), feeder, level, stt, turns, gate]
         if assistant_live:
             stages += self._assistant_stages(transport, dispatcher, gate)
         else:

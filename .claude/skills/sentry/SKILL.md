@@ -131,7 +131,17 @@ them together with the heartbeat count:
     substring.
   - `gate_match` / `gate_miss` / `stt_final` carry `confidence` (mean per-word,
     from Flux) — bad transcript vs bad phrasing. Absent on turns where Flux
-    sent no per-word data.
+    sent no per-word data. Since 2026-09-05 they also carry the room:
+    `level_db` is how far the turn's loudest moment sat under the wake phrase
+    (0 = as loud as the talker; -15 = chatter or the ducked TV) and
+    `quiet_ms` how long after the talker went quiet the transcript arrived
+    (large = Flux could not find the end of the turn over the room). `wake`
+    carries `dbfs`, the talker's absolute level.
+  - `stt_final` outcomes: `wake_only` (the transcript was just the wake
+    phrase), `after_stop` (arrived after stop_listening; dropped),
+    `unaddressed` (a loud room — the duck did not land — and no wake prefix;
+    dropped). `gate_match` with `closer` is a closing phrase caught with
+    company ("alright, thanks") rather than by the whole-utterance grammar.
   - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
     session build. Deepgram's ceiling is 100 keyterms (documented, and
     measured; 110 is a 400 on connect) and `headroom` is what is left of it,
