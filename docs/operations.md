@@ -21,7 +21,7 @@ independent jobs run on the self-hosted runners:
 Both jobs wait for a live session to end. A hand run of `Deploy.ps1` refuses
 an active session unless given a wait budget. PC files are copied sequentially,
 not atomically: a failed copy stops deployment, and `build-id` is absent until
-all copies pass hash verification. Neither deployer rolls back. Run the deploy
+all copies match byte for byte. Neither deployer rolls back. Run the deploy
 again to repair an interrupted copy. The gaming-PC job queues while asleep
 and runs when it wakes. Because the repository is public, `cd` deploys only
 commits pushed to `main`; pull-request code never reaches either runner.

@@ -89,7 +89,9 @@ foreach ($f in $scripts) {
     $source = Join-Path $PSScriptRoot $f
     $target = Join-Path $Dest $f
     Copy-Item $source $target -Force
-    if ((Get-FileHash $source).Hash -ne (Get-FileHash $target).Hash) {
+    $expected = [Convert]::ToBase64String([IO.File]::ReadAllBytes($source))
+    $actual = [Convert]::ToBase64String([IO.File]::ReadAllBytes($target))
+    if ($actual -cne $expected) {
         throw "Deployed file differs from source: $f"
     }
     Write-Host "  $f"
