@@ -91,6 +91,16 @@ def test_the_gate_reopens_on_a_soft_onset_and_logs_only_long_mutes():
     assert not glog.find("mic_gated"), "a 100 ms mute is a gap between words"
 
 
+def test_a_duck_that_fails_after_the_gate_closed_reopens_it():
+    loud = [False]
+    lvl = live(floor_db=15, loud=lambda: loud[0])
+    lvl.hear(chunk(8000), now=1.0)
+    tv = chunk(400)
+    assert lvl.hear(tv, now=1.4) == bytes(len(tv)) and lvl.gated
+    loud[0] = True  # the duck reported failure off-thread
+    assert lvl.hear(tv, now=1.5) == tv and not lvl.gated, "reopened at once"
+
+
 def test_no_floor_no_reference_or_a_loud_room_never_mutes():
     tv = chunk(400)
     off = live(floor_db=0)

@@ -84,7 +84,9 @@ class RoomLevel(FrameProcessor):
             self._loud_at = now
         since = self._gated_since
         gated = since is not None
-        if since is not None and level >= line * self.REOPEN_RATIO:
+        if since is not None and (
+            level >= line * self.REOPEN_RATIO or not self._can_gate()
+        ):
             gated_ms = int(round((now - since) * 1000))
             if self.log is not None and gated_ms >= self.LOG_MIN_MS:
                 self.log(

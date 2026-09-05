@@ -182,6 +182,9 @@ CLOSERS = [
     ("Alright. Thanks.", "thanks"),  # fillers around it
     ("Thank.", "thanks"),  # the one listed mishear
     ("thanks alfred", "thanks"),  # the anchor is not content either
+    ("no thanks", "thanks"),
+    ("don't go away", None),  # the opposite of a closer
+    ("please don't go away", None),
     ("never mind, cancel", "cancel"),
     ("yeah leave me alone please", "leave me alone"),
     ("Okay. Thanks. Go ahead.", None),  # the tail is not a closer
@@ -198,6 +201,8 @@ CLOSERS = [
 # A loud room: the TV finishes the sentence, so a closer after the anchor counts.
 CLOSERS_LOUD = [
     ("The Alfred go away. Only hands exactly.", "go away"),
+    ("Hey Alfred go away only hands exactly", "go away"),  # as heard, unstripped
+    ("Hey Alfred don't go away", None),
     ("actually alfred cancel the download", "cancel"),  # the price of it
     ("what time is it, thanks", None),
 ]
@@ -409,6 +414,17 @@ def test_a_loud_room_needs_the_wake_prefix_on_every_turn(hear):
     assert heard == ["what time is it?"], heard
     dropped = glog.find("turn_dropped")
     assert len(dropped) == 1 and dropped[0]["reason"] == "unaddressed", dropped
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Hey Alfred go away only hands exactly", "The Alfred go away only hands exactly"],
+)
+def test_a_loud_room_closes_on_go_away_however_the_tv_finished_it(hear, text):
+    ended, glog, _ = hear([text], loud=lambda: True)
+    assert len(ended) == 1, glog.records
+    assert glog.find("gate_match")[0]["closer"] == "go away"
+    assert not glog.find("turn_dropped"), "addressed, so never unaddressed"
 
 
 def test_a_quiet_room_hears_every_turn(hear):

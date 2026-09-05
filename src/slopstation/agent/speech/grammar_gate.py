@@ -75,6 +75,12 @@ def _anchor_len(toks: list[str], i: int, anchor: str) -> int:
     return 0
 
 
+def mentions_anchor(text: str, anchor: str) -> bool:
+    """The wake anchor anywhere in the text, greeted or not."""
+    toks = text.split()
+    return any(_anchor_len(toks, i, anchor) for i in range(len(toks)))
+
+
 def strip_wake(text: str, anchor: str = "jarvis") -> str:
     """Remove the wake phrase ("hey jarvis", "jarvis", mishears like "jervis")
     from a transcript; the pre-roll buffer includes it. Fuzzy on the anchor
@@ -111,6 +117,9 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
 
 # One-word closers match exactly, plus these: fuzzy would take "tanks".
 MISHEARS = {"thank": "thanks"}
+# The one word allowed in front of a closer ("no thanks"). Anything else
+# is content, and "don't go away" is the opposite of a closer.
+CLOSER_PREFIXES = {"no", "nope", "nah"}
 
 
 def closer_in(
@@ -158,10 +167,14 @@ def closer_in(
             hit = match(core[-k:])
             if not hit:
                 continue
-            # The rest is a word ("no thanks") or another closer ("never
-            # mind, cancel"), not a question.
+            # The rest is nothing, "no" ("no thanks") or another closer
+            # ("never mind, cancel") - not "don't", not a question.
             rest = core[:-k]
-            if len(rest) <= 1 or closer_in(" ".join(rest), closers):
+            if (
+                not rest
+                or (len(rest) == 1 and rest[0] in CLOSER_PREFIXES)
+                or closer_in(" ".join(rest), closers)
+            ):
                 return hit
     return None
 
@@ -443,6 +456,7 @@ class GrammarGate(FrameProcessor):
                     quiet_ms=room["quiet_ms"],
                 )
                 return
+            original = text
             addressed = False  # the transcript carried the wake prefix
             if text:
                 # Associate downstream events with this utterance.
@@ -474,7 +488,11 @@ class GrammarGate(FrameProcessor):
                     self.log("wake_prefix_stripped", text=text, stripped=stripped)
                     frame.text = stripped  # both lanes see the command only
                     text = stripped
-            if text and not addressed and self.loud is not None and self.loud():
+            loud = self.loud is not None and self.loud()
+            if text and loud and not addressed and self.wake_word:
+                # A bare "the alfred go away" in a loud room is still us.
+                addressed = mentions_anchor(original, self.wake_word)
+            if text and not addressed and loud:
                 # Loud room: speech that did not address us is the TV.
                 self.log(
                     "turn_dropped",
@@ -491,11 +509,13 @@ class GrammarGate(FrameProcessor):
                 self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
                 if m is None:
+                    # In a loud room the closer is judged on the transcript
+                    # as heard: the anchor the strip removed is what places it.
                     closer = closer_in(
-                        text,
+                        original if loud else text,
                         self.closers,
                         self.wake_word,
-                        loud=self.loud is not None and self.loud(),
+                        loud=loud,
                     )
                     if closer:
                         m = ("ExitSession", {})
