@@ -50,7 +50,7 @@ agent does not start. Every other voice key has a default in code, so a
 |---|---|
 | `inputDeviceName`, `outputDeviceName` | the audio devices, by name |
 | `wakeModel`, `wakeThreshold`, `wakeNearMissFactor`, `wakeClipsKeep`, `wakeVadThreshold`, `wakePatience`, `wakeVerifier`, `wakeVerifierThreshold` | the wake word: a stock openWakeWord name or a `.onnx` vendored in `src/slopstation/agent/models`, and its tuning |
-| `duckSteps`, `duckToPct` | volume ducking during a voice session; needs `tvIp` and the pairing step |
+| `duckSteps`, `duckToPct` | volume ducking during a voice session; needs `tvIp` |
 | `holdWindowS`, `followupCarryS`, `eotThreshold`, `eagerEotThreshold`, `eagerEnabled` | turn taking |
 | `keytermCount`, `fuzzyTitleThreshold` | what the speech recogniser is told to expect, and how loosely a spoken title matches the library |
 | `ttsVoice` | the Deepgram voice |
@@ -58,9 +58,10 @@ agent does not start. Every other voice key has a default in code, so a
 | `inputs`, `navTargets` | spoken names for TV inputs and for Big Picture destinations |
 | `volumeStep`, `volumeMax`, `earconGain`, `location`, `followUpAfterAnnounce`, `steamDataTools` | volume verbs, earcon level, the assistant's time zone and locale, and whether an announcement opens a follow-up window |
 
-Volume changes use WebSocket remote keys and verify the resulting soundbar
-level through readback. `volumeMax` caps both absolute and relative commands.
-Mute sends a remote toggle; the TV provides no reliable mute-state readback.
+Volume changes set an absolute target through UPnP and verify the resulting
+soundbar level through readback. They need no pairing. `volumeMax` caps both
+absolute and relative commands. Mute sends a paired WebSocket remote toggle;
+the TV provides no reliable mute-state readback.
 Ex-Link remains the power and input path: its volume acknowledgments do not
 mean the soundbar changed.
 

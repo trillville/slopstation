@@ -85,16 +85,18 @@ def test_lock_arbiter():
 
 def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     readings = iter([20, 23, 23, 40, 40, 25])
+    levels = []
     keys = []
     monkeypatch.setattr(tv, "tv_volume", lambda ip: next(readings))
+    monkeypatch.setattr(tv, "tv_set_volume", lambda ip, level: levels.append(level))
     monkeypatch.setattr(TvRemote, "press", lambda self, key, n: keys.append((key, n)))
     d, _ = harness()
     assert d.volume_up().ok
-    assert keys.pop() == ("up", 3)
+    assert levels.pop() == 23
 
     r = d.volume_set(80)  # clamps to volumeMax 40
-    assert r.ok and keys.pop() == ("up", 17)
-    assert d.volume_set(25).ok and keys.pop() == ("down", 15)
+    assert r.ok and levels.pop() == 40
+    assert d.volume_set(25).ok and levels.pop() == 25
 
     assert d.mute_toggle().ok and keys.pop() == ("mute", 1)
     assert not sent
@@ -175,7 +177,7 @@ def test_end_session_on_an_idle_rig_is_a_failure(host):
 def test_end_session_restores_the_room_before_the_exit(host):
     # The room ducker restores HERE, before the exit: the voice session stays
     # open for the idle timeout, by which time couch has cut TV power and
-    # remote keys relay nothing.
+    # volume writes have no effect.
     seed_lock(10)
     order = []
     host(lambda cmd, **kw: order.append(f"ssh {cmd}") or "OK")

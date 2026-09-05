@@ -80,7 +80,7 @@
     "_wakeVerifier": "Optional speaker-specific verifier model from src/slopstation/agent/models. Enabling it replaces the base score, so retune wakeThreshold. wakeVerifierThreshold controls when verification runs.",
     "wakeVerifier": "",
     "wakeVerifierThreshold": 0.1,
-    "_duckSteps":"Soundbar volume steps removed during a voice session and restored afterward. Requires tvIp and WebSocket pairing. Set to 0 to disable.",
+    "_duckSteps":"Soundbar volume steps removed during a voice session and restored afterward. Requires tvIp. Set to 0 to disable.",
     "duckSteps": 10,
     "_duckToPct": "Reduce volume to this percentage during a voice session. Values 1-99 override duckSteps; 0 disables it.",
     "duckToPct": 0,
