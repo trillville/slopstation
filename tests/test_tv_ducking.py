@@ -8,17 +8,17 @@ from slopstation.agent.tools import tv_remote
 
 @dataclasses.dataclass
 class FakeRoom:
-    """TV+bar as the ducker sees them: power state, readback volume, keys -
-    with scriptable key loss, readback death, and a hand on the remote. A
+    """TV+bar as the ducker sees them: power state, volume reads and writes -
+    with scriptable incomplete writes, readback death, and a hand on the remote. A
     scenario sets the knobs up front by keyword and turns them mid-session
     through set()."""
 
     power: str | None = "on"
     vol: int = 14
-    drop: int = 0  # keys the CEC relay eats
+    drop: int = 0  # steps a write fails to move
     readback_dead: bool = False
-    press_error: Exception | None = None
-    presses: list = dataclasses.field(default_factory=list)  # every (direction, n)
+    write_error: Exception | None = None
+    writes: list = dataclasses.field(default_factory=list)  # requested absolute levels
 
     def set(self, **knobs):
         """What the room does between the ducker's calls: a hand on the
@@ -33,13 +33,14 @@ class FakeRoom:
     def read(self):
         return None if self.readback_dead else self.vol
 
-    def press(self, direction, n):
-        self.presses.append((direction, n))
-        if self.press_error:
-            raise self.press_error
+    def write(self, target):
+        self.writes.append(target)
+        n = abs(target - self.vol)
+        if self.write_error:
+            raise self.write_error
         landed = max(0, n - self.drop)
         self.drop -= min(n, self.drop)
-        if direction == "down":
+        if target < self.vol:
             self.vol -= min(landed, self.vol)  # floor 0
         else:
             self.vol += min(landed, 100 - self.vol)  # ceiling 100
@@ -56,7 +57,7 @@ def ducker(steps=10, room=None, **kw):
         log,
         probe=room.probe,
         read=room.read,
-        press=room.press,
+        write=room.write,
         pause=lambda s: None,
         **kw,
     )
@@ -66,20 +67,20 @@ def ducker(steps=10, room=None, **kw):
 def test_gate_a_set_that_is_not_on_is_not_touched():
     dk, room, log = ducker(room=FakeRoom(power="standby"))
     dk.duck()
-    assert room.presses == [] and log.events() == ["tv_duck_skipped"], log.records
+    assert room.writes == [] and log.events() == ["tv_duck_skipped"], log.records
     dk.unduck()
-    assert room.presses == [] and log.events() == ["tv_duck_skipped"]
+    assert room.writes == [] and log.events() == ["tv_duck_skipped"]
 
     dk, room, log = ducker(room=FakeRoom(power=None))  # unreachable = unknown
     dk.duck()
-    assert room.presses == [] and log.find("tv_duck_skipped")[0]["state"] == "unknown"
+    assert room.writes == [] and log.find("tv_duck_skipped")[0]["state"] == "unknown"
 
 
 def test_no_readback_means_no_duck():
     dk, room, log = ducker(room=FakeRoom(readback_dead=True))
     dk.duck()
     assert (
-        room.presses == [] and log.find("tv_duck_skipped")[0]["reason"] == "no_readback"
+        room.writes == [] and log.find("tv_duck_skipped")[0]["reason"] == "no_readback"
     )
 
 
@@ -105,16 +106,18 @@ def test_clamp_at_zero_ok_is_intent_achieved_and_the_delta_stays_honest():
     assert room.vol == 6 and dk.out == 0
 
 
-def test_lost_keys_are_noticed_by_readback_and_a_top_up_round_finishes():
-    dk, room, log = ducker(steps=10, room=FakeRoom(drop=3))  # relay eats 3
+def test_incomplete_write_restores_only_verified_movement():
+    dk, room, log = ducker(steps=10, room=FakeRoom(drop=3))
     dk.duck()
-    assert room.vol == 4 and dk.out == 10
-    assert room.presses == [("down", 10), ("down", 3)], room.presses
-    assert log.find("tv_ducked")[0]["ok"] is True
+    assert room.vol == 7 and dk.out == 7
+    assert room.writes == [4], room.writes
+    assert log.find("tv_ducked")[0]["ok"] is False
+    dk.unduck()
+    assert room.vol == 14 and dk.out == 0
 
 
-def test_relay_dead_verifies_nothing_and_owes_nothing():
-    dk, room, log = ducker(room=FakeRoom(press_error=RuntimeError("ws down")))
+def test_write_failure_verifies_nothing_and_owes_nothing():
+    dk, room, log = ducker(room=FakeRoom(write_error=RuntimeError("HTTP down")))
     dk.duck()
     assert room.vol == 14 and dk.out == 0
     d0 = log.find("tv_ducked")[0]
@@ -176,24 +179,24 @@ def test_a_close_that_could_not_reach_the_set_means_no_silence_and_no_swing():
     dk, room, log = ducker(steps=15, room=FakeRoom(vol=22))
     dk.duck()
     assert room.vol == 7 and dk.out == 15
-    room.set(drop=99)  # set going down: keys relay nowhere
+    room.set(drop=99)  # set going down: writes have no effect
     dk.unduck()
     assert dk.out == 15 and log.find("tv_duck_deficit"), log.records
     assert room.vol == 7, "the restore moved nothing"
     room.set(drop=0)  # next session, bar still low
-    presses = len(room.presses)
+    writes = len(room.writes)
     dk.duck()
     assert dk.out == 15 and room.vol == 7, (dk.out, room.vol)
-    assert len(room.presses) == presses, "a bar already ducked is not touched"
+    assert len(room.writes) == writes, "a bar already ducked is not touched"
     dk.unduck()  # the close pays it all back
     assert room.vol == 22 and dk.out == 0, (room.vol, dk.out)
 
 
-def test_dry_run_balances_the_books_and_presses_nothing():
+def test_dry_run_balances_the_books_and_writes_nothing():
     dk, room, log = ducker(dry_run=True)
     dk.duck()
     dk.unduck()
-    assert room.presses == [] and dk.out == 0
+    assert room.writes == [] and dk.out == 0
     assert [e for e in log.events() if e == "dry_run_would"] and not log.find(
         "tv_ducked"
     ), log.records

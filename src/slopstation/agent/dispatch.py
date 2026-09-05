@@ -278,7 +278,7 @@ class Dispatch:
             )
         ip = self.cfg.get("tvIp")
         if not ip:
-            return _fail("volume control needs tvIp and TV pairing - see setup.md")
+            return _fail("volume control needs tvIp - see setup.md")
         volume = TvVolume(ip, self.log)
         try:
             with VOLUME_LOCK:

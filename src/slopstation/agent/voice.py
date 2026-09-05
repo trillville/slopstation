@@ -152,7 +152,7 @@ def make_ducker(cfg, dry_run):
             setting="duckSteps",
             value=duck_steps,
             reason="ducking is configured but tvIp is not - it stays off "
-            "(gate, keys and readback all need the TV's address)",
+            "(power and volume requests need the TV's address)",
         )
     ducker = (
         TvDucker(duck_steps, tv_ip, log, dry_run=dry_run, to_pct=duck_to_pct or None)

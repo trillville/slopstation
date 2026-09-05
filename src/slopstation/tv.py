@@ -1,4 +1,4 @@
-"""Control the TV over Ex-Link and read its state over HTTP."""
+"""Control TV power/input over Ex-Link and volume over HTTP."""
 
 from __future__ import annotations
 
@@ -91,35 +91,42 @@ def tv_power_state(ip: str, timeout: float = 2.0, raw: bool = False) -> str | No
     return state if state in ("on", "standby") else None
 
 
-def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
-    """Current volume via pairing-free UPnP RenderingControl (port 9197). With
-    eARC audio this is the soundbar's level, and the set refuses every direct
-    volume WRITE (UPnP 501; Ex-Link frames ack, then say "Not Available"), so
-    writes go through remote keys in agent/tools/tv_remote.py and this read
-    verifies them. None is unknown, not zero: the renderer sleeps with the
-    panel, unlike /api/v2/ above."""
+def _volume_request(ip: str, action: str, arguments: str, timeout: float) -> str:
+    """UPnP RenderingControl on the TV; with eARC this controls the soundbar."""
     import urllib.request
 
     body = (
-        b'<?xml version="1.0" encoding="utf-8"?>'
-        b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
-        b's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-        b"<s:Body>"
-        b'<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
-        b"<InstanceID>0</InstanceID><Channel>Master</Channel>"
-        b"</u:GetVolume></s:Body></s:Envelope>"
-    )
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+        's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        "<s:Body>"
+        f'<u:{action} xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+        f"<InstanceID>0</InstanceID><Channel>Master</Channel>{arguments}"
+        f"</u:{action}></s:Body></s:Envelope>"
+    ).encode()
     req = urllib.request.Request(
         f"http://{ip}:9197/upnp/control/RenderingControl1",
         data=body,
         headers={
             "Content-Type": 'text/xml; charset="utf-8"',
-            "SOAPACTION": '"urn:schemas-upnp-org:service:RenderingControl:1#GetVolume"',
+            "SOAPACTION": f'"urn:schemas-upnp-org:service:RenderingControl:1#{action}"',
         },
     )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode(errors="replace")
+
+
+def tv_set_volume(ip: str, level: int, timeout: float = 2.0) -> None:
+    """Set volume without pairing. Callers must verify it with tv_volume."""
+    level = max(0, min(100, int(level)))
+    _volume_request(ip, "SetVolume", f"<DesiredVolume>{level}</DesiredVolume>", timeout)
+
+
+def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
+    """Read soundbar volume without pairing. None means unknown, not zero;
+    the UPnP renderer may be unavailable while the TV sleeps."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = r.read().decode(errors="replace")
+        out = _volume_request(ip, "GetVolume", "", timeout)
         start = out.index("<CurrentVolume>") + len("<CurrentVolume>")
         return int(out[start : out.index("</CurrentVolume>")])
     except Exception:

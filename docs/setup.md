@@ -14,8 +14,8 @@ media stack has its own guide, [media/README.md](../media/README.md).
 
 Prerequisites: Windows 11, Python 3.13, Git, the TV's Ex-Link serial adapter,
 and for voice a USB microphone and a speaker. The TV must be a Samsung set
-with an Ex-Link port: power and input go over that serial link, and the
-remote and volume ducking use Samsung's WebSocket API. Another make means
+with an Ex-Link port: power and input go over that serial link, volume ducking
+uses UPnP over HTTP, and remote keys use Samsung's WebSocket API. Another make means
 replacing `tv.py` and `agent/tools/tv_remote.py`.
 
 1. Clone the repository, for example to `C:\slopstation`. The checkout is the
@@ -53,8 +53,8 @@ replacing `tv.py` and `agent/tools/tv_remote.py`.
    .\Start-Slopstation.bat
    ```
 
-8. For volume commands and ducking, set `tvIp`, pair with the TV, and accept
-   its on-screen prompt:
+8. Set `tvIp` for volume commands and ducking; these do not require pairing.
+   For mute and manual remote keys, pair with the TV and accept its prompt:
 
    ```powershell
    .venv\Scripts\python -m slopstation.agent.tools.tv_remote pair

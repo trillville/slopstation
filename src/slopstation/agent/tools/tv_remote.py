@@ -1,6 +1,6 @@
-"""Control TV volume over WebSocket and restore it after voice sessions.
+"""Duck volume over UPnP; send manual remote keys over WebSocket.
 
-Run ``pair`` once and approve the client on the TV before first use.
+Run ``pair`` before using remote keys. Ducking does not need pairing.
 
 CLI (lane=manual):
 
@@ -71,20 +71,19 @@ class TvRemote:
 
 
 class TvVolume:
-    """Move soundbar volume with remote keys and verify it through readback."""
+    """Set soundbar volume directly and verify it through readback."""
 
-    TOPUPS = 2
-    POLLS = 6
-    POLL_GAP_S = 0.4
+    POLLS = 24
+    POLL_GAP_S = 0.1
 
-    def __init__(self, tv_ip, log, read=None, press=None, pause=None):
+    def __init__(self, tv_ip, log, read=None, write=None, pause=None):
         self.log = log
         self.read = read or (lambda: tv.tv_volume(tv_ip))
-        self.press = press or (lambda d, n: TvRemote(tv_ip).press(d, n))
+        self.write = write or (lambda level: tv.tv_set_volume(tv_ip, level))
         self.pause = pause
 
     def _settle(self, target):
-        """Poll the readback toward target; the relay lands in ~1 s."""
+        """Allow delayed readback without sending more volume changes."""
         for _ in range(self.POLLS):
             v = self.read()
             if v == target:
@@ -93,33 +92,22 @@ class TvVolume:
         return self.read()
 
     def move(self, now, target):
-        """Press toward target, verify by readback, top up what got lost.
-        Returns the last level actually SEEN - `now` if nothing verified.
-        Rounds are bounded so a dead relay gets bursts, not a storm."""
-        best = now
-        for _ in range(1 + self.TOPUPS):
-            need = abs(target - best)
-            if not need:
-                break
-            try:
-                self.press("up" if target > best else "down", need)
-            except Exception as e:
-                self.log.warn("tv_duck_failed", stage="press", err=str(e))
-            final = self._settle(target)
-            if final is None:
-                break
-            if final == best:
-                break  # keys verifiably bought nothing: stop
-            best = final
-        return best
+        """Write once, then verify even if the HTTP reply was lost."""
+        if now == target:
+            return now
+        try:
+            self.write(target)
+        except Exception as e:
+            self.log.warn("tv_duck_failed", stage="write", err=str(e))
+        final = self._settle(target)
+        return now if final is None else final
 
 
 class TvDucker(TvVolume):
     """Drop the room's volume for a voice session; restore it on close. A
     talker on the couch reaches the mic 10-20 dB below TV dialogue.
 
-    Writes are remote keys over CEC; the UPnP readback (tv.tv_volume) is
-    ground truth. The ledger holds only VERIFIED movement, so a shortfall
+    UPnP sets and reads the volume. The ledger holds only VERIFIED movement, so a shortfall
     carries as debt to the next close and a human moving the remote
     mid-session is detected. It dies with the process."""
 
@@ -132,14 +120,14 @@ class TvDucker(TvVolume):
         to_pct=None,
         probe=None,
         read=None,
-        press=None,
+        write=None,
         pause=None,
     ):
         # to_pct (1-99) wins over steps: duck TO that percent of the pre-duck
         # level, so the drop scales with how loud the room is.
         self.steps = int(steps)
         self.to_pct = int(to_pct) if to_pct else None
-        super().__init__(tv_ip, log, read, press, pause)
+        super().__init__(tv_ip, log, read, write, pause)
         self.dry_run = dry_run
         self.probe = probe or (lambda: tv.tv_power_state(tv_ip))
         self.out = 0  # verified steps down, not yet restored
@@ -192,8 +180,7 @@ class TvDucker(TvVolume):
             return
         now = self.read()
         if now is None:
-            # TV gone (off, or its UPnP renderer down with the panel): keys
-            # would not relay. Keep the debt; the next close retries.
+            # Cannot verify a restore. Keep the debt; the next close retries.
             self.log("tv_unducked", steps=0, asked=want, ok=False, reason="no_readback")
             self.log.warn("tv_duck_deficit", steps=self.out)
             return

@@ -26,7 +26,7 @@ dependencies = [
   "PyYAML==6.0.3",
   "requests==2.34.2",
   "howlongtobeatpy==1.0.23",  # completion times; imported only when used
-  "samsungtvws==3.0.5",  # TV remote keys, the volume write path under eARC
+  "samsungtvws==3.0.5",  # mute and manual TV remote keys
 ]
 
 [project.optional-dependencies]
