@@ -166,19 +166,21 @@ class Session:
                 ),
                 numerals=True,
                 keyterm=terms,
-                # Flux's own cap on a turn once speech stops. The mic gate
-                # feeds it silence when the talker goes quiet, so this is
-                # how long a hesitant end-of-turn model can hold a turn.
-                eot_timeout_ms=int(voice.get("eotTimeoutMs", 2000)),
+                # Flux's own cap on a turn once speech stops (its default is
+                # 5 s). With the mic gate feeding it silence when the talker
+                # goes quiet, 2000 is a good value; unset keeps Flux's own.
+                eot_timeout_ms=(
+                    int(voice["eotTimeoutMs"]) if voice.get("eotTimeoutMs") else None
+                ),
             ),
         )
 
-        # The wake phrase in the capture is the talker's level; a follow-up
-        # open has no capture and the first turn stands in for it.
+        # The talker's level comes from the first live turn (see level.py);
+        # 0 dB of floor is measure-only, the inert default for a config
+        # written before the key existed.
+        loud = (lambda: self.room.loud) if self.room is not None else None
         level = RoomLevel(
-            self.capture.peak if self.capture is not None else 0.0,
-            floor_db=float(voice.get("chatterFloorDb", 15)),
-            log=log,
+            floor_db=float(voice.get("chatterFloorDb", 0) or 0), log=log, loud=loud
         )
         dispatcher = Dispatch(
             cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
@@ -202,11 +204,12 @@ class Session:
             wake_word=wake_phrase.split()[-1],  # "jarvis" - the strip anchor
             ack=self.ack,  # wake chime, if still unplayed
             # The duck runs off-thread; read it per turn, not at build.
-            loud=(lambda: self.room.loud) if self.room is not None else None,
+            loud=loud,
             level=level,
         )
 
         feeder = PrerollFeeder(log)
+        feeder.on_replayed = level.go_live
         # Flux only PROPOSES turn edges since pipecat 1.8, and its stop
         # proposal is a queued ControlFrame - resolved downstream of a gate
         # whose queue blocks on dispatch, a stale stop can land after the next

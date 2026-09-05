@@ -108,11 +108,14 @@ class TvVolume:
         return seen
 
     def move(self, now, target):
-        """Write, then verify by readback; write again if the level has not
-        moved. The set can accept a SetVolume (HTTP 200) and not apply it -
-        seen 2026-09-05: the readback sat at 30 for 2.4 s, and the next
-        session's identical write took in 0.3 s. A raised write is retried
-        too, since a lost reply can still have landed. Returns the last level
+        """Write, then verify by readback; write again only while the level
+        has not moved from `now`. The set can accept a SetVolume (HTTP 200)
+        and not apply it - seen 2026-09-05 (session 84aa98): the readback sat
+        at 30 for 2.4 s, and the next session's identical write took in
+        0.3 s. A raised write is retried the same way, since a lost reply can
+        still have landed. A level that moved but stopped short is left
+        where it is: it may be a hand on the remote, and writing an absolute
+        target over that would take their level away. Returns the last level
         SEEN - `now` if nothing verified."""
         self.last_writes = 0
         if now == target:
@@ -132,8 +135,8 @@ class TvVolume:
             if v is None:
                 break  # readback gone: nothing more can be verified
             seen = v
-            if seen == target or left <= 0 or self.clock() >= self._deadline:
-                break
+            if seen != now or left <= 0 or self.clock() >= self._deadline:
+                break  # landed, moved (stop: a hand may be on it), or out of time
         return seen
 
 
@@ -170,8 +173,9 @@ class TvDucker(TvVolume):
 
     def duck(self):
         """Returns True when the room is at the ducked level (landed, or
-        still down from an unpaid restore), False when a duck was wanted and
-        did not land (the room is loud), None when the set is not on."""
+        still down from an unpaid restore), False when a duck was tried and
+        verifiably did not land (the room is loud), None when nothing is
+        known: the set is not on, or its readback is not answering."""
         state = self.probe()
         if state != "on":
             self.log("tv_duck_skipped", state=state or "unknown", debt=self.out)
@@ -189,7 +193,7 @@ class TvDucker(TvVolume):
         v0 = self.read()
         if v0 is None:
             self.log("tv_duck_skipped", state="on", reason="no_readback", debt=self.out)
-            return False
+            return None
         if self.to_pct:
             target = min(v0, round(v0 * self.to_pct / 100))
             asked = v0 - target  # scales with v0; never clamps below 0

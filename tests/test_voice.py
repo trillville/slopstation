@@ -145,13 +145,14 @@ class FakeSteam:
 
 class FakeDucker:
     made = []
+    lands = None  # what duck() reports: True landed, False did not, None unknown
 
     def __init__(self, steps, tv_ip, log, dry_run=False, to_pct=None):
         self.dry_run = dry_run
         FakeDucker.made.append(self)
 
     def duck(self):
-        pass
+        return FakeDucker.lands
 
     def unduck(self):
         pass
@@ -343,6 +344,19 @@ def test_full_lanes_run_one_dry_session(run):
     assert calls[0]["capture"].stopped >= 1, "capture must be stopped after the session"
     # end_session restores the room while the TV is still on (dispatch calls it)
     assert callable(calls[0]["on_end_session"])
+
+
+def test_a_duck_that_did_not_land_marks_the_room_loud(run, monkeypatch):
+    cfg = make_config(tvIp="10.0.0.9")
+    cfg["voice"]["duckSteps"] = 4
+    monkeypatch.setattr(FakeDucker, "lands", False)
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert calls[0]["room"].loud is True
+    monkeypatch.setattr(FakeDucker, "lands", None)  # TV off, or no readback
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert calls[0]["room"].loud is False
+    rc, log, calls = run(["--once"], make_config(), wakes=one_wake())
+    assert calls[0]["room"] is None, "no ducking configured: never strict"
 
 
 def test_no_deepgram_key_opens_no_session_and_releases_the_capture(monkeypatch, run):

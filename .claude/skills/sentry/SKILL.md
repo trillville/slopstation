@@ -118,11 +118,11 @@ them together with the heartbeat count:
   same events from a hand-run `python exlink.py <cmd>`, kept off the launch
   lane so operator probing does not skew launch metrics. Drop the lane to see
   every frame whoever sent it.
-- **voice**: `wake` `stt_final` `gate_match` `gate_miss` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat` `checkin` `checkin_failed`
+- **voice**: `wake` `stt_final` `gate_match` `gate_miss` `turn_dropped` `mic_gated` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat` `checkin` `checkin_failed`
   - Room ducking (TvDucker): `tv_ducked` / `tv_unducked` (both carry `steps` =
     verified movement vs `asked`, plus `vol`, `ok` and `writes` - the SetVolume
-    requests one move took, 2+ meaning the set ignored a write it had
-    accepted; `tv_unducked` may carry
+    requests one move took; 2+ means the first did not move the readback
+    (accepted and ignored, or it raised); `tv_unducked` may carry
     `reason=user_adjusted|no_readback`), `tv_duck_skipped` (the on-gate:
     `state=standby|unknown` or `reason=no_readback`), `tv_duck_failed` (a key
     burst or the whole op raised), `tv_duck_deficit` (warn: steps still owed —
@@ -132,22 +132,26 @@ them together with the heartbeat count:
   - `gate_match` / `gate_miss` / `stt_final` carry `confidence` (mean per-word,
     from Flux) — bad transcript vs bad phrasing. Absent on turns where Flux
     sent no per-word data. Since 2026-09-05 they also carry the room:
-    `level_db` is how far the turn's loudest moment sat under the wake phrase
-    (0 = as loud as the talker; -15 = chatter or the ducked TV) and
+    `level_db` is how far the turn's loudest moment sat under the talker's
+    reference level (0 = the talker; -15 = chatter or the ducked TV) and
     `quiet_ms` how long after the talker went quiet the transcript arrived
-    (large = Flux could not find the end of the turn over the room). `wake`
-    carries `dbfs`, the talker's absolute level.
+    (large = Flux could not find the end of the turn over the room). The
+    reference is the first LIVE turn after the pre-roll, so the first turn of
+    a session reads `level_db` None. `wake` (trigger=wake_word only) carries
+    `dbfs`, the loudest hop of the pre-roll: the talker or the un-ducked TV,
+    whichever reached the mic louder.
   - `turn_dropped` is a transcript the gate refused, with `reason`:
     `after_stop` (arrived after stop_listening) or `unaddressed` (a loud
     room — the duck did not land — and no wake prefix). `stt_final
     outcome=wake_only` is a transcript that was just the wake phrase.
     `gate_match` with `closer` is a closing phrase caught with company
     ("alright, thanks") rather than by the whole-utterance grammar.
-  - `mic_gated` is the mic gate reopening: for `gated_ms` the room sat under
-    `chatterFloorDb` after the talker went quiet and the STT heard silence
-    instead; `peak_db` is the loudest thing it silenced, relative to the wake
-    phrase. Many of these with `peak_db` near the floor means the floor is
-    close to someone real.
+  - `mic_gated` is the mic gate reopening after a mute of 1 s or more: for
+    `gated_ms` the room sat under `chatterFloorDb` after the talker went
+    quiet and the STT heard silence instead; `peak_db` is the loudest thing
+    it silenced, relative to the talker. Many of these with `peak_db` near
+    the floor means the floor is close to someone real. Nothing is logged
+    while the floor is 0 (the default), which only measures.
   - `stt_vocabulary` `keyterms_capped` — what the STT was told to expect at
     session build. Deepgram's ceiling is 100 keyterms (documented, and
     measured; 110 is a 400 on connect) and `headroom` is what is left of it,

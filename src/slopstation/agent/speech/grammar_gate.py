@@ -58,7 +58,7 @@ FILLERS = GREETINGS | {
 CLOSER_RATIO = 85  # "thank" ~91, "go way" ~92 against their closers
 # A closer arrives on its own, give or take fillers. Longer is content
 # ("what time is it, thanks" wants an answer).
-CLOSER_MAX_WORDS = 4
+CLOSER_MAX_WORDS = 5
 
 
 def _anchor_len(toks: list[str], i: int, anchor: str) -> int:
@@ -100,9 +100,10 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
     for i in range(len(toks) - 1):
         if toks[i].strip(_PUNCT).lower() in GREETINGS:
             n = _anchor_len(toks, i + 1, anchor)
-            if n:
+            if n and i + 1 + n < len(toks):  # content after it, or it is a tail
                 cut = i + 1 + n
-    text = " ".join(toks[cut:])
+    if cut:
+        text = " ".join(toks[cut:])
     while True:
         toks = text.split()
         i = 1 if (len(toks) > 1 and toks[0].strip(_PUNCT).lower() in GREETINGS) else 0
@@ -112,15 +113,27 @@ def strip_wake(text: str, anchor: str = "jarvis") -> str:
         text = " ".join(toks[i + n :])
 
 
-def closer_in(text: str, closers: list[str], anchor: str | None = None) -> str | None:
-    """The closing phrase ("thanks", "go away") that ends a short utterance,
-    or that follows a wake anchor inside a long one; None otherwise.
+# Mishears of a one-word closer. One-word windows match exactly (plus these):
+# a fuzzy bar lets "tanks" in as "thanks", and a bare title is an answer.
+MISHEARS = {"thank": "thanks"}
+
+
+def closer_in(
+    text: str, closers: list[str], anchor: str | None = None, loud: bool = False
+) -> str | None:
+    """The closing phrase ("thanks", "go away") that ends a short utterance;
+    None otherwise.
 
     The grammar matches whole utterances, and a closer rarely arrives clean:
-    "Alright. Thanks." after an answer, or "The Alfred go away. Only hands
-    exactly." in a loud room where the TV finished the sentence. A closer at
-    the head of a longer utterance is content ("cancel the download") and a
-    long utterance ending in one wants its answer first, so those stay."""
+    "Alright. Thanks." after an answer, "thanks alfred". Fillers and the wake
+    anchor are ignored around it. A closer at the head of a longer utterance
+    is content ("cancel the download") and a long utterance ending in one
+    wants its answer first, so those stay.
+
+    In a loud room (`loud`: the duck did not land) the TV finishes the user's
+    sentences - "The Alfred go away. Only hands exactly." - so a closer right
+    after a wake anchor counts whatever follows it. Only there: in a quiet
+    room "actually alfred cancel the download" is a command."""
     words = [w for w in (t.strip(_PUNCT).lower() for t in text.split()) if w]
     if not words:
         return None
@@ -128,23 +141,36 @@ def closer_in(text: str, closers: list[str], anchor: str | None = None) -> str |
 
     def match(window: list[str]) -> str | None:
         phrase = " ".join(window)
+        if len(window) == 1:
+            if phrase in closers:
+                return phrase
+            return MISHEARS.get(phrase)
         for c in closers:
             if fuzz.ratio(phrase, c) >= CLOSER_RATIO:
                 return c
         return None
 
-    if anchor:
+    def is_anchor(w: str) -> bool:
+        return anchor is not None and fuzz.ratio(w, anchor) >= 80
+
+    if loud and anchor:
         for i, w in enumerate(words[:-1]):
-            if fuzz.ratio(w, anchor) >= 80:
+            if is_anchor(w):
                 for k in range(1, longest + 1):
                     hit = match(words[i + 1 : i + 1 + k])
                     if hit:
                         return hit
-    core = [w for w in words if w not in FILLERS]
+    core = [w for w in words if w not in FILLERS and not is_anchor(w)]
     if 0 < len(core) <= CLOSER_MAX_WORDS:
         for k in range(1, min(longest, len(core)) + 1):
             hit = match(core[-k:])
-            if hit:
+            if not hit:
+                continue
+            # What is left must be nothing much ("no thanks") or another
+            # closer ("never mind, cancel") - not a question ("what's the
+            # weather, thanks").
+            rest = core[:-k]
+            if len(rest) <= 1 or closer_in(" ".join(rest), closers):
                 return hit
     return None
 
@@ -410,11 +436,12 @@ class GrammarGate(FrameProcessor):
         ):
             text = frame.text.strip()
             conf = stt_confidence(frame)
-            # The room around this turn: how far under the wake phrase it
-            # peaked, and how long after the talker went quiet it arrived.
+            # The room around this turn: how far under the talker it peaked,
+            # and how long after they went quiet it arrived. Not taken for an
+            # empty final, which would rob the next turn of its peak.
             room = (
                 self.level.snapshot()
-                if self.level is not None
+                if self.level is not None and text
                 else {"level_db": None, "quiet_ms": None}
             )
             if text and self._stop_pending:
@@ -476,7 +503,12 @@ class GrammarGate(FrameProcessor):
                 self.dispatch.begin_utterance(turn, text)
                 m = self.matcher.match(text)
                 if m is None:
-                    closer = closer_in(text, self.closers, self.wake_word)
+                    closer = closer_in(
+                        text,
+                        self.closers,
+                        self.wake_word,
+                        loud=self.loud is not None and self.loud(),
+                    )
                     if closer:
                         m = ("ExitSession", {})
                         self.log(

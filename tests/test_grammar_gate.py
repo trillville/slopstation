@@ -172,20 +172,36 @@ STRIP_ALFRED = [
         "What time is it?",
     ),
     ("tell my alfred story", "tell my alfred story"),  # bare mid-anchor: content
+    # A greeted anchor with nothing after it is not where a command starts.
+    ("hey alfred play hades hey alfred", "play hades hey alfred"),
+    ("is that okay alfred", "is that okay alfred"),
+    ("what  time is it", "what  time is it"),  # nothing cut, nothing touched
 ]
 
-# closer_in: (text, expected closer or None), anchor "alfred".
+# closer_in: (text, expected closer or None), anchor "alfred", quiet room.
 CLOSERS = [
     ("Alright. Thanks.", "thanks"),  # fillers around it
-    ("Thank.", "thanks"),  # mishear, ~91
+    ("Thank.", "thanks"),  # the one listed mishear
+    ("thanks alfred", "thanks"),  # the anchor is not content either
     ("never mind, cancel", "cancel"),
     ("yeah leave me alone please", "leave me alone"),
     ("Okay. Thanks. Go ahead.", None),  # the tail is not a closer
     ("what time is it, thanks", None),  # long: wants its answer first
+    ("what's the weather alfred thanks", None),  # same, anchor or not
     ("cancel the download", None),  # a closer at the head is content
-    ("The Alfred go away. Only hands exactly.", "go away"),  # after the anchor
+    ("actually alfred cancel the download", None),  # still a command
+    ("world of tanks", None),  # a title is an answer, not "thanks"
+    ("The Alfred go away. Only hands exactly.", None),  # quiet room: content
     ("hey alfred what time is it", None),
     ("", None),
+]
+
+# The same matcher in a loud room (the duck did not land): the TV finishes
+# the user's sentences, so a closer right after the anchor counts.
+CLOSERS_LOUD = [
+    ("The Alfred go away. Only hands exactly.", "go away"),
+    ("actually alfred cancel the download", "cancel"),  # the price of it
+    ("what time is it, thanks", None),
 ]
 
 # The two-token join, both directions: (text, anchor, want). The second group
@@ -275,6 +291,11 @@ def test_strip_wake_two_token_join(text, anchor, want):
 @pytest.mark.parametrize("text,want", CLOSERS, ids=[t[0] or "empty" for t in CLOSERS])
 def test_closer_in_finds_a_closing_phrase_with_company(text, want):
     assert closer_in(text, load_closers(), "alfred") == want
+
+
+@pytest.mark.parametrize("text,want", CLOSERS_LOUD, ids=[t[0] for t in CLOSERS_LOUD])
+def test_a_loud_room_takes_a_closer_right_after_the_anchor(text, want):
+    assert closer_in(text, load_closers(), "alfred", loud=True) == want
 
 
 def test_exit_sentences_stay_plain_for_closer_matching():
