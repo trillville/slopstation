@@ -77,7 +77,6 @@ regex==2026.7.19
 requests==2.34.2
 resampy==0.4.3
 ruff==0.16.5
-samsungtvws==3.0.5
 scikit-learn==1.9.0
 scipy==1.18.0
 sentry-sdk==2.68.1

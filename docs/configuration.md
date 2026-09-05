@@ -60,8 +60,9 @@ agent does not start. Every other voice key has a default in code, so a
 
 Volume changes set an absolute target through UPnP and verify the resulting
 soundbar level through readback. They need no pairing. `volumeMax` caps both
-absolute and relative commands. Mute sends a paired WebSocket remote toggle;
-the TV provides no reliable mute-state readback.
+absolute and relative commands. Mute reads the current state, writes its
+opposite through the same UPnP service, and requires matching readback.
+An unknown mute state stops a toggle without sending a write.
 Ex-Link remains the power and input path: its volume acknowledgments do not
 mean the soundbar changed.
 

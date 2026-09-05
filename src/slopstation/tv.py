@@ -1,4 +1,4 @@
-"""Control TV power/input over Ex-Link and volume over HTTP."""
+"""Control TV power/input over Ex-Link and audio over HTTP."""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ import json
 import threading
 import time
 from typing import NamedTuple
-
-from slopstation import paths
 
 # All Tv instances in the voice process share the same soundbar. Reentrant so
 # ducking can keep its read/restore bookkeeping in the same transaction.
@@ -25,7 +23,7 @@ class VolumeChange(NamedTuple):
 
 
 class Tv:
-    """Household TV control. Commands acknowledge receipt; volume verifies state.
+    """Household TV control. Serial acknowledges receipt; audio verifies state.
 
     Construction performs no I/O. Each process owns its instances; the volume
     transaction coordinates instances within a process, not other processes.
@@ -98,41 +96,46 @@ class Tv:
             except Exception as e:
                 self.log.warn("tv_duck_failed", stage="write", err=str(e))
             # A lost HTTP reply does not prove the write failed.
-            final = self._settle(target)
+            final = self._settle(self.volume, target)
             return VolumeChange(now, target, now if final is None else final)
 
-    def _settle(self, target):
+    def _settle(self, read, target):
         for _ in range(24):
-            level = self.volume()
-            if level == target:
-                return level
+            value = read()
+            if value == target:
+                return value
             time.sleep(0.1)
-        return self.volume()
+        return read()
 
-    def _remote(self, timeout=6):
-        if not self.ip:
-            raise ValueError("remote control needs tvIp and TV pairing - see setup.md")
-        from samsungtvws import SamsungTVWS
+    def muted(self) -> bool | None:
+        """Unknown mute state is distinct from unmuted."""
+        with self.volume_transaction():
+            value = (
+                _read_rendering(self.ip, "GetMute", "CurrentMute") if self.ip else None
+            )
+            return bool(value) if value in (0, 1) else None
 
-        token = paths.state("tv-ws-token.txt")
-        token.parent.mkdir(exist_ok=True)
-        return SamsungTVWS(
-            self.ip,
-            port=8002,
-            token_file=str(token),
-            name="slopstation-k15",
-            timeout=timeout,
-            key_press_delay=0.15,
-        )
+    def set_mute(self, muted: bool) -> bool:
+        """Set an explicit state once and require matching readback."""
+        with self.volume_transaction():
+            if not self.ip:
+                raise ValueError("mute control needs tvIp - see setup.md")
+            try:
+                _rendering_request(
+                    self.ip, "SetMute", f"<DesiredMute>{int(muted)}</DesiredMute>", 2.0
+                )
+            except Exception as e:
+                self.log.warn("tvremote_fail", cmd="mute", err=str(e))
+            if self._settle(self.muted, muted) is not muted:
+                raise RuntimeError(f"mute state {muted} wasn't verified")
+            return muted
 
-    def toggle_mute(self) -> None:
-        """Send a toggle; receipt does not verify mute state."""
-        with self._remote() as remote:
-            remote.send_key("KEY_MUTE")
-
-    def pair(self) -> None:
-        with self._remote(timeout=45) as remote:
-            remote.open()
+    def toggle_mute(self) -> bool:
+        with self.volume_transaction():
+            before = self.muted()
+            if before is None:
+                raise RuntimeError("couldn't read mute state - nothing changed")
+            return self.set_mute(not before)
 
 
 def main(argv=None):
@@ -144,7 +147,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Control the household TV")
     ap.add_argument(
         "command",
-        choices=("power_on", "power_off", "input", "vol", "up", "down", "mute", "pair"),
+        choices=("power_on", "power_off", "input", "vol", "up", "down", "mute"),
     )
     ap.add_argument("value", nargs="?")
     args = ap.parse_args(argv)
@@ -182,13 +185,20 @@ def main(argv=None):
             )
             return 0 if change.ok else 1
         else:
-            if command == "pair":
-                print("watch the TV - accept the pairing prompt...")
-                device.pair()
+            if args.value == "status":
+                muted = device.muted()
+                if muted is None:
+                    raise RuntimeError("couldn't read mute state")
+                print(f"muted={muted}")
+                return 0
+            if args.value is None:
+                muted = device.toggle_mute()
+            elif args.value in ("on", "off"):
+                muted = device.set_mute(args.value == "on")
             else:
-                device.toggle_mute()
+                raise ValueError("mute takes on, off, status, or no value to toggle")
             events.emit("manual", "tvremote_send", cmd=command, ok=True)
-            print(f"{command}: sent")
+            print(f"muted={muted}, verified=True")
         return 0
     except Exception as e:
         events.emit(
@@ -284,7 +294,7 @@ def tv_power_state(ip: str, timeout: float = 2.0, raw: bool = False) -> str | No
     return state if state in ("on", "standby") else None
 
 
-def _volume_request(ip: str, action: str, arguments: str, timeout: float) -> str:
+def _rendering_request(ip: str, action: str, arguments: str, timeout: float) -> str:
     """UPnP RenderingControl on the TV; with eARC this controls the soundbar."""
     import urllib.request
 
@@ -312,16 +322,24 @@ def _volume_request(ip: str, action: str, arguments: str, timeout: float) -> str
 def tv_set_volume(ip: str, level: int, timeout: float = 2.0) -> None:
     """Set volume without pairing. Callers must verify it with tv_volume."""
     level = max(0, min(100, int(level)))
-    _volume_request(ip, "SetVolume", f"<DesiredVolume>{level}</DesiredVolume>", timeout)
+    _rendering_request(
+        ip, "SetVolume", f"<DesiredVolume>{level}</DesiredVolume>", timeout
+    )
 
 
 def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
     """Read soundbar volume without pairing. None means unknown, not zero;
     the UPnP renderer may be unavailable while the TV sleeps."""
+    return _read_rendering(ip, "GetVolume", "CurrentVolume", timeout)
+
+
+def _read_rendering(
+    ip: str, action: str, field: str, timeout: float = 2.0
+) -> int | None:
     try:
-        out = _volume_request(ip, "GetVolume", "", timeout)
-        start = out.index("<CurrentVolume>") + len("<CurrentVolume>")
-        return int(out[start : out.index("</CurrentVolume>")])
+        out = _rendering_request(ip, action, "", timeout)
+        start = out.index(f"<{field}>") + len(field) + 2
+        return int(out[start : out.index(f"</{field}>")])
     except Exception:
         return None
 

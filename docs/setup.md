@@ -14,9 +14,8 @@ media stack has its own guide, [media/README.md](../media/README.md).
 
 Prerequisites: Windows 11, Python 3.13, Git, the TV's Ex-Link serial adapter,
 and for voice a USB microphone and a speaker. The TV must be a Samsung set
-with an Ex-Link port: power and input go over that serial link, volume ducking
-uses UPnP over HTTP, and remote keys use Samsung's WebSocket API. Another make means
-replacing `tv.py`.
+with an Ex-Link port: power and input go over that serial link, and volume and
+mute use UPnP over HTTP. Another make means adapting `tv.py`.
 
 1. Clone the repository, for example to `C:\slopstation`. The checkout is the
    installation: `config.json`, `secrets.json`, `state\` and `logs\` sit
@@ -53,15 +52,15 @@ replacing `tv.py`.
    .\Start-Slopstation.bat
    ```
 
-8. Set `tvIp` for volume commands and ducking; these do not require pairing.
-   For mute and manual remote keys, pair with the TV and accept its prompt:
+8. Set `tvIp` for volume, mute, and ducking. These use the TV's local HTTP
+   interface and do not require pairing. List the manual controls with:
 
    ```powershell
-   .venv\Scripts\python -m slopstation.tv pair
+   .venv\Scripts\python -m slopstation.tv --help
    ```
 
-   `python -m slopstation.tv --help` lists the shared manual controls. For example,
    `vol` reads volume, `vol 14` sets it, and `input hdmi1` selects an input.
+   `mute status` reads mute state; `mute on` and `mute off` set it explicitly.
    The separate `slopstation.exlink` command is a raw serial diagnostic.
 
 9. Run the doctor until it ends with `0 fail`:

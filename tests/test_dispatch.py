@@ -8,7 +8,6 @@ from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, tv
 from slopstation.agent import dispatch as dp
 from slopstation.agent.tools import library
-from slopstation.tv import Tv
 
 CFG = {
     "tvIp": "192.0.2.1",
@@ -86,10 +85,19 @@ def test_lock_arbiter():
 def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     readings = iter([20, 23, 23, 40, 40, 25])
     levels = []
-    keys = []
+    muted = False
     monkeypatch.setattr(tv, "tv_volume", lambda ip: next(readings))
     monkeypatch.setattr(tv, "tv_set_volume", lambda ip, level: levels.append(level))
-    monkeypatch.setattr(Tv, "toggle_mute", lambda self: keys.append(("mute", 1)))
+
+    def rendering_request(ip, action, arguments, timeout):
+        nonlocal muted
+        if action == "GetMute":
+            return f"<CurrentMute>{int(muted)}</CurrentMute>"
+        assert action == "SetMute"
+        muted = "<DesiredMute>1</DesiredMute>" in arguments
+        return "<SetMuteResponse/>"
+
+    monkeypatch.setattr(tv, "_rendering_request", rendering_request)
     d, _ = harness()
     assert d.volume_up().ok
     assert levels.pop() == 23
@@ -98,7 +106,7 @@ def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     assert r.ok and levels.pop() == 40
     assert d.volume_set(25).ok and levels.pop() == 25
 
-    assert d.mute_toggle().ok and keys.pop() == ("mute", 1)
+    assert d.mute_toggle().ok and muted
     assert not sent
 
 
