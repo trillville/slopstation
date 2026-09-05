@@ -11,6 +11,7 @@ from slopstation.agent.speech.preroll import (
     CHUNK_BYTES,
     CHUNK_SAMPLES,
     SAMPLE_RATE,
+    PrerollAudioFrame,
     PrerollFeeder,
     WakeAck,
     WakeCapture,
@@ -189,6 +190,7 @@ async def test_feeder_stops_capture_at_startframe_and_feeds_it_in_hops(monkeypat
     assert fed[0].audio == marker and len(fed[-1].audio) == 100, fed
     assert all(len(f.audio) == CHUNK_BYTES for f in fed[:-1])
     assert all(f.sample_rate == 16000 and f.num_channels == 1 for f in fed)
+    assert all(isinstance(f, PrerollAudioFrame) for f in fed), "marked as replay"
 
 
 async def test_pipeline_ordering(monkeypatch):

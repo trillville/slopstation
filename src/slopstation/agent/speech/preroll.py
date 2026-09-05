@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 
 import numpy as np
 from pipecat.frames.frames import Frame, InputAudioRawFrame, StartFrame
@@ -111,10 +111,16 @@ class WakeCapture:
         return self._pcm
 
 
+class PrerollAudioFrame(InputAudioRawFrame):
+    """A replayed hop. The STT hears it as mic audio; level.RoomLevel tells
+    it from live audio in-band, so nothing depends on pipecat's frame
+    ordering between processors."""
+
+
 def _frames(pcm: bytes) -> list:
     """The PCM as input frames on the wake loop's 80 ms hop."""
     return [
-        InputAudioRawFrame(
+        PrerollAudioFrame(
             audio=pcm[i : i + CHUNK_BYTES], sample_rate=SAMPLE_RATE, num_channels=1
         )
         for i in range(0, len(pcm), CHUNK_BYTES)
@@ -132,8 +138,6 @@ class PrerollFeeder(FrameProcessor):
         super().__init__()
         self._log = log
         self.capture = None  # WakeCapture, stopped on StartFrame
-        # Called once the replay is fed.
-        self.on_replayed: Callable[[], None] | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -145,5 +149,3 @@ class PrerollFeeder(FrameProcessor):
                 self._log("preroll_fed", audio_s=round(len(pcm) / BYTES_PER_S, 1))
                 for f in _frames(pcm):
                     await self.push_frame(f)
-        if isinstance(frame, StartFrame) and self.on_replayed is not None:
-            self.on_replayed()

@@ -18,9 +18,8 @@ def chunk(level):
 
 
 def live(floor_db=0, log=None, loud=None, talker=8000):
-    """A RoomLevel past the replay whose first live turn set the reference."""
+    """A RoomLevel whose first live turn set the reference."""
     lvl = RoomLevel(floor_db=floor_db, log=log, loud=loud)
-    lvl.go_live()
     lvl.hear(chunk(talker), now=0.0)
     lvl.snapshot(now=0.0)
     return lvl
@@ -30,11 +29,10 @@ def test_the_first_live_turn_is_the_reference_not_the_pre_roll():
     # The pre-roll predates the duck: its peak is the TV (8000), the talker
     # 20 dB under. The gate must not measure the person against that.
     lvl = RoomLevel(floor_db=15)
-    lvl.hear(chunk(8000), now=0.0)  # replay: TV
-    lvl.hear(chunk(800), now=0.1)  # replay: the wake phrase
+    lvl.hear(chunk(8000), now=0.0, replay=True)  # TV
+    lvl.hear(chunk(800), now=0.1, replay=True)  # the wake phrase
     assert lvl.snapshot(now=0.2)["level_db"] is None, "no reference yet"
-    assert lvl.reference == 0
-    lvl.go_live()
+    assert lvl.reference == 0 and not lvl.live
     lvl.hear(chunk(800), now=1.0)  # the talker, TV now ducked
     assert lvl.snapshot(now=1.0)["level_db"] == 0.0
     assert lvl.reference == 800
@@ -98,8 +96,8 @@ def test_no_floor_no_reference_or_a_loud_room_never_mutes():
     off = live(floor_db=0)
     assert off.hear(tv, now=5.0) == tv and not off.gated
     unknown = RoomLevel(floor_db=15)  # nothing live yet
-    unknown.hear(chunk(8000), now=1.0)
-    assert unknown.hear(tv, now=5.0) == tv and not unknown.gated
+    unknown.hear(chunk(8000), now=1.0, replay=True)
+    assert unknown.hear(tv, now=5.0, replay=True) == tv and not unknown.gated
     loud = live(floor_db=15, loud=lambda: True)  # the duck did not land
     assert loud.hear(tv, now=5.0) == tv and not loud.gated
 

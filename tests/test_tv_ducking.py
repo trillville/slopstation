@@ -231,6 +231,7 @@ def test_a_human_on_the_remote_mid_session_wins():
     assert room.vol == 20 and dk.out == 0
     u0 = log.find("tv_unducked")[0]
     assert u0["reason"] == "user_adjusted" and u0["steps"] == 0 and u0["ok"] is True, u0
+    assert u0["writes"] == 0, "no move, and the field is still there"
 
 
 def test_debt_when_readback_dies_at_close_a_later_close_restores_exactly():
@@ -240,6 +241,7 @@ def test_debt_when_readback_dies_at_close_a_later_close_restores_exactly():
     dk.unduck()  # cannot verify: keep debt
     assert dk.out == 10
     assert log.find("tv_unducked")[0]["reason"] == "no_readback"
+    assert log.find("tv_unducked")[0]["writes"] == 0
     assert log.find("tv_duck_deficit")[0]["steps"] == 10
     room.set(readback_dead=False)
     assert dk.duck() is True  # already down 10: left alone, debt unchanged

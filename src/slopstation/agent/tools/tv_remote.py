@@ -226,7 +226,14 @@ class TvDucker(TvVolume):
         now = self.read()
         if now is None:
             # Cannot verify a restore. Keep the debt; the next close retries.
-            self.log("tv_unducked", steps=0, asked=want, ok=False, reason="no_readback")
+            self.log(
+                "tv_unducked",
+                steps=0,
+                asked=want,
+                ok=False,
+                reason="no_readback",
+                writes=0,
+            )
             self.log.warn("tv_duck_deficit", steps=self.out)
             return
         if self.expect is not None and now != self.expect:
@@ -239,6 +246,7 @@ class TvDucker(TvVolume):
                 ok=True,
                 reason="user_adjusted",
                 vol=now,
+                writes=0,
             )
             self.out, self.expect = 0, None
             return

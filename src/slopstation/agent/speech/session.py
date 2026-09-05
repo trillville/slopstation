@@ -205,7 +205,6 @@ class Session:
         )
 
         feeder = PrerollFeeder(log)
-        feeder.on_replayed = level.go_live
         # Flux only PROPOSES turn edges since pipecat 1.8, and its stop
         # proposal is a queued ControlFrame - resolved downstream of a gate
         # whose queue blocks on dispatch, a stale stop can land after the next

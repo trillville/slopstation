@@ -23,7 +23,7 @@ import time
 from pipecat.frames.frames import Frame, InputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from slopstation.agent.speech.preroll import _rms
+from slopstation.agent.speech.preroll import PrerollAudioFrame, _rms
 
 FULL_SCALE = 32768.0
 
@@ -57,11 +57,6 @@ class RoomLevel(FrameProcessor):
     def gated(self) -> bool:
         return self._gated_since is not None
 
-    def go_live(self) -> None:
-        """The replay is over; the first turn from here sets the reference."""
-        self.live = True
-        self._peak = 0.0
-
     def _line(self) -> float:
         ratio = 10 ** (-self.floor_db / 20) if self.floor_db > 0 else self.QUIET_RATIO
         return (self.reference or self._peak) * ratio
@@ -74,9 +69,14 @@ class RoomLevel(FrameProcessor):
             and not (self.loud is not None and self.loud())
         )
 
-    def hear(self, chunk: bytes, now: float | None = None) -> bytes:
-        """One hop in; the hop, or silence while gated, out."""
+    def hear(
+        self, chunk: bytes, now: float | None = None, replay: bool = False
+    ) -> bytes:
+        """One hop in; the hop, or silence while gated, out. The first live
+        hop after the replay starts the turn that sets the reference."""
         now = time.monotonic() if now is None else now
+        if not replay and not self.live:
+            self.live, self._peak = True, 0.0
         level = _rms(chunk)
         self._peak = max(self._peak, level)
         line = self._line()
@@ -131,5 +131,7 @@ class RoomLevel(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, InputAudioRawFrame):
-            frame.audio = self.hear(frame.audio)
+            frame.audio = self.hear(
+                frame.audio, replay=isinstance(frame, PrerollAudioFrame)
+            )
         await self.push_frame(frame, direction)
