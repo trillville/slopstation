@@ -103,12 +103,18 @@ class Tv:
             return VolumeChange(now, target, now if final is None else final)
 
     def _settle(self, read, target):
+        # Bound retries by elapsed time as well as count. An in-flight read
+        # can still take its two-second HTTP timeout.
+        deadline = time.monotonic() + 2.4
+        value = None
         for _ in range(24):
+            if time.monotonic() >= deadline:
+                break
             value = read()
             if value == target:
                 return value
             time.sleep(0.1)
-        return read()
+        return value
 
     def muted(self) -> bool | None:
         """Unknown mute state is distinct from unmuted."""
