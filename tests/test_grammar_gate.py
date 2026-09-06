@@ -183,6 +183,8 @@ CLOSERS = [
     ("Thank.", "thanks"),  # the one listed mishear
     ("thanks alfred", "thanks"),  # the anchor is not content either
     ("no thanks", "thanks"),
+    ("alright, that's all", "that's all"),  # "all" is the closer's own word
+    ("all right, that's all", "that's all"),
     ("don't go away", None),  # the opposite of a closer
     ("please don't go away", None),
     ("never mind, cancel", "cancel"),
