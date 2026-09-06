@@ -19,7 +19,7 @@ repository. It is not a framework.
 flowchart LR
     chord[Controller chord] --> mini[Mini PC]
     voice[Voice and text] --> mini
-    mini -->|serial, HTTP, WebSocket| tv[Samsung TV]
+    mini -->|serial, HTTP| tv[Samsung TV]
     mini -->|Wake-on-LAN, SSH, controller over USB/IP| pc[Gaming PC]
     pc -->|HDMI| tv
     mini --> media[Steam, Radarr, Sonarr]
@@ -49,9 +49,8 @@ voice run as separate processes, so either can restart on its own.
 | Speech | openWakeWord, Deepgram for speech to text and text to speech, Anthropic or OpenAI for the assistant |
 
 The TV is the one hard dependency on a brand. Power and input go over Ex-Link,
-Samsung's serial control protocol. Volume ducking uses UPnP over HTTP, and
-remote keys use Samsung's WebSocket API. Another make of TV means adapting
-`tv.py`.
+Samsung's serial control protocol. Volume and mute use UPnP over HTTP, with
+readback to verify changes. Another make of TV means adapting `tv.py`.
 
 The custom wake model in `src/slopstation/agent/models` was trained by the
 author on recordings from this room with
