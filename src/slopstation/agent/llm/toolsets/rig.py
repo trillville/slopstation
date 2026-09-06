@@ -85,6 +85,16 @@ start_session does this itself) or put it to sleep. Sleep is refused while a
 session is live, a game is running, or someone is signed in at the desk, so
 it cannot end what is on the TV or under someone's hands."""
 
+DISPLAY = """\
+Move the PC's desktop between screens with NO session: 'tv' puts the desktop
+on the TV (the TV is switched to the PC first) for a one-off, for using the
+PC on the TV without Steam Big Picture, or to fix a profile stuck the wrong
+way; 'monitor' puts it back on the desk monitor. The controller is not part
+of this - the mouse and keyboard at the desk drive it - and nothing puts the
+display back on its own: say so. Not the session: 'back to the office' means
+END the session, which restores the monitor itself. Refused while a session
+is live."""
+
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this
 for 'install <game>'. It either queues the download on the PC outright or
@@ -292,6 +302,25 @@ SPECS += [
             "steam library free space",
             "is steam online",
             "room to install",
+        ),
+        default=False,
+    ),
+    ToolSpec(
+        "display",
+        DISPLAY,
+        {"target": {"type": "string", "enum": ["tv", "monitor"]}},
+        ("target",),
+        risk="act",
+        area="session",
+        keywords=(
+            "desktop on the tv",
+            "put the pc on the tv",
+            "display profile",
+            "back on the monitor",
+            "wrong screen",
+            "display stuck",
+            "switch the display",
+            "without big picture",
         ),
         default=False,
     ),
@@ -644,6 +673,10 @@ def impls(ctx: ToolContext):
                 out["steam_online_error"] = str(e)
         return out
 
+    def display(args):
+        r = dispatch.display(str(args.get("target") or ""))
+        return {"ok": r.ok, "detail": r.detail}
+
     def pc_power(args):
         action = str(args.get("action") or "")
         if action not in ("wake", "sleep"):
@@ -682,5 +715,6 @@ def impls(ctx: ToolContext):
         "install_game": install_game,
         "tv_status": tv_status,
         "pc_status": pc_status,
+        "display": display,
         "pc_power": pc_power,
     }

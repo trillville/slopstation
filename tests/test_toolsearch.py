@@ -67,6 +67,7 @@ ASKS = {
     "tv_status": "is the tv on and how loud is it",
     "pc_status": "is the pc awake and how much room is there to install",
     "pc_power": "put the pc to sleep",
+    "display": "put the desktop on the tv without big picture",
 }
 
 
