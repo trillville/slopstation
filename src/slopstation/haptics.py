@@ -8,12 +8,12 @@ from collections.abc import Sequence
 # 0x1304 = USB_PRODUCT_VALVE_STEAM_PROTEUS_DONGLE in SDL's usb_ids.h.
 VID, PID = 0x28DE, 0x1304
 
-# Input report type measured by calibrate.py. Recheck after firmware updates.
+# Input report type, measured off the controller. Recheck after firmware
+# updates.
 RID_INPUT = 0x42  # ID_TRITON_CONTROLLER_STATE in SDL
 
 # Layouts from SDL's steam/controller_structs.h. All u16 values are
 # little-endian with no padding.
-HAPTIC_RUMBLE = 0x80  # 10B: type u8, intensity u16, left speed u16 + gain s8, right speed u16 + gain s8
 # 8B: side u8, on_us u16, off_us u16, repeat u16; zero-filled = stop tone
 HAPTIC_PULSE = 0x81
 HAPTIC_TONE = 0x83  # 10B: side u8, gain_db s8, freq u16, duration_ms u16, lfo_freq u16, lfo_depth u8
@@ -32,20 +32,6 @@ def pulse_report(side, on_us, off_us, repeat):
 def stop_report(side):
     """Zero-filled 0x81 = stop any playing tone on that side."""
     return pulse_report(side, 0, 0, 0)
-
-
-def rumble_report(intensity, left_speed, left_gain, right_speed, right_gain):
-    """One-shot 0x80 rumble; hardware safety-timeout stops it in ~50 ms."""
-    return struct.pack(
-        "<BBHHbHb",
-        HAPTIC_RUMBLE,
-        0,
-        intensity,
-        left_speed,
-        left_gain,
-        right_speed,
-        right_gain,
-    )
 
 
 # --- finding the interface ----------------------------------------------------
@@ -105,21 +91,15 @@ def play_pattern(dev, steps: Sequence[tuple[int, ...]], gain: int = 0) -> None:
         dev.write(stop_report(side))
 
 
-def chirp(dev, gain: int = 0, write=None) -> None:
+def chirp(dev, gain: int = 0) -> None:
     """Two short self-terminating tones + stops: the 'is the haptic path alive'
-    stimulus doctor.py sends. `write(dev, report, label)` swaps in haptic_test's
-    logged, pad-on-failure write; the default is a plain dev.write."""
-    put = write or (lambda d, report, label: d.write(report))
+    stimulus doctor.py sends."""
     for freq, dur in ((440, 60), (660, 90)):
         for side in (0, 1):
-            put(
-                dev,
-                tone_report(side, freq, dur, gain),
-                f"tone {freq}Hz/{dur}ms side{side}",
-            )
+            dev.write(tone_report(side, freq, dur, gain))
         time.sleep(0.07)
     for side in (0, 1):
-        put(dev, stop_report(side), f"stop side{side}")
+        dev.write(stop_report(side))
 
 
 # --- Haptic vocabulary: one base note, count is the message -------------------

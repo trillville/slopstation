@@ -185,14 +185,16 @@ def check_haptics():
         report(
             PASS,
             "haptics",
-            "chirp sent - you should have felt it (if not: rerun after firmware calibrate)",
+            "chirp sent - you should have felt it "
+            "(if not: recheck after a controller firmware update)",
         )
     except Exception as e:
         report(
             FAIL,
             "haptics",
             f"write failed ({e})",
-            "protocol drift after firmware update? re-run slopstation.calibrate and slopstation.haptic_test",
+            "protocol drift after firmware update? recheck the report "
+            "layouts in haptics.py against SDL's controller_structs.h",
         )
     finally:
         dev.close()
