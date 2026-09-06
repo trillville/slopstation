@@ -434,13 +434,21 @@ def impls(ctx: ToolContext):
                 # mints (a web-audience token never does). Fall
                 # through to the path that needs no credential.
                 log.error("install_error", appid=appid, err=str(e))
+        # With no session, nav starts one and the page comes up with it; the
+        # receipt has to say so rather than claim the page is on the TV now.
+        starting = not sessionlock.active()
         r = dispatch.nav("details", appid)
-        if r.ok:
+        if not r.ok:
+            return {"ok": False, "error": r.detail}
+        if starting:
             return {
                 "ok": True,
-                "detail": "it's on the TV now - press Install and the download starts",
+                "detail": f"{r.detail} - then press Install and the download starts",
             }
-        return {"ok": False, "error": r.detail}
+        return {
+            "ok": True,
+            "detail": "it's on the TV now - press Install and the download starts",
+        }
 
     @bind
     def nav(args):

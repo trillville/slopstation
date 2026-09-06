@@ -299,6 +299,9 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     # The clock is the LAST line, so every token before it is a stable prefix.
     assert re.search(r"It is \d\d:\d\d on [\d-]+ local time" + r"\.$", si.strip())
     assert si.index("CATALOG (") < si.rindex("It is ")
+    # A config that says "inputs": null still gets a prompt, with no input names.
+    nulled = {**CFG_MIN, "voice": {**CFG_MIN["voice"], "inputs": None}}
+    assert "none configured" in assistant.system_instruction(nulled)
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
     assert "local time" in flat(si)
@@ -611,8 +614,15 @@ def test_a_dead_token_falls_through_to_the_tv_path(
         {"appid": INSTALLED}
     )["dry_run"]
     # A dead token must not end the request: it falls through to the TV path.
+    # With no session the page comes up with the session nav starts, and the
+    # receipt says so instead of claiming the page is on the TV already.
     assert inst["ok"] and "press Install" in inst["detail"], inst
+    assert "showing" in inst["detail"] and "on the TV now" not in inst["detail"]
     assert navd == [("details", INSTALLED)], navd
+    seed_lock(10)  # a live session: the page is on the TV at once
+    inst = rimpls["install_game"]({"appid": INSTALLED})
+    assert inst["ok"] and "on the TV now" in inst["detail"], inst
+    seed_lock(None)
     dl = rimpls["download_status"]({})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())

@@ -42,7 +42,9 @@ def tools_map(offered=None):
 def system_instruction(cfg, interface="voice", offered=None):
     """Build the system prompt from configuration and the game catalog."""
     voice = cfg["voice"]
-    inputs = voice.get("inputs", {})
+    # `or {}`: a config that says "inputs": null is a misconfiguration the
+    # doctor reports, not a reason for every prompt to fail.
+    inputs = voice.get("inputs") or {}
     # A day with no zone resolves toward UTC and dates an evening brief
     # tomorrow. Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
