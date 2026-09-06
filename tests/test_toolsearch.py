@@ -38,6 +38,22 @@ ASKS = {
     "orphan_files": "any leftover or orphan files on the drive",
     "delete_path": "delete that folder from the disk",
     "drive_health": "is the drive ok, any smart warnings",
+    "browse_media": "browse the movies i have by genre, recently added",
+    "media_details": "what quality is that movie and which episodes are missing",
+    "missing_media": "what episodes are missing or not downloaded yet",
+    "calendar": "what airs this week, upcoming episodes",
+    "search_releases": "do a manual search for releases of that movie",
+    "grab_release": "grab that release and download that one",
+    "retry_search": "search again for it, the download is stuck",
+    "set_monitored": "stop tracking that show, unmonitor it",
+    "set_quality_profile": "change the quality profile to 4k",
+    "import_queue": "why is the import stuck, show the queue warnings",
+    "resolve_queue_item": "remove it from the queue and blocklist that release",
+    "manual_import": "force the manual import of that download",
+    "media_history": "what was grabbed recently, media history",
+    "media_health": "is radarr ok, media stack health and indexer status",
+    "movie_collections": "do i have all the alien movies in the collection",
+    "search_indexers": "search the indexers for a documentary release",
 }
 
 

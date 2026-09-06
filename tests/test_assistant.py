@@ -419,14 +419,24 @@ def test_list_operations_acknowledges_only_on_a_live_recent_read(
 def test_function_schemas_render_only_the_tools_present(
     dispatch, log, impls, fake_operations, media_impls
 ):
-    # find_tools, steam_api and eleven base tools; no operations, no media.
-    assert len(assistant.function_schemas(impls, log)) == 13
+    # The schema list is exactly the tools whose services are present: the
+    # registry's `needs` is the one gate, on both the impls and the schemas.
+    def expect(*services):
+        have = set(services) | {"steam_data"}
+        return {s.name for s in assistant.REGISTRY if set(s.needs) <= have}
+
+    def names(schemas):
+        return {s.name for s in schemas}
+
+    assert names(assistant.function_schemas(impls, log)) == expect()
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert len(assistant.function_schemas(oimpls, log)) == 14
-    # Media adds its five tools, the five storage tools, describe_api and the
-    # two arr passthroughs; the fake carries no qBittorrent or Prowlarr, so
-    # the torrent tools and theirs stay out.
-    assert len(assistant.function_schemas(media_impls, log)) == 27
+    assert names(assistant.function_schemas(oimpls, log)) == expect("operations")
+    # The media fake carries no qBittorrent or Prowlarr, so the torrent tools
+    # and the Prowlarr ones stay out while the arr and storage tools come in.
+    assert names(assistant.function_schemas(media_impls, log)) == expect(
+        "operations", "media"
+    )
+    assert "list_torrents" not in names(assistant.function_schemas(media_impls, log))
 
 
 # -- the media tools -----------------------------------------------------------
