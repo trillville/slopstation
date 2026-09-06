@@ -594,6 +594,59 @@ class MediaService:
             out["command_ids"] = command_ids
         return out
 
+    # -- what the arr apps hold, keyed by download ------------------------------
+
+    def download_index(self):
+        """{infohash lower: {kind, title, queue_id, authority}} for every queue
+        item Radarr and Sonarr are waiting on. This is the torrent-to-media
+        link: a torrent in here belongs to an arr app, which owns its identity,
+        location and lifecycle."""
+        out = {}
+        for kind, client, id_key, include in (
+            ("movie", self.radarr, "movie", "includeMovie"),
+            ("series", self.sonarr, "series", "includeSeries"),
+        ):
+            try:
+                queue = client.get(
+                    "queue", {"page": 1, "pageSize": 1000, include: "true"}
+                )
+            except MediaError as e:
+                self.log.warn("queue_read_failed", authority=client.name, err=str(e))
+                continue
+            for row in (
+                (queue or {}).get("records", []) if isinstance(queue, dict) else []
+            ):
+                download_id = str(row.get("downloadId") or "").lower()
+                if not download_id:
+                    continue
+                parent = row.get(id_key) if isinstance(row.get(id_key), dict) else {}
+                out[download_id] = {
+                    "kind": kind,
+                    "title": parent.get("title") or f"{kind} {row.get(id_key + 'Id')}",
+                    "queue_id": row.get("id"),
+                    "authority": client.name,
+                    "status": row.get("status"),
+                }
+        return out
+
+    def known_download_ids(self):
+        """Every infohash the arr apps have ever grabbed or imported, from
+        their histories. A completed torrent outside this set is an orphan:
+        nobody asked for it through Radarr or Sonarr."""
+        known = set()
+        for client in (self.radarr, self.sonarr):
+            try:
+                history = client.get("history", {"page": 1, "pageSize": 1000})
+            except MediaError as e:
+                self.log.warn("history_read_failed", authority=client.name, err=str(e))
+                continue
+            rows = history.get("records", []) if isinstance(history, dict) else []
+            for row in rows:
+                download_id = str(row.get("downloadId") or "").lower()
+                if download_id:
+                    known.add(download_id)
+        return known
+
     @staticmethod
     def _command_phase(client, command_ids):
         statuses = []

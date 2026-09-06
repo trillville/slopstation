@@ -423,9 +423,10 @@ def test_function_schemas_render_only_the_tools_present(
     assert len(assistant.function_schemas(impls, log)) == 13
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
     assert len(assistant.function_schemas(oimpls, log)) == 14
-    # Media adds its five tools plus describe_api and the two arr passthroughs;
-    # the fake carries no qBittorrent or Prowlarr, so theirs stay out.
-    assert len(assistant.function_schemas(media_impls, log)) == 22
+    # Media adds its five tools, the five storage tools, describe_api and the
+    # two arr passthroughs; the fake carries no qBittorrent or Prowlarr, so
+    # the torrent tools and theirs stay out.
+    assert len(assistant.function_schemas(media_impls, log)) == 27
 
 
 # -- the media tools -----------------------------------------------------------

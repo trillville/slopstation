@@ -198,6 +198,12 @@ class FakeQbitWeb:
             changes = json.loads(urllib.parse.parse_qs(body.decode())["json"][0])
             self.preferences.update(changes)
             return {}, b""
+        if path.endswith("/torrents/info"):
+            return {}, json.dumps([{"hash": "a" * 40, "name": "x"}]).encode()
+        if path.endswith("/torrents/stop"):
+            return {}, b""
+        if path.endswith("/transfer/speedLimitsMode"):
+            return {}, b"1"
         raise AssertionError((method, path))
 
     def count(self, suffix):
@@ -217,6 +223,26 @@ def qbit(qbit_web):
         "a-long-qbit-password",
         transport=qbit_web.transport,
     )
+
+
+def test_qbittorrent_client_torrent_calls_carry_params_and_form_fields(qbit, qbit_web):
+    rows = qbit.torrents(filter="downloading", sort="added_on", reverse=True)
+    assert rows[0]["hash"] == "a" * 40
+    method, url, headers, body, _ = qbit_web.calls[-1]
+    assert method == "GET" and url.endswith(
+        "/torrents/info?filter=downloading&sort=added_on&reverse=true"
+    )
+    qbit.torrent_action("stop", ["a" * 40, "b" * 40])
+    method, url, headers, body, _ = qbit_web.calls[-1]
+    assert method == "POST" and url.endswith("/torrents/stop")
+    assert urllib.parse.parse_qs(body.decode()) == {
+        "hashes": ["a" * 40 + "|" + "b" * 40]
+    }
+    assert qbit.speed_limits_mode() is True
+    # The passthrough shape: JSON when it parses, text otherwise, None when empty.
+    assert qbit.call("GET", "torrents/info")[0]["name"] == "x"
+    assert qbit.call("GET", "transfer/speedLimitsMode") == 1
+    assert qbit.call("POST", "torrents/stop", payload={"hashes": "all"}) is None
 
 
 def test_qbittorrent_client_logs_in_once_and_sets_the_port(qbit, qbit_web, monkeypatch):

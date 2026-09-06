@@ -20,7 +20,7 @@ def test_every_spec_is_well_formed():
             assert "limit" in spec.properties, f"{spec.name} is paged without a limit"
             assert "count" in spec.description, spec.name
     destructive = {s.name for s in assistant.REGISTRY if s.risk == "destructive"}
-    assert destructive == {"delete_media"}
+    assert destructive == {"delete_media", "delete_torrent", "delete_path"}
     # Destructive tools are never in the default set: the search step is a
     # natural pause before them.
     assert all(not assistant.REGISTRY.get(n).default for n in destructive)

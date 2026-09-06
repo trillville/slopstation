@@ -10,6 +10,8 @@ from slopstation.agent.llm.toolsets import (
     rig,
     search,
     steam,
+    storage,
+    torrents,
 )
 
-ALL = (search, rig, steam, house, media, passthrough)
+ALL = (search, rig, steam, house, media, torrents, storage, passthrough)
