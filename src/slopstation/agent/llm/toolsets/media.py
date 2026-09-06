@@ -1,52 +1,54 @@
-"""Define assistant tools for media lookup, requests, and deletion."""
+"""Tools for movies and series: lookup, requests, and deletion."""
 
-import time
-from typing import Any
-
+from slopstation.agent.llm.registry import ToolContext, ToolSpec
 from slopstation.agent.tools import operations as operations_mod
-
-ASK_TTL_S = 120  # a delete confirmation goes stale
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five
 canonical candidates with year and a TMDB movie id or TVDB series id. Use the
 returned id in a request tool only when the intended candidate is clear; ask a
-short clarifying question otherwise."""
+short clarifying question otherwise. Never guess an id: every id a request or
+deletion uses comes from this tool."""
 
 _MEDIA_LIBRARY = """\
 Read what the library already holds for one movie or series - the answer to
 'what seasons do I have', 'is <movie> downloaded', and the check before any
 deletion. Pass the id returned by find_media. A movie reports available or
 not; a series reports have vs aired episode counts per season. Ownership
-never comes from conversation memory or the catalog - always call this."""
+never comes from conversation memory or the catalog - always call this. A
+request tool skips what is already present, so never re-request media just
+because the user says they lack it."""
 
 _REQUEST_MOVIE = """\
 Request one movie by a tmdb_id returned by find_media. preset is default,
-1080p, or 2160p; omit it unless the user gives a quality preference. This can
-start a large download, so call it only for an explicit request and never with
-a guessed id."""
+1080p, or 2160p; a quality preference applies only to that request, so omit
+it unless the user gives one. This can start a large download, so call it
+only for an explicit request and never with a guessed id."""
 
 _REQUEST_SERIES = """\
 Request one series by a tvdb_id returned by find_media. Pass explicit positive
 season numbers, or set all_seasons=true only when the user explicitly requests
-the whole series or every season. Never omit both scopes. preset is default,
-1080p, or 2160p. This can start many large downloads, so call it only for an
-explicit request and never with a guessed id. After success, use the returned
-acknowledgment as the entire reply without paraphrasing it."""
+the whole series or every season. Never omit both scopes: a bare series
+request is ambiguous, so ask which season, or whether they want all seasons,
+and call nothing until they answer. preset is default, 1080p, or 2160p, and
+applies only to that request. This can start many large downloads, so call
+it only for an explicit request and never with a guessed id. After success,
+use the returned acknowledgment as the entire reply without paraphrasing it."""
 
 _DELETE_MEDIA = """\
 Cleanly cancel or delete media through Radarr or Sonarr: this erases imported
 files and active downloads in that scope and cannot be undone. Resolve the title
 with find_media first and pass its catalog id. For a series, pass explicit
 positive season numbers, or set all_seasons=true only when the user explicitly
-asks to delete the entire series. The first call on a scope deletes nothing and
-answers with the title the authority itself holds; put that question to the user
-verbatim and call again unchanged only once they have answered yes. A repeat
-inside the same turn is always refused, and so is an ask older than two minutes,
-but nothing else checks their answer - a no is yours to honour."""
+asks to delete the entire series; every other season is preserved. The first
+call on a scope deletes nothing and answers with the title the authority itself
+holds; put that question to the user verbatim and call again unchanged only
+once they have answered yes. A repeat inside the same turn is always refused,
+and so is an ask older than ten minutes, but nothing else checks their answer
+- a no is yours to honour."""
 
-TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
-    (
+SPECS = [
+    ToolSpec(
         "find_media",
         _FIND_MEDIA,
         {
@@ -56,9 +58,13 @@ TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
                 "description": "spoken title and optional year",
             },
         },
-        ["kind", "query"],
+        ("kind", "query"),
+        risk="read",
+        area="media",
+        keywords=("movie", "series", "show", "tmdb", "tvdb", "which one", "lookup"),
+        needs=("media",),
     ),
-    (
+    ToolSpec(
         "media_library",
         _MEDIA_LIBRARY,
         {
@@ -68,18 +74,26 @@ TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
                 "description": "TMDB movie id or TVDB series id returned by find_media",
             },
         },
-        ["kind", "catalog_id"],
+        ("kind", "catalog_id"),
+        risk="read",
+        area="media",
+        keywords=("do i have", "downloaded", "which seasons", "library", "available"),
+        needs=("media",),
     ),
-    (
+    ToolSpec(
         "request_movie",
         _REQUEST_MOVIE,
         {
             "tmdb_id": {"type": "integer", "description": "id returned by find_media"},
             "preset": {"type": "string", "enum": ["default", "1080p", "2160p"]},
         },
-        ["tmdb_id"],
+        ("tmdb_id",),
+        risk="act",
+        area="media",
+        keywords=("download movie", "get the movie", "request", "radarr", "4k"),
+        needs=("media",),
     ),
-    (
+    ToolSpec(
         "request_series",
         _REQUEST_SERIES,
         {
@@ -95,9 +109,19 @@ TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
                 "description": "true only for an explicit whole-series request",
             },
         },
-        ["tvdb_id"],
+        ("tvdb_id",),
+        risk="act",
+        area="media",
+        keywords=(
+            "download show",
+            "get season",
+            "request series",
+            "sonarr",
+            "episodes",
+        ),
+        needs=("media",),
     ),
-    (
+    ToolSpec(
         "delete_media",
         _DELETE_MEDIA,
         {
@@ -116,7 +140,12 @@ TOOL_DEFS: list[tuple[str, str, dict[str, Any], list[str]]] = [
                 "description": "true only for an explicit whole-series deletion",
             },
         },
-        ["kind", "catalog_id"],
+        ("kind", "catalog_id"),
+        risk="destructive",
+        area="media",
+        keywords=("delete", "remove", "erase", "cancel download", "free space"),
+        default=False,
+        needs=("media",),
     ),
 ]
 
@@ -127,9 +156,9 @@ def _season_scope(seasons):
     return "seasons " + ", ".join(str(n) for n in seasons[:-1]) + f" and {seasons[-1]}"
 
 
-def tool_impls(dispatch, log, operations, media):
-    """name -> fn(args: dict) -> dict for the five media tools;
-    assistant.tool_impls adds them when a media service is wired in."""
+def impls(ctx: ToolContext):
+    """name -> fn(args: dict) -> dict for the five media tools."""
+    dispatch, log, operations, media = ctx.dispatch, ctx.log, ctx.operations, ctx.media
 
     def find_media(args):
         kind = str(args.get("kind", ""))
@@ -229,8 +258,6 @@ def tool_impls(dispatch, log, operations, media):
             log.error("tool_error", tool="request_series", err=str(e))
             return {"ok": False, "error": str(e)}
 
-    pending_delete: dict[tuple, tuple] = {}  # delete scope -> (turn that asked, when)
-
     def delete_media(args):
         try:
             kind = str(args.get("kind", ""))
@@ -270,12 +297,9 @@ def tool_impls(dispatch, log, operations, media):
         try:
             entry = media.library(kind, catalog_id)
             scope = (kind, catalog_id, tuple(seasons or ()), all_seasons)
-            asked_turn, asked_at = pending_delete.get(scope, (None, 0.0))
-            if entry["in_library"] and (
-                asked_turn in (None, dispatch.utterance.turn)
-                or time.time() - asked_at > ASK_TTL_S
+            if entry["in_library"] and not ctx.gate.confirmed(
+                scope, dispatch.utterance.turn
             ):
-                pending_delete[scope] = (dispatch.utterance.turn, time.time())
                 named = (
                     " ".join(
                         str(part) for part in (entry["title"], entry["year"]) if part
@@ -296,7 +320,6 @@ def tool_impls(dispatch, log, operations, media):
                     "ok": False,
                     "acknowledgment": f"Delete {named}? That erases the files.",
                 }
-            pending_delete.pop(scope, None)
             covered, command_ids = operations_mod.covered_by_delete(
                 operations, kind, catalog_id, seasons, all_seasons
             )

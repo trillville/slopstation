@@ -11,6 +11,10 @@ from slopstation.agent.telemetry import sentry, traces
 # Keep provider timeouts shorter than the HTTP interface timeout.
 LLM_TIMEOUT_S = 90
 LLM_MAX_RETRIES = 1
+# These backends serve the text interface and the REPL, where an answer can
+# be a list or a table. The voice lane sets its own, shorter cap in
+# speech/session.py. Matches the OpenAI backend's max_output_tokens.
+TEXT_MAX_TOKENS = 1500
 
 
 # --- Provider backends --------------------------------------------------------
@@ -67,7 +71,7 @@ class AnthropicBackend(Backend):
             ) as span:
                 resp = self.client.messages.create(
                     model=self.model,
-                    max_tokens=400,
+                    max_tokens=TEXT_MAX_TOKENS,
                     system=system,  # type: ignore[arg-type]
                     messages=self.messages,
                     tools=tools,

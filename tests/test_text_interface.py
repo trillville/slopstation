@@ -56,7 +56,7 @@ class FakeOperations:
     def observe(self, operation_id, state, progress, detail):
         return {"id": operation_id, "state": state, "progress": progress}
 
-    def for_assistant(self, scope, acknowledge=False):
+    def for_assistant(self, scope, limit=10, acknowledge=False):
         return [
             {
                 "id": "op-andor",

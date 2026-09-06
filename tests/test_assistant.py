@@ -10,7 +10,7 @@ import pytest
 from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
-from slopstation.agent.llm import assistant, backends, media_tools
+from slopstation.agent.llm import assistant, backends, confirm
 from slopstation.agent.tools import library, steamstore
 
 CFG_MIN = {
@@ -123,8 +123,9 @@ class FakeOperations:
         )
         return {"id": "op-media"}
 
-    def for_assistant(self, scope, acknowledge=False):
+    def for_assistant(self, scope, limit=10, acknowledge=False):
         self.acknowledged = acknowledge
+        self.limit = limit
         return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
 
     def observe(self, operation_id, state, progress, detail):
@@ -284,7 +285,10 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     assert "CATALOG" in si and str(INSTALLED) in si
     # Mishear-repair: the model must know its input is STT, not typed text.
     assert "speech-to-text" in flat(si) and "mishears" in flat(si)
-    assert "find_media" in si and "Never guess an id" in si
+    # The behavioural rule stays in the prompt; the tool rule travels with
+    # the tool, so it is absent when the media service is.
+    assert "Never guess an id" in si and "find_media" not in si
+    assert "Never guess an id" in assistant.REGISTRY.get("find_media").description
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
     assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
@@ -329,12 +333,18 @@ def test_launch_game_refuses_an_appid_outside_the_catalog(impls):
     assert r["ok"] and "dry-run" in r["detail"], r
 
 
-def test_control_routes_actions_and_refuses_the_malformed(impls):
-    assert impls["control"]({"action": "volume_up"})["ok"]
-    assert impls["control"]({"action": "set_volume", "level": 30})["ok"]
-    assert not impls["control"]({"action": "self_destruct"})["ok"]
-    r = impls["control"]({"action": "set_volume"})  # no level -> refused
+def test_volume_and_session_route_actions_and_refuse_the_malformed(impls):
+    # Two tools where there was one: volume never interrupts the TV, session
+    # always does, so they carry different risk and separate descriptions.
+    assert impls["volume"]({"action": "up"})["ok"]
+    assert impls["volume"]({"action": "set", "level": 30})["ok"]
+    assert not impls["volume"]({"action": "self_destruct"})["ok"]
+    r = impls["volume"]({"action": "set"})  # no level -> refused
     assert not r["ok"] and "level" in r["error"]
+    assert impls["session"]({"action": "end_session"})["ok"]
+    assert impls["session"]({"action": "switch_input", "input": "apple tv"})["ok"]
+    assert not impls["session"]({"action": "volume_up"})["ok"]
+    assert assistant.REGISTRY.get("session").risk == "act"
 
 
 def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
@@ -409,10 +419,10 @@ def test_list_operations_acknowledges_only_on_a_live_recent_read(
 def test_function_schemas_render_only_the_tools_present(
     dispatch, log, impls, fake_operations, media_impls
 ):
-    assert len(assistant.function_schemas(impls, log)) == 10  # no operations store
+    assert len(assistant.function_schemas(impls, log)) == 11  # no operations store
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert len(assistant.function_schemas(oimpls, log)) == 11
-    assert len(assistant.function_schemas(media_impls, log)) == 16
+    assert len(assistant.function_schemas(oimpls, log)) == 12
+    assert len(assistant.function_schemas(media_impls, log)) == 17
 
 
 # -- the media tools -----------------------------------------------------------
@@ -506,7 +516,7 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
     deleted = live_media["delete_media"](dict(ask))
     assert deleted["ok"]
     # a question the user declined must not stay armed
-    monkeypatch.setattr(media_tools, "ASK_TTL_S", -1)
+    monkeypatch.setattr(confirm, "ASK_TTL_S", -1)
     live_media["delete_media"](dict(ask))
     live_dispatch.begin_utterance("fa1102", "later")
     assert not live_media["delete_media"](dict(ask))["ok"]
@@ -555,8 +565,8 @@ def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
     gated = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
-    # Ten base tools minus the two store ones the kill switch drops.
-    assert len(assistant.function_schemas(gated, log)) == 8
+    # Eleven base tools minus the two store ones the kill switch drops.
+    assert len(assistant.function_schemas(gated, log)) == 9
 
 
 # -- Tool errors ---------------------------------------------------------------
@@ -667,7 +677,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
 
     for s in schemas:
         asyncio.run(s.handler(P2()))
-    # Order follows TOOL_DEFS, not the impls dict, so key by tool name.
+    # Order follows the registry, not the impls dict, so key by tool name.
     rec = {r["tool"]: r for r in tlog.records if r.get("event") == "tool_call"}
     assert set(rec) == {"get_now_playing", "launch_game"}, rec  # the raiser too
     assert rec["get_now_playing"]["ok"] is True
@@ -785,7 +795,7 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
 
 def test_tool_defs_render_flat_for_both_providers(catalog):
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
-    names = {n for n, *_ in assistant.TOOL_DEFS}
+    names = set(assistant.REGISTRY.names())
     assert {t["name"] for t in at} == names
     # Responses API tools are FLAT (name/parameters at top level, no nesting).
     assert {t["name"] for t in ot} == names
@@ -795,11 +805,12 @@ def test_tool_defs_render_flat_for_both_providers(catalog):
     )
     assert all("input_schema" in t for t in at)
     # The prompt defines the volume range and launch_game starts sessions.
-    assert "0-100" not in flat(assistant.TOOL_DEFS)
-    assert "never call start_session" in flat(assistant.TOOL_DEFS)
+    descriptions = flat([s.description for s in assistant.REGISTRY])
+    assert "0-100" not in descriptions
+    assert "never call start_session" in descriptions
     # Closing the mic must never read as ending the session on the TV - spelled
     # out in both places the model reads.
-    assert "NOT end_session" in flat(assistant.TOOL_DEFS)
+    assert "NOT end_session" in descriptions
     si = assistant.system_instruction(CFG_MIN)
     assert "never end the gaming session for them" in flat(si)
 
