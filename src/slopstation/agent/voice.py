@@ -421,11 +421,6 @@ def main():
 
     session_ctx = None
     while True:
-        # Drop the closed session's id before waiting again. The wait logs
-        # under the ambient context (wake_near_miss from inside the listen,
-        # wake_clip on the way out, wake_stream_died on the error path), and
-        # all three fire while no session is open - inheriting the previous
-        # one's id attributed them to a conversation that had already ended.
         if session_ctx is not None:
             events.reset(session_ctx)
             session_ctx = None
