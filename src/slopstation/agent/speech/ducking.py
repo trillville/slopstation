@@ -7,8 +7,8 @@ class TvDucker:
     """Drop the room's volume for a voice session; restore it on close. A
     talker on the couch reaches the mic 10-20 dB below TV dialogue.
 
-    The TV interface verifies volume changes. The ledger holds only measured
-    movement, so a shortfall carries as debt to the next close. A human moving the remote
+    UPnP sets and reads the volume. The ledger holds only VERIFIED movement, so a shortfall
+    carries as debt to the next close and a human moving the remote
     mid-session is detected. It dies with the process."""
 
     def __init__(
@@ -31,13 +31,16 @@ class TvDucker:
 
     def duck(self):
         with self.tv.volume_transaction():
-            self._duck()
+            return self._duck()
 
     def _duck(self):
+        """True: the room is at the ducked level (landed, or still down from
+        an unpaid restore). False: tried and did not land, so the room is
+        loud. None: unknown - the set is off or its readback is silent."""
         state = self.tv.power_state()
         if state != "on":
             self.log("tv_duck_skipped", state=state or "unknown", debt=self.out)
-            return
+            return None
         # Owed a duck already: the last close could not reach the set, so the
         # bar is still that far below the baseline - as far as a fresh duck
         # would take it. Ducking again lands on the 0-clamp (silence);
@@ -47,11 +50,11 @@ class TvDucker:
             self.log(
                 "tv_duck_skipped", state="on", reason="already_ducked", debt=self.out
             )
-            return
+            return True
         v0 = self.tv.volume()
         if v0 is None:
             self.log("tv_duck_skipped", state="on", reason="no_readback", debt=self.out)
-            return
+            return None
         if self.to_pct:
             target = min(v0, round(v0 * self.to_pct / 100))
             asked = v0 - target  # scales with v0; never clamps below 0
@@ -62,19 +65,28 @@ class TvDucker:
             self.log("dry_run_would", action=f"duck vol {v0}->{target}")
             self.out += v0 - target
             self.expect = target
-            return
-        final = self.tv.set_volume(target, before=v0).after
+            return True
+        change = self.tv.set_volume(target, before=v0)
+        final = change.after
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
-        self.log("tv_ducked", steps=landed, asked=asked, vol=final, ok=final == target)
+        self.log(
+            "tv_ducked",
+            steps=landed,
+            asked=asked,
+            vol=final,
+            ok=final == target,
+            writes=change.writes,
+        )
+        return final == target
 
     def unduck(self):
-        """Restore the ledger: this session's duck plus any earlier debt."""
         with self.tv.volume_transaction():
             self._unduck()
 
     def _unduck(self):
+        """Restore the ledger: this session's duck plus any earlier debt."""
         if not self.out:
             return
         want = self.out
@@ -85,7 +97,14 @@ class TvDucker:
         now = self.tv.volume()
         if now is None:
             # Cannot verify a restore. Keep the debt; the next close retries.
-            self.log("tv_unducked", steps=0, asked=want, ok=False, reason="no_readback")
+            self.log(
+                "tv_unducked",
+                steps=0,
+                asked=want,
+                ok=False,
+                reason="no_readback",
+                writes=0,
+            )
             self.log.warn("tv_duck_deficit", steps=self.out)
             return
         if self.expect is not None and now != self.expect:
@@ -98,14 +117,23 @@ class TvDucker:
                 ok=True,
                 reason="user_adjusted",
                 vol=now,
+                writes=0,
             )
             self.out, self.expect = 0, None
             return
         target = min(100, now + want)
-        final = self.tv.set_volume(target, before=now).after
+        change = self.tv.set_volume(target, before=now)
+        final = change.after
         restored = max(0, final - now)
         self.out = max(0, self.out - restored)
         self.expect = final if self.out else None
-        self.log("tv_unducked", steps=restored, asked=want, vol=final, ok=self.out == 0)
+        self.log(
+            "tv_unducked",
+            steps=restored,
+            asked=want,
+            vol=final,
+            ok=self.out == 0,
+            writes=change.writes,
+        )
         if self.out:
             self.log.warn("tv_duck_deficit", steps=self.out)

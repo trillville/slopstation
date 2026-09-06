@@ -18,6 +18,7 @@ class VolumeChange(NamedTuple):
     before: int
     target: int
     after: int
+    writes: int = 0
 
     @property
     def ok(self) -> bool:
@@ -30,6 +31,12 @@ class Tv:
     Construction performs no I/O. Each process owns its instances; the volume
     transaction coordinates instances within a process, not other processes.
     """
+
+    POLLS = 24
+    POLL_GAP_S = 0.1
+    WRITES = 3
+    RETRY_AFTER = 5
+    HTTP_TIMEOUT_S = 1.0
 
     def __init__(self, cfg, log):
         self.ip = cfg.get("tvIp")
@@ -70,7 +77,7 @@ class Tv:
 
     def volume(self):
         with self.volume_transaction():
-            return tv_volume(self.ip) if self.ip else None
+            return tv_volume(self.ip, timeout=self.HTTP_TIMEOUT_S) if self.ip else None
 
     def set_volume(
         self, level: int, maximum: int = 100, *, before: int | None = None
@@ -96,21 +103,39 @@ class Tv:
                 self.log("volume_clamped", asked=asked, set=target, max=maximum)
             if now == target:
                 return VolumeChange(now, target, now)
+            return self._move_volume(now, target)
+
+    def _move_volume(self, now, target):
+        """Retry only an unmoved readback; partial movement may be the remote."""
+        deadline = time.monotonic() + self.POLLS * self.POLL_GAP_S
+        seen = now
+        left = self.POLLS
+        for attempt in range(1, self.WRITES + 1):
             try:
-                tv_set_volume(self.ip, target)
+                tv_set_volume(self.ip, target, timeout=self.HTTP_TIMEOUT_S)
             except Exception as e:
                 self.log.warn("tv_duck_failed", stage="write", err=str(e))
-            # A lost HTTP reply does not prove the write failed.
-            final = self._settle(target)
-            return VolumeChange(now, target, now if final is None else final)
+            polls = left if attempt == self.WRITES else min(left, self.RETRY_AFTER)
+            left -= polls
+            value = self._settle(target, polls, deadline)
+            if value is None:
+                break
+            seen = value
+            if seen != now or left <= 0 or time.monotonic() >= deadline:
+                break
+        return VolumeChange(now, target, seen, attempt)
 
-    def _settle(self, target):
-        for _ in range(24):
-            level = self.volume()
-            if level == target:
-                return level
-            time.sleep(0.1)
-        return self.volume()
+    def _settle(self, target, polls, deadline):
+        seen = None
+        for i in range(polls):
+            value = self.volume()
+            if value is not None:
+                seen = value
+            if value == target or time.monotonic() >= deadline:
+                return seen
+            if i + 1 < polls:
+                time.sleep(self.POLL_GAP_S)
+        return seen
 
     def _remote(self, timeout=6):
         if not self.ip:
