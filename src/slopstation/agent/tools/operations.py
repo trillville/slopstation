@@ -27,6 +27,13 @@ STATES = ACTIVE | TERMINAL
 def _summary(operation, state):
     title = operation["title"]
     kind = operation.get("kind")
+    phase = (operation.get("progress") or {}).get("phase")
+    authority = str(operation.get("authority", "")).title()
+    # A search promised a search, not a file: say what it found.
+    if state == SUCCEEDED and phase == "searched":
+        return f"{authority} searched again for {title} and found nothing better."
+    if state == FAILED and phase == "search_failed":
+        return f"{authority}'s search for {title} failed."
     if state == SUCCEEDED:
         if kind == "movie_acquisition":
             return f"{title} is ready to watch."
@@ -384,6 +391,8 @@ def track(store, submission, turn=None):
             "baseline_episode_files",
             "search_pending",
             "command_ids",
+            "episode_ids",
+            "promise",
         )
         if k in submission
     }
@@ -404,12 +413,14 @@ def track(store, submission, turn=None):
         return {**submission, "tracking": "failed"}
 
 
-def join(store, submission, turn=None):
+def join(store, submission, merge, turn=None):
     """Record work started on a title outside a request: a grab, a fresh
-    search, an import. When a request for the title is already active the
-    work joins it, so "what is downloading" has one row per title: the
-    request keeps its scope and baselines, and only the commands it waits on
-    and its phase move. Otherwise the work is tracked as its own operation."""
+    search, an import. The store keeps one active operation per title, so
+    when one is live the work joins it; `merge(existing, submission)` is the
+    service's rule for what the operation then covers (scope widens, the
+    first baselines win, running searches stay watched), so nothing the
+    user asked for is dropped to keep one row. Otherwise the work is tracked
+    as its own operation."""
     if store is None:
         return submission
     ref = str(submission["external_ref"])
@@ -425,10 +436,9 @@ def join(store, submission, turn=None):
         return track(store, submission, turn)
     phase = submission.get("phase") or "searching"
     try:
-        if submission.get("command_ids"):
-            store.update_metadata(
-                existing["id"], {"command_ids": submission["command_ids"]}
-            )
+        updates = merge(existing, submission)
+        if updates:
+            store.update_metadata(existing["id"], updates)
         store.observe(
             existing["id"],
             RUNNING,
@@ -451,7 +461,9 @@ def covered_by_delete(store, kind, catalog_id, seasons=None, all_seasons=False):
     search commands to cancel alongside them. `kind` is "movie" or "series".
     A movie is covered outright; a series only when the delete's scope holds
     every season its request asked for, so a partial delete leaves the
-    request tracking the seasons it still owns."""
+    request tracking the seasons it still owns. Work scoped to explicit
+    episodes has no season list, so only a delete of every season covers
+    it; after a partial delete the monitor sees its files gone and waits."""
     rows: list[dict] = []
     command_ids: list = []
     for operation in (

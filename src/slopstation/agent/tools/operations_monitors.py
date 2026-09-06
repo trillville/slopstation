@@ -313,6 +313,8 @@ class MediaMonitor(Monitor):
                 state = (
                     CANCELED
                     if observation.get("canceled")
+                    else FAILED
+                    if observation.get("failed")
                     else SUCCEEDED
                     if observation["complete"]
                     else RUNNING

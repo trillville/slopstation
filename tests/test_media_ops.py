@@ -234,6 +234,7 @@ def stack():
                 "seasonNumber": 1,
                 "episodeNumber": 1,
                 "hasFile": True,
+                "episodeFileId": 1001,
                 "monitored": True,
                 "airDateUtc": iso(-400),
             },
@@ -469,12 +470,26 @@ def test_retry_monitor_and_profile_changes(rig, stack):
     assert out["ok"] and out["phase"] == "searching" and out["command_ids"] == [99]
     assert radarr.posts[-1] == ("command", {"name": "MoviesSearch", "movieIds": [2]})
     out = tk.call("retry_search", {"kind": "series", "catalog_id": 81189, "season": 2})
-    assert out["ok"] and out["seasons"] == [2]
+    # A season search is the app's own season search, watched for exactly
+    # that season's episodes; one episode is an episode search.
+    assert out["ok"] and out["episode_ids"] == [201] and "seasons" not in out
     assert sonarr.posts[-1][1] == {
         "name": "SeasonSearch",
         "seriesId": 5,
         "seasonNumber": 2,
     }
+    one = tk.call(
+        "retry_search",
+        {"kind": "series", "catalog_id": 81189, "season": 1, "episode": 2},
+    )
+    assert one["episode_ids"] == [102] and one["promise"] == "search"
+    assert sonarr.posts[-1][1] == {"name": "EpisodeSearch", "episodeIds": [102]}
+    assert (
+        "no season 4"
+        in tk.call(
+            "retry_search", {"kind": "series", "catalog_id": 81189, "season": 4}
+        )["error"]
+    )
     out = tk.call("retry_search", {"kind": "series", "catalog_id": 81189})
     assert out["ok"] and sonarr.posts[-1][1]["name"] == "SeriesSearch"
     assert not tk.call("retry_search", {"kind": "series", "catalog_id": "x"})["ok"]
@@ -710,7 +725,7 @@ def test_dry_run_and_failures_come_back_as_errors(stack):
     assert log.find("tool_error")[-1]["tool"] == "browse_media"
 
 
-def test_work_on_a_held_title_is_tracked_and_joins_its_request(stack):
+def test_work_on_a_held_title_is_tracked_for_exactly_its_scope(stack):
     svc, radarr, sonarr, _ = stack
     log = CapturingLog("voice")
     store = operations.OperationStore(log)
@@ -719,6 +734,9 @@ def test_work_on_a_held_title_is_tracked_and_joins_its_request(stack):
     )
     tk = assistant.Toolkit(dispatch, log, media=svc, operations=store)
     tk.load(["grab_release", "retry_search", "manual_import"])
+    radarr.answers["command/99"] = {"id": 99, "status": "started"}
+    sonarr.answers["command/1"] = {"id": 1, "status": "started"}
+    sonarr.answers["command/99"] = {"id": 99, "status": "completed"}
     # A grab on a title nobody requested is its own operation, with the file
     # it already held as the baseline, so the upgrade is not called done
     # because the old file is still there.
@@ -735,11 +753,13 @@ def test_work_on_a_held_title_is_tracked_and_joins_its_request(stack):
     )
     assert op["progress"] == {"phase": "grabbed"}
     assert op["metadata"]["baseline_file_id"] == 501 and op["turn"] == "aa0001"
+    assert "promise" not in op["metadata"], "a grab promises the file"
     # The monitor keeps that phase until the client shows the download.
     seen = svc.observe(op)
     assert not seen["complete"] and seen["progress"]["phase"] == "grabbed"
     # A fresh search for the same title joins the operation rather than
-    # opening a second row: baselines stay, the commands watched change.
+    # opening a second row: the baseline stays, the command is watched, and
+    # the stronger promise (the file, not just a search) survives.
     searched = tk.call("retry_search", {"kind": "movie", "catalog_id": 438631})
     assert searched["ok"] and searched["joined"]
     assert searched["operation_id"] == op["id"] and len(store.active()) == 1
@@ -747,21 +767,41 @@ def test_work_on_a_held_title_is_tracked_and_joins_its_request(stack):
     assert op["progress"]["phase"] == "searching"
     assert op["metadata"]["command_ids"] == [99]
     assert op["metadata"]["baseline_file_id"] == 501
-    # A request keeps its scope when a one-season search joins it.
+    assert op["metadata"]["promise"] == "acquire"
+    # A season-1 request, then a season-2 search: the operation now covers
+    # both, and the season-1 search still running stays watched beside the
+    # new one. Nothing the user asked for is dropped to keep one row.
     request = store.track_external(
         "series_acquisition",
         "sonarr",
         "5",
         "Breaking Bad",
-        metadata={"catalog_id": 81189, "seasons": [1, 2], "command_ids": [1]},
+        metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
     )
     joined = tk.call(
         "retry_search", {"kind": "series", "catalog_id": 81189, "season": 2}
     )
     assert joined["joined"] and joined["operation_id"] == request["id"]
     metadata = store.get(request["id"])["metadata"]
-    assert metadata["seasons"] == [1, 2] and metadata["command_ids"] == [99]
-    # An import is tracked from its importing phase.
+    assert metadata["seasons"] == [1] and metadata["episode_ids"] == [201]
+    assert metadata["command_ids"] == [1, 99] and metadata["promise"] == "acquire"
+    # An episode grab on the same series widens the episode scope; the
+    # finished season-2 search is dropped, the live season-1 one kept.
+    tk.call(
+        "grab_release",
+        {
+            "kind": "series",
+            "catalog_id": 81189,
+            "guid": "g1",
+            "indexer_id": 3,
+            "season": 1,
+            "episode": 2,
+        },
+    )
+    metadata = store.get(request["id"])["metadata"]
+    assert metadata["episode_ids"] == [102, 201] and metadata["command_ids"] == [1]
+    assert not metadata.get("baseline_episode_files"), "episode 102 held no file"
+    # An import is tracked from its importing phase, for the movie it is for.
     imported = tk.call("manual_import", {"kind": "movie", "download_id": "ABC123"})
     assert imported["ok"] and store.get(imported["operation_id"])["progress"] == {
         "phase": "importing"
@@ -771,3 +811,115 @@ def test_work_on_a_held_title_is_tracked_and_joins_its_request(stack):
     assert [
         r["title"] for r in store.for_assistant("active", limit=2, offset=2)[0]
     ] == ["Alien"]
+    # A grab of a series release without its season cannot be scoped.
+    assert (
+        "season"
+        in tk.call(
+            "grab_release",
+            {"kind": "series", "catalog_id": 81189, "guid": "g1", "indexer_id": 3},
+        )["error"]
+    )
+
+
+def test_one_episode_is_done_when_that_episode_arrives(stack):
+    # Grabbing an upgrade for one episode of a two-episode season must not
+    # wait on the other episode, and a special (season 0) is grabbable.
+    svc, _, sonarr, _ = stack
+    sonarr.answers["episode"] = lambda p: [
+        {
+            "id": 101,
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "hasFile": True,
+            "episodeFileId": 1001,
+            "monitored": True,
+            "airDateUtc": iso(-400),
+        },
+        {
+            "id": 102,
+            "seasonNumber": 1,
+            "episodeNumber": 2,
+            "hasFile": True,
+            "episodeFileId": 1002,
+            "monitored": True,
+            "airDateUtc": iso(-390),
+        },
+        {
+            "id": 900,
+            "seasonNumber": 0,
+            "episodeNumber": 1,
+            "hasFile": False,
+            "monitored": False,
+            "airDateUtc": iso(-10),
+        },
+    ]
+    sub = svc.grab_release("series", 81189, "g1", 3, season=1, episode=1)
+    assert sub["episode_ids"] == [101] and "seasons" not in sub
+    assert sub["baseline_episode_files"] == {"101": 1001}
+    assert sonarr.posts[-1] == ("release", {"guid": "g1", "indexerId": 3})
+    out = svc.observe_series(
+        5, baseline_episode_files=sub["baseline_episode_files"], episode_ids=[101]
+    )
+    assert not out["complete"] and out["progress"]["total_episodes"] == 1
+    sonarr.answers["episode"]({})[0]["episodeFileId"]  # the rows are rebuilt each call
+    rows = sonarr.answers["episode"]({})
+    rows[0]["episodeFileId"] = 1010
+    sonarr.answers["episode"] = lambda p: rows
+    out = svc.observe_series(
+        5, baseline_episode_files=sub["baseline_episode_files"], episode_ids=[101]
+    )
+    assert out["complete"] and out["progress"]["episodes"] == 1
+    # Episode 2 kept its old file and was never in scope.
+    # A season pack covers the season's episodes, specials included when it
+    # is season 0; an unmonitored special counts because it was chosen.
+    special = svc.grab_release("series", 81189, "g2", 3, season=0)
+    assert special["episode_ids"] == [900]
+    out = svc.observe_series(5, episode_ids=[900])
+    assert not out["complete"] and out["progress"]["total_episodes"] == 1
+    rows[2].update(hasFile=True, episodeFileId=9000)
+    assert svc.observe_series(5, episode_ids=[900])["complete"]
+    # A season search for the specials is a season search, seasonNumber 0.
+    sub = svc.search_again("series", 81189, season=0)
+    assert sonarr.posts[-1][1] == {
+        "name": "SeasonSearch",
+        "seriesId": 5,
+        "seasonNumber": 0,
+    }
+    assert sub["episode_ids"] == [900] and sub["promise"] == "search"
+
+
+def test_a_search_promises_the_search_not_the_old_file(stack):
+    svc, radarr, _, _ = stack
+    log = CapturingLog("voice")
+    store = operations.OperationStore(log)
+    # Dune already has a file: a fresh search must not report it done at
+    # once, and must end when the search has run, whatever it found.
+    sub = svc.search_again("movie", 438631)
+    assert sub["promise"] == "search" and sub["baseline_file_id"] == 501
+    assert sub["command_ids"] == [99]
+    radarr.answers["command/99"] = {"id": 99, "status": "started"}
+    op = operations.track(store, sub)
+    seen = svc.observe(store.get(op["operation_id"]))
+    assert not seen["complete"] and seen["progress"]["phase"] == "searching"
+    radarr.answers["command/99"] = {"id": 99, "status": "completed"}
+    seen = svc.observe(store.get(op["operation_id"]))
+    assert seen["complete"] and seen["progress"]["phase"] == "searched"
+    done = store.observe(op["operation_id"], operations.SUCCEEDED, seen["progress"], "")
+    assert done["summary"] == "Radarr searched again for Dune and found nothing better."
+    # A search that found a better file is the file arriving.
+    radarr.answers["moviefile"] = lambda p: [{"id": 777}]
+    assert svc.observe_movie(1, 501, [99], "searching", promise="search")["detail"] == (
+        "Radarr imported the requested movie upgrade"
+    )
+    # A search the app failed is a failure, not a success.
+    radarr.answers["moviefile"] = lambda p: [{"id": 501}]
+    radarr.answers["command/99"] = {"id": 99, "status": "failed"}
+    failed = svc.observe_movie(1, 501, [99], "searching", promise="search")
+    assert failed["complete"] and failed["failed"]
+    # The first operation is closed; the failure lands on a fresh one.
+    again = operations.track(store, sub)
+    assert again["operation_id"] != op["operation_id"]
+    row = store.observe(
+        again["operation_id"], operations.FAILED, failed["progress"], ""
+    )
+    assert row["summary"] == "Radarr's search for Dune failed."

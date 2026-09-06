@@ -176,14 +176,12 @@ class Bindings:
 
         return bind.impls()
 
-    `wrap(name, fn)` decorates every bound function (a toolset's own error
-    mapping). `impls()` refuses a spec left unbound."""
+    `impls()` refuses a spec left unbound."""
 
-    def __init__(self, ctx: ToolContext, specs: Iterable[ToolSpec], wrap=None):
+    def __init__(self, ctx: ToolContext, specs: Iterable[ToolSpec]):
         self.ctx = ctx
         self._specs = {s.name: s for s in specs}
         self._impls: dict[str, Callable[[dict], dict]] = {}
-        self._wrap = wrap
 
     def _add(self, fn, gated: bool):
         name = fn.__name__
@@ -195,7 +193,7 @@ class Bindings:
         if (spec.risk == "destructive") != gated:
             how = "bind.destructive" if spec.risk == "destructive" else "bind"
             raise ValueError(f"{name} is {spec.risk}: bind it with @{how}")
-        self._impls[name] = self._wrap(name, fn) if self._wrap else fn
+        self._impls[name] = fn
 
     def __call__(self, fn):
         self._add(fn, gated=False)

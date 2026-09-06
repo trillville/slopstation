@@ -8,8 +8,6 @@ fetched for this window; a tool over a local list passes the whole list.
 """
 
 DEFAULT, CAP = 10, 40
-# Past this the model is walking a list nobody will hear the end of.
-OFFSET_MAX = 1000
 
 
 def properties(default=DEFAULT, cap=CAP, what="rows"):
@@ -36,7 +34,9 @@ def window(args, default=DEFAULT, cap=CAP):
         return None, {"ok": False, "error": "limit and offset must be integers"}
     if offset < 0:
         return None, {"ok": False, "error": "offset must not be negative"}
-    return (max(1, min(limit, cap)), min(offset, OFFSET_MAX)), None
+    # No ceiling on the offset: a clamped offset would hand back the same
+    # page with the same continuation, forever.
+    return (max(1, min(limit, cap)), offset), None
 
 
 def page(rows, args, key, default=DEFAULT, cap=CAP, total=None, **extra):
@@ -59,5 +59,7 @@ def page(rows, args, key, default=DEFAULT, cap=CAP, total=None, **extra):
         "count": total,
         "offset": offset,
         key: chunk,
-        "next_offset": after if after < total else None,
+        # An empty page is the end whatever the total said: a continuation
+        # that does not advance is a loop.
+        "next_offset": after if chunk and after < total else None,
     }

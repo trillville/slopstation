@@ -11,6 +11,7 @@ from slopstation.agent.llm.registry import AREAS, Registry, ToolContext
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry
 from slopstation.agent.tools import library
+from slopstation.agent.tools.media_clients import MediaError
 
 # Every tool the assistant can ever offer, in the order the model sees them.
 # A tool's description is its whole interface: the rules about a tool live
@@ -110,6 +111,12 @@ class Tools:
             }
         try:
             out = fn(args)
+        except MediaError as e:
+            # The media services' errors are written for the user: "that
+            # series is not in the library", "Radarr returned HTTP 503".
+            if self.log is not None:
+                self.log.error("tool_error", tool=name, err=str(e))
+            out = {"ok": False, "error": str(e)}
         except Exception as e:
             if self.log is not None:
                 self.log.error("tool_error", tool=name, err=repr(e))

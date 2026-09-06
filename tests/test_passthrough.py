@@ -343,9 +343,16 @@ def test_a_refused_request_fails_and_keeps_the_ask_armed(live, log, monkeypatch)
     assert out["result"]["body"] == {"error": "server"} and "request" in out
     gap = log.find("tool_gap")[-1]
     assert gap["ok"] is False and gap["status"] == 500
-    # The ask is still armed: the retry runs without asking the user twice.
+    # A 200 with a failing X-eresult is Steam saying no: the same failure,
+    # read the way the session's own calls read it.
     R.status_code = 200
-    assert tk.call("steam_api", dict(ask))["ok"] and calls == ["POST", "POST"]
+    R.headers = {"X-eresult": "15"}
+    out = tk.call("steam_api", dict(ask))
+    assert not out["ok"] and "code 15" in out["error"] and calls == ["POST", "POST"]
+    assert log.find("tool_gap")[-1]["ok"] is False
+    # The ask is still armed: the retry runs without asking the user twice.
+    R.headers = {"X-eresult": "1"}
+    assert tk.call("steam_api", dict(ask))["ok"] and calls == ["POST"] * 3
     assert log.find("tool_gap")[-1]["ok"] is True
     assert not tk.call("steam_api", dict(ask))["ok"], "spent: asked afresh"
     # A wire failure on a mutation says the outcome is unknown.

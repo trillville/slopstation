@@ -15,7 +15,7 @@ import re
 from typing import Any
 
 from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
-from slopstation.agent.tools import apidocs, library
+from slopstation.agent.tools import apidocs, library, steam_session
 
 METHODS = ("GET", "POST", "PUT", "DELETE")
 # Status text the media clients raise for an answered-and-refused request.
@@ -23,12 +23,15 @@ HTTP_STATUS_RE = re.compile(r"\bHTTP (\d{3})\b")
 
 
 class HttpFailure(Exception):
-    """The service answered, and refused: a status and the body it sent."""
+    """The service answered, and refused: the status, the body it sent, and
+    the refusal in words (an HTTP status, or Steam's own result code on a
+    200)."""
 
-    def __init__(self, status, body):
-        super().__init__(f"HTTP {status}")
+    def __init__(self, status, body, reason=None):
+        super().__init__(reason or f"answered HTTP {status}")
         self.status = status
         self.body = body
+        self.reason = reason or f"answered HTTP {status}"
 
 
 # No empty segments: the blocklist is a string match, so `config//host` must
@@ -380,11 +383,7 @@ def impls(ctx: ToolContext):
             except HttpFailure as e:
                 status = e.status
                 body_, truncated = _cap(scrub(e.body))
-                out = {
-                    "ok": False,
-                    "error": f"{service} answered HTTP {status}",
-                    "result": body_,
-                }
+                out = {"ok": False, "error": f"{service} {e.reason}", "result": body_}
             except Exception as e:
                 # Through the scrub: a transport error can quote the URL.
                 err = scrub(str(e))
@@ -511,6 +510,12 @@ def impls(ctx: ToolContext):
         }
         if r.status_code >= 400:
             raise HttpFailure(r.status_code, envelope)
+        if steam_session.refused(envelope["eresult"]):
+            # A 200 with a failing X-eresult is Steam saying no, the same
+            # way the session's own calls read it.
+            raise HttpFailure(
+                r.status_code, envelope, f"refused (code {envelope['eresult']})"
+            )
         return envelope
 
     @bind

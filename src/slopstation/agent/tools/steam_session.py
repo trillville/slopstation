@@ -46,6 +46,16 @@ def _jwt_exp(token):
         return 0
 
 
+ERESULT_OK = "1"
+
+
+def refused(eresult):
+    """Steam's own verdict on an HTTP 200: the X-eresult header. Absent or
+    OK is success; anything else is a refusal with that code. One reading,
+    for the session's calls and the raw steam_api tool alike."""
+    return eresult not in (None, ERESULT_OK)
+
+
 class SteamSession:
     """One long-lived account session: a requests.Session (browser UA) plus a
     cached access token. The lane self-gates on available()."""
@@ -326,7 +336,7 @@ class SteamSession:
                     "client_instanceid": tgt["instanceid"],
                 },
             )
-            if eresult not in (None, "1"):  # 1 == EResult.OK
+            if refused(eresult):
                 self.log.warn("install_failed", appid=appid, eresult=eresult)
                 return {
                     "ok": False,
@@ -370,7 +380,7 @@ class SteamSession:
         if appid is not None:
             data["appid"] = int(appid)
         _, eresult = self._post(f"IClientCommService/{method}/v1", data)
-        if eresult not in (None, "1"):
+        if refused(eresult):
             self.log.warn("clientcomm_refused", what=what, appid=appid, eresult=eresult)
             return {
                 "ok": False,
@@ -454,7 +464,7 @@ class SteamSession:
         except Exception as e:
             self.log.error("wishlist_edit_error", appid=appid, err=str(e))
             return {"ok": False, "error": "couldn't reach Steam to change the wishlist"}
-        if eresult not in (None, "1"):
+        if refused(eresult):
             return {
                 "ok": False,
                 "error": f"Steam refused the wishlist change (code {eresult})",

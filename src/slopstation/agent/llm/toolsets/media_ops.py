@@ -57,15 +57,17 @@ lane; speak the title. Take one with grab_release."""
 
 GRAB_RELEASE = """\
 Take one specific release from search_releases: pass its guid and indexer_id,
-and the catalog_id (and season) you searched with. The arr app downloads and
-imports it as its own, so it stays consistent. Use this when the automatic
-choice was wrong or nothing was picked. The work is tracked: list_operations
-follows it from here."""
+and the catalog_id, season and episode you searched with (a season alone is
+a season pack; season 0 is the specials). The arr app downloads and imports
+it as its own, so it stays consistent. Use this when the automatic choice was
+wrong or nothing was picked. The work is tracked for exactly what the release
+covers: list_operations follows it from here."""
 
 RETRY_SEARCH = """\
-Kick off a fresh search for a stuck title: a movie, a whole series, or one
-season. The app searches in the background and the work is tracked: check
-back with list_operations."""
+Kick off a fresh search for a stuck title: a movie, a whole series, one
+season, or one episode. The app searches in the background and the search is
+tracked: it ends when the search has run and anything it took has imported,
+or with nothing better found. Check back with list_operations."""
 
 SET_MONITORED = """\
 Monitor or unmonitor a movie, a whole series, or named seasons. Unmonitored
@@ -233,7 +235,11 @@ SPECS = [
             "catalog_id": CATALOG_ID,
             "guid": {"type": "string"},
             "indexer_id": {"type": "integer"},
-            "season": {"type": "integer", "description": "the season searched"},
+            "season": {
+                "type": "integer",
+                "description": "the season searched (series); 0 for specials",
+            },
+            "episode": {"type": "integer", "description": "the episode searched"},
         },
         ("kind", "catalog_id", "guid", "indexer_id"),
         "act",
@@ -242,7 +248,12 @@ SPECS = [
     _spec(
         "retry_search",
         RETRY_SEARCH,
-        {"kind": KIND, "catalog_id": CATALOG_ID, "season": {"type": "integer"}},
+        {
+            "kind": KIND,
+            "catalog_id": CATALOG_ID,
+            "season": {"type": "integer"},
+            "episode": {"type": "integer"},
+        },
         ("kind", "catalog_id"),
         "act",
         (
@@ -465,7 +476,7 @@ def _series_row(row):
 
 
 def impls(ctx: ToolContext):
-    log, media, operations = ctx.log, ctx.media, ctx.operations
+    media, operations = ctx.media, ctx.operations
 
     def _client(kind):
         return media._client(kind)
@@ -491,25 +502,15 @@ def impls(ctx: ToolContext):
             return None, {"ok": False, "error": "kind must be movie or series"}
         return kind, None
 
-    def _guard(name, fn):
-        def run(args):
-            try:
-                return fn(args)
-            except MediaError as e:
-                log.error("tool_error", tool=name, err=str(e))
-                return {"ok": False, "error": str(e)}
-            except Exception as e:
-                log.error("tool_error", tool=name, err=str(e))
-                return {"ok": False, "error": f"{name} failed: {e}"}
-
-        return run
-
-    bind = Bindings(ctx, SPECS, wrap=_guard)
+    bind = Bindings(ctx, SPECS)
 
     def _join(submission, **extra):
         """Track work the service just accepted, joining the title's live
-        request when there is one."""
-        return {**operations_mod.join(operations, submission, ctx.turn()), **extra}
+        operation when there is one, on the service's merge rule."""
+        joined = operations_mod.join(
+            operations, submission, media.merge_work, ctx.turn()
+        )
+        return {**joined, **extra}
 
     # -- reads ---------------------------------------------------------------
 
@@ -1000,16 +1001,19 @@ def impls(ctx: ToolContext):
             catalog_id = int(args.get("catalog_id"))
             indexer_id = int(args.get("indexer_id"))
             season = None if args.get("season") is None else int(args["season"])
+            episode = None if args.get("episode") is None else int(args["episode"])
         except (TypeError, ValueError):
             return {
                 "ok": False,
-                "error": "catalog_id and indexer_id (and season) must be integers",
+                "error": "catalog_id, indexer_id, season and episode must be integers",
             }
         if not guid:
             return {"ok": False, "error": "pass the release guid from search_releases"}
         if dry := ctx.preview(f"grab {kind} release {guid[:40]}"):
             return dry
-        return _join(media.grab_release(kind, catalog_id, guid, indexer_id, season))
+        return _join(
+            media.grab_release(kind, catalog_id, guid, indexer_id, season, episode)
+        )
 
     @bind
     def retry_search(args):
@@ -1019,14 +1023,22 @@ def impls(ctx: ToolContext):
         try:
             catalog_id = int(args.get("catalog_id"))
             season = None if args.get("season") is None else int(args["season"])
+            episode = None if args.get("episode") is None else int(args["episode"])
         except (TypeError, ValueError):
-            return {"ok": False, "error": "catalog_id and season must be integers"}
+            return {
+                "ok": False,
+                "error": "catalog_id, season and episode must be integers",
+            }
         if kind == "movie":
-            season = None
-        scope = f"season {season}" if season is not None else "all of it"
+            season = episode = None
+        scope = (
+            "all of it"
+            if season is None
+            else f"season {season}" + (f" episode {episode}" if episode else "")
+        )
         if dry := ctx.preview(f"search again for {kind} {catalog_id}, {scope}"):
             return dry
-        return _join(media.search_again(kind, catalog_id, season))
+        return _join(media.search_again(kind, catalog_id, season, episode))
 
     @bind
     def set_monitored(args):

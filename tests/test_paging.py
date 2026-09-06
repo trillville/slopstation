@@ -32,9 +32,19 @@ def test_page_walks_a_local_list_and_a_server_window():
     # Malformed and out-of-range asks.
     assert not paging.page(rows, {"limit": "x"}, "items")["ok"]
     assert not paging.page(rows, {"offset": -1}, "items")["ok"]
-    assert paging.window({"limit": 999, "offset": 10**9}) == (
-        (paging.CAP, paging.OFFSET_MAX),
-        None,
+    # The limit is capped; the offset is not, so a walk always advances.
+    assert paging.window({"limit": 999, "offset": 10**9}) == ((paging.CAP, 10**9), None)
+    big = list(range(1100))
+    seen, offset = [], 0
+    while offset is not None:
+        out = paging.page(big, {"limit": paging.CAP, "offset": offset}, "items")
+        seen.extend(out["items"])
+        offset = out["next_offset"]
+    assert seen == big
+    # An empty server window ends the walk even when the total says more.
+    assert (
+        paging.page([], {"limit": 2, "offset": 4}, "items", total=9)["next_offset"]
+        is None
     )
     assert paging.window({}, default=5, cap=8) == ((5, 0), None)
     props = paging.properties(cap=25, what="lines")
