@@ -195,6 +195,7 @@ PYTHON = {
     "token_mint_failed": {"err", "stage"},
     "token_transfer_failed": {"err", "url"},
     "tool_call": {"args", "ok", "tool"},
+    "tools_found": {"found", "n", "query"},
     "tool_error": {"err", "tool"},
     "tool_refused": {"appid", "catalog_id", "reason", "tool"},
     "trace_save_failed": {"err"},

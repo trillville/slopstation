@@ -26,6 +26,31 @@ class SessionBusy(RuntimeError):
     """The session's previous turn is still running."""
 
 
+class Audited:
+    """A Toolkit whose calls are recorded and whose acknowledgments are kept,
+    so the LAN client gets the receipt a voice user would have heard."""
+
+    def __init__(self, toolkit, log, acknowledgments):
+        self.toolkit = toolkit
+        self.log = log
+        self.acknowledgments = acknowledgments
+
+    def render(self, provider):
+        return self.toolkit.render(provider)
+
+    def call(self, name, args):
+        # Let the LAN client receive tool failures as HTTP 500.
+        try:
+            out = self.toolkit.call(name, args)
+        except Exception:
+            assistant.record_tool_call(name, args, {"ok": False}, self.log)
+            raise
+        assistant.record_tool_call(name, args, out, self.log)
+        if isinstance(out, dict) and out.get("acknowledgment"):
+            self.acknowledgments.append(str(out["acknowledgment"]))
+        return out
+
+
 class TextApplication:
     def __init__(
         self, cfg, secrets, log, operations=None, steam=None, media=None, dry_run=False
@@ -39,7 +64,7 @@ class TextApplication:
         self.dry_run = dry_run
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
-        self.system_text = assistant.system_instruction(cfg, interface="text")
+        self.system_text = None  # built with the first session's offered set
         self.sessions = OrderedDict()
         self.lock = threading.Lock()
 
@@ -53,7 +78,7 @@ class TextApplication:
             voice=self.voice,
         )
         dispatch = Dispatch(self.cfg, self.log, dry_run=self.dry_run)
-        impls = assistant.tool_impls(
+        toolkit = assistant.Toolkit(
             dispatch,
             self.log,
             operations=self.operations,
@@ -61,10 +86,16 @@ class TextApplication:
             steam=self.steam,
             media=self.media,
         )
+        if self.system_text is None:
+            # The offered set is the same for every session of this process,
+            # so the prompt is built once and stays cache-stable.
+            self.system_text = assistant.system_instruction(
+                self.cfg, interface="text", offered=toolkit.offered
+            )
         return {
             "backend": backend,
             "dispatch": dispatch,
-            "impls": impls,
+            "toolkit": toolkit,
             "lock": threading.Lock(),
             # Taken once, so every turn of this conversation rewrites the
             # one trace file rather than adding another.
@@ -98,24 +129,9 @@ class TextApplication:
             )
         try:
             session["dispatch"].begin_utterance(turn, message)
-            impls = {}
-            acknowledgments = []
-            for name, fn in session["impls"].items():
-
-                def audited(args, _name=name, _fn=fn):
-                    # Let the LAN client receive tool failures as HTTP 500.
-                    try:
-                        out = _fn(args)
-                    except Exception:
-                        assistant.record_tool_call(_name, args, {"ok": False}, self.log)
-                        raise
-                    assistant.record_tool_call(_name, args, out, self.log)
-                    if isinstance(out, dict) and out.get("acknowledgment"):
-                        acknowledgments.append(str(out["acknowledgment"]))
-                    return out
-
-                impls[name] = audited
-            reply = session["backend"].turn(self.system_text, message, impls)
+            acknowledgments: list[str] = []
+            tools = Audited(session["toolkit"], self.log, acknowledgments)
+            reply = session["backend"].turn(self.system_text, message, tools)
             if acknowledgments:
                 reply = acknowledgments[-1]
             # Copied under the lock: a concurrent turn on this session appends

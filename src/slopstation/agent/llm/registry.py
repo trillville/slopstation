@@ -11,14 +11,29 @@ from slopstation.agent.llm.confirm import ConfirmGate
 Risk = Literal["read", "act", "destructive"]
 RISKS: tuple[Risk, ...] = ("read", "act", "destructive")
 
-# The areas find_tools will name on a miss, so the model can search again
-# with better words. A spec outside these is a typo.
-AREAS = ("session", "steam", "media", "house")
+# The areas, each with the gloss the system prompt and find_tools use to say
+# what lives there. A spec outside these is a typo.
+AREAS = {
+    "session": "the session, the TV, the mic, and Big Picture on the PC",
+    "steam": "Steam: the catalog, the store, playtime, friends, downloads",
+    "media": "movies and TV through Radarr and Sonarr, and the torrents under them",
+    "storage": "disk space and files under the media root",
+    "house": "Slopstation itself: operations, lanes, logs, settings",
+    "api": "direct calls to any service's API when no tool covers the ask",
+}
 
 # What a tool needs before it is offered: an operations store, a media
-# service, or the steam data lane (which config can switch off). A tool with
-# no needs is always offered.
-SERVICES = ("operations", "media", "steam_data")
+# service (and the qBittorrent and Prowlarr clients it may carry), the Steam
+# account session, or the steam data lane (which config can switch off). A
+# tool with no needs is always offered.
+SERVICES = (
+    "operations",
+    "media",
+    "torrents",
+    "prowlarr",
+    "steam_account",
+    "steam_data",
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +93,9 @@ class ToolContext:
     steam: Any = None
     media: Any = None
     gate: ConfirmGate = field(default_factory=ConfirmGate)
+    # The Toolkit that owns this context, for the tools that act on the tool
+    # set itself (find_tools). Set by the Toolkit after construction.
+    toolkit: Any = None
 
     def services(self) -> frozenset[str]:
         """Which of SERVICES are present, so specs can be gated by `needs`."""
@@ -86,6 +104,12 @@ class ToolContext:
             have.add("operations")
         if self.media is not None:
             have.add("media")
+            if getattr(self.media, "qbit", None) is not None:
+                have.add("torrents")
+            if getattr(self.media, "prowlarr", None) is not None:
+                have.add("prowlarr")
+        if self.steam is not None:
+            have.add("steam_account")
         if self.voice is None or self.voice.get("steamDataTools", True):
             have.add("steam_data")
         return frozenset(have)
@@ -127,6 +151,15 @@ class Registry:
     def offered(self, services: frozenset[str]) -> list[ToolSpec]:
         """The specs whose needs the present services satisfy."""
         return [s for s in self._specs if set(s.needs) <= services]
+
+    def by_area(self, names: Iterable[str] | None = None) -> dict[str, list[ToolSpec]]:
+        """Specs grouped by area, in AREAS order; `names` narrows the set."""
+        keep = None if names is None else set(names)
+        out: dict[str, list[ToolSpec]] = {area: [] for area in AREAS}
+        for s in self._specs:
+            if keep is None or s.name in keep:
+                out[s.area].append(s)
+        return {a: specs for a, specs in out.items() if specs}
 
     # `names` filters to the tools present in a given impls set, so a renderer
     # can't offer a tool that isn't callable; None renders every spec.

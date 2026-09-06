@@ -11,7 +11,9 @@ from slopstation.agent.tools import library, titles
 log = logbook.logger("voice")
 
 
-CARRY: dict[str, Any] = {"messages": [], "t": 0.0}  # cross-session context
+# Cross-session context: the last turns, and the tools find_tools loaded,
+# so a follow-up session keeps what the last one found.
+CARRY: dict[str, Any] = {"messages": [], "loaded": [], "t": 0.0}
 
 
 def _trim_carry(messages):
@@ -101,6 +103,7 @@ class Session:
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None  # the LLM lane's, once built
+        self.toolkit = None  # the LLM lane's tools, once built
 
     async def run(self):
         from pipecat.frames.frames import (
@@ -314,41 +317,47 @@ class Session:
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
         from slopstation.agent.llm.assistant import (
-            function_schemas,
+            Toolkit,
             server_tools,
             system_instruction,
-            tool_impls,
         )
 
         voice, secrets = self.voice, self.secrets
-        carry = (
-            list(CARRY["messages"])
-            if time.time() - CARRY["t"] < voice["followupCarryS"]
-            else []
-        )
+        carrying = time.time() - CARRY["t"] < voice["followupCarryS"]
+        carry = list(CARRY["messages"]) if carrying else []
         # Native (provider-executed) tools ride custom_tools. Only the OpenAI
         # adapter has that passthrough (AdapterType still has no ANTHROPIC in
         # 1.8.1), so the knob is a no-op under the anthropic provider.
         native = server_tools(voice, "openai") if self.provider == "openai" else []
-        self.context = LLMContext(
-            messages=carry,
-            tools=ToolsSchema(
-                standard_tools=function_schemas(
-                    # Built after the gate so its request_stop can ride here.
-                    tool_impls(
-                        dispatcher,
-                        log,
-                        operations=self.operations,
-                        on_stop_listening=gate.request_stop,
-                        voice=voice,
-                        steam=self.steam,
-                        media=self.media,
-                    ),
-                    log,
-                ),  # -> one tool_call event per call
+
+        def tools_schema():
+            assert self.toolkit is not None
+            return ToolsSchema(
+                # -> one tool_call event per call
+                standard_tools=self.toolkit.function_schemas(log),
                 custom_tools={AdapterType.OPENAI: native} if native else None,
+            )
+
+        # Built after the gate so its request_stop can ride here. When
+        # find_tools loads more, the context's tool list is replaced; Pipecat
+        # re-reads it on the next inference and registers the new handlers.
+        self.toolkit = Toolkit(
+            dispatcher,
+            log,
+            operations=self.operations,
+            on_stop_listening=gate.request_stop,
+            voice=voice,
+            steam=self.steam,
+            media=self.media,
+            on_load=lambda: (
+                self.context.set_tools(tools_schema())
+                if self.context is not None
+                else None
             ),
         )
+        if carrying:
+            self.toolkit.load(CARRY["loaded"])
+        self.context = LLMContext(messages=carry, tools=tools_schema())
         # Strategies passed explicitly so the aggregator does not build its
         # default per-session smart-turn ONNX model; turn resolution itself
         # happens upstream in the turns resolver (see run()), so these only
@@ -362,7 +371,9 @@ class Session:
                 )
             ),
         )
-        llm = _make_llm(voice, secrets, system_instruction(self.cfg))
+        llm = _make_llm(
+            voice, secrets, system_instruction(self.cfg, offered=self.toolkit.offered)
+        )
         if native:
             # Pipecat (still in 1.8.1) has no handling for provider-executed
             # tools: a web_search never reaches the context, so the model
@@ -387,4 +398,5 @@ class Session:
         msgs = list(self.context.messages)
         traces.save("voice", msgs, {"provider": self.provider, "dry_run": self.dry_run})
         CARRY["messages"] = _trim_carry(msgs[-8:])
+        CARRY["loaded"] = list(self.toolkit.loaded) if self.toolkit else []
         CARRY["t"] = time.time()
