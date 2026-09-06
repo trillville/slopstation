@@ -579,3 +579,22 @@ def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
         )
     )
     ann.stop()
+
+
+def test_media_monitor_reports_a_failed_search_as_failed(log):
+    terminal = []
+    store = operations.OperationStore(log, on_terminal=terminal.append)
+    fake_media = FakeMedia()
+    monitor = operations_monitors.MediaMonitor(store, fake_media, log)
+    op = _movie(store, "61", "Arrival", 329865, 9, promise="search")
+    fake_media.result = {
+        "complete": True,
+        "failed": True,
+        "progress": {"phase": "search_failed"},
+        "detail": "Radarr search failed",
+    }
+    monitor.reconcile_once()
+    row = store.get(op["id"])
+    assert row["state"] == operations.FAILED
+    assert row["summary"] == "Radarr's search for Arrival failed."
+    assert len(terminal) == 1

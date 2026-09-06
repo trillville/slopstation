@@ -83,10 +83,11 @@ def test_validation_rejects_every_hostile_shape():
 
 
 def test_dispatch_ps1_is_the_real_boundary():
-    # 13 patterns across 11 verbs: nav alone is three (front-page/library,
-    # game-page with an appid, collection), so this counts patterns, not verbs.
+    # 18 patterns across 13 verbs: nav alone is six (front pages, game page
+    # with an appid, collection, more pages, one game's pages, a URL), so this
+    # counts patterns, not verbs.
     allpats = dispatch_patterns()
-    assert len(allpats) == 13, f"expected 13 patterns, got {len(allpats)}: {allpats}"
+    assert len(allpats) == 18, f"expected 18 patterns, got {len(allpats)}: {allpats}"
     for p in allpats:
         # \z, not $: in .NET '$' also matches before a trailing newline.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
@@ -99,9 +100,9 @@ def test_dispatch_ps1_is_the_real_boundary():
     assert all(callable(getattr(gamepc, v)) for v in gamepc.VERBS)
 
     pats = [p for p in allpats if "--turn" in p]
-    # Five mutating verbs take a turn, and nav is three patterns, so seven
-    # patterns carry one: enter, exit, launch, nav x3, stop.
-    assert len(pats) == 7, f"expected 7 turn-bearing patterns, got {pats}"
+    # Six mutating verbs take a turn, and nav is six patterns, so eleven
+    # patterns carry one: enter, exit, launch, nav x6, stop, sleep.
+    assert len(pats) == 11, f"expected 11 turn-bearing patterns, got {pats}"
     for p in pats:
         assert "[0-9a-f]{1,8}" in p, f"pattern does not bound the turn: {p}"
 
@@ -118,7 +119,15 @@ def test_dispatch_ps1_is_the_real_boundary():
         "nav collection favorite",
         "nav collection uc-mkD+r+pfQ1hu",
         "nav collection uc-odwxN*+G1zDb*+",
+        "nav friends",
+        "nav news",
+        "nav news 12345",
+        "nav dlc 12345",
+        "nav validate 12345",
+        "nav url https://store.steampowered.com/search/?term=co%2Bop+roguelike",
+        "nav url https://steamcommunity.com/app/1245620/workshop/",
         "stop 12345",
+        "sleep",
     ]
     for p in pats:
         rx = compile_ps(p)

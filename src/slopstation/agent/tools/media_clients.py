@@ -125,6 +125,10 @@ class ArrClient:
     def delete(self, endpoint, params=None):
         return self.request("DELETE", endpoint, params=params)
 
+    def call(self, method, endpoint, params=None, payload=None):
+        """The passthrough shape: any method, any endpoint under the API root."""
+        return self.request(method, endpoint, params=params, payload=payload)
+
 
 def _qbit_http_transport(method, url, headers, body, timeout):
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -166,9 +170,12 @@ class QbittorrentClient:
         self.sid = None
         self.sid_cookie = None
 
-    def _call(self, method, endpoint, payload=None, authenticate=True):
+    def _call(self, method, endpoint, payload=None, authenticate=True, params=None):
         if authenticate and self.sid is None:
             self.login()
+        url = f"{self.base_url}/api/v2/{endpoint.lstrip('/')}"
+        if params:
+            url += "?" + urllib.parse.urlencode(params, doseq=True)
 
         def send():
             body = None
@@ -182,13 +189,7 @@ class QbittorrentClient:
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
             if self.sid is not None and self.sid_cookie is not None:
                 headers["Cookie"] = f"{self.sid_cookie}={self.sid}"
-            return self.transport(
-                method,
-                f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
-                headers,
-                body,
-                HTTP_TIMEOUT_S,
-            )
+            return self.transport(method, url, headers, body, HTTP_TIMEOUT_S)
 
         try:
             return send()
@@ -224,17 +225,149 @@ class QbittorrentClient:
         if self.sid is None:
             raise MediaError("qBittorrent login returned no session cookie")
 
-    def _text(self, endpoint):
-        _, raw = self._call("GET", endpoint)
+    def _text(self, endpoint, params=None):
+        _, raw = self._call("GET", endpoint, params=params)
         return raw.decode("utf-8", "replace").strip()
 
-    def _json(self, endpoint):
-        _, raw = self._call("GET", endpoint)
+    def _json(self, endpoint, params=None):
+        _, raw = self._call("GET", endpoint, params=params)
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as e:
             raise MediaError("qBittorrent returned malformed JSON") from e
         return value
+
+    def call(self, method, endpoint, params=None, payload=None):
+        """The passthrough shape: JSON when the body parses, else the text,
+        else None for an empty 200. qBittorrent takes form-encoded POSTs."""
+        _, raw = self._call(method, endpoint, payload=payload, params=params)
+        text = raw.decode("utf-8", "replace").strip() if raw else ""
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
+
+    # -- torrents (API v2.11, qBittorrent 5) -----------------------------------
+
+    @staticmethod
+    def _hashes(hashes):
+        if hashes == "all":
+            return "all"
+        return "|".join(hashes)
+
+    def torrents(
+        self,
+        filter=None,
+        category=None,
+        sort=None,
+        reverse=False,
+        limit=None,
+        hashes=None,
+    ):
+        params = {}
+        if hashes:
+            params["hashes"] = self._hashes(hashes)
+        if filter:
+            params["filter"] = filter
+        if category is not None:
+            params["category"] = category
+        if sort:
+            params["sort"] = sort
+            params["reverse"] = "true" if reverse else "false"
+        if limit:
+            params["limit"] = int(limit)
+        value = self._json("torrents/info", params or None)
+        if not isinstance(value, list):
+            raise MediaError("qBittorrent returned an invalid torrent list")
+        return value
+
+    def torrent_properties(self, torrent_hash):
+        return self._json("torrents/properties", {"hash": torrent_hash})
+
+    def torrent_files(self, torrent_hash):
+        return self._json("torrents/files", {"hash": torrent_hash})
+
+    def torrent_trackers(self, torrent_hash):
+        return self._json("torrents/trackers", {"hash": torrent_hash})
+
+    def torrent_action(self, action, hashes):
+        """stop, start, recheck, reannounce, topPrio, bottomPrio, increasePrio,
+        decreasePrio - the ones that take only hashes."""
+        self._call("POST", f"torrents/{action}", {"hashes": self._hashes(hashes)})
+
+    def set_force_start(self, hashes, value):
+        self._call(
+            "POST",
+            "torrents/setForceStart",
+            {"hashes": self._hashes(hashes), "value": "true" if value else "false"},
+        )
+
+    def delete_torrents(self, hashes, delete_files):
+        self._call(
+            "POST",
+            "torrents/delete",
+            {
+                "hashes": self._hashes(hashes),
+                "deleteFiles": "true" if delete_files else "false",
+            },
+        )
+
+    def set_torrent_limits(self, hashes, download=None, upload=None):
+        """Per-torrent speed limits in bytes/s; 0 lifts one."""
+        if download is not None:
+            self._call(
+                "POST",
+                "torrents/setDownloadLimit",
+                {"hashes": self._hashes(hashes), "limit": int(download)},
+            )
+        if upload is not None:
+            self._call(
+                "POST",
+                "torrents/setUploadLimit",
+                {"hashes": self._hashes(hashes), "limit": int(upload)},
+            )
+
+    # -- transfer ------------------------------------------------------------
+
+    def transfer_info(self):
+        value = self._json("transfer/info")
+        if not isinstance(value, dict):
+            raise MediaError("qBittorrent returned invalid transfer info")
+        return value
+
+    def speed_limits_mode(self):
+        """True when the alternative limits are active."""
+        return self._text("transfer/speedLimitsMode") == "1"
+
+    def toggle_speed_limits_mode(self):
+        self._call("POST", "transfer/toggleSpeedLimitsMode")
+
+    def set_global_limits(self, download=None, upload=None):
+        """Global speed limits in bytes/s; 0 lifts one."""
+        if download is not None:
+            self._call("POST", "transfer/setDownloadLimit", {"limit": int(download)})
+        if upload is not None:
+            self._call("POST", "transfer/setUploadLimit", {"limit": int(upload)})
+
+    def main_log(self, warnings_only=True, last_known_id=-1):
+        params = {
+            "normal": "false" if warnings_only else "true",
+            "info": "false" if warnings_only else "true",
+            "warning": "true",
+            "critical": "true",
+            "last_known_id": int(last_known_id),
+        }
+        value = self._json("log/main", params)
+        return value if isinstance(value, list) else []
+
+    def server_state(self):
+        """sync/maindata's server_state: free space on the download disk,
+        connection status, DHT nodes, alternative-limits flag."""
+        value = self._json("sync/maindata")
+        state = value.get("server_state") if isinstance(value, dict) else None
+        return state if isinstance(state, dict) else {}
 
     def version(self):
         return self._text("app/version")

@@ -121,7 +121,11 @@
       "my downloads": "downloads",
       "downloads queue": "downloads", "download queue": "downloads",
       "library": "library", "my library": "library", "the library": "library",
-      "store": "store", "the store": "store", "store page": "store"
+      "store": "store", "the store": "store", "store page": "store",
+      "friends": "friends", "my friends": "friends", "friends list": "friends",
+      "settings": "settings", "the settings": "settings",
+      "wishlist": "wishlist", "my wishlist": "wishlist",
+      "screenshots": "screenshots", "my screenshots": "screenshots"
     }
   }
 }

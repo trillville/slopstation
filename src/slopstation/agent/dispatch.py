@@ -214,7 +214,26 @@ class Dispatch:
 
     # -- Big Picture navigation ------------------------------------------------
 
-    NAV_KINDS = {"downloads", "library", "store", "details", "collection"}
+    # One kind per Dispatch.ps1 nav arm shape. The bare kinds open a Big
+    # Picture page; the appid kinds a game's page; url an allowed Steam web
+    # page (the tool builds search results and arbitrary pages out of it).
+    NAV_KINDS = {
+        "downloads",
+        "library",
+        "store",
+        "friends",
+        "settings",
+        "screenshots",
+        "wishlist",
+        "news",
+        "details",
+        "collection",
+        "dlc",
+        "hub",
+        "workshop",
+        "validate",
+        "url",
+    }
 
     def nav(self, kind: str, arg: int | str | None = None) -> Result:
         """Fire a steam:// navigation into Big Picture via the host `nav`
@@ -223,6 +242,10 @@ class Dispatch:
         kind = str(kind).strip().lower()
         if kind not in self.NAV_KINDS:
             return _fail(f"there's no navigation target called '{kind}'")
+        if kind == "url" and not gamepc.NAV_URL_RE.fullmatch(str(arg or "")):
+            # The PC's allowlist regex, applied here first so a bad URL is a
+            # refusal and never a DENIED on the wire.
+            return _fail("that is not a Steam store or community page")
         cmd = gamepc.nav_cmd(kind, arg)
         if self.dry_run:
             return self._would(f"ssh {cmd}")
@@ -251,11 +274,26 @@ class Dispatch:
             return _name(arg)
         if kind == "store" and arg:
             return f"{_name(arg)} in the store"
+        if kind in ("dlc", "hub", "workshop", "news", "validate") and arg:
+            what = {
+                "dlc": "the DLC for {}",
+                "hub": "the community hub for {}",
+                "workshop": "the workshop for {}",
+                "news": "the news for {}",
+                "validate": "the file check for {}",
+            }[kind]
+            return what.format(_name(arg))
         return {
             "downloads": "downloads",
             "library": "your library",
             "store": "the store",
             "collection": "that collection",
+            "friends": "your friends",
+            "settings": "settings",
+            "screenshots": "your screenshots",
+            "wishlist": "your wishlist",
+            "news": "the news",
+            "url": "that page",
         }.get(kind, kind)
 
     # -- TV --------------------------------------------------------------------

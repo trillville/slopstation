@@ -10,7 +10,7 @@ import pytest
 from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
-from slopstation.agent.llm import assistant, backends, media_tools
+from slopstation.agent.llm import assistant, backends, confirm
 from slopstation.agent.tools import library, steamstore
 
 CFG_MIN = {
@@ -117,15 +117,17 @@ class FakeOperations:
         turn=None,
         detail="",
         metadata=None,
+        work_id=None,
     ):
         self.tracked.append(
             (kind, authority, external_ref, title, turn, detail, metadata)
         )
         return {"id": "op-media"}
 
-    def for_assistant(self, scope, acknowledge=False):
+    def for_assistant(self, scope, limit=10, offset=0, acknowledge=False):
         self.acknowledged = acknowledge
-        return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
+        self.limit = limit
+        return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}], 1
 
     def observe(self, operation_id, state, progress, detail):
         self.observed.append((operation_id, state, progress, detail))
@@ -193,6 +195,9 @@ class FakeMedia:
     def delete_movie(self, tmdb_id, command_ids):
         self.requests.append(("delete_movie", tmdb_id, command_ids))
         return {"ok": True, "title": "Dune", "removed": True}
+
+    def episodes_in_seasons(self, tvdb_id, seasons):
+        return [201]
 
     def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
         self.requests.append(
@@ -284,7 +289,10 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     assert "CATALOG" in si and str(INSTALLED) in si
     # Mishear-repair: the model must know its input is STT, not typed text.
     assert "speech-to-text" in flat(si) and "mishears" in flat(si)
-    assert "find_media" in si and "Never guess an id" in si
+    # The behavioural rule stays in the prompt; the tool rule travels with
+    # the tool, so it is absent when the media service is.
+    assert "Never guess an id" in si and "find_media" not in si
+    assert "Never guess an id" in assistant.REGISTRY.get("find_media").description
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
     assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
@@ -329,12 +337,18 @@ def test_launch_game_refuses_an_appid_outside_the_catalog(impls):
     assert r["ok"] and "dry-run" in r["detail"], r
 
 
-def test_control_routes_actions_and_refuses_the_malformed(impls):
-    assert impls["control"]({"action": "volume_up"})["ok"]
-    assert impls["control"]({"action": "set_volume", "level": 30})["ok"]
-    assert not impls["control"]({"action": "self_destruct"})["ok"]
-    r = impls["control"]({"action": "set_volume"})  # no level -> refused
+def test_volume_and_session_route_actions_and_refuse_the_malformed(impls):
+    # Two tools where there was one: volume never interrupts the TV, session
+    # always does, so they carry different risk and separate descriptions.
+    assert impls["volume"]({"action": "up"})["ok"]
+    assert impls["volume"]({"action": "set", "level": 30})["ok"]
+    assert not impls["volume"]({"action": "self_destruct"})["ok"]
+    r = impls["volume"]({"action": "set"})  # no level -> refused
     assert not r["ok"] and "level" in r["error"]
+    assert impls["session"]({"action": "end_session"})["ok"]
+    assert impls["session"]({"action": "switch_input", "input": "apple tv"})["ok"]
+    assert not impls["session"]({"action": "volume_up"})["ok"]
+    assert assistant.REGISTRY.get("session").risk == "act"
 
 
 def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
@@ -409,10 +423,24 @@ def test_list_operations_acknowledges_only_on_a_live_recent_read(
 def test_function_schemas_render_only_the_tools_present(
     dispatch, log, impls, fake_operations, media_impls
 ):
-    assert len(assistant.function_schemas(impls, log)) == 10  # no operations store
+    # The schema list is exactly the tools whose services are present: the
+    # registry's `needs` is the one gate, on both the impls and the schemas.
+    def expect(*services):
+        have = set(services) | {"steam_data"}
+        return {s.name for s in assistant.REGISTRY if set(s.needs) <= have}
+
+    def names(schemas):
+        return {s.name for s in schemas}
+
+    assert names(assistant.function_schemas(impls, log)) == expect()
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert len(assistant.function_schemas(oimpls, log)) == 11
-    assert len(assistant.function_schemas(media_impls, log)) == 16
+    assert names(assistant.function_schemas(oimpls, log)) == expect("operations")
+    # The media fake carries no qBittorrent or Prowlarr, so the torrent tools
+    # and the Prowlarr ones stay out while the arr and storage tools come in.
+    assert names(assistant.function_schemas(media_impls, log)) == expect(
+        "operations", "media"
+    )
+    assert "list_torrents" not in names(assistant.function_schemas(media_impls, log))
 
 
 # -- the media tools -----------------------------------------------------------
@@ -506,7 +534,7 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
     deleted = live_media["delete_media"](dict(ask))
     assert deleted["ok"]
     # a question the user declined must not stay armed
-    monkeypatch.setattr(media_tools, "ASK_TTL_S", -1)
+    monkeypatch.setattr(confirm, "ASK_TTL_S", -1)
     live_media["delete_media"](dict(ask))
     live_dispatch.begin_utterance("fa1102", "later")
     assert not live_media["delete_media"](dict(ask))["ok"]
@@ -523,8 +551,8 @@ def test_list_games_and_search_store_refuse_a_bad_ask(impls):
     assert "list_games" in impls and "search_store" in impls
     r = impls["list_games"]({"source": "nope"})
     assert not r["ok"] and "unknown source" in r["error"], r
-    r = impls["list_games"]({"source": "downloading"})  # no account session here
-    assert not r["ok"] and "enrolled" in r["error"], r
+    r = impls["list_games"]({"source": "downloading"})  # moved to its own tool
+    assert not r["ok"] and "download_status" in r["error"], r
     r = impls["search_store"]({})  # neither term nor tags
     assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
 
@@ -555,8 +583,11 @@ def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
     gated = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
-    # Ten base tools minus the two store ones the kill switch drops.
-    assert len(assistant.function_schemas(gated, log)) == 8
+    # What remains is exactly the tools that need no service at all.
+    assert "steam_api" not in gated
+    assert {s.name for s in assistant.function_schemas(gated, log)} == {
+        s.name for s in assistant.REGISTRY if not s.needs
+    }
 
 
 # -- Tool errors ---------------------------------------------------------------
@@ -578,7 +609,7 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     # A dead token must not end the request: it falls through to the TV path.
     assert inst["ok"] and "press Install" in inst["detail"], inst
     assert navd == [("details", INSTALLED)], navd
-    dl = rimpls["list_games"]({"source": "downloading"})
+    dl = rimpls["download_status"]({})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())
 
@@ -667,7 +698,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
 
     for s in schemas:
         asyncio.run(s.handler(P2()))
-    # Order follows TOOL_DEFS, not the impls dict, so key by tool name.
+    # Order follows the registry, not the impls dict, so key by tool name.
     rec = {r["tool"]: r for r in tlog.records if r.get("event") == "tool_call"}
     assert set(rec) == {"get_now_playing", "launch_game"}, rec  # the raiser too
     assert rec["get_now_playing"]["ok"] is True
@@ -700,6 +731,53 @@ def test_nav_remaps_targets_and_guards_the_catalog(monkeypatch, dispatch, log):
     assert navimpls["nav"]({"target": "store_page", "appid": 1478500})["ok"]
     assert seen[-1] == ("store", 1478500), seen[-1]
     assert not navimpls["nav"]({"target": "store_page", "appid": 0})["ok"]
+
+
+def test_nav_reaches_the_newer_pages_search_and_allowed_urls(
+    monkeypatch, dispatch, log
+):
+    seen = []
+    monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
+    navimpls = assistant.tool_impls(dispatch, log)
+    nav = navimpls["nav"]
+    for target in ("friends", "settings", "screenshots", "wishlist"):
+        assert nav({"target": target})["ok"]
+    assert seen[-4:] == [
+        (t, None) for t in ("friends", "settings", "screenshots", "wishlist")
+    ]
+    # Per-game pages take any appid; the tool maps its names onto the verb's.
+    assert nav({"target": "dlc", "appid": 1478500})["ok"] and seen[-1] == (
+        "dlc",
+        1478500,
+    )
+    assert nav({"target": "community_hub", "appid": 1478500})["ok"]
+    assert seen[-1] == ("hub", 1478500)
+    assert nav({"target": "verify_files", "appid": INSTALLED})["ok"]
+    assert seen[-1] == ("validate", INSTALLED)
+    assert not nav({"target": "workshop"})["ok"], "a per-game page needs the appid"
+    # news is both: the feed without an appid, one game's with.
+    assert nav({"target": "news"})["ok"] and seen[-1] == ("news", None)
+    assert nav({"target": "news", "appid": INSTALLED})["ok"]
+    assert seen[-1] == ("news", INSTALLED)
+    # search builds a store URL with the words encoded, trimmed to fit the
+    # PC's URL length when the encoding blows up.
+    assert nav({"target": "search", "query": "co-op roguelike & friends"})["ok"]
+    assert seen[-1] == (
+        "url",
+        "https://store.steampowered.com/search/?term=co-op+roguelike+%26+friends",
+    )
+    assert nav({"target": "search", "query": "'" * 120})["ok"]
+    assert len(seen[-1][1]) <= len("https://store.steampowered.com/") + 300
+    assert not nav({"target": "search", "query": " "})["ok"]
+    # The two front pages are pages too.
+    assert nav({"target": "web", "url": "https://steamcommunity.com/"})["ok"]
+    # web takes the two Steam hosts and nothing else.
+    assert nav({"target": "web", "url": "https://steamcommunity.com/id/someone/"})["ok"]
+    assert seen[-1] == ("url", "https://steamcommunity.com/id/someone/")
+    r = nav({"target": "web", "url": "https://example.com/store.steampowered.com/"})
+    assert not r["ok"] and "store.steampowered.com" in r["error"]
+    assert not nav({"target": "web", "url": "http://store.steampowered.com/"})["ok"]
+    assert not nav({"target": "web", "url": "javascript:alert(1)"})["ok"]
 
 
 def test_nav_resolves_a_collection_by_name_and_lists_them_on_a_miss(
@@ -785,7 +863,7 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
 
 def test_tool_defs_render_flat_for_both_providers(catalog):
     at, ot = assistant.anthropic_tools(), assistant.openai_tools()
-    names = {n for n, *_ in assistant.TOOL_DEFS}
+    names = set(assistant.REGISTRY.names())
     assert {t["name"] for t in at} == names
     # Responses API tools are FLAT (name/parameters at top level, no nesting).
     assert {t["name"] for t in ot} == names
@@ -795,11 +873,12 @@ def test_tool_defs_render_flat_for_both_providers(catalog):
     )
     assert all("input_schema" in t for t in at)
     # The prompt defines the volume range and launch_game starts sessions.
-    assert "0-100" not in flat(assistant.TOOL_DEFS)
-    assert "never call start_session" in flat(assistant.TOOL_DEFS)
+    descriptions = flat([s.description for s in assistant.REGISTRY])
+    assert "0-100" not in descriptions
+    assert "never call start_session" in descriptions
     # Closing the mic must never read as ending the session on the TV - spelled
     # out in both places the model reads.
-    assert "NOT end_session" in flat(assistant.TOOL_DEFS)
+    assert "NOT end_session" in descriptions
     si = assistant.system_instruction(CFG_MIN)
     assert "never end the gaming session for them" in flat(si)
 

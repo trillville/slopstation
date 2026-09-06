@@ -11,6 +11,10 @@ from slopstation.agent.telemetry import sentry, traces
 # Keep provider timeouts shorter than the HTTP interface timeout.
 LLM_TIMEOUT_S = 90
 LLM_MAX_RETRIES = 1
+# These backends serve the text interface and the REPL, where an answer can
+# be a list or a table. The voice lane sets its own, shorter cap in
+# speech/session.py. Matches the OpenAI backend's max_output_tokens.
+TEXT_MAX_TOKENS = 1500
 
 
 # --- Provider backends --------------------------------------------------------
@@ -24,7 +28,10 @@ class Backend:
     server_tools: list
     cache_note: str
 
-    def turn(self, system_text, user_text, impls) -> str:
+    def turn(self, system_text, user_text, tools) -> str:
+        """One user turn to a final reply. `tools` is a Toolkit (or a bare
+        impls dict): its tool list is rendered on EVERY request in the loop,
+        so a tool that find_tools loads mid-turn is offered on the next."""
         raise NotImplementedError
 
 
@@ -45,7 +52,8 @@ class AnthropicBackend(Backend):
         self.server_tools = assistant.server_tools(voice, "anthropic") if voice else []
 
     @sentry.agent("assistant")
-    def turn(self, system_text, user_text, impls):
+    def turn(self, system_text, user_text, tools):
+        toolkit = assistant.as_tools(tools)
         # Cache the stable tools and system prompt together.
         system = [
             {
@@ -57,7 +65,7 @@ class AnthropicBackend(Backend):
         self.messages.append({"role": "user", "content": user_text})
         spoken = []  # text carried across pause_turn continuations
         while True:
-            tools = assistant.anthropic_tools(set(impls)) + self.server_tools
+            tools = toolkit.render("anthropic") + self.server_tools
             with sentry.chat_span(
                 "anthropic",
                 self.model,
@@ -67,7 +75,7 @@ class AnthropicBackend(Backend):
             ) as span:
                 resp = self.client.messages.create(
                     model=self.model,
-                    max_tokens=400,
+                    max_tokens=TEXT_MAX_TOKENS,
                     system=system,  # type: ignore[arg-type]
                     messages=self.messages,
                     tools=tools,
@@ -99,7 +107,7 @@ class AnthropicBackend(Backend):
             results = []
             for b in resp.content:
                 if b.type == "tool_use":
-                    out = impls[b.name](dict(b.input))
+                    out = toolkit.call(b.name, dict(b.input))
                     print(f"  [tool] {b.name}({dict(b.input)}) -> {out}")
                     results.append(
                         {
@@ -132,11 +140,12 @@ class OpenAIBackend(Backend):
         self.server_tools = assistant.server_tools(voice, "openai") if voice else []
 
     @sentry.agent("assistant")
-    def turn(self, system_text, user_text, impls):
+    def turn(self, system_text, user_text, tools):
+        toolkit = assistant.as_tools(tools)
         self.messages.append({"role": "user", "content": user_text})
         pending = [{"role": "user", "content": user_text}]
         while True:
-            tools = assistant.openai_tools(set(impls)) + self.server_tools
+            tools = toolkit.render("openai") + self.server_tools
             with sentry.chat_span(
                 "openai", self.model, system=system_text, messages=pending, tools=tools
             ) as span:
@@ -185,7 +194,7 @@ class OpenAIBackend(Backend):
             pending = []
             for c in calls:
                 args = json.loads(c.arguments or "{}")
-                out = impls[c.name](args)
+                out = toolkit.call(c.name, args)
                 print(f"  [tool] {c.name}({args}) -> {out}")
                 self.messages.append(
                     {"role": "tool", "name": c.name, "args": args, "out": out}
@@ -218,7 +227,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
         print(f"{keyname} is a placeholder - add it to secrets.json for {provider}")
         return 1
 
-    impls = assistant.tool_impls(Dispatch(cfg, log, dry_run=dry_run), log)
+    toolkit = assistant.Toolkit(Dispatch(cfg, log, dry_run=dry_run), log)
     effort = effort or cfg["voice"]["assistantReasoningEffort"]
     backend = BACKENDS[provider](
         secrets,
@@ -226,7 +235,7 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
         effort=effort,
         voice=cfg["voice"],
     )
-    system_text = assistant.system_instruction(cfg)
+    system_text = assistant.system_instruction(cfg, offered=toolkit.offered)
     tag = f"{provider}/{backend.model}"
     if provider == "openai":
         tag += f" effort={effort}"
@@ -243,14 +252,17 @@ def repl(cfg, secrets, log, dry_run=True, provider=None, model=None, effort=None
                 break
             t0 = time.time()
             try:
-                text = backend.turn(system_text, q, impls)
+                text = backend.turn(system_text, q, toolkit)
             except Exception as e:
                 # A bad knob value (e.g. an unsupported reasoning effort) or a
                 # transient API error shouldn't kill the REPL session.
                 print(f"API error ({time.time() - t0:.1f}s)> {e}")
                 continue
             note = f", {backend.cache_note}" if backend.cache_note else ""
-            print(f"assistant ({time.time() - t0:.1f}s{note})> {text}")
+            print(
+                f"assistant ({time.time() - t0:.1f}s{note}, "
+                f"{len(toolkit.loaded)} tools)> {text}"
+            )
     finally:
         # Save the transcript on every exit path, Ctrl-C included.
         traces.save(

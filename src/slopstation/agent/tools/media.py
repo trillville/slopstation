@@ -45,11 +45,14 @@ def _command(client, command_id):
 class MediaService:
     """Resolve policy names and submit/observe concrete media requests."""
 
-    def __init__(self, cfg, log, radarr, sonarr):
+    def __init__(self, cfg, log, radarr, sonarr, prowlarr=None, qbit=None):
         self.cfg = cfg
         self.log = log
         self.radarr = radarr
         self.sonarr = sonarr
+        # Optional: the tools that reach them are offered only when present.
+        self.prowlarr = prowlarr
+        self.qbit = qbit
 
     def _client(self, kind):
         return getattr(self, _kind(kind)["authority"])
@@ -372,7 +375,9 @@ class MediaService:
         seasons = self._seasons(metadata.get("seasons"))
         series_id = int(operation["external_ref"])
         rows = self.sonarr.get("episode", {"seriesId": series_id})
-        targets = self._target_episodes(rows, seasons)
+        targets = self._target_episodes(
+            rows, seasons, episode_ids=metadata.get("episode_ids")
+        )
         missing = [row for row in targets if not row.get("hasFile")]
         episode_ids = []
         for row in missing:
@@ -393,20 +398,287 @@ class MediaService:
             ],
         }
 
-    def retry_search(self, operation):
-        external_ref = int(operation["external_ref"])
-        if self._operation_kind(operation) == "movie":
+    def _search(self, kind, row_id, seasons=None, episode_ids=None):
+        """Start the app's search for one title: a movie, the given episodes,
+        the given seasons, or the whole series. The command ids to watch."""
+        if kind == "movie":
             command = self._one(
                 self.radarr.post(
-                    "command", {"name": "MoviesSearch", "movieIds": [external_ref]}
+                    "command", {"name": "MoviesSearch", "movieIds": [int(row_id)]}
                 ),
                 "Radarr",
                 "search command",
             )
             return [int(command["id"])]
+        if episode_ids:
+            command = self._one(
+                self.sonarr.post(
+                    "command",
+                    {"name": "EpisodeSearch", "episodeIds": sorted(episode_ids)},
+                ),
+                "Sonarr",
+                "search command",
+            )
+            return [int(command["id"])]
+        return self._search_series(int(row_id), seasons)
+
+    def retry_search(self, operation):
         metadata = operation.get("metadata") or {}
-        seasons = self._seasons(metadata.get("seasons"))
-        return self._search_series(external_ref, seasons)
+        return self._search(
+            self._operation_kind(operation),
+            operation["external_ref"],
+            self._seasons(metadata.get("seasons")),
+            metadata.get("episode_ids"),
+        )
+
+    # -- work on a title the library already holds ------------------------------
+
+    def _held(self, kind, catalog_id):
+        """The app's row for a catalog id, or the plain error for a title the
+        library does not hold."""
+        row = self._library_row(kind, catalog_id)
+        if row is None:
+            raise MediaError(f"that {kind} is not in the library - request it first")
+        return row
+
+    def _baselines(self, kind, row, seasons=None, episode_ids=None, rows=None):
+        """The file ids on disk before new work starts, for exactly the scope
+        of that work, so a later observation does not call an upgrade done
+        because the old file is still there, and does not wait on episodes
+        the work never touched."""
+        if kind == "movie":
+            return {
+                "baseline_file_id": self._movie_file_id(int(row["id"]))
+                if row.get("hasFile")
+                else None
+            }
+        if rows is None:
+            rows = self.sonarr.get("episode", {"seriesId": int(row["id"])})
+        files = {}
+        for episode in self._target_episodes(
+            rows, seasons, monitored_only=False, episode_ids=episode_ids
+        ):
+            if not episode.get("hasFile"):
+                continue
+            try:
+                files[str(int(episode["id"]))] = int(episode["episodeFileId"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode file has no id") from e
+        return {"baseline_episode_files": files}
+
+    def _episode_scope(self, series_id, season, episode=None):
+        """The episode ids one release covers: one episode, or a whole season
+        (a season pack), specials included. With the episode rows, so the
+        baselines need no second read."""
+        rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
+        if not isinstance(rows, list):
+            raise MediaError("Sonarr returned invalid episodes")
+        ids = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if int(row.get("seasonNumber", -1) or 0) != int(season):
+                continue
+            if episode is not None and int(row.get("episodeNumber", -1) or 0) != int(
+                episode
+            ):
+                continue
+            try:
+                ids.append(int(row["id"]))
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode has no id") from e
+        if not ids:
+            what = f"season {season}" + (f" episode {episode}" if episode else "")
+            raise MediaError(f"Sonarr has no {what} for this series")
+        return sorted(ids), rows
+
+    def _scoped(self, kind, row, season=None, episode=None):
+        """The scope one piece of work on a held title covers, and its
+        baselines: for a series that is the episodes of the season (or the
+        one episode) it was searched under."""
+        if kind == "movie":
+            return {}, self._baselines(kind, row)
+        if season is None:
+            raise MediaError("pass the season the release was searched under")
+        episode_ids, rows = self._episode_scope(row["id"], season, episode)
+        return (
+            {
+                "episode_ids": episode_ids,
+                "scope_label": f"season {season}"
+                + (f", episode {episode}" if episode is not None else ""),
+            },
+            self._baselines(kind, row, episode_ids=episode_ids, rows=rows),
+        )
+
+    def grab_release(
+        self, kind, catalog_id, guid, indexer_id, season=None, episode=None
+    ):
+        """Hand one release from the app's own search to the app, which
+        downloads and imports it as its own. The submission tracks it, scoped
+        to what the release covers."""
+        row = self._held(kind, catalog_id)
+        client = self._client(kind)
+        title = _clean_text(row.get("title")) or f"{kind} {catalog_id}"
+        scope, baselines = self._scoped(kind, row, season, episode)
+        try:
+            client.post("release", {"guid": str(guid), "indexerId": int(indexer_id)})
+        except MediaError as e:
+            if "HTTP 404" in str(e):
+                # The app keeps search results for half an hour; after that the
+                # guid means nothing to it.
+                raise MediaError(
+                    "that release is no longer in the app's search results - run "
+                    "search_releases again and grab from the new list"
+                ) from e
+            raise
+        return self._submission(
+            kind,
+            row["id"],
+            title,
+            catalog_id,
+            phase="grabbed",
+            work_id=json.dumps(["release", str(guid), int(indexer_id)]),
+            detail=f"{client.name} accepted the release and handed it to the "
+            "download client",
+            **scope,
+            **baselines,
+        )
+
+    def search_again(self, kind, catalog_id, season=None, episode=None):
+        """A fresh search for a held title: the whole of it, one season, or
+        one episode. What it promises is the search: the operation ends when
+        the app's search has run and anything it took has imported."""
+        row = self._held(kind, catalog_id)
+        title = _clean_text(row.get("title")) or f"{kind} {catalog_id}"
+        if kind == "series" and season is not None:
+            scope, baselines = self._scoped(kind, row, season, episode)
+            # A season is searched as a season (season packs count); one
+            # episode as that episode. The scope watched is the same either
+            # way: the episodes the search is for.
+            command_ids = (
+                self._search(kind, row["id"], episode_ids=scope["episode_ids"])
+                if episode is not None
+                else self._search(kind, row["id"], seasons=[int(season)])
+            )
+        else:
+            scope, baselines = {}, self._baselines(kind, row)
+            command_ids = self._search(kind, row["id"])
+        return self._submission(
+            kind,
+            row["id"],
+            title,
+            catalog_id,
+            command_ids=command_ids,
+            phase="searching",
+            promise="search",
+            work_id=f"command:{','.join(str(i) for i in command_ids)}",
+            detail=f"{self._client(kind).name} is searching again",
+            **scope,
+            **baselines,
+        )
+
+    def import_candidates(self, kind, download_id):
+        """What the app would import for a finished download, by its own match
+        and verdict: the files it matched and accepts, the ones it could not
+        match, and the ones it rejects (a sample, not an upgrade), with the
+        title the matched files belong to."""
+        client = self._client(kind)
+        rows = client.get(
+            "manualimport", {"downloadId": download_id, "filterExistingFiles": "true"}
+        )
+        files: list[dict] = []
+        unmatched: list = []
+        rejected: list = []
+        parent = None
+        seasons: set[int] = set()
+        for c in rows or []:
+            if not isinstance(c, dict):
+                continue
+            name = c.get("relativePath") or c.get("path")
+            reasons = [
+                str(r.get("reason") or r) for r in (c.get("rejections") or []) if r
+            ]
+            if reasons:
+                rejected.append({"file": name, "why": reasons[:3]})
+                continue
+            entry: dict = {
+                "path": c.get("path"),
+                "quality": c.get("quality"),
+                "languages": c.get("languages") or [],
+                "downloadId": download_id,
+            }
+            owner = c.get("movie" if kind == "movie" else "series") or {}
+            episodes = c.get("episodes") or []
+            if not owner.get("id") or (kind == "series" and not episodes):
+                unmatched.append(name)
+                continue
+            if kind == "movie":
+                entry["movieId"] = owner["id"]
+            else:
+                entry["seriesId"] = owner["id"]
+                entry["episodeIds"] = [e.get("id") for e in episodes if e.get("id")]
+                seasons.update(
+                    int(e["seasonNumber"])
+                    for e in episodes
+                    if e.get("seasonNumber") is not None
+                )
+            parent = parent or owner
+            files.append(entry)
+        return {
+            "files": files,
+            "unmatched": unmatched,
+            "rejected": rejected,
+            "parent": parent,
+            "seasons": sorted(n for n in seasons if n > 0) or None,
+        }
+
+    def manual_import(self, kind, download_id, candidates):
+        """Import the matched files of `import_candidates`; the submission
+        tracks the import against exactly the episodes (or the movie) those
+        files are for."""
+        parent = candidates["parent"] or {}
+        client = self._client(kind)
+        spec = _kind(kind)
+        row = self._one(
+            client.get(f"{spec['resource']}/{int(parent['id'])}"),
+            client.name,
+            spec["resource"],
+        )
+        title = _clean_text(row.get("title")) or f"{kind} {parent['id']}"
+        scope: dict = {}
+        if kind == "series":
+            scope["episode_ids"] = sorted(
+                {
+                    int(i)
+                    for entry in candidates["files"]
+                    for i in entry.get("episodeIds") or []
+                }
+            )
+        baselines = self._baselines(kind, row, episode_ids=scope.get("episode_ids"))
+        command = self._one(
+            client.post(
+                "command",
+                {
+                    "name": "ManualImport",
+                    "files": candidates["files"],
+                    "importMode": "auto",
+                },
+            ),
+            client.name,
+            "import command",
+        )
+        return self._submission(
+            kind,
+            row["id"],
+            title,
+            row.get(spec["id_key"]),
+            command_ids=[int(command["id"])],
+            phase="importing",
+            work_id=f"command:{command['id']}",
+            detail=f"{client.name} is importing {len(candidates['files'])} file(s)",
+            **scope,
+            **baselines,
+        )
 
     @staticmethod
     def _episode_metadata_ready(rows, seasons):
@@ -559,15 +831,26 @@ class MediaService:
         external_ref,
         title,
         catalog_id,
-        preset,
-        profile,
-        already_available,
+        preset=None,
+        profile=None,
+        already_available=False,
         seasons=None,
         baseline_file_id=None,
         baseline_episode_files=None,
         search_pending=False,
         command_ids=None,
+        phase="searching",
+        detail=None,
+        episode_ids=None,
+        promise="acquire",
+        work_id=None,
+        scope_label=None,
     ):
+        """What one accepted piece of work looks like to the operation store.
+        A request carries its preset and profile and a season scope; work on
+        a held title (a grab, a search, an import) carries the phase it
+        starts in and, for a series, the exact episodes it covers. `promise`
+        is what done means: media on disk for the scope, or a search run."""
         out = {
             "ok": True,
             "kind": f"{kind}_acquisition",
@@ -575,12 +858,30 @@ class MediaService:
             "external_ref": str(external_ref),
             "title": title,
             "catalog_id": catalog_id,
-            "preset": str(preset or "default").lower(),
-            "profile": profile,
             "already_available": already_available,
+            "phase": phase,
         }
-        if kind == "series":
+        if preset is not None:
+            out["preset"] = str(preset or "default").lower()
+            out["profile"] = profile
+        if detail is not None:
+            out["detail"] = detail
+        if kind == "series" and episode_ids is None:
             out["seasons"] = seasons
+        if episode_ids is not None:
+            out["episode_ids"] = list(episode_ids)
+        if kind == "series":
+            out["scope_label"] = scope_label or (
+                f"{len(episode_ids)} selected episodes"
+                if episode_ids is not None
+                else "seasons " + ", ".join(str(n) for n in seasons)
+                if seasons
+                else "all regular seasons"
+            )
+        if promise != "acquire":
+            out["promise"] = promise
+        if work_id is not None:
+            out["work_id"] = work_id
         if baseline_file_id is not None:
             out["baseline_file_id"] = baseline_file_id
         if baseline_episode_files is not None:
@@ -590,6 +891,77 @@ class MediaService:
         if command_ids:
             out["command_ids"] = command_ids
         return out
+
+    # -- what the arr apps hold, keyed by download ------------------------------
+
+    def download_index(self, strict=False):
+        """{infohash lower: {kind, title, queue_id, authority}} for every queue
+        item Radarr and Sonarr are waiting on. This is the torrent-to-media
+        link: a torrent in here belongs to an arr app, which owns its identity,
+        location and lifecycle. With strict, a queue that cannot be read
+        raises, because a decision that hangs on the link (deleting) must not
+        treat an unread queue as an empty one."""
+        out = {}
+        for kind, client, id_key, include in (
+            ("movie", self.radarr, "movie", "includeMovie"),
+            ("series", self.sonarr, "series", "includeSeries"),
+        ):
+            try:
+                queue = client.get(
+                    "queue", {"page": 1, "pageSize": 1000, include: "true"}
+                )
+            except MediaError as e:
+                self.log.warn("queue_read_failed", authority=client.name, err=str(e))
+                if strict:
+                    raise MediaError(f"{client.name}'s queue could not be read") from e
+                continue
+            for row in (
+                (queue or {}).get("records", []) if isinstance(queue, dict) else []
+            ):
+                download_id = str(row.get("downloadId") or "").lower()
+                if not download_id:
+                    continue
+                parent = row.get(id_key) if isinstance(row.get(id_key), dict) else {}
+                out[download_id] = {
+                    "kind": kind,
+                    "title": parent.get("title") or f"{kind} {row.get(id_key + 'Id')}",
+                    "queue_id": row.get("id"),
+                    "authority": client.name,
+                    "status": row.get("status"),
+                }
+        return out
+
+    def download_known(self, download_id):
+        """Whether either arr app's history has ever seen this infohash. Asked
+        per hash with the history filter, because a page of recent history
+        would miss an old import still seeding under the app's control."""
+        for client in (self.radarr, self.sonarr):
+            history = client.get(
+                "history", {"page": 1, "pageSize": 1, "downloadId": download_id}
+            )
+            rows = history.get("records", []) if isinstance(history, dict) else []
+            if rows:
+                return True
+        return False
+
+    def arr_files(self):
+        """Host-independent container paths of every file Radarr and Sonarr
+        hold, from the movie rows (movieFile.path) and each series' episode
+        files. Raises when an app cannot be read: a partial index would let a
+        held file look deletable."""
+        paths = set()
+        for row in self.radarr.get("movie") or []:
+            if isinstance(row, dict) and isinstance(row.get("movieFile"), dict):
+                path = row["movieFile"].get("path")
+                if path:
+                    paths.add(str(path))
+        for series in self.sonarr.get("series") or []:
+            if not isinstance(series, dict) or "id" not in series:
+                continue
+            for f in self.sonarr.get("episodefile", {"seriesId": series["id"]}) or []:
+                if isinstance(f, dict) and f.get("path"):
+                    paths.add(str(f["path"]))
+        return paths
 
     @staticmethod
     def _command_phase(client, command_ids):
@@ -608,6 +980,16 @@ class MediaService:
         if any(status in ("queued", "started") for status in statuses):
             return "searching"
         return "waiting_for_match"
+
+    def _idle_phase(self, client, command_ids, previous_phase):
+        """The phase when nothing of the title's is in the queue: a download
+        that was there is now importing; a release just grabbed has not
+        reached the client yet; otherwise the search commands say."""
+        if previous_phase == "downloading":
+            return "importing"
+        if previous_phase == "grabbed":
+            return "grabbed"
+        return self._command_phase(client, command_ids)
 
     @staticmethod
     def _queue_records(client, id_key, wanted_id):
@@ -643,7 +1025,12 @@ class MediaService:
         return max(0, min(100, round((size - left) * 100 / size)))
 
     def observe_movie(
-        self, movie_id, baseline_file_id=None, command_ids=None, previous_phase=None
+        self,
+        movie_id,
+        baseline_file_id=None,
+        command_ids=None,
+        previous_phase=None,
+        promise="acquire",
     ):
         movie = self._one(self.radarr.get(f"movie/{int(movie_id)}"), "Radarr", "movie")
         if movie.get("hasFile"):
@@ -671,25 +1058,56 @@ class MediaService:
                 else "the movie download is active"
             )
         else:
-            phase = (
-                "importing"
-                if previous_phase == "downloading"
-                else self._command_phase(self.radarr, command_ids)
-            )
+            try:
+                phase = self._idle_phase(self.radarr, command_ids, previous_phase)
+            except MediaError as e:
+                if promise != "search":
+                    raise
+                return {
+                    "complete": True,
+                    "failed": True,
+                    "progress": {"phase": "search_failed"},
+                    "detail": str(e),
+                }
+            if promise == "search" and phase not in ("searching", "importing"):
+                # The search ran and the client holds nothing for it: that
+                # is the promise, kept; the old file is what it found.
+                return {
+                    "complete": True,
+                    "progress": {"phase": "searched"},
+                    "detail": "Radarr searched and found nothing better than "
+                    "the file it holds",
+                }
             progress = {"phase": phase}
             detail = (
                 "Radarr is importing the requested movie file"
                 if phase == "importing"
+                else "Radarr handed the release to the download client and is "
+                "waiting for it to appear"
+                if phase == "grabbed"
                 else "Radarr is searching for an acceptable movie release"
                 if phase == "searching"
                 else "no acceptable movie release is available yet; Radarr is watching"
             )
         return {"complete": False, "progress": progress, "detail": detail}
 
-    def _target_episodes(self, rows, seasons=None, now=None, monitored_only=True):
-        seasons = self._seasons(seasons)
+    def _target_episodes(
+        self, rows, seasons=None, now=None, monitored_only=True, episode_ids=None
+    ):
+        """The episodes a scope covers. Explicit episode ids are the scope
+        whole - specials and unmonitored episodes included, since somebody
+        chose them; a season scope is the aired, monitored episodes of the
+        normal seasons (all of them when `seasons` is None)."""
         if not isinstance(rows, list):
             raise MediaError("Sonarr returned invalid episodes")
+        if episode_ids:
+            wanted = {int(i) for i in episode_ids}
+            return [
+                row
+                for row in rows
+                if isinstance(row, dict) and int(row.get("id", 0) or 0) in wanted
+            ]
+        seasons = self._seasons(seasons)
         now = now or datetime.datetime.now(datetime.UTC)
         targets = []
         for episode in rows:
@@ -714,16 +1132,27 @@ class MediaService:
         baseline_episode_files=None,
         command_ids=None,
         previous_phase=None,
+        episode_ids=None,
+        promise="acquire",
     ):
         rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
-        metadata_ready = self._episode_metadata_ready(rows, seasons)
-        scope = [
-            row
-            for row in rows
-            if isinstance(row, dict)
-            and int(row.get("seasonNumber", 0) or 0) > 0
-            and (seasons is None or int(row.get("seasonNumber", 0) or 0) in seasons)
-        ]
+        # Explicit episodes exist by construction; a season scope has to wait
+        # for Sonarr to populate them. Unmonitoring cancels a season request;
+        # an explicit episode was chosen unmonitored or not.
+        metadata_ready = bool(episode_ids) or self._episode_metadata_ready(
+            rows, seasons
+        )
+        scope = (
+            []
+            if episode_ids
+            else [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and int(row.get("seasonNumber", 0) or 0) > 0
+                and (seasons is None or int(row.get("seasonNumber", 0) or 0) in seasons)
+            ]
+        )
         if metadata_ready and scope and not any(row.get("monitored") for row in scope):
             return {
                 "complete": False,
@@ -732,7 +1161,7 @@ class MediaService:
                 "detail": "Sonarr reports the requested episodes are unmonitored",
                 "metadata_ready": True,
             }
-        targets = self._target_episodes(rows, seasons, now)
+        targets = self._target_episodes(rows, seasons, now, episode_ids=episode_ids)
         baseline = baseline_episode_files or {}
         total = len(targets)
         ready = 0
@@ -786,15 +1215,37 @@ class MediaService:
                     else f"download is active; {ready} of {total} episodes are imported"
                 )
             else:
-                phase = (
-                    "importing"
-                    if previous_phase == "downloading"
-                    else self._command_phase(self.sonarr, command_ids)
-                )
+                try:
+                    phase = self._idle_phase(self.sonarr, command_ids, previous_phase)
+                except MediaError as e:
+                    if promise != "search":
+                        raise
+                    progress["phase"] = "search_failed"
+                    return {
+                        "complete": True,
+                        "failed": True,
+                        "progress": progress,
+                        "detail": str(e),
+                        "metadata_ready": metadata_ready,
+                    }
+                if promise == "search" and phase not in ("searching", "importing"):
+                    # The search ran and the client holds nothing for it:
+                    # that is the promise, kept, whatever it found.
+                    progress["phase"] = "searched"
+                    return {
+                        "complete": True,
+                        "progress": progress,
+                        "detail": f"Sonarr searched; {ready} of {total} episodes "
+                        "gained a file",
+                        "metadata_ready": metadata_ready,
+                    }
                 progress["phase"] = phase
                 detail = (
                     f"Sonarr is importing episodes; {ready} of {total} are ready"
                     if phase == "importing"
+                    else "Sonarr handed the release to the download client and is "
+                    "waiting for it to appear"
+                    if phase == "grabbed"
                     else "Sonarr is searching for acceptable episode releases"
                     if phase == "searching"
                     else "no acceptable episode release is available yet; Sonarr is watching"
@@ -811,12 +1262,14 @@ class MediaService:
         external_ref = int(operation["external_ref"])
         metadata = operation.get("metadata") or {}
         phase = (operation.get("progress") or {}).get("phase")
+        promise = metadata.get("promise", "acquire")
         if self._operation_kind(operation) == "movie":
             return self.observe_movie(
                 external_ref,
                 metadata.get("baseline_file_id"),
                 metadata.get("command_ids"),
                 phase,
+                promise=promise,
             )
         return self.observe_series(
             external_ref,
@@ -824,6 +1277,8 @@ class MediaService:
             baseline_episode_files=metadata.get("baseline_episode_files"),
             command_ids=metadata.get("command_ids"),
             previous_phase=phase,
+            episode_ids=metadata.get("episode_ids"),
+            promise=promise,
         )
 
     QUEUE_DELETE_PARAMS = {
@@ -889,10 +1344,30 @@ class MediaService:
             "detail": f"removed {title} from Radarr and deleted its files",
         }
 
-    def delete_series(self, tvdb_id, seasons=None, all_seasons=False, command_ids=None):
+    def episodes_in_seasons(self, tvdb_id, seasons):
+        """Resolve a deletion's episode scope while Sonarr still has its rows."""
+        series = self._library_row("series", int(tvdb_id))
+        if series is None:
+            return []
+        rows = self.sonarr.get("episode", {"seriesId": int(series["id"])})
+        return sorted(
+            int(row["id"])
+            for row in rows
+            if int(row.get("seasonNumber", 0) or 0) in seasons
+        )
+
+    def delete_series(
+        self,
+        tvdb_id,
+        seasons=None,
+        all_seasons=False,
+        command_ids=None,
+        *,
+        episode_ids=None,
+    ):
         tvdb_id = int(tvdb_id)
         selected = self._seasons(seasons)
-        if selected is None and not all_seasons:
+        if selected is None and not all_seasons and episode_ids is None:
             raise MediaError("series deletion needs seasons or explicit all_seasons")
         series = self._library_row("series", tvdb_id)
         if series is None:
@@ -931,14 +1406,19 @@ class MediaService:
             row
             for row in episodes
             if isinstance(row, dict)
-            and int(row.get("seasonNumber", 0) or 0) in selected
+            and (
+                int(row.get("id", 0) or 0) in episode_ids
+                if episode_ids is not None
+                else int(row.get("seasonNumber", 0) or 0) in selected
+            )
         ]
         episode_ids = sorted({int(row["id"]) for row in wanted if row.get("id")})
         self._monitor_episodes(episode_ids, False)
         updated = dict(series)
         updated["seasons"] = [
             {**row, "monitored": False}
-            if isinstance(row, dict) and int(row.get("seasonNumber", -1)) in selected
+            if isinstance(row, dict)
+            and int(row.get("seasonNumber", -1)) in (selected or [])
             else row
             for row in series.get("seasons") or []
         ]
@@ -959,7 +1439,11 @@ class MediaService:
         )
         for file_id in file_ids:
             self.sonarr.delete(f"episodefile/{file_id}")
-        season_text = ", ".join(str(n) for n in selected)
+        scope = (
+            "season " + ", ".join(str(n) for n in selected)
+            if selected is not None
+            else f"{len(episode_ids)} selected episodes"
+        )
         return {
             "ok": True,
             "kind": "series",
@@ -969,7 +1453,8 @@ class MediaService:
             "seasons": selected,
             "downloads_canceled": downloads,
             "files_deleted": len(file_ids),
-            "detail": f"deleted season {season_text} of {title} and stopped monitoring it",
+            "episode_ids": episode_ids,
+            "detail": f"deleted {scope} of {title} and stopped monitoring it",
         }
 
 
@@ -1097,7 +1582,26 @@ def from_config(cfg, secrets, log):
     except (KeyError, MediaConfigurationError) as e:
         log.warn("lane_disabled", what="media", reason=str(e))
         return None
-    return MediaService(media_cfg, log, radarr, sonarr)
+    # Prowlarr and qBittorrent are extras: their absence disables their tools,
+    # not the media lane.
+    prowlarr = qbit = None
+    if config.real_key(secrets.get("prowlarrApiKey")):
+        try:
+            prowlarr = ArrClient(
+                "Prowlarr",
+                media_cfg.get("prowlarrUrl", ""),
+                secrets["prowlarrApiKey"],
+                api_version="v1",
+            )
+        except MediaConfigurationError as e:
+            log("lane_disabled", what="prowlarr_tools", reason=str(e))
+    else:
+        log("lane_disabled", what="prowlarr_tools", reason="prowlarrApiKey missing")
+    try:
+        qbit = _qbit_from_config(media_cfg, secrets)
+    except MediaConfigurationError as e:
+        log("lane_disabled", what="torrent_tools", reason=str(e))
+    return MediaService(media_cfg, log, radarr, sonarr, prowlarr=prowlarr, qbit=qbit)
 
 
 def main(argv=None):
@@ -1196,7 +1700,14 @@ def main(argv=None):
                 operations.record_deleted(store, covered, result)
             else:
                 covered, command_ids = operations.covered_by_delete(
-                    store, "series", args.tvdb_id, args.seasons, args.all_seasons
+                    store,
+                    "series",
+                    args.tvdb_id,
+                    args.seasons,
+                    args.all_seasons,
+                    service.episodes_in_seasons(args.tvdb_id, args.seasons)
+                    if not args.all_seasons
+                    else [],
                 )
                 result = service.delete_series(
                     args.tvdb_id, args.seasons, args.all_seasons, command_ids

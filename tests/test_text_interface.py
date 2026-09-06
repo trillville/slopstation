@@ -31,15 +31,17 @@ class FakeBackend:
         self.turns: int = 0
         self.messages: list[dict] = []
 
-    def turn(self, system_text, user_text, impls):
+    def turn(self, system_text, user_text, tools):
         assert "general text assistant" in system_text
+        # The area map is built from what this process offers.
+        assert "TOOLS:" in system_text and "find_tools reaches" in system_text
         self.turns += 1
         if "running" in user_text:
-            result = impls["list_operations"]({"scope": "active"})
+            result = tools.call("list_operations", {"scope": "active"})
             assert result["operations"][0]["title"] == "Andor"
         if "download" in user_text:
-            result = impls["request_series"](
-                {"tvdb_id": 393189, "seasons": [1], "preset": "2160p"}
+            result = tools.call(
+                "request_series", {"tvdb_id": 393189, "seasons": [1], "preset": "2160p"}
             )
             assert result["ok"]
         if "stall" in user_text:
@@ -56,7 +58,7 @@ class FakeOperations:
     def observe(self, operation_id, state, progress, detail):
         return {"id": operation_id, "state": state, "progress": progress}
 
-    def for_assistant(self, scope, acknowledge=False):
+    def for_assistant(self, scope, limit=10, offset=0, acknowledge=False):
         return [
             {
                 "id": "op-andor",
@@ -64,7 +66,7 @@ class FakeOperations:
                 "state": "RUNNING",
                 "progress": {"phase": "waiting_for_match"},
             }
-        ]
+        ], 1
 
 
 class FakeMedia:

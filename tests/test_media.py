@@ -198,6 +198,12 @@ class FakeQbitWeb:
             changes = json.loads(urllib.parse.parse_qs(body.decode())["json"][0])
             self.preferences.update(changes)
             return {}, b""
+        if path.endswith("/torrents/info"):
+            return {}, json.dumps([{"hash": "a" * 40, "name": "x"}]).encode()
+        if path.endswith("/torrents/stop"):
+            return {}, b""
+        if path.endswith("/transfer/speedLimitsMode"):
+            return {}, b"1"
         raise AssertionError((method, path))
 
     def count(self, suffix):
@@ -217,6 +223,26 @@ def qbit(qbit_web):
         "a-long-qbit-password",
         transport=qbit_web.transport,
     )
+
+
+def test_qbittorrent_client_torrent_calls_carry_params_and_form_fields(qbit, qbit_web):
+    rows = qbit.torrents(filter="downloading", sort="added_on", reverse=True)
+    assert rows[0]["hash"] == "a" * 40
+    method, url, headers, body, _ = qbit_web.calls[-1]
+    assert method == "GET" and url.endswith(
+        "/torrents/info?filter=downloading&sort=added_on&reverse=true"
+    )
+    qbit.torrent_action("stop", ["a" * 40, "b" * 40])
+    method, url, headers, body, _ = qbit_web.calls[-1]
+    assert method == "POST" and url.endswith("/torrents/stop")
+    assert urllib.parse.parse_qs(body.decode()) == {
+        "hashes": ["a" * 40 + "|" + "b" * 40]
+    }
+    assert qbit.speed_limits_mode() is True
+    # The passthrough shape: JSON when it parses, text otherwise, None when empty.
+    assert qbit.call("GET", "torrents/info")[0]["name"] == "x"
+    assert qbit.call("GET", "transfer/speedLimitsMode") == 1
+    assert qbit.call("POST", "torrents/stop", payload={"hashes": "all"}) is None
 
 
 def test_qbittorrent_client_logs_in_once_and_sets_the_port(qbit, qbit_web, monkeypatch):
@@ -1201,6 +1227,21 @@ def test_from_config_needs_the_lane_and_its_keys():
     cfg["media"]["enabled"] = True
     assert media.from_config(cfg, {}, log) is None
     assert log.find("lane_disabled")[-1]["what"] == "media"
+    # With the two arr keys the lane is up; Prowlarr and qBittorrent are
+    # extras whose absence disables only their own tools.
+    keys = {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32}
+    svc = media.from_config(cfg, keys, log)
+    assert svc is not None and svc.prowlarr is None and svc.qbit is None
+    assert {r["what"] for r in log.find("lane_disabled")} >= {
+        "prowlarr_tools",
+        "torrent_tools",
+    }
+    full = media.from_config(
+        cfg,
+        {**keys, "prowlarrApiKey": "p" * 32, "qbittorrentPassword": "q" * 16},
+        log,
+    )
+    assert full.prowlarr.api_version == "v1" and full.qbit is not None
 
 
 def test_track_survives_a_failing_store():

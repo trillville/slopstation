@@ -22,6 +22,19 @@ try {
         # real collection passes the verb and dies here. Steam's ids are
         # base64-ish ("uc-mkD+r+pfQ1hu").
         'collection' { if ($arg -match '^[A-Za-z0-9_.*+=-]{1,64}$') { "steam://open/library/collection/$arg" } else { $null } }
+        'friends'     { 'steam://open/friends' }
+        'settings'    { 'steam://open/settings' }
+        'screenshots' { 'steam://open/screenshots' }
+        'news'        { if ($arg -match '^\d{1,10}$') { "steam://openurl/https://store.steampowered.com/news/app/$arg" }
+                        elseif (-not $arg) { 'steam://open/news' } else { $null } }
+        'wishlist'    { 'steam://openurl/https://store.steampowered.com/wishlist/' }
+        'dlc'         { if ($arg -match '^\d{1,10}$') { "steam://openurl/https://store.steampowered.com/dlc/$arg/" } else { $null } }
+        'hub'         { if ($arg -match '^\d{1,10}$') { "steam://url/GameHub/$arg" } else { $null } }
+        'workshop'    { if ($arg -match '^\d{1,10}$') { "steam://url/SteamWorkshopPage/$arg" } else { $null } }
+        'validate'    { if ($arg -match '^\d{1,10}$') { "steam://validate/$arg" } else { $null } }
+        # Re-checked against the same allowlist Dispatch used: the URL becomes
+        # part of a steam://openurl and nothing else may.
+        'url'         { if ($arg -match '^https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{0,300}$') { "steam://openurl/$arg" } else { $null } }
         default      { $null }
     }
     if (-not $url) { throw "unrecognized nav target: '$target'" }

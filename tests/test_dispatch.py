@@ -288,6 +288,18 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
         d.nav("collection", "uc-abc").ok
         and wire[-1] == "nav collection uc-abc --turn 4c1d0e"
     ), wire
+    # The newer pages: bare, per-game, and a URL on the allowlist.
+    assert d.nav("friends").ok and wire[-1] == "nav friends --turn 4c1d0e", wire
+    assert d.nav("dlc", 400).ok and wire[-1] == "nav dlc 400 --turn 4c1d0e", wire
+    r = d.nav("url", "https://store.steampowered.com/wishlist/")
+    assert r.ok and "that page" in r.detail, r
+    assert wire[-1] == "nav url https://store.steampowered.com/wishlist/ --turn 4c1d0e"
+    # A URL off the allowlist is refused here and never reaches the wire.
+    n = len(wire)
+    r = d.nav("url", "https://evil.example/steam")
+    assert not r.ok and r.earcon == "fail" and len(wire) == n, (r, wire[-1])
+    r = d.nav("url", "https://store.steampowered.com/a b")
+    assert not r.ok and len(wire) == n
     host("NOTREADY")
     r = d.nav("downloads")
     assert not r.ok and r.earcon == "busy", r

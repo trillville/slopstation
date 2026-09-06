@@ -186,6 +186,37 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       Set-Content $navMarker "collection $($Matches[1])"
       Write-Answer 'nav' (Start-CgTask 'Nav') $turn
       break }
+  # More Big Picture pages, no argument. 'news' spans two patterns like
+  # 'store': the feed here, one game's news below (digits required).
+  '^nav (friends|settings|screenshots|wishlist|news)( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[3]
+      if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
+      Set-Turn $turn
+      Remove-Item $navMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $navMarker $Matches[1]
+      Write-Answer 'nav' (Start-CgTask 'Nav') $turn
+      break }
+  # One game's DLC list, community hub, workshop, news, or a file check.
+  '^nav (dlc|hub|workshop|news|validate) (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[4]
+      if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
+      Set-Turn $turn
+      Remove-Item $navMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $navMarker "$($Matches[1]) $($Matches[2])"
+      Write-Answer 'nav' (Start-CgTask 'Nav') $turn
+      break }
+  # Any store or community page. Two hosts, a bounded charset with no
+  # whitespace, so the URL can never swallow the turn. The same text lives in
+  # gamepc.py (refused before the wire) and Nav-BigPicture.ps1 (re-checked
+  # before it becomes a steam://openurl).
+  '^nav url (https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{0,300})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[3]
+      if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
+      Set-Turn $turn
+      Remove-Item $navMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $navMarker "url $($Matches[1])"
+      Write-Answer 'nav' (Start-CgTask 'Nav') $turn
+      break }
   # stop: quit the running game. The appid is REQUIRED and re-checked against
   # RunningAppID, so a raced/wrong id refuses (BUSY:<other>) instead of killing
   # the wrong game. The StopGame task quits it and re-focuses Big Picture.
@@ -198,6 +229,41 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       Remove-Item $stopMarker -Force -ErrorAction SilentlyContinue
       Set-Content $stopMarker $id
       Write-Answer 'stop' (Start-CgTask 'StopGame') $turn
+      break }
+  # disk: free space on each Steam library drive, for "can I install X".
+  '^disk\z' {
+      $out = @()
+      $seen = @{}
+      foreach ($root in (Get-SteamRoots)) {
+        try {
+          $d = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
+          if ($seen.ContainsKey($d.Name)) { continue }
+          $seen[$d.Name] = $true
+          $out += [pscustomobject]@{ root = $root; drive = $d.Name
+            free = [long]$d.AvailableFreeSpace; total = [long]$d.TotalSize }
+        } catch { }
+      }
+      ConvertTo-Json -InputObject @($out) -Compress -Depth 3
+      break }
+  # sleep: suspend the PC. Refused (BUSY) while a session is live, a game
+  # runs, or someone is signed in at the desk, so it can never end what is on
+  # the TV or under someone's hands. The suspend runs in a child powershell
+  # through the typed .NET call (Suspend, not Hibernate): rundll32's
+  # SetSuspendState misreads its arguments and hibernates. SetSuspendState
+  # blocks until the PC wakes, so the child is fire-and-forget and OK means
+  # "asked", not "asleep".
+  '^sleep( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[2]
+      if (Test-Path $ready) { Write-Answer 'sleep' 'BUSY' $turn; break }
+      $run = Get-RunningAppId
+      if ($run -and $run -ne 0) { Write-Answer 'sleep' "BUSY:$run" $turn; break }
+      $desk = $false
+      try { $desk = [bool](quser 2>$null | Select-String -Pattern '\sActive\s') } catch { }
+      if ($desk) { Write-Answer 'sleep' 'BUSY:desk' $turn; break }
+      Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-Command',
+        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState('Suspend', `$false, `$false)")
+      Write-Answer 'sleep' 'OK' $turn
       break }
   # collections: library collections as [{name,id}] JSON. Skip entries that
   # cannot be parsed from Steam's cloud-storage file.

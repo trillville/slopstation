@@ -27,6 +27,20 @@ STATES = ACTIVE | TERMINAL
 def _summary(operation, state):
     title = operation["title"]
     kind = operation.get("kind")
+    phase = (operation.get("progress") or {}).get("phase")
+    authority = str(operation.get("authority", "")).title()
+    # A search promised a search, not a file: say what it found.
+    if state == SUCCEEDED and phase == "searched":
+        gained = (operation.get("progress") or {}).get("episodes", 0)
+        if gained:
+            noun = "episode" if gained == 1 else "episodes"
+            return (
+                f"{authority} searched again for {title}; "
+                f"{gained} {noun} gained a file."
+            )
+        return f"{authority} searched again for {title} and found nothing better."
+    if state == FAILED and phase == "search_failed":
+        return f"{authority}'s search for {title} failed."
     if state == SUCCEEDED:
         if kind == "movie_acquisition":
             return f"{title} is ready to watch."
@@ -104,8 +118,13 @@ class OperationStore:
         detail="external authority accepted the request",
         metadata=None,
         observed=True,
+        work_id=None,
     ):
-        """Create one active tracker per concrete authority resource."""
+        """Deduplicate a receipt for the same work, not every action on a title.
+
+        Requests and Steam installs retain their resource identity. A manual
+        grab, search or import supplies its release or command identity.
+        """
         if state not in ACTIVE:
             raise ValueError(f"new operation state must be active, got {state}")
         external_ref = str(external_ref)
@@ -121,6 +140,7 @@ class OperationStore:
                     for r in rows
                     if r.get("kind") == kind
                     and r.get("external_ref") == external_ref
+                    and r.get("work_id") == work_id
                     and r.get("state") in ACTIVE
                 ),
                 None,
@@ -158,6 +178,8 @@ class OperationStore:
                 }
                 if metadata is not None:
                     created["metadata"] = metadata
+                if work_id is not None:
+                    created["work_id"] = work_id
                 rows.append(created)
                 self._save(rows)
         if reused is not None:
@@ -332,29 +354,41 @@ class OperationStore:
                     return True
         return False
 
-    def for_assistant(self, scope="active", limit=10, acknowledge=False):
-        rows = self.active() if scope == "active" else self.recent(limit)
+    def for_assistant(self, scope="active", limit=10, offset=0, acknowledge=False):
+        """One page of the scope's rows as the model reads them, and the
+        scope's total. Only the rows on the page are acknowledged: a bulletin
+        on a page nobody heard stays pending."""
+        rows = self.active() if scope == "active" else self.recent(offset + limit)
+        total = len(rows) if scope == "active" else len(self.all())
+        rows = rows[offset : offset + limit]
         if acknowledge:
             for row in rows:
                 if row.get("state") in TERMINAL and row.get("announcement_pending"):
                     self.mark_delivered(row["id"])
         return [
             {
-                k: r.get(k)
-                for k in (
-                    "id",
-                    "kind",
-                    "title",
-                    "state",
-                    "progress",
-                    "detail",
-                    "created",
-                    "updated",
-                    "finished",
-                )
+                **{
+                    k: r.get(k)
+                    for k in (
+                        "id",
+                        "kind",
+                        "title",
+                        "state",
+                        "progress",
+                        "detail",
+                        "created",
+                        "updated",
+                        "finished",
+                    )
+                },
+                "scope": {
+                    k: r.get("metadata", {})[k]
+                    for k in ("seasons", "episode_ids", "scope_label", "promise")
+                    if k in r.get("metadata", {})
+                },
             }
-            for r in rows[:limit]
-        ]
+            for r in rows
+        ], total
 
 
 def track(store, submission, turn=None):
@@ -362,6 +396,11 @@ def track(store, submission, turn=None):
     so a failed local write reports itself and never invites a second one."""
     if store is None or submission.get("already_available"):
         return submission
+    phase = submission.get("phase") or "searching"
+    authority = str(submission["authority"]).title()
+    detail = (
+        submission.get("detail") or f"{authority} accepted the request and is searching"
+    )
     metadata = {
         k: submission[k]
         for k in (
@@ -374,10 +413,12 @@ def track(store, submission, turn=None):
             "baseline_episode_files",
             "search_pending",
             "command_ids",
+            "episode_ids",
+            "promise",
+            "scope_label",
         )
         if k in submission
     }
-    authority = str(submission["authority"]).title()
     try:
         operation = store.track_external(
             submission["kind"],
@@ -387,25 +428,24 @@ def track(store, submission, turn=None):
             turn=turn,
             detail=f"{authority} accepted the request",
             metadata=metadata,
+            work_id=submission.get("work_id"),
         )
-        operation = store.observe(
-            operation["id"],
-            RUNNING,
-            {"phase": "searching"},
-            f"{authority} accepted the request and is searching",
-        )
-        return {**submission, "operation_id": operation["id"], "phase": "searching"}
+        operation = store.observe(operation["id"], RUNNING, {"phase": phase}, detail)
+        return {**submission, "operation_id": operation["id"], "phase": phase}
     except Exception as e:
         store.log.error("tool_error", tool="track_media", err=str(e))
         return {**submission, "tracking": "failed"}
 
 
-def covered_by_delete(store, kind, catalog_id, seasons=None, all_seasons=False):
+def covered_by_delete(
+    store, kind, catalog_id, seasons=None, all_seasons=False, episode_ids=()
+):
     """The active acquisitions a delete of this scope would cover, with the
     search commands to cancel alongside them. `kind` is "movie" or "series".
     A movie is covered outright; a series only when the delete's scope holds
     every season its request asked for, so a partial delete leaves the
-    request tracking the seasons it still owns."""
+    request tracking the seasons it still owns. `episode_ids` names the
+    episodes the service resolved for this deletion before changing state."""
     rows: list[dict] = []
     command_ids: list = []
     for operation in (
@@ -415,10 +455,15 @@ def covered_by_delete(store, kind, catalog_id, seasons=None, all_seasons=False):
         if int(metadata.get("catalog_id", 0) or 0) != int(catalog_id):
             continue
         requested = metadata.get("seasons")
+        explicit = metadata.get("episode_ids")
         if not (
             kind == "movie"
             or all_seasons
-            or (requested is not None and set(requested) <= set(seasons or []))
+            or (
+                set(explicit) <= set(episode_ids)
+                if explicit is not None
+                else requested is not None and set(requested) <= set(seasons or [])
+            )
         ):
             continue
         rows.append(operation)
@@ -440,6 +485,27 @@ def record_deleted(store, rows, result=None):
         store.mark_delivered(operation["id"])
     if rows and result is not None:
         result["operations_canceled"] = [row["id"] for row in rows]
+    # An import can cover episodes in more than one season. A partial delete
+    # removes only those targets; the remainder keeps its own completion rule.
+    if store is not None and result and result.get("episode_ids"):
+        deleted = set(result["episode_ids"])
+        for operation in store.active("series_acquisition"):
+            metadata = operation.get("metadata") or {}
+            if metadata.get("catalog_id") != result.get("catalog_id"):
+                continue
+            ids = metadata.get("episode_ids")
+            if ids and deleted.intersection(ids):
+                remaining = sorted(set(ids) - deleted)
+                if remaining:
+                    store.update_metadata(
+                        operation["id"],
+                        {
+                            "episode_ids": remaining,
+                            "scope_label": f"{len(remaining)} selected episodes",
+                        },
+                    )
+                else:
+                    record_deleted(store, [operation])
     return result
 
 

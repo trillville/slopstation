@@ -173,6 +173,20 @@ def test_gaming_pc_scripts_parse():
     assert d.group(1) == t.group(1), (
         f"collection charset drift: {d.group(1)} vs {t.group(1)}"
     )
+    # 3b. The nav-url allowlist: three copies (gamepc.py refuses before the
+    # wire, Dispatch's verb pattern, the task's re-validation) must be one text.
+    from slopstation import gamepc
+
+    du = re.search(r"\^nav url \((https://[^\n]+?)\)\( --turn", dispatch)
+    tu = re.search(r"'url'\s*\{[^\n]*-match\s+'\^(https://[^\n]+?)\$'", nav)
+    assert du and tu, f"url allowlist not found: dispatch={bool(du)} nav={bool(tu)}"
+    assert du.group(1) == tu.group(1) == gamepc.NAV_URL_PATTERN, (
+        f"url allowlist drift: dispatch {du.group(1)!r} nav {tu.group(1)!r} "
+        f"gamepc {gamepc.NAV_URL_PATTERN!r}"
+    )
+    assert " " not in du.group(1) and "\\s" not in du.group(1), (
+        "the url charset must exclude whitespace or a URL could swallow --turn"
+    )
 
     # 4. Set-Turn after the guards, before the task start: every early
     # `break` (a refusal) precedes it, and Start-CgTask follows it.
