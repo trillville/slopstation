@@ -10,9 +10,9 @@ import subprocess
 import sys
 from typing import NamedTuple
 
-from slopstation import events, gamepc, sessionlock, tv
+from slopstation import events, gamepc, sessionlock
 from slopstation.agent.tools import library
-from slopstation.agent.tools.tv_remote import VOLUME_LOCK, TvRemote, TvVolume
+from slopstation.tv import Tv
 
 COUCH = [sys.executable, "-m", "slopstation.couch"]
 
@@ -66,6 +66,7 @@ class Dispatch:
         self.cfg = cfg
         self.voice = cfg["voice"]
         self.log = log
+        self.tv = Tv(cfg, log)
         self.dry_run = dry_run
         self.on_end_session = on_end_session
         self.utterance = Utterance(None, None)
@@ -79,18 +80,6 @@ class Dispatch:
     def _would(self, what: str) -> Result:
         self.log("dry_run_would", action=what)
         return _ok(f"dry-run: {what}")
-
-    def _exlink(self, what: str, frame_hex: str) -> Result:
-        """TV serial send; COM-port contention retry lives in tv.py."""
-        if self.dry_run:
-            return self._would(f"exlink {what} ({frame_hex})")
-        try:
-            ack = tv.exlink_send_hex(frame_hex, self.cfg["tvComPort"])
-            self.log("exlink_send", cmd=what, ack=ack or "no-ack")
-            return _ok(f"exlink {what}")
-        except Exception as e:
-            self.log.error("exlink_nak", cmd=what, err=str(e))
-            return _fail(f"the TV command failed ({what}: {e})")
 
     # -- session ---------------------------------------------------------------
 
@@ -276,30 +265,20 @@ class Dispatch:
             return self._would(
                 f"volume {level if level is not None else f'{steps:+d}'}"
             )
-        ip = self.cfg.get("tvIp")
-        if not ip:
-            return _fail("volume control needs tvIp - see setup.md")
-        volume = TvVolume(ip, self.log)
         try:
-            with VOLUME_LOCK:
-                now = volume.read()
-                if now is None:
-                    return _fail("couldn't read the soundbar volume - nothing changed")
-                asked = level if level is not None else now + steps
-                target = max(0, min(100, int(self.voice["volumeMax"]), asked))
-                if target != asked:
-                    self.log(
-                        "volume_clamped",
-                        asked=asked,
-                        set=target,
-                        max=self.voice["volumeMax"],
-                    )
-                final = volume.move(now, target)
+            maximum = int(self.voice["volumeMax"])
+            change = (
+                self.tv.set_volume(level, maximum)
+                if level is not None
+                else self.tv.adjust_volume(steps, maximum)
+            )
         except Exception as e:
             return _fail(f"volume control failed ({e})")
-        if final != target:
-            return _fail(f"volume {target} wasn't verified (last read: {final})")
-        return _ok(f"volume is {final}")
+        if not change.ok:
+            return _fail(
+                f"volume {change.target} wasn't verified (last read: {change.after})"
+            )
+        return _ok(f"volume is {change.after}")
 
     def volume_up(self) -> Result:
         return self._volume(steps=int(self.voice["volumeStep"]))
@@ -314,11 +293,8 @@ class Dispatch:
         """Send a remote toggle; the TV does not expose reliable mute readback."""
         if self.dry_run:
             return self._would("remote mute toggle")
-        ip = self.cfg.get("tvIp")
-        if not ip:
-            return _fail("mute control needs tvIp and TV pairing - see setup.md")
         try:
-            TvRemote(ip).press("mute", 1)
+            self.tv.toggle_mute()
         except Exception as e:
             return _fail(f"the mute command failed ({e})")
         return _ok("sent mute toggle")
@@ -337,7 +313,7 @@ class Dispatch:
                 self.log("input_starts_session", input=cmd)
                 return self.start_session()
             if self.dry_run:
-                return self._would(f"check READY then exlink {cmd}")
+                return self._would(f"check READY then select TV input {cmd}")
             try:
                 if gamepc.status() == "NOTREADY":
                     self.log("input_deferred", input=cmd, reason="not_ready")
@@ -348,10 +324,10 @@ class Dispatch:
             except Exception as e:
                 self.log.error("input_refused", input=cmd, err=str(e))
                 return _fail(f"couldn't reach the PC (status check: {e})")
-        frame_hex = tv.EXLINK_FRAMES.get(cmd)
-        if frame_hex is None:
-            return _fail(
-                f"that input isn't configured correctly - config maps "
-                f"'{spoken_name}' to unknown command '{cmd}'"
-            )
-        return self._exlink(f"input {cmd}", frame_hex)
+        if self.dry_run:
+            return self._would(f"select TV input {cmd}")
+        try:
+            self.tv.select_input(cmd)
+            return _ok(f"sent TV input {cmd}")
+        except Exception as e:
+            return _fail(f"the TV input command failed ({cmd}: {e})")

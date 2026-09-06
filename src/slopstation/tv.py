@@ -3,7 +3,228 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
+from typing import NamedTuple
+
+from slopstation import paths
+
+# All Tv instances in the voice process share the same soundbar. Reentrant so
+# ducking can keep its read/restore bookkeeping in the same transaction.
+_VOLUME_LOCK = threading.RLock()
+
+
+class VolumeChange(NamedTuple):
+    before: int
+    target: int
+    after: int
+    writes: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.after == self.target
+
+
+class Tv:
+    """Household TV control. Commands acknowledge receipt; volume verifies state.
+
+    Construction performs no I/O. Each process owns its instances; the volume
+    transaction coordinates instances within a process, not other processes.
+    """
+
+    POLLS = 24
+    POLL_GAP_S = 0.1
+    WRITES = 3
+    RETRY_AFTER = 5
+    HTTP_TIMEOUT_S = 1.0
+
+    def __init__(self, cfg, log):
+        self.ip = cfg.get("tvIp")
+        self.port = cfg.get("tvComPort")
+        self.log = log
+
+    def power_on(self, **fields) -> str:
+        return self._serial("power_on", **fields)
+
+    def power_off(self, **fields) -> str:
+        return self._serial("power_off", **fields)
+
+    def select_input(self, name: str, **fields) -> str:
+        if name not in ("hdmi1", "hdmi2", "hdmi3", "hdmi4"):
+            self.log.error(
+                "exlink_nak", cmd=name, err=f"unknown TV input: {name}", **fields
+            )
+            raise ValueError(f"unknown TV input: {name}")
+        return self._serial(name, **fields)
+
+    def _serial(self, name, **fields):
+        try:
+            if not self.port:
+                raise ValueError("TV power/input control needs tvComPort")
+            ack = exlink_send(name, self.port)
+            self.log("exlink_send", cmd=name, ack=ack, **fields)
+            return ack
+        except Exception as e:
+            self.log.error("exlink_nak", cmd=name, err=str(e), **fields)
+            raise
+
+    def power_state(self, timeout=2.0, raw=False):
+        return tv_power_state(self.ip, timeout=timeout, raw=raw) if self.ip else None
+
+    def volume_transaction(self):
+        """Keep a volume operation and its caller's bookkeeping together."""
+        return _VOLUME_LOCK
+
+    def volume(self):
+        with self.volume_transaction():
+            return tv_volume(self.ip, timeout=self.HTTP_TIMEOUT_S) if self.ip else None
+
+    def set_volume(
+        self, level: int, maximum: int = 100, *, before: int | None = None
+    ) -> VolumeChange:
+        """Set a level; reuse before only within the same volume_transaction."""
+        return self._change_volume(level, 0, maximum, before)
+
+    def adjust_volume(self, steps: int, maximum: int = 100) -> VolumeChange:
+        return self._change_volume(None, steps, maximum)
+
+    def _change_volume(self, level, steps, maximum, before=None):
+        with self.volume_transaction():
+            if not self.ip:
+                raise ValueError("volume control needs tvIp - see setup.md")
+            now = self.volume() if before is None else before
+            if now is None:
+                raise RuntimeError(
+                    "couldn't read the soundbar volume - nothing changed"
+                )
+            asked = level if level is not None else now + steps
+            target = max(0, min(100, maximum, asked))
+            if target != asked:
+                self.log("volume_clamped", asked=asked, set=target, max=maximum)
+            if now == target:
+                return VolumeChange(now, target, now)
+            return self._move_volume(now, target)
+
+    def _move_volume(self, now, target):
+        """Retry only an unmoved readback; partial movement may be the remote."""
+        deadline = time.monotonic() + self.POLLS * self.POLL_GAP_S
+        seen = now
+        left = self.POLLS
+        for attempt in range(1, self.WRITES + 1):
+            try:
+                tv_set_volume(self.ip, target, timeout=self.HTTP_TIMEOUT_S)
+            except Exception as e:
+                self.log.warn("tv_duck_failed", stage="write", err=str(e))
+            polls = left if attempt == self.WRITES else min(left, self.RETRY_AFTER)
+            left -= polls
+            value = self._settle(target, polls, deadline)
+            if value is None:
+                break
+            seen = value
+            if seen != now or left <= 0 or time.monotonic() >= deadline:
+                break
+        return VolumeChange(now, target, seen, attempt)
+
+    def _settle(self, target, polls, deadline):
+        seen = None
+        for i in range(polls):
+            value = self.volume()
+            if value is not None:
+                seen = value
+            if value == target or time.monotonic() >= deadline:
+                return seen
+            if i + 1 < polls:
+                time.sleep(self.POLL_GAP_S)
+        return seen
+
+    def _remote(self, timeout=6):
+        if not self.ip:
+            raise ValueError("remote control needs tvIp and TV pairing - see setup.md")
+        from samsungtvws import SamsungTVWS
+
+        token = paths.state("tv-ws-token.txt")
+        token.parent.mkdir(exist_ok=True)
+        return SamsungTVWS(
+            self.ip,
+            port=8002,
+            token_file=str(token),
+            name="slopstation-k15",
+            timeout=timeout,
+            key_press_delay=0.15,
+        )
+
+    def toggle_mute(self) -> None:
+        """Send a toggle; receipt does not verify mute state."""
+        with self._remote() as remote:
+            remote.send_key("KEY_MUTE")
+
+    def pair(self) -> None:
+        with self._remote(timeout=45) as remote:
+            remote.open()
+
+
+def main(argv=None):
+    """The normal manual controls; exlink.py remains the serial diagnostic."""
+    import argparse
+
+    from slopstation import config, events, logbook
+
+    ap = argparse.ArgumentParser(description="Control the household TV")
+    ap.add_argument(
+        "command",
+        choices=("power_on", "power_off", "input", "vol", "up", "down", "mute", "pair"),
+    )
+    ap.add_argument("value", nargs="?")
+    args = ap.parse_args(argv)
+    device = Tv(config.current(), logbook.logger("manual"))
+    command = args.command
+    n = None
+    try:
+        if command in ("power_on", "power_off", "input"):
+            if command == "input":
+                ack = device.select_input(args.value)
+            else:
+                ack = getattr(device, command)()
+            print(f"{command}: acknowledged ({ack}); resulting state not verified")
+        elif command == "vol" and args.value is None:
+            print(device.volume())
+        elif command in ("vol", "up", "down"):
+            n = int(args.value) if args.value is not None else 1
+            if command in ("up", "down") and n < 0:
+                raise ValueError("steps must be nonnegative")
+            change = (
+                device.set_volume(n)
+                if command == "vol"
+                else device.adjust_volume(n if command == "up" else -n)
+            )
+            events.emit(
+                "manual",
+                "tvremote_send",
+                cmd=command,
+                n=n,
+                vol_before=change.before,
+                vol_after=change.after,
+            )
+            print(
+                f"volume {change.before} -> {change.after}; target {change.target}, verified={change.ok}"
+            )
+            return 0 if change.ok else 1
+        else:
+            if command == "pair":
+                print("watch the TV - accept the pairing prompt...")
+                device.pair()
+            else:
+                device.toggle_mute()
+            events.emit("manual", "tvremote_send", cmd=command, ok=True)
+            print(f"{command}: sent")
+        return 0
+    except Exception as e:
+        events.emit(
+            "manual", "tvremote_fail", events.ERROR, cmd=command, n=n, err=str(e)
+        )
+        print(f"{command}: FAILED - {e}")
+        return 1
+
 
 # Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum, 9600 baud 8N1.
 EXLINK_FRAMES = {
@@ -131,3 +352,7 @@ def tv_volume(ip: str, timeout: float = 2.0) -> int | None:
         return int(out[start : out.index("</CurrentVolume>")])
     except Exception:
         return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

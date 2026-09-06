@@ -64,7 +64,7 @@ def wire(rig, monkeypatch):
             return reply
 
         monkeypatch.setattr(couch, "log", log)
-        monkeypatch.setattr(couch, "exlink", fake_exlink)
+        monkeypatch.setattr(couch, "tv_command", fake_exlink)
         monkeypatch.setattr(gamepc, "ssh", fake_ssh)
         monkeypatch.setattr(couch, "wol", lambda: log("wol_sent"))
         monkeypatch.setattr(couch, "wait_port", lambda *a, **kw: True)
