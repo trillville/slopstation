@@ -278,6 +278,13 @@ def test_steam_api_injects_the_right_credential(live, monkeypatch):
     tk.call("steam_api", flat)
     tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0003", asked="yes")
     assert tk.call("steam_api", flat)["ok"] and sent[-1][2]["data"] == {"appid": 1}
+    # An array body to the store site goes as a JSON document, not a form.
+    doc = {"method": "POST", "path": "store.steampowered.com/x", "body": [1, 2]}
+    tk.call("steam_api", doc)
+    tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0004", asked="yes")
+    assert tk.call("steam_api", doc)["ok"]
+    assert sent[-1][2]["data"] == "[1, 2]"
+    assert sent[-1][2]["headers"]["Content-Type"] == "application/json"
     # An account call without an enrolled session fails plainly.
     out = tk.call(
         "steam_api",

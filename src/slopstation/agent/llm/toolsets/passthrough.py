@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
 from slopstation.agent.llm.registry import ToolContext, ToolSpec
 from slopstation.agent.tools import apidocs, library
@@ -431,7 +432,8 @@ def impls(ctx: ToolContext):
             params.setdefault("steamid", creds[1])
         if not url.endswith("/") and host == "api.steampowered.com":
             url += "/"
-        data = None
+        data: Any = None
+        headers = {"Accept": "application/json"}
         if method != "GET" and body is not None:
             # Steam's Web API takes flat fields as form data; a nested body
             # (a Service method's lists and messages) has to travel as one
@@ -441,6 +443,11 @@ def impls(ctx: ToolContext):
             )
             if host == "api.steampowered.com" and nested and "input_json" not in body:
                 data = {"input_json": json.dumps(body)}
+            elif isinstance(body, list):
+                # The store and community sites take a JSON document, never a
+                # form; requests cannot encode a list as one anyway.
+                data = json.dumps(body)
+                headers["Content-Type"] = "application/json"
             else:
                 data = body
         try:
@@ -450,7 +457,7 @@ def impls(ctx: ToolContext):
                 params=params,
                 data=data,
                 timeout=20,
-                headers={"Accept": "application/json"},
+                headers=headers,
             )
         except requests.RequestException as e:
             # Never the message: it quotes the URL, credential and all.
