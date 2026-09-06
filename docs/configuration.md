@@ -57,7 +57,7 @@ agent does not start. Every other voice key has a default in code, so a
 | `keytermCount`, `fuzzyTitleThreshold` | what the speech recogniser is told to expect, and how loosely a spoken title matches the library |
 | `ttsVoice` | the Deepgram voice |
 | `assistantProvider`, `assistantModelAnthropic`, `assistantModelOpenai`, `assistantReasoningEffort`, `assistantWebSearch`, `assistantSearchMaxUses` | the assistant model and its tools |
-| `inputs`, `navTargets` | spoken names for TV inputs and for Big Picture destinations |
+| `inputs`, `navTargets` | spoken names for TV inputs, and for Big Picture pages: each phrase maps to one of downloads, library, store, friends, settings, wishlist, screenshots. Write phrases the way speech recognition spells them ("wish list" as well as "wishlist"). A page asked for with no session live starts one and opens once Big Picture is up |
 | `volumeStep`, `volumeMax`, `earconGain`, `location`, `followUpAfterAnnounce`, `steamDataTools` | volume verbs, earcon level, the assistant's time zone and locale, and whether an announcement opens a follow-up window |
 
 Volume changes set an absolute target through UPnP and verify the resulting

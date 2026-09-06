@@ -83,21 +83,36 @@ class Dispatch:
 
     # -- session ---------------------------------------------------------------
 
-    def start_session(self, appid: int | str | None = None) -> Result:
-        """Advisory busy check; the real arbiter is couch.py's acquire_lock."""
+    def start_session(
+        self, appid: int | str | None = None, nav: tuple | None = None
+    ) -> Result:
+        """Advisory busy check; the real arbiter is couch.py's acquire_lock.
+        `appid` launches that game once the session is up; `nav` (kind, arg)
+        opens that Big Picture page once it is up."""
         age = sessionlock.age()
         if sessionlock.active(age):
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))  # type: ignore[arg-type] # active implies aged
             return _busy("a session is already active or starting")
-        what = f"couch.py start{f' {appid}' if appid else ''}"
+        page = [str(x) for x in nav if x not in (None, "")] if nav else []
+        what = "couch.py start" + (f" {appid}" if appid else "")
+        if page:
+            what += " --nav " + " ".join(page)
         if self.dry_run:
             return self._would(what)
         args = COUCH + ["start"] + ([str(appid)] if appid else [])
+        if page:
+            args += ["--nav", *page]
         turn = self.utterance.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
         subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        self.log("session_dispatched", appid=appid, turn=turn)
+        self.log("session_dispatched", appid=appid, nav=page or None, turn=turn)
+        if page:
+            label = self._nav_label(page[0], page[1] if len(page) > 1 else None)
+            return _ok(
+                f"starting a session; {label} opens once Big Picture is up, "
+                "in about fifteen seconds"
+            )
         return _ok(f"starting a session ({what})")
 
     def end_session(self) -> Result:
@@ -246,6 +261,11 @@ class Dispatch:
             # The PC's allowlist regex, applied here first so a bad URL is a
             # refusal and never a DENIED on the wire.
             return _fail("that is not a Steam store or community page")
+        if not sessionlock.active():
+            # No session: the page is the reason to start one. couch.py opens
+            # it once READY. Lock check first: no ssh timeout against a
+            # sleeping PC.
+            return self.start_session(nav=(kind, arg))
         cmd = gamepc.nav_cmd(kind, arg)
         if self.dry_run:
             return self._would(f"ssh {cmd}")
@@ -258,12 +278,9 @@ class Dispatch:
         if out == "OK":
             return _ok(f"showing {self._nav_label(kind, arg)}")
         if out == "NOTREADY":
-            # start_session is fire-and-forget (Popen), so "start a session
-            # and open X" chains into nav while couch.py is still coming up:
-            # a fresh lock means starting, not absent.
-            if sessionlock.active():
-                return _busy("the session is still starting - try again in a moment")
-            return _busy("there's no session to navigate - start one first")
+            # The lock is fresh (checked above), so the session is coming up
+            # and the host has not reached READY: starting, not absent.
+            return _busy("the session is still starting - try again in a moment")
         if out.startswith("NOTASK:"):
             return _no_task(out)
         return _fail(f"the navigation failed (ssh {cmd}: {out})")

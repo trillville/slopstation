@@ -58,6 +58,9 @@ def test_trailing_sequel_number_yields_the_bare_name():
 def test_vocabulary_covers_all_three_sources_and_drops_non_games():
     terms = keyterms.stt_keyterms(VOICE, "hey jarvis")
     assert terms[0] == "hey jarvis", terms[:1]
+    # The house's own words ride ahead of the titles: "seeding" heard as
+    # "seating" is a miss on every torrent ask.
+    assert terms[1 : 1 + len(keyterms.HOUSE_TERMS)] == list(keyterms.HOUSE_TERMS)
     assert "armored core 6" in terms, "titles missing"
     assert "mech" in terms, "collection names missing - this is the mech/neck bug"
     assert "rpg" in terms, "collection names must be normalised like everything else"

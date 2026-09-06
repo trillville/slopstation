@@ -296,6 +296,12 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
     assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
+    # The clock is the LAST line, so every token before it is a stable prefix.
+    assert re.search(r"It is \d\d:\d\d on [\d-]+ local time" + r"\.$", si.strip())
+    assert si.index("CATALOG (") < si.rindex("It is ")
+    # A config that says "inputs": null still gets a prompt, with no input names.
+    nulled = {**CFG_MIN, "voice": {**CFG_MIN["voice"], "inputs": None}}
+    assert "none configured" in assistant.system_instruction(nulled)
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
     assert "local time" in flat(si)
@@ -305,7 +311,8 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     }
     si_tz = assistant.system_instruction({**CFG_MIN, "voice": zoned})
     assert f"{time.strftime('%Y-%m-%d')} in America/Los_Angeles" in flat(si_tz)
-    assert "apple tv" in flat(si) and "'gaming' starts a session" in flat(si)
+    assert "apple tv" in flat(si) and "Switching the TV to 'gaming'" in flat(si)
+    assert "DESK MONITOR" in flat(si) and "display tool is the one way" in flat(si)
     assert "clamped" in flat(si) and "blind toggle" in flat(si)
     # Out-of-catalog carve-out, so mishear-repair can't force a wrong match.
     assert "isn't in the library" in flat(si)
@@ -607,8 +614,15 @@ def test_a_dead_token_falls_through_to_the_tv_path(
         {"appid": INSTALLED}
     )["dry_run"]
     # A dead token must not end the request: it falls through to the TV path.
+    # With no session the page comes up with the session nav starts, and the
+    # receipt says so instead of claiming the page is on the TV already.
     assert inst["ok"] and "press Install" in inst["detail"], inst
+    assert "showing" in inst["detail"] and "on the TV now" not in inst["detail"]
     assert navd == [("details", INSTALLED)], navd
+    seed_lock(10)  # a live session: the page is on the TV at once
+    inst = rimpls["install_game"]({"appid": INSTALLED})
+    assert inst["ok"] and "on the TV now" in inst["detail"], inst
+    seed_lock(None)
     dl = rimpls["download_status"]({})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())

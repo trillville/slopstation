@@ -42,23 +42,27 @@ def tools_map(offered=None):
 def system_instruction(cfg, interface="voice", offered=None):
     """Build the system prompt from configuration and the game catalog."""
     voice = cfg["voice"]
-    inputs = voice.get("inputs", {})
+    # `or {}`: a config that says "inputs": null is a misconfiguration the
+    # doctor reports, not a reason for every prompt to fail.
+    inputs = voice.get("inputs") or {}
     # A day with no zone resolves toward UTC and dates an evening brief
     # tomorrow. Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
-    # The clock too, or the model searches the web for the time.
-    tail = [
-        f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}"
-        + (f" in {tz}." if tz else " local time.")
-    ]
-    if inputs:
-        gaming = next(
-            (k for k, v in inputs.items() if v == cfg.get("tvGamingCmd")), None
+    # The clock too, or the model searches the web for the time. It is the
+    # LAST line: it changes every minute, and everything before it is a
+    # cached prefix only while it stays byte-identical. Ahead of the catalog
+    # it left 850 stable tokens, under the provider's caching floor.
+    clock = f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}" + (
+        f" in {tz}." if tz else " local time."
+    )
+    tail = []
+    gaming = next((k for k, v in inputs.items() if v == cfg.get("tvGamingCmd")), None)
+    tail.append(
+        prompts.SCREENS.format(
+            inputs=", ".join(inputs) or "none configured",
+            gaming=gaming or "the PC's input",
         )
-        tail.append(
-            f"TV inputs: {', '.join(inputs)}"
-            + (f"; '{gaming}' starts a session if none is running." if gaming else ".")
-        )
+    )
     tail.append(
         f"Volume runs 0-{voice['volumeMax']}, higher requests are clamped - "
         "confirm the level the tool actually returns. Mute is a blind toggle "
@@ -75,7 +79,7 @@ def system_instruction(cfg, interface="voice", offered=None):
         style + input_rule + "\n\n" + prompts.RULES + " " + " ".join(tail) + "\n\n"
         "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
         "never|inst[:YYYY-MM-DD last install or update]/notinst|controller "
-        "full/partial/none/?):\n" + "\n".join(library.catalog_lines())
+        "full/partial/none/?):\n" + "\n".join(library.catalog_lines()) + "\n\n" + clock
     )
 
 

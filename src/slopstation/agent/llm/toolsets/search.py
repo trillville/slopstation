@@ -49,7 +49,13 @@ def impls(ctx: ToolContext):
         matches = toolsearch.search(toolkit.registry, query, exclude=unreachable)
         if matches:
             new = toolkit.load([spec.name for spec, _ in matches])
-            ctx.log("tools_found", query=query[:120], found=new, n=len(new))
+            ctx.log(
+                "tools_found",
+                query=query[:120],
+                found=new,
+                n=len(new),
+                already=[spec.name for spec, _ in matches if spec.name not in new],
+            )
             rows = [
                 {
                     "tool": spec.name,
@@ -66,7 +72,7 @@ def impls(ctx: ToolContext):
                 "detail": "these tools are loaded now - call the right one directly",
             }
         by_area = toolkit.registry.by_area(set(toolkit.offered) - set(toolkit.loaded))
-        ctx.log("tools_found", query=query[:120], found=[], n=0)
+        ctx.log("tools_found", query=query[:120], found=[], n=0, already=[])
         return {
             "ok": False,
             "error": "no tool matches those words",

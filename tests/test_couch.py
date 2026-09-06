@@ -156,6 +156,53 @@ def test_happy_path_switches_the_input_with_power_on(wire):
     assert not sessionlock.last_error_file().exists(), "success must clear last_error"
 
 
+def test_a_page_queued_for_the_start_opens_once_ready(wire):
+    # "show my wishlist" with no session: the launch carries the page and
+    # opens it after READY, after the input switch, like a queued game.
+    log, sent = wire(
+        [
+            ("enter", "OK"),
+            ("status", READY_TS),
+            ("nav wishlist", "OK"),
+            ("status", "NOTREADY"),
+        ]
+    )
+    assert couch.start(None, nav=["wishlist"]) == 0
+    ev = log.events()
+    assert (
+        ev.index("host_ready")
+        < ev.index("nav_after_start")
+        < ev.index("session_gaming")
+    )
+    opened = log.find("nav_after_start")[0]
+    assert opened["kind"] == "wishlist" and opened["result"] == "OK"
+    assert opened["level"] == "info"
+    # A page the host refuses is a warning, never a failed launch.
+    log, _ = wire(
+        [
+            ("enter", "OK"),
+            ("status", READY_TS),
+            ("nav details 400", "NOTREADY"),
+            ("status", "NOTREADY"),
+        ]
+    )
+    assert couch.start(None, nav=["details", "400"]) == 0
+    assert log.find("nav_after_start")[0]["level"] == "warn"
+    assert "launch_failed" not in log.events()
+
+
+def test_the_cli_takes_the_queued_page_beside_the_turn():
+    argv = ["start", "--nav", "details", "400", "--turn", "ab12cd"]
+    assert couch.take_turn(argv) == "ab12cd"
+    assert couch.take_nav(argv) == ["details", "400"] and argv == ["start"]
+    argv = ["start", "777", "--turn", "ab12cd", "--nav", "wishlist"]
+    assert couch.take_turn(argv) == "ab12cd"
+    assert couch.take_nav(argv) == ["wishlist"] and argv == ["start", "777"]
+    argv = ["start", "--nav"]
+    assert couch.take_nav(argv) is None and argv == ["start"]
+    assert couch.take_nav(["start"]) is None
+
+
 def test_already_is_a_degraded_launch_not_a_clean_one(wire):
     # An app left running from an earlier session is not a clean launch.
     log, _ = wire(

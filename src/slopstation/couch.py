@@ -227,7 +227,14 @@ def wait_ready(
     raise RuntimeError("host never reported READY")
 
 
-def start(appid: str | None = None, turn: str | None = None) -> int:
+def start(
+    appid: str | None = None,
+    turn: str | None = None,
+    nav: list[str] | None = None,
+) -> int:
+    """Bring a session up. `appid` launches a game once READY; `nav` opens a
+    Big Picture page (kind, then an optional argument) once READY, the way
+    "show my wishlist" with no session live gets there."""
     turn = turn if events.valid_turn(turn) else events.new_turn()
     events.context(turn=turn)
     err: str | None = None
@@ -319,6 +326,14 @@ def start(appid: str | None = None, turn: str | None = None) -> int:
                 emit("game_launch", appid=appid, result=answer)
             except Exception as e:
                 log.warn("game_launch_failed", appid=appid, err=str(e))
+        if nav:
+            kind, arg = nav[0], (nav[1] if len(nav) > 1 else None)
+            try:
+                answer = gamepc.nav(kind, arg, turn)
+                emit = log if answer == "OK" else log.warn
+                emit("nav_after_start", kind=kind, arg=arg, result=answer)
+            except Exception as e:
+                log.warn("nav_after_start_failed", kind=kind, arg=arg, err=str(e))
         log("session_gaming", dur_ms=ms())
         watch(expected=turn)
     except Exception as e:
@@ -410,7 +425,10 @@ def reconcile() -> int:
 
 
 def usage() -> int:
-    print("usage: python -m slopstation.couch [start [appid] [--turn <hex>]|reconcile]")
+    print(
+        "usage: python -m slopstation.couch "
+        "[start [appid] [--nav <kind> [arg]] [--turn <hex>]|reconcile]"
+    )
     return 2
 
 
@@ -424,15 +442,30 @@ def take_turn(argv: list[str]) -> str | None:
     return None
 
 
+def take_nav(argv: list[str]) -> list[str] | None:
+    """Pull `--nav <kind> [arg]` out of argv (mutating it): the Big Picture
+    page to open once READY, or None."""
+    if "--nav" not in argv:
+        return None
+    i = argv.index("--nav")
+    j = i + 1
+    while j < len(argv) and j - i <= 2 and not argv[j].startswith("--"):
+        j += 1
+    out = argv[i + 1 : j]
+    del argv[i:j]
+    return out or None
+
+
 if __name__ == "__main__":
     argv = sys.argv[1:]
     turn = take_turn(argv)
+    nav = take_nav(argv)
     cmd = argv[0] if argv else "start"
     if cmd == "start":
         if len(argv) > 1 and not argv[1].isdigit():
             sys.exit(usage())  # a non-digit appid is a caller bug
         appid = argv[1] if len(argv) > 1 else None
-        sys.exit(start(appid, turn))
+        sys.exit(start(appid, turn, nav))
     elif cmd == "reconcile":
         sys.exit(reconcile())
     else:
