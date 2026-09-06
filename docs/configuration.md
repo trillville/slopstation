@@ -52,6 +52,7 @@ agent does not start. Every other voice key has a default in code, so a
 | `wakeModel`, `wakeThreshold`, `wakeNearMissFactor`, `wakeClipsKeep`, `wakeVadThreshold`, `wakePatience`, `wakeVerifier`, `wakeVerifierThreshold` | the wake word: a stock openWakeWord name or a `.onnx` vendored in `src/slopstation/agent/models`, and its tuning |
 | `duckSteps`, `duckToPct` | volume ducking during a voice session; needs `tvIp` |
 | `holdWindowS`, `followupCarryS`, `eotThreshold`, `eotTimeoutMs`, `eagerEotThreshold`, `eagerEnabled` | turn taking; `holdWindowS` is how long the mic stays open after an answer, and a closing phrase ("thanks", "go away") ends it early |
+| `busyAfterMs`, `busyPhrase` | a tool call still out after this many milliseconds gets the busy earcon (or the phrase), once per turn, so a slow lookup or a find_tools round trip is not a silence; 0 is off |
 | `chatterFloorDb` | the mic gate: once the talker goes quiet, sound this far under the talker's level is muted before speech recognition hears it. Absent or 0 is off (measure only); 15 is the value to try. `mic_gated` in the logs says what it silenced; `level_db` on each turn says where the room sits |
 | `keytermCount`, `fuzzyTitleThreshold` | what the speech recogniser is told to expect, and how loosely a spoken title matches the library |
 | `ttsVoice` | the Deepgram voice |
