@@ -200,6 +200,45 @@ Confirm that Proton and qBittorrent show the same port. Then set
 .venv\Scripts\python -m slopstation.agent.tools.media set-qbit-port <active-port> --execute
 ```
 
+### When the forwarded port cannot be bound
+
+Windows reserves blocks of ports inside the dynamic range (49152-65535) for
+Hyper-V, and it picks fresh blocks at every boot. A forwarded port that lands
+in one cannot be bound. qBittorrent then runs with no peer socket at all: no
+listening port, no DHT, no tracker announces. Every torrent sits at 0 percent
+in `metaDL`, and every other setting still reads as configured.
+
+qBittorrent says so once, in
+`%LOCALAPPDATA%\qBittorrent\logs\qbittorrent.log`:
+
+```text
+(C) Failed to listen on IP. IP: "10.2.0.2". Port: "UDP/55217". Reason: "An
+attempt was made to access a socket in a way forbidden by its access
+permissions"
+```
+
+The doctor's `qBittorrent peer port` check reports the same thing. To see the
+reserved blocks, run
+`netsh int ipv4 show excludedportrange protocol=udp`.
+
+Keep those blocks above the forwarded port by moving the dynamic range. From
+an elevated PowerShell:
+
+```powershell
+net stop winnat
+netsh int ipv4 set dynamicport tcp start=58000 num=7536
+netsh int ipv4 set dynamicport udp start=58000 num=7536
+net start winnat
+```
+
+Stopping WinNAT releases the blocks already held; a reboot does the same. Both
+interrupt Docker's published ports, so confirm the media web interfaces come
+back and restart Docker Desktop if they do not. Restart qBittorrent afterwards
+so it binds the port, then rerun the doctor.
+
+This protects every port below 58000. If Proton ever forwards a higher one,
+the peer port check fails and the range moves again.
+
 ## Monitoring
 
 Start diagnosis with:

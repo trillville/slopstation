@@ -346,6 +346,7 @@ def _check_qbittorrent(report, client, media_cfg):
         version = client.version()
         preferences = client.preferences()
         categories = client.categories()
+        transfer = client.transfer_info()
     except MediaError as e:
         report.add("FAIL", "qBittorrent API", str(e))
         return None
@@ -383,6 +384,18 @@ def _check_qbittorrent(report, client, media_cfg):
         "PASS" if 1 <= port <= 65535 else "FAIL",
         "qBittorrent listening port",
         str(port or "invalid"),
+    )
+    # A port qBittorrent cannot bind leaves it with no peer socket at all, and
+    # every other setting still reads as configured. Windows reserves blocks of
+    # ports for Hyper-V, so a synchronized Proton port can land on one.
+    connection = str(transfer.get("connection_status", "")).casefold()
+    report.add(
+        "FAIL" if connection == "disconnected" else "PASS",
+        "qBittorrent peer port",
+        f"not listening on {port or 'an unset port'}; qBittorrent's log gives the"
+        " reason"
+        if connection == "disconnected"
+        else f"listening on {port}, {connection or 'status unavailable'}",
     )
     action = preferences.get("max_ratio_act")
     report.add(

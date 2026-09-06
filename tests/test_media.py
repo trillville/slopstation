@@ -1246,7 +1246,7 @@ HEALTHY_QBIT_PREFERENCES = {
 }
 
 
-def _doctor(monkeypatch, tmp_path, qbit_preferences):
+def _doctor(monkeypatch, tmp_path, qbit_preferences, connection_status="connected"):
     """media_doctor over a stack whose only variable is what qBittorrent
     reports for its preferences."""
     doctor_cfg = json.loads(json.dumps(helpers.CONFIG))
@@ -1310,6 +1310,8 @@ def _doctor(monkeypatch, tmp_path, qbit_preferences):
             return {}, json.dumps(qbit_preferences).encode()
         if path.endswith("/torrents/categories"):
             return {}, json.dumps({"radarr": {}, "sonarr": {}}).encode()
+        if path.endswith("/transfer/info"):
+            return {}, json.dumps({"connection_status": connection_status}).encode()
         raise AssertionError((method, url))
 
     compose_rows = [
@@ -1378,6 +1380,20 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
     assert any(
         row["name"] == "Proton port synchronization" and row["level"] == "FAIL"
         for row in broken["checks"]
+    )
+
+
+def test_media_doctor_fails_a_peer_port_qbittorrent_never_bound(monkeypatch, tmp_path):
+    unbound = _doctor(
+        monkeypatch,
+        tmp_path,
+        dict(HEALTHY_QBIT_PREFERENCES),
+        connection_status="disconnected",
+    )
+    assert not unbound["ok"]
+    assert any(
+        row["name"] == "qBittorrent peer port" and row["level"] == "FAIL"
+        for row in unbound["checks"]
     )
 
 

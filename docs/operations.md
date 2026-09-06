@@ -74,6 +74,11 @@ deploy goes red with a diagnosis, and someone does the step by hand.
   `.venv\Scripts\slopstation-lane.exe` by absolute path, so moving the
   checkout means re-running `Setup-K15-Tasks.ps1`. The gaming PC's tasks are
   re-registered by `gaming-pc\Install.ps1`, run elevated from a checkout.
+- **Windows reserved ports on the mini PC.** Hyper-V reserves blocks inside the
+  dynamic port range at every boot. A Proton forwarded port that lands in one
+  leaves qBittorrent with no peer socket and every torrent at 0 percent. The
+  doctor's `qBittorrent peer port` check catches it; `media\README.md` has the
+  elevated commands.
 - **Runtime pieces on the PC.** `vhui64.exe` and the two DisplayMagician
   shortcuts. `Deploy.ps1` warns when they are missing and never touches them.
 

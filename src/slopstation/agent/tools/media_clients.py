@@ -251,6 +251,12 @@ class QbittorrentClient:
             raise MediaError("qBittorrent returned invalid categories")
         return value
 
+    def transfer_info(self):
+        value = self._json("transfer/info")
+        if not isinstance(value, dict):
+            raise MediaError("qBittorrent returned invalid transfer info")
+        return value
+
     def set_preferences(self, changes):
         self._call(
             "POST",
