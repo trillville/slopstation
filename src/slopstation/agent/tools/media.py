@@ -45,11 +45,14 @@ def _command(client, command_id):
 class MediaService:
     """Resolve policy names and submit/observe concrete media requests."""
 
-    def __init__(self, cfg, log, radarr, sonarr):
+    def __init__(self, cfg, log, radarr, sonarr, prowlarr=None, qbit=None):
         self.cfg = cfg
         self.log = log
         self.radarr = radarr
         self.sonarr = sonarr
+        # Optional: the tools that reach them are offered only when present.
+        self.prowlarr = prowlarr
+        self.qbit = qbit
 
     def _client(self, kind):
         return getattr(self, _kind(kind)["authority"])
@@ -1097,7 +1100,28 @@ def from_config(cfg, secrets, log):
     except (KeyError, MediaConfigurationError) as e:
         log.warn("lane_disabled", what="media", reason=str(e))
         return None
-    return MediaService(media_cfg, log, radarr, sonarr)
+    # Prowlarr and qBittorrent are extras: their absence disables their tools,
+    # not the media lane.
+    prowlarr = qbit = None
+    if config.real_key(secrets.get("prowlarrApiKey")):
+        try:
+            prowlarr = ArrClient(
+                "Prowlarr",
+                media_cfg.get("prowlarrUrl", ""),
+                secrets["prowlarrApiKey"],
+                api_version="v1",
+            )
+        except MediaConfigurationError as e:
+            log.warn("lane_disabled", what="prowlarr_tools", reason=str(e))
+    else:
+        log.warn(
+            "lane_disabled", what="prowlarr_tools", reason="prowlarrApiKey missing"
+        )
+    try:
+        qbit = _qbit_from_config(media_cfg, secrets)
+    except MediaConfigurationError as e:
+        log.warn("lane_disabled", what="torrent_tools", reason=str(e))
+    return MediaService(media_cfg, log, radarr, sonarr, prowlarr=prowlarr, qbit=qbit)
 
 
 def main(argv=None):

@@ -1201,6 +1201,21 @@ def test_from_config_needs_the_lane_and_its_keys():
     cfg["media"]["enabled"] = True
     assert media.from_config(cfg, {}, log) is None
     assert log.find("lane_disabled")[-1]["what"] == "media"
+    # With the two arr keys the lane is up; Prowlarr and qBittorrent are
+    # extras whose absence disables only their own tools.
+    keys = {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32}
+    svc = media.from_config(cfg, keys, log)
+    assert svc is not None and svc.prowlarr is None and svc.qbit is None
+    assert {r["what"] for r in log.find("lane_disabled")} >= {
+        "prowlarr_tools",
+        "torrent_tools",
+    }
+    full = media.from_config(
+        cfg,
+        {**keys, "prowlarrApiKey": "p" * 32, "qbittorrentPassword": "q" * 16},
+        log,
+    )
+    assert full.prowlarr.api_version == "v1" and full.qbit is not None
 
 
 def test_track_survives_a_failing_store():

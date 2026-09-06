@@ -12,6 +12,12 @@ from slopstation.agent.llm import assistant, backends, toolsearch
 # its own tool fails loudly.
 ASKS = {
     "delete_media": "delete the movie and erase its files",
+    "describe_api": "look up the api documentation for the queue endpoint",
+    "radarr_api": "call the radarr api directly",
+    "sonarr_api": "make a raw sonarr call",
+    "prowlarr_api": "hit the prowlarr api",
+    "qbittorrent_api": "call the qbittorrent api",
+    "steam_api": "call the steam web api directly",
 }
 
 

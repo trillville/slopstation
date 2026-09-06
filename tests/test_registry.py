@@ -49,7 +49,7 @@ def test_every_offered_spec_has_an_implementation():
         dispatch,
         log,
         operations=object(),
-        media=object(),
+        media=types.SimpleNamespace(qbit=object(), prowlarr=object()),
         steam=object(),
         voice={"steamDataTools": True},
     )
@@ -57,11 +57,10 @@ def test_every_offered_spec_has_an_implementation():
     # Absent services drop exactly the tools that need them.
     bare = assistant.tool_impls(dispatch, log)
     dropped = set(assistant.REGISTRY.names()) - set(bare)
-    assert dropped == {
-        s.name for s in assistant.REGISTRY if {"operations", "media"} & set(s.needs)
-    }
+    absent = {"operations", "media", "torrents", "prowlarr"}
+    assert dropped == {s.name for s in assistant.REGISTRY if absent & set(s.needs)}
     off = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
-    assert set(bare) - set(off) == {"list_games", "search_store"}
+    assert set(bare) - set(off) == {"list_games", "search_store", "steam_api"}
 
 
 def test_renders_follow_the_registry_order_and_filter():

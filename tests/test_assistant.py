@@ -419,11 +419,13 @@ def test_list_operations_acknowledges_only_on_a_live_recent_read(
 def test_function_schemas_render_only_the_tools_present(
     dispatch, log, impls, fake_operations, media_impls
 ):
-    # find_tools plus eleven base tools; no operations store, no media.
-    assert len(assistant.function_schemas(impls, log)) == 12
+    # find_tools, steam_api and eleven base tools; no operations, no media.
+    assert len(assistant.function_schemas(impls, log)) == 13
     oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert len(assistant.function_schemas(oimpls, log)) == 13
-    assert len(assistant.function_schemas(media_impls, log)) == 18
+    assert len(assistant.function_schemas(oimpls, log)) == 14
+    # Media adds its five tools plus describe_api and the two arr passthroughs;
+    # the fake carries no qBittorrent or Prowlarr, so theirs stay out.
+    assert len(assistant.function_schemas(media_impls, log)) == 22
 
 
 # -- the media tools -----------------------------------------------------------
@@ -566,7 +568,8 @@ def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
     gated = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
-    # Twelve base tools minus the two store ones the kill switch drops.
+    # Thirteen base tools minus the store pair and steam_api the switch drops.
+    assert "steam_api" not in gated
     assert len(assistant.function_schemas(gated, log)) == 10
 
 

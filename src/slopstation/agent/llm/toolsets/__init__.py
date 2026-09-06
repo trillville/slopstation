@@ -3,6 +3,13 @@
 The order here is the order the model sees the tools in, so it stays fixed:
 a stable tool list is a stable cache prefix."""
 
-from slopstation.agent.llm.toolsets import house, media, rig, search, steam
+from slopstation.agent.llm.toolsets import (
+    house,
+    media,
+    passthrough,
+    rig,
+    search,
+    steam,
+)
 
-ALL = (search, rig, steam, house, media)
+ALL = (search, rig, steam, house, media, passthrough)

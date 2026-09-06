@@ -125,6 +125,10 @@ class ArrClient:
     def delete(self, endpoint, params=None):
         return self.request("DELETE", endpoint, params=params)
 
+    def call(self, method, endpoint, params=None, payload=None):
+        """The passthrough shape: any method, any endpoint under the API root."""
+        return self.request(method, endpoint, params=params, payload=payload)
+
 
 def _qbit_http_transport(method, url, headers, body, timeout):
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -166,9 +170,12 @@ class QbittorrentClient:
         self.sid = None
         self.sid_cookie = None
 
-    def _call(self, method, endpoint, payload=None, authenticate=True):
+    def _call(self, method, endpoint, payload=None, authenticate=True, params=None):
         if authenticate and self.sid is None:
             self.login()
+        url = f"{self.base_url}/api/v2/{endpoint.lstrip('/')}"
+        if params:
+            url += "?" + urllib.parse.urlencode(params, doseq=True)
 
         def send():
             body = None
@@ -182,13 +189,7 @@ class QbittorrentClient:
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
             if self.sid is not None and self.sid_cookie is not None:
                 headers["Cookie"] = f"{self.sid_cookie}={self.sid}"
-            return self.transport(
-                method,
-                f"{self.base_url}/api/v2/{endpoint.lstrip('/')}",
-                headers,
-                body,
-                HTTP_TIMEOUT_S,
-            )
+            return self.transport(method, url, headers, body, HTTP_TIMEOUT_S)
 
         try:
             return send()
@@ -224,17 +225,29 @@ class QbittorrentClient:
         if self.sid is None:
             raise MediaError("qBittorrent login returned no session cookie")
 
-    def _text(self, endpoint):
-        _, raw = self._call("GET", endpoint)
+    def _text(self, endpoint, params=None):
+        _, raw = self._call("GET", endpoint, params=params)
         return raw.decode("utf-8", "replace").strip()
 
-    def _json(self, endpoint):
-        _, raw = self._call("GET", endpoint)
+    def _json(self, endpoint, params=None):
+        _, raw = self._call("GET", endpoint, params=params)
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as e:
             raise MediaError("qBittorrent returned malformed JSON") from e
         return value
+
+    def call(self, method, endpoint, params=None, payload=None):
+        """The passthrough shape: JSON when the body parses, else the text,
+        else None for an empty 200. qBittorrent takes form-encoded POSTs."""
+        _, raw = self._call(method, endpoint, payload=payload, params=params)
+        text = raw.decode("utf-8", "replace").strip() if raw else ""
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
 
     def version(self):
         return self._text("app/version")
