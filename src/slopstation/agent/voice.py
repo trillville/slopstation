@@ -419,7 +419,11 @@ def main():
 
     duck = make_ducker(cfg, args.dry_run)
 
+    session_ctx = None
     while True:
+        if session_ctx is not None:
+            events.reset(session_ctx)
+            session_ctx = None
         # The chime is armed, not played: whoever first hears the user stop
         # talking plays it (capture watcher, or GrammarGate at end of turn),
         # so it never lands over the command.
@@ -447,7 +451,7 @@ def main():
         # after the wait returns (a wake_stream_died must not carry a session
         # that never opens) and before log("wake"), so the wake carries the
         # session it opens.
-        events.context(session=events.new_turn())
+        session_ctx = events.context(session=events.new_turn())
         if score is None:
             # A bulletin just finished: the mic opens for a follow-up with no
             # wake word, and no chime - the announcement was the cue.
