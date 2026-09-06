@@ -159,9 +159,6 @@ def load_titles(count, rows=None):
     ][:count]
 
 
-# The house's own words, in spoken form. Flux hears "seeding" as "seating"
-# and "wishlist" as two words without them (2026-09-06 logs). A handful,
-# ahead of the titles, since each one is a mishear on every ask.
 HOUSE_TERMS = (
     "wishlist",
     "seeding",
