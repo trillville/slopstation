@@ -21,6 +21,11 @@ class ConfirmGate:
     older than the lifetime is treated as declined and asked afresh. Nothing
     here reads the user's answer: a no is the model's to honour by not
     calling again.
+
+    A call with no turn id never confirms, on purpose: every live lane (the
+    voice grammar, the text interface) mints one per utterance, and the one
+    caller without it, the dry-run REPL, answers before the gate. Failing
+    closed there is what keeps an untagged path from acting.
     """
 
     def __init__(self, now=time.time):

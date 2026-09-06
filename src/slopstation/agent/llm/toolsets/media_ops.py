@@ -410,6 +410,12 @@ WANTED_SORT = {
 }
 
 
+def _num(value, missing=-1):
+    """An integer field, with 0 kept as 0: `or -1` would lose season zero,
+    the specials."""
+    return missing if value is None else int(value)
+
+
 def _limit(args, default=LIMIT_DEFAULT, cap=LIMIT_MAX):
     try:
         n = int(args.get("limit") or default)
@@ -732,8 +738,8 @@ def impls(ctx: ToolContext):
                 match = [
                     e
                     for e in episodes
-                    if int(e.get("seasonNumber", -1) or -1) == int(season)
-                    and int(e.get("episodeNumber", -1) or -1) == int(args["episode"])
+                    if _num(e.get("seasonNumber")) == int(season)
+                    and _num(e.get("episodeNumber")) == int(args["episode"])
                 ]
                 if not match:
                     return {"ok": False, "error": "no such episode in that season"}
@@ -1075,7 +1081,7 @@ def impls(ctx: ToolContext):
         else:
             wanted = {int(s) for s in seasons}
             for s in updated.get("seasons") or []:
-                if int(s.get("seasonNumber", -1) or -1) in wanted:
+                if _num(s.get("seasonNumber")) in wanted:
                     s["monitored"] = monitored
             if monitored:
                 updated["monitored"] = True

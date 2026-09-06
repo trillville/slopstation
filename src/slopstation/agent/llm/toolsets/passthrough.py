@@ -170,9 +170,12 @@ def _params_schema(extra=None):
             "additionalProperties": True,
         },
         "body": {
-            "type": "object",
-            "description": "request body (JSON object; form fields for qBittorrent)",
-            "additionalProperties": True,
+            "description": "request body: a JSON object, or a JSON array where "
+            "the API takes one (manualimport); form fields for qBittorrent",
+            "anyOf": [
+                {"type": "object", "additionalProperties": True},
+                {"type": "array", "items": {}},
+            ],
         },
     }
     props.update(extra or {})
@@ -317,10 +320,12 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": f"method must be one of {', '.join(METHODS)}"}
         if not path or not PATH_RE.match(path) or ".." in path.split("/"):
             return {"ok": False, "error": "path must be a plain API path"}
-        if not isinstance(params, dict) or (
-            body is not None and not isinstance(body, dict)
-        ):
-            return {"ok": False, "error": "params and body must be objects"}
+        if not isinstance(params, dict):
+            return {"ok": False, "error": "params must be an object"}
+        if body is not None and not isinstance(body, (dict, list)):
+            return {"ok": False, "error": "body must be a JSON object or array"}
+        if service == "qbittorrent" and isinstance(body, list):
+            return {"ok": False, "error": "qBittorrent takes form fields, not an array"}
         if service == "qbittorrent" and _qbit_mutates(method, path):
             # An action is an action whatever verb the model wrote.
             method = "POST"
@@ -426,12 +431,24 @@ def impls(ctx: ToolContext):
             params.setdefault("steamid", creds[1])
         if not url.endswith("/") and host == "api.steampowered.com":
             url += "/"
+        data = None
+        if method != "GET" and body is not None:
+            # Steam's Web API takes flat fields as form data; a nested body
+            # (a Service method's lists and messages) has to travel as one
+            # input_json field. An array body is nested by definition.
+            nested = isinstance(body, list) or any(
+                isinstance(v, (dict, list)) for v in body.values()
+            )
+            if host == "api.steampowered.com" and nested and "input_json" not in body:
+                data = {"input_json": json.dumps(body)}
+            else:
+                data = body
         try:
             r = requests.request(
                 method,
                 url,
                 params=params,
-                data=body if method != "GET" else None,
+                data=data,
                 timeout=20,
                 headers={"Accept": "application/json"},
             )

@@ -145,6 +145,20 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
         "ok"
     ]
     assert media.radarr.calls == []
+    # An array body is what manualimport takes; qBittorrent never takes one.
+    ask = {
+        "method": "POST",
+        "path": "manualimport",
+        "body": [{"path": "/x", "movieId": 2}],
+    }
+    first = tk.call("radarr_api", dict(ask))
+    assert not first["ok"] and first["confirm"].startswith("POST /manualimport")
+    assert not tk.call(
+        "qbittorrent_api", {"method": "POST", "path": "torrents/add", "body": [1]}
+    )["ok"]
+    assert not tk.call("radarr_api", {"method": "POST", "path": "movie", "body": "x"})[
+        "ok"
+    ]
 
 
 def test_dry_run_reports_a_mutation_without_sending_it(log):
@@ -243,6 +257,27 @@ def test_steam_api_injects_the_right_credential(live, monkeypatch):
     )
     assert sent[-1][1] == "https://store.steampowered.com/api/featuredcategories"
     assert "key" not in sent[-1][2]["params"]
+    # A nested body to a Service method travels as one input_json field; a
+    # flat one goes as form fields, as the session's own calls do.
+    tk.ctx.dispatch.dry_run = False
+    tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0001", asked="")
+    nested = {
+        "method": "POST",
+        "path": "IStoreBrowseService/GetItems/v1",
+        "body": {"ids": [{"appid": 1}], "context": {"language": "english"}},
+    }
+    assert not tk.call("steam_api", nested)["ok"]  # asked
+    tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0002", asked="yes")
+    assert tk.call("steam_api", nested)["ok"]
+    assert sent[-1][2]["data"] == {"input_json": json.dumps(nested["body"])}
+    flat = {
+        "method": "POST",
+        "path": "IWishlistService/AddToWishlist/v1",
+        "body": {"appid": 1},
+    }
+    tk.call("steam_api", flat)
+    tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0003", asked="yes")
+    assert tk.call("steam_api", flat)["ok"] and sent[-1][2]["data"] == {"appid": 1}
     # An account call without an enrolled session fails plainly.
     out = tk.call(
         "steam_api",

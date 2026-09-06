@@ -418,6 +418,21 @@ def test_search_releases_and_grab(rig, stack):
         {"kind": "series", "catalog_id": 81189, "season": 1, "episode": 2},
     )
     assert ep["ok"]
+    # A special (season 0) is found too.
+    sonarr.answers["episode"] = lambda p: [
+        {
+            "id": 900,
+            "seasonNumber": 0,
+            "episodeNumber": 1,
+            "hasFile": False,
+            "monitored": True,
+        }
+    ]
+    special = tk.call(
+        "search_releases",
+        {"kind": "series", "catalog_id": 81189, "season": 0, "episode": 1},
+    )
+    assert special["ok"] and sonarr.gets[-1] == ("release", {"episodeId": 900})
     assert not tk.call(
         "search_releases",
         {"kind": "series", "catalog_id": 81189, "season": 1, "episode": 9},
@@ -474,6 +489,21 @@ def test_retry_monitor_and_profile_changes(rig, stack):
         True,
         True,
     ]
+    # Season zero (the specials) is a season: unmonitoring it must not be a
+    # silent no-op.
+    out = tk.call(
+        "set_monitored",
+        {"kind": "series", "catalog_id": 81189, "monitored": False, "seasons": [0]},
+    )
+    assert out["ok"]
+    put = sonarr.puts[-1][1]
+    assert [s["monitored"] for s in put["seasons"]] == [False, True, True]
+    sonarr.answers["series"][0]["seasons"][0]["monitored"] = True
+    out = tk.call(
+        "set_monitored",
+        {"kind": "series", "catalog_id": 81189, "monitored": False, "seasons": [0]},
+    )
+    assert [s["monitored"] for s in sonarr.puts[-1][1]["seasons"]][0] is False
     # The whole series: only its own flag moves, as the app's UI does; the
     # seasons (and so every episode) are left as the user set them.
     whole = tk.call(
@@ -482,7 +512,8 @@ def test_retry_monitor_and_profile_changes(rig, stack):
     assert whole["ok"] and whole["scope"] == "everything"
     put = sonarr.puts[-1][1]
     assert put["monitored"] is False
-    assert [s["monitored"] for s in put["seasons"]] == [False, True, True]
+    # Season 0 was set monitored above; the whole-series call left it alone.
+    assert [s["monitored"] for s in put["seasons"]] == [True, True, True]
     assert tk.call(
         "set_monitored", {"kind": "movie", "catalog_id": 348, "monitored": True}
     )["ok"]
