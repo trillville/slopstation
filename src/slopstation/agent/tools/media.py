@@ -502,7 +502,11 @@ class MediaService:
             raise MediaError("pass the season the release was searched under")
         episode_ids, rows = self._episode_scope(row["id"], season, episode)
         return (
-            {"episode_ids": episode_ids},
+            {
+                "episode_ids": episode_ids,
+                "scope_label": f"season {season}"
+                + (f", episode {episode}" if episode is not None else ""),
+            },
             self._baselines(kind, row, episode_ids=episode_ids, rows=rows),
         )
 
@@ -533,6 +537,7 @@ class MediaService:
             title,
             catalog_id,
             phase="grabbed",
+            work_id=json.dumps(["release", str(guid), int(indexer_id)]),
             detail=f"{client.name} accepted the release and handed it to the "
             "download client",
             **scope,
@@ -566,6 +571,7 @@ class MediaService:
             command_ids=command_ids,
             phase="searching",
             promise="search",
+            work_id=f"command:{','.join(str(i) for i in command_ids)}",
             detail=f"{self._client(kind).name} is searching again",
             **scope,
             **baselines,
@@ -668,61 +674,11 @@ class MediaService:
             row.get(spec["id_key"]),
             command_ids=[int(command["id"])],
             phase="importing",
+            work_id=f"command:{command['id']}",
             detail=f"{client.name} is importing {len(candidates['files'])} file(s)",
             **scope,
             **baselines,
         )
-
-    @staticmethod
-    def _command_running(client, command_id):
-        row = _command(client, int(command_id))
-        return row is not None and str(row.get("status", "")).lower() in (
-            "queued",
-            "started",
-        )
-
-    def merge_work(self, existing, submission):
-        """The metadata an operation takes on when new work on its title
-        joins it. Scope widens and never narrows: seasons and episodes are
-        the union, and a request for everything stays everything. The first
-        snapshot of a file is the true "before", so old baselines win. The
-        searches still running stay watched next to the new ones; the ones
-        that have finished are dropped. A promise to acquire outlives a
-        promise to search."""
-        old = existing.get("metadata") or {}
-        updates: dict = {}
-        if "seasons" in old and "seasons" in submission:
-            a, b = old["seasons"], submission["seasons"]
-            updates["seasons"] = (
-                None if a is None or b is None else sorted(set(a) | set(b))
-            )
-        elif "seasons" in submission:
-            updates["seasons"] = submission["seasons"]
-        ids = set(old.get("episode_ids") or []) | set(
-            submission.get("episode_ids") or []
-        )
-        if ids:
-            updates["episode_ids"] = sorted(ids)
-        files = {
-            **(submission.get("baseline_episode_files") or {}),
-            **(old.get("baseline_episode_files") or {}),
-        }
-        if files:
-            updates["baseline_episode_files"] = files
-        if old.get("baseline_file_id") is None and submission.get("baseline_file_id"):
-            updates["baseline_file_id"] = submission["baseline_file_id"]
-        client = self._client(self._operation_kind(existing))
-        live = [
-            int(c)
-            for c in old.get("command_ids") or []
-            if self._command_running(client, c)
-        ]
-        updates["command_ids"] = live + [
-            int(c) for c in submission.get("command_ids") or [] if int(c) not in live
-        ]
-        promises = {old.get("promise", "acquire"), submission.get("promise", "acquire")}
-        updates["promise"] = "acquire" if "acquire" in promises else "search"
-        return updates
 
     @staticmethod
     def _episode_metadata_ready(rows, seasons):
@@ -887,6 +843,8 @@ class MediaService:
         detail=None,
         episode_ids=None,
         promise="acquire",
+        work_id=None,
+        scope_label=None,
     ):
         """What one accepted piece of work looks like to the operation store.
         A request carries its preset and profile and a season scope; work on
@@ -912,8 +870,18 @@ class MediaService:
             out["seasons"] = seasons
         if episode_ids is not None:
             out["episode_ids"] = list(episode_ids)
+        if kind == "series":
+            out["scope_label"] = scope_label or (
+                f"{len(episode_ids)} selected episodes"
+                if episode_ids is not None
+                else "seasons " + ", ".join(str(n) for n in seasons)
+                if seasons
+                else "all regular seasons"
+            )
         if promise != "acquire":
             out["promise"] = promise
+        if work_id is not None:
+            out["work_id"] = work_id
         if baseline_file_id is not None:
             out["baseline_file_id"] = baseline_file_id
         if baseline_episode_files is not None:
@@ -1376,10 +1344,30 @@ class MediaService:
             "detail": f"removed {title} from Radarr and deleted its files",
         }
 
-    def delete_series(self, tvdb_id, seasons=None, all_seasons=False, command_ids=None):
+    def episodes_in_seasons(self, tvdb_id, seasons):
+        """Resolve a deletion's episode scope while Sonarr still has its rows."""
+        series = self._library_row("series", int(tvdb_id))
+        if series is None:
+            return []
+        rows = self.sonarr.get("episode", {"seriesId": int(series["id"])})
+        return sorted(
+            int(row["id"])
+            for row in rows
+            if int(row.get("seasonNumber", 0) or 0) in seasons
+        )
+
+    def delete_series(
+        self,
+        tvdb_id,
+        seasons=None,
+        all_seasons=False,
+        command_ids=None,
+        *,
+        episode_ids=None,
+    ):
         tvdb_id = int(tvdb_id)
         selected = self._seasons(seasons)
-        if selected is None and not all_seasons:
+        if selected is None and not all_seasons and episode_ids is None:
             raise MediaError("series deletion needs seasons or explicit all_seasons")
         series = self._library_row("series", tvdb_id)
         if series is None:
@@ -1418,14 +1406,19 @@ class MediaService:
             row
             for row in episodes
             if isinstance(row, dict)
-            and int(row.get("seasonNumber", 0) or 0) in selected
+            and (
+                int(row.get("id", 0) or 0) in episode_ids
+                if episode_ids is not None
+                else int(row.get("seasonNumber", 0) or 0) in selected
+            )
         ]
         episode_ids = sorted({int(row["id"]) for row in wanted if row.get("id")})
         self._monitor_episodes(episode_ids, False)
         updated = dict(series)
         updated["seasons"] = [
             {**row, "monitored": False}
-            if isinstance(row, dict) and int(row.get("seasonNumber", -1)) in selected
+            if isinstance(row, dict)
+            and int(row.get("seasonNumber", -1)) in (selected or [])
             else row
             for row in series.get("seasons") or []
         ]
@@ -1446,7 +1439,11 @@ class MediaService:
         )
         for file_id in file_ids:
             self.sonarr.delete(f"episodefile/{file_id}")
-        season_text = ", ".join(str(n) for n in selected)
+        scope = (
+            "season " + ", ".join(str(n) for n in selected)
+            if selected is not None
+            else f"{len(episode_ids)} selected episodes"
+        )
         return {
             "ok": True,
             "kind": "series",
@@ -1456,7 +1453,8 @@ class MediaService:
             "seasons": selected,
             "downloads_canceled": downloads,
             "files_deleted": len(file_ids),
-            "detail": f"deleted season {season_text} of {title} and stopped monitoring it",
+            "episode_ids": episode_ids,
+            "detail": f"deleted {scope} of {title} and stopped monitoring it",
         }
 
 
@@ -1702,7 +1700,14 @@ def main(argv=None):
                 operations.record_deleted(store, covered, result)
             else:
                 covered, command_ids = operations.covered_by_delete(
-                    store, "series", args.tvdb_id, args.seasons, args.all_seasons
+                    store,
+                    "series",
+                    args.tvdb_id,
+                    args.seasons,
+                    args.all_seasons,
+                    service.episodes_in_seasons(args.tvdb_id, args.seasons)
+                    if not args.all_seasons
+                    else [],
                 )
                 result = service.delete_series(
                     args.tvdb_id, args.seasons, args.all_seasons, command_ids

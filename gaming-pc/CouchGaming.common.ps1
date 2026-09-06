@@ -54,7 +54,6 @@ $CG.TurnMarker   = Join-Path $CG.StateDir 'turn'
 $CG.LaunchMarker = Join-Path $CG.StateDir 'launch-app'
 $CG.NavMarker    = Join-Path $CG.StateDir 'nav-target'
 $CG.StopMarker   = Join-Path $CG.StateDir 'stop-app'
-$CG.DisplayMarker = Join-Path $CG.StateDir 'display-target'
 
 # The scheduled tasks. Install.ps1 registers them from this table and
 # Doctor.ps1 checks what is registered against it. Trigger 'logon' fires at
@@ -71,7 +70,6 @@ $CG.Tasks = @(
     @{ Name = 'LaunchGame';         Script = 'Launch-Game.ps1';    Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
     @{ Name = 'Nav';                Script = 'Nav-BigPicture.ps1'; Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
     @{ Name = 'StopGame';           Script = 'Stop-Game.ps1';      Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
-    @{ Name = 'Display';            Script = 'Set-Display.ps1';    Hidden = $false; Elevated = $false; Trigger = 'none';  TimeLimit = 'PT5M'  }
 )
 $CG.WakeEventQuery = "<QueryList><Query><Select Path='System'>*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]</Select></Query></QueryList>"
 

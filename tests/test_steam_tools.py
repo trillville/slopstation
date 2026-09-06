@@ -126,9 +126,6 @@ def rig(catalog, log, monkeypatch):
         tv=types.SimpleNamespace(
             power_state=lambda: "on", volume=lambda: 14, muted=lambda: False
         ),
-        display=lambda target: types.SimpleNamespace(
-            ok=target in ("tv", "monitor"), detail=f"display {target}"
-        ),
     )
     steam = FakeSteam()
     tk = assistant.Toolkit(dispatch, log, steam=steam)
@@ -375,13 +372,6 @@ def test_steam_client_tools_need_the_account_session(catalog, log):
     unenrolled = assistant.Toolkit(dispatch, log, steam=FakeSteam(enrolled=False))
     unenrolled.load(["download_status"])
     assert "enrolled" in unenrolled.call("download_status", {})["error"]
-
-
-def test_display_tool_hands_the_target_to_dispatch(rig):
-    tk, _, _, _ = rig
-    assert tk.call("display", {"target": "tv"}) == {"ok": True, "detail": "display tv"}
-    assert tk.call("display", {"target": "monitor"})["ok"]
-    assert not tk.call("display", {"target": "projector"})["ok"]
 
 
 def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):

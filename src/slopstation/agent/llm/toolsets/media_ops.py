@@ -504,13 +504,8 @@ def impls(ctx: ToolContext):
 
     bind = Bindings(ctx, SPECS)
 
-    def _join(submission, **extra):
-        """Track work the service just accepted, joining the title's live
-        operation when there is one, on the service's merge rule."""
-        joined = operations_mod.join(
-            operations, submission, media.merge_work, ctx.turn()
-        )
-        return {**joined, **extra}
+    def _track(submission, **extra):
+        return {**operations_mod.track(operations, submission, ctx.turn()), **extra}
 
     # -- reads ---------------------------------------------------------------
 
@@ -1011,7 +1006,7 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "pass the release guid from search_releases"}
         if dry := ctx.preview(f"grab {kind} release {guid[:40]}"):
             return dry
-        return _join(
+        return _track(
             media.grab_release(kind, catalog_id, guid, indexer_id, season, episode)
         )
 
@@ -1038,7 +1033,7 @@ def impls(ctx: ToolContext):
         )
         if dry := ctx.preview(f"search again for {kind} {catalog_id}, {scope}"):
             return dry
-        return _join(media.search_again(kind, catalog_id, season, episode))
+        return _track(media.search_again(kind, catalog_id, season, episode))
 
     @bind
     def set_monitored(args):
@@ -1201,6 +1196,6 @@ def impls(ctx: ToolContext):
             }
         if dry := ctx.preview(f"manual import {len(files)} file(s) for {download_id}"):
             return dry
-        return _join(media.manual_import(kind, download_id, found), files=len(files))
+        return _track(media.manual_import(kind, download_id, found), files=len(files))
 
     return bind.impls()

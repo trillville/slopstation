@@ -117,6 +117,7 @@ class FakeOperations:
         turn=None,
         detail="",
         metadata=None,
+        work_id=None,
     ):
         self.tracked.append(
             (kind, authority, external_ref, title, turn, detail, metadata)
@@ -194,6 +195,9 @@ class FakeMedia:
     def delete_movie(self, tmdb_id, command_ids):
         self.requests.append(("delete_movie", tmdb_id, command_ids))
         return {"ok": True, "title": "Dune", "removed": True}
+
+    def episodes_in_seasons(self, tvdb_id, seasons):
+        return [201]
 
     def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
         self.requests.append(

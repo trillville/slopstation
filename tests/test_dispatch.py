@@ -320,51 +320,6 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     assert d.nav("downloads").earcon == "fail"
 
 
-def test_display_moves_the_desktop_without_a_session(monkeypatch, host):
-    # No session: `tv` powers the TV on, switches its input to the PC, then
-    # fires the verb; `monitor` fires the verb alone. Both refuse while a
-    # session is live, since the session flow owns the displays.
-    seed_lock(None)
-    d, log = harness()
-    tv_calls = []
-    monkeypatch.setattr(d.tv, "power_on", lambda **f: tv_calls.append("on") or "ok")
-    monkeypatch.setattr(
-        d.tv, "select_input", lambda name, **f: tv_calls.append(name) or "ok"
-    )
-    wire = []
-    host(lambda cmd, **kw: wire.append(cmd) or "OK")
-    d.begin_utterance("4c1d0e", "put the desktop on the tv")
-    r = d.display("tv")
-    assert r.ok and "no controller" in r.detail, r
-    assert (
-        tv_calls == ["on", CFG["tvGamingCmd"]]
-        and wire[-1] == "display tv --turn 4c1d0e"
-    )
-    assert "display_dispatched" in log.events()
-    r = d.display("monitor")
-    assert r.ok and tv_calls == ["on", CFG["tvGamingCmd"]], (
-        "monitor leaves the TV alone"
-    )
-    assert wire[-1] == "display monitor --turn 4c1d0e"
-    assert not d.display("projector").ok
-    host("BUSY:Enter")
-    r = d.display("monitor")
-    assert not r.ok and r.earcon == "busy", r
-    seed_lock(5)
-    n = len(wire)
-    for target in ("tv", "monitor"):
-        r = d.display(target)
-        assert not r.ok and r.earcon == "busy" and len(wire) == n, (target, r)
-    seed_lock(None)
-    host("NOTASK:Display")
-    r = d.display("monitor")
-    assert not r.ok and "Display" in r.detail and "registered" in r.detail, r
-    host(ssh_down)
-    assert d.display("monitor").earcon == "fail"
-    dry, _ = harness(dry_run=True)
-    assert "dry-run" in dry.display("tv").detail
-
-
 def test_an_unregistered_task_says_so_on_every_verb_that_fires_one(monkeypatch, host):
     # The reply must name the task and the Register-ScheduledTask fix, not read
     # as a broken verb.

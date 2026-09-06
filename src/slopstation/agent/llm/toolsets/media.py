@@ -308,8 +308,13 @@ def impls(ctx: ToolContext):
 
         def act():
             try:
+                episode_ids = (
+                    media.episodes_in_seasons(catalog_id, seasons)
+                    if kind == "series" and not all_seasons
+                    else []
+                )
                 covered, command_ids = operations_mod.covered_by_delete(
-                    operations, kind, catalog_id, seasons, all_seasons
+                    operations, kind, catalog_id, seasons, all_seasons, episode_ids
                 )
                 if kind == "movie":
                     result = media.delete_movie(catalog_id, command_ids)

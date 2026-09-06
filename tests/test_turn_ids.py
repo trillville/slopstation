@@ -83,11 +83,11 @@ def test_validation_rejects_every_hostile_shape():
 
 
 def test_dispatch_ps1_is_the_real_boundary():
-    # 19 patterns across 14 verbs: nav alone is six (front pages, game page
+    # 18 patterns across 13 verbs: nav alone is six (front pages, game page
     # with an appid, collection, more pages, one game's pages, a URL), so this
     # counts patterns, not verbs.
     allpats = dispatch_patterns()
-    assert len(allpats) == 19, f"expected 19 patterns, got {len(allpats)}: {allpats}"
+    assert len(allpats) == 18, f"expected 18 patterns, got {len(allpats)}: {allpats}"
     for p in allpats:
         # \z, not $: in .NET '$' also matches before a trailing newline.
         assert p.startswith("^") and p.endswith(r"\z"), f"unanchored pattern: {p}"
@@ -100,9 +100,9 @@ def test_dispatch_ps1_is_the_real_boundary():
     assert all(callable(getattr(gamepc, v)) for v in gamepc.VERBS)
 
     pats = [p for p in allpats if "--turn" in p]
-    # Seven mutating verbs take a turn, and nav is six patterns, so twelve
-    # patterns carry one: enter, exit, launch, nav x6, stop, sleep, display.
-    assert len(pats) == 12, f"expected 12 turn-bearing patterns, got {pats}"
+    # Six mutating verbs take a turn, and nav is six patterns, so eleven
+    # patterns carry one: enter, exit, launch, nav x6, stop, sleep.
+    assert len(pats) == 11, f"expected 11 turn-bearing patterns, got {pats}"
     for p in pats:
         assert "[0-9a-f]{1,8}" in p, f"pattern does not bound the turn: {p}"
 
@@ -128,8 +128,6 @@ def test_dispatch_ps1_is_the_real_boundary():
         "nav url https://steamcommunity.com/app/1245620/workshop/",
         "stop 12345",
         "sleep",
-        "display tv",
-        "display monitor",
     ]
     for p in pats:
         rx = compile_ps(p)

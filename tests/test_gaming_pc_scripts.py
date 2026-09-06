@@ -101,9 +101,7 @@ def parse_all():
 
 def dispatch_markers(text):
     # $launchMarker = 'C:\...\launch-app'
-    return dict(
-        re.findall(r"^\$(launch|nav|stop|display)Marker\s*=\s*'([^']+)'", text, re.M)
-    )
+    return dict(re.findall(r"^\$(launch|nav|stop)Marker\s*=\s*'([^']+)'", text, re.M))
 
 
 def common_markers(text):
@@ -153,13 +151,11 @@ def test_gaming_pc_scripts_parse():
 
     # 2. Marker paths: Dispatch's literals == common.ps1's $CG values.
     dm, cm = dispatch_markers(dispatch), common_markers(common)
-    assert set(dm) == {"launch", "nav", "stop", "display"}, (
+    assert set(dm) == {"launch", "nav", "stop"}, (
         f"Dispatch marker literals: {sorted(dm)}"
     )
-    assert {"launch", "nav", "stop", "display"} <= set(cm), (
-        f"common.ps1 markers: {sorted(cm)}"
-    )
-    for k in ("launch", "nav", "stop", "display"):
+    assert {"launch", "nav", "stop"} <= set(cm), f"common.ps1 markers: {sorted(cm)}"
+    for k in ("launch", "nav", "stop"):
         assert dm[k] == cm[k], (
             f"{k} marker drift: Dispatch {dm[k]!r} vs common {cm[k]!r}"
         )
@@ -295,7 +291,7 @@ def test_common_loads_config_beside_it(tmp_path):
     )
     out = powershell(load)
     assert out == [
-        "LOADED 2160 TVNAME Enter,Exit,ForceOfficeAtLogon,WakeSafety,LaunchGame,Nav,StopGame,Display"
+        "LOADED 2160 TVNAME Enter,Exit,ForceOfficeAtLogon,WakeSafety,LaunchGame,Nav,StopGame"
     ], out
 
     config.unlink()
@@ -354,7 +350,7 @@ def test_task_table_is_the_task_contract():
     common = read(COMMON)
     rows = task_table(common)
     names = {r["Name"] for r in rows}
-    assert len(rows) == 8 and len(names) == 8, rows
+    assert len(rows) == 7 and len(names) == 7, rows
     shipped = name_list(read(DEPLOY), "scripts", "Deploy.ps1")
     assert {r["Script"] for r in rows} <= shipped
     assert {r["Trigger"] for r in rows} <= {"none", "logon", "wake"}

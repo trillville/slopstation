@@ -435,13 +435,15 @@ def main(argv=None):
                 result = service.delete_movie(metadata["catalog_id"], command_ids)
             else:
                 seasons = metadata.get("seasons")
+                episode_ids = metadata.get("episode_ids")
                 result = service.delete_series(
                     metadata["catalog_id"],
                     seasons=seasons,
-                    all_seasons=seasons is None,
+                    all_seasons=seasons is None and episode_ids is None,
                     command_ids=command_ids,
+                    episode_ids=episode_ids,
                 )
-            record_deleted(store, [operation])
+            record_deleted(store, [operation], result)
         except Exception as e:
             print(f"abandon failed; operation left active: {e}")
             return 1

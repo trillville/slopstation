@@ -24,7 +24,7 @@ function Report([string]$Level, [string]$Name, [string]$Detail, [string]$Hint = 
 # 1. Configuration and deployed files
 Report PASS 'config' "Puck '$($CG.PuckName)' ($($CG.PuckHwId)), TV EDID $($CG.TvEdid), TV height $($CG.TvHeight)"
 
-$files = @('CouchGaming.common.ps1','config.example.psd1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Set-Display.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
+$files = @('CouchGaming.common.ps1','config.example.psd1','Enter-TV.ps1','Exit-TV.ps1','Office-Safety.ps1','Wake-Safety.ps1','Dispatch.ps1','Launch-Game.ps1','Nav-BigPicture.ps1','Stop-Game.ps1','Doctor.ps1','vhui64.exe','OFFICE.lnk','TV-GAMING.lnk')
 $missing = $files | Where-Object { -not (Test-Path (Join-Path $CG.Root $_)) }
 if ($missing) { Report FAIL 'files' "missing: $($missing -join ', ')" 'Deploy.ps1 ships the scripts; vhui64.exe is the VirtualHere client; the .lnk files are made in DisplayMagician' }
 else { Report PASS 'files' "$($files.Count)/$($files.Count) present" }

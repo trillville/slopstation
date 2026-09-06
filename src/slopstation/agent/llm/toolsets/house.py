@@ -11,7 +11,9 @@ work, imports, or recent completion: current operation state never comes from
 the catalog or conversation memory. Report each operation's actual phase: only
 phase=downloading is downloading; name every other phase accurately. Never
 infer current state from conversation history, the catalog, or an absent
-download. Returns the count and one page of rows."""
+download. Several operations can share a title: report their scopes separately;
+a search only promises a search, not a new file. Returns the count and one page
+of rows."""
 
 SPECS = [
     ToolSpec(

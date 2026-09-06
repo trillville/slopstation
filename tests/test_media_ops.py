@@ -7,7 +7,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation.agent.llm import assistant
-from slopstation.agent.tools import media, operations
+from slopstation.agent.tools import media, operations, operations_monitors
 from slopstation.agent.tools.media_clients import MediaError
 
 NOW = datetime.datetime.now(datetime.UTC)
@@ -725,52 +725,51 @@ def test_dry_run_and_failures_come_back_as_errors(stack):
     assert log.find("tool_error")[-1]["tool"] == "browse_media"
 
 
-def test_work_on_a_held_title_is_tracked_for_exactly_its_scope(stack):
-    svc, radarr, sonarr, _ = stack
-    log = CapturingLog("voice")
+@pytest.fixture
+def tracked(stack, log):
+    svc, *_ = stack
     store = operations.OperationStore(log)
     dispatch = types.SimpleNamespace(
         dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
     )
-    tk = assistant.Toolkit(dispatch, log, media=svc, operations=store)
-    tk.load(["grab_release", "retry_search", "manual_import"])
-    radarr.answers["command/99"] = {"id": 99, "status": "started"}
-    sonarr.answers["command/1"] = {"id": 1, "status": "started"}
-    sonarr.answers["command/99"] = {"id": 99, "status": "completed"}
-    # A grab on a title nobody requested is its own operation, with the file
-    # it already held as the baseline, so the upgrade is not called done
-    # because the old file is still there.
+    toolkit = assistant.Toolkit(dispatch, log, media=svc, operations=store)
+    toolkit.load(["grab_release", "retry_search", "manual_import", "delete_media"])
+    return toolkit, store, dispatch
+
+
+def test_work_receipts_are_distinct_and_repeated_receipts_deduplicate(stack, tracked):
+    svc, radarr, _, _ = stack
+    tk, store, _ = tracked
     grabbed = tk.call(
         "grab_release",
         {"kind": "movie", "catalog_id": 438631, "guid": "g1", "indexer_id": 3},
     )
-    assert grabbed["ok"] and "joined" not in grabbed
     op = store.get(grabbed["operation_id"])
-    assert (op["kind"], op["external_ref"], op["title"]) == (
-        "movie_acquisition",
-        "1",
-        "Dune",
-    )
-    assert op["progress"] == {"phase": "grabbed"}
     assert op["metadata"]["baseline_file_id"] == 501 and op["turn"] == "aa0001"
-    assert "promise" not in op["metadata"], "a grab promises the file"
-    # The monitor keeps that phase until the client shows the download.
-    seen = svc.observe(op)
-    assert not seen["complete"] and seen["progress"]["phase"] == "grabbed"
-    # A fresh search for the same title joins the operation rather than
-    # opening a second row: the baseline stays, the command is watched, and
-    # the stronger promise (the file, not just a search) survives.
+    assert svc.observe(op)["progress"]["phase"] == "grabbed"
     searched = tk.call("retry_search", {"kind": "movie", "catalog_id": 438631})
-    assert searched["ok"] and searched["joined"]
-    assert searched["operation_id"] == op["id"] and len(store.active()) == 1
-    op = store.get(op["id"])
-    assert op["progress"]["phase"] == "searching"
-    assert op["metadata"]["command_ids"] == [99]
-    assert op["metadata"]["baseline_file_id"] == 501
-    assert op["metadata"]["promise"] == "acquire"
-    # A season-1 request, then a season-2 search: the operation now covers
-    # both, and the season-1 search still running stays watched beside the
-    # new one. Nothing the user asked for is dropped to keep one row.
+    assert searched["operation_id"] != op["id"]
+    assert store.get(op["id"]) == op
+    assert store.get(searched["operation_id"])["metadata"]["promise"] == "search"
+    posts = len(radarr.posts)
+    assert operations.track(store, grabbed)["operation_id"] == op["id"]
+    assert len(radarr.posts) == posts and len(store.active()) == 2
+    imported = tk.call("manual_import", {"kind": "movie", "download_id": "ABC123"})
+    assert store.get(imported["operation_id"])["progress"]["phase"] == "importing"
+    rows, total = store.for_assistant("active", limit=2)
+    assert total == 3 and [r["title"] for r in rows] == ["Dune", "Dune"]
+    assert store.for_assistant("active", limit=2, offset=2)[0][0]["title"] == "Alien"
+
+
+def test_new_episode_work_cannot_complete_an_existing_season_request(
+    stack, tracked, monkeypatch
+):
+    svc, _, sonarr, _ = stack
+    tk, store, _ = tracked
+    episodes = sonarr.answers["episode"]({})
+    monkeypatch.setitem(episodes[0], "hasFile", False)
+    monkeypatch.setitem(sonarr.answers, "episode", episodes)
+    monkeypatch.setitem(sonarr.answers, "command/1", {"status": "started"})
     request = store.track_external(
         "series_acquisition",
         "sonarr",
@@ -778,47 +777,151 @@ def test_work_on_a_held_title_is_tracked_for_exactly_its_scope(stack):
         "Breaking Bad",
         metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
     )
-    joined = tk.call(
+    searched = tk.call(
         "retry_search", {"kind": "series", "catalog_id": 81189, "season": 2}
     )
-    assert joined["joined"] and joined["operation_id"] == request["id"]
-    metadata = store.get(request["id"])["metadata"]
-    assert metadata["seasons"] == [1] and metadata["episode_ids"] == [201]
-    assert metadata["command_ids"] == [1, 99] and metadata["promise"] == "acquire"
-    # An episode grab on the same series widens the episode scope; the
-    # finished season-2 search is dropped, the live season-1 one kept.
-    tk.call(
+    assert searched["operation_id"] != request["id"]
+    visible, _ = store.for_assistant("active")
+    assert visible[0]["scope"]["seasons"] == [1]
+    assert visible[1]["scope"]["scope_label"] == "season 2"
+    monkeypatch.setitem(episodes[2], "hasFile", True)
+    monkeypatch.setitem(episodes[2], "episodeFileId", 2001)
+    assert svc.observe(store.get(searched["operation_id"]))["complete"]
+    original = svc.observe(store.get(request["id"]))
+    assert not original["complete"] and original["progress"]["total_episodes"] == 2
+    assert store.get(request["id"])["metadata"] == request["metadata"]
+
+
+def test_grab_cannot_change_what_a_separate_search_promises(
+    stack, tracked, monkeypatch
+):
+    svc, _, sonarr, _ = stack
+    tk, store, _ = tracked
+    episodes = sonarr.answers["episode"]({})
+    monkeypatch.setitem(sonarr.answers, "episode", episodes)
+    monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
+    monkeypatch.setitem(sonarr.answers, "command/99", {"status": "completed"})
+    searched = tk.call(
+        "retry_search",
+        {
+            "kind": "series",
+            "catalog_id": 81189,
+            "season": 1,
+            "episode": 1,
+        },
+    )
+    grabbed = tk.call(
         "grab_release",
         {
             "kind": "series",
             "catalog_id": 81189,
-            "guid": "g1",
+            "guid": "episode-2",
             "indexer_id": 3,
             "season": 1,
             "episode": 2,
         },
     )
-    metadata = store.get(request["id"])["metadata"]
-    assert metadata["episode_ids"] == [102, 201] and metadata["command_ids"] == [1]
-    assert not metadata.get("baseline_episode_files"), "episode 102 held no file"
-    # An import is tracked from its importing phase, for the movie it is for.
-    imported = tk.call("manual_import", {"kind": "movie", "download_id": "ABC123"})
-    assert imported["ok"] and store.get(imported["operation_id"])["progress"] == {
-        "phase": "importing"
-    }
-    rows, total = store.for_assistant("active", limit=2)
-    assert total == 3 and [r["title"] for r in rows] == ["Dune", "Breaking Bad"]
-    assert [
-        r["title"] for r in store.for_assistant("active", limit=2, offset=2)[0]
-    ] == ["Alien"]
-    # A grab of a series release without its season cannot be scoped.
-    assert (
-        "season"
-        in tk.call(
-            "grab_release",
-            {"kind": "series", "catalog_id": 81189, "guid": "g1", "indexer_id": 3},
-        )["error"]
+    monkeypatch.setitem(episodes[1], "hasFile", True)
+    monkeypatch.setitem(episodes[1], "episodeFileId", 1002)
+    assert svc.observe(store.get(grabbed["operation_id"]))["complete"]
+    result = svc.observe(store.get(searched["operation_id"]))
+    assert result["complete"] and result["progress"]["phase"] == "searched"
+
+
+def test_partial_search_announcement_reports_the_files_gained(
+    stack, tracked, monkeypatch
+):
+    svc, _, sonarr, _ = stack
+    tk, store, _ = tracked
+    episodes = sonarr.answers["episode"]({})
+    monkeypatch.setitem(episodes[1], "hasFile", True)
+    monkeypatch.setitem(episodes[1], "episodeFileId", 1002)
+    monkeypatch.setitem(sonarr.answers, "episode", episodes)
+    monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
+    monkeypatch.setitem(sonarr.answers, "command/99", {"status": "completed"})
+    searched = tk.call(
+        "retry_search", {"kind": "series", "catalog_id": 81189, "season": 1}
     )
+    monkeypatch.setitem(episodes[0], "episodeFileId", 2001)
+    result = svc.observe(store.get(searched["operation_id"]))
+    assert result["complete"] and result["progress"]["episodes"] == 1
+    done = store.observe(
+        searched["operation_id"],
+        operations.SUCCEEDED,
+        result["progress"],
+        result["detail"],
+    )
+    assert "1 episode gained a file" in done["summary"]
+    assert "nothing better" not in done["summary"]
+
+
+def test_delete_season_cancels_only_covered_work_and_retains_other_episodes(
+    stack, tracked, monkeypatch
+):
+    svc, _, sonarr, _ = stack
+    tk, store, dispatch = tracked
+    episodes = sonarr.answers["episode"]({})
+    monkeypatch.setitem(sonarr.answers, "episode", episodes)
+    monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
+    rows = []
+    for command_id, ids in ((1, [101]), (2, [201]), (3, [102, 201])):
+        monkeypatch.setitem(
+            sonarr.answers, f"command/{command_id}", {"status": "started"}
+        )
+        rows.append(
+            store.track_external(
+                "series_acquisition",
+                "sonarr",
+                "5",
+                "Breaking Bad",
+                work_id=f"command:{command_id}",
+                metadata={
+                    "catalog_id": 81189,
+                    "episode_ids": ids,
+                    "command_ids": [command_id],
+                },
+            )
+        )
+    ask = {"kind": "series", "catalog_id": 81189, "seasons": [1]}
+    assert not tk.call("delete_media", ask)["ok"]
+    assert not sonarr.deletes
+    monkeypatch.setattr(dispatch.utterance, "turn", "aa0002")
+    deleted = tk.call("delete_media", ask)
+    assert deleted["ok"], deleted
+    assert deleted["operations_canceled"] == [rows[0]["id"]]
+    assert store.get(rows[0]["id"])["state"] == operations.CANCELED
+    assert store.get(rows[1]["id"])["state"] == operations.RUNNING
+    assert store.get(rows[2]["id"])["metadata"]["episode_ids"] == [201]
+    assert ("command/1", None) in sonarr.deletes
+    assert not any(path in ("command/2", "command/3") for path, _ in sonarr.deletes)
+    monkeypatch.setitem(episodes[2], "hasFile", True)
+    monkeypatch.setitem(episodes[2], "episodeFileId", 2001)
+    assert svc.observe(store.get(rows[1]["id"]))["complete"]
+    assert svc.observe(store.get(rows[2]["id"]))["complete"]
+
+
+def test_abandon_episode_operation_does_not_delete_the_series(
+    stack, tracked, monkeypatch
+):
+    svc, _, sonarr, _ = stack
+    _, store, _ = tracked
+    operation = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        work_id="release:101",
+        metadata={"catalog_id": 81189, "episode_ids": [101]},
+    )
+    monkeypatch.setattr(media, "from_config", lambda *args, **kwargs: svc)
+    assert operations_monitors.main(["abandon", operation["id"], "--execute"]) == 0
+    assert ("episodefile/1001", None) in sonarr.deletes
+    assert not any(path == "series/5" for path, _ in sonarr.deletes)
+    assert sonarr.puts[0] == (
+        "episode/monitor",
+        {"episodeIds": [101], "monitored": False},
+    )
+    assert store.get(operation["id"])["state"] == operations.CANCELED
 
 
 def test_one_episode_is_done_when_that_episode_arrives(stack):
