@@ -296,6 +296,9 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
     assert time.strftime("%Y-%m-%d") in si
     assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
+    # The clock is the LAST line, so every token before it is a stable prefix.
+    assert re.search(r"It is \d\d:\d\d on [\d-]+ local time" + r"\.$", si.strip())
+    assert si.index("CATALOG (") < si.rindex("It is ")
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
     assert "local time" in flat(si)

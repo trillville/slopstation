@@ -46,11 +46,14 @@ def system_instruction(cfg, interface="voice", offered=None):
     # A day with no zone resolves toward UTC and dates an evening brief
     # tomorrow. Empty timezone is a normal deployment.
     tz = voice.get("location", {}).get("timezone")
-    # The clock too, or the model searches the web for the time.
-    tail = [
-        f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}"
-        + (f" in {tz}." if tz else " local time.")
-    ]
+    # The clock too, or the model searches the web for the time. It is the
+    # LAST line: it changes every minute, and everything before it is a
+    # cached prefix only while it stays byte-identical. Ahead of the catalog
+    # it left 850 stable tokens, under the provider's caching floor.
+    clock = f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}" + (
+        f" in {tz}." if tz else " local time."
+    )
+    tail = []
     gaming = next((k for k, v in inputs.items() if v == cfg.get("tvGamingCmd")), None)
     tail.append(
         prompts.SCREENS.format(
@@ -74,7 +77,7 @@ def system_instruction(cfg, interface="voice", offered=None):
         style + input_rule + "\n\n" + prompts.RULES + " " + " ".join(tail) + "\n\n"
         "CATALOG (appid|name|tags|genres|hours|lastPlayed YYYY-MM-DD or "
         "never|inst[:YYYY-MM-DD last install or update]/notinst|controller "
-        "full/partial/none/?):\n" + "\n".join(library.catalog_lines())
+        "full/partial/none/?):\n" + "\n".join(library.catalog_lines()) + "\n\n" + clock
     )
 
 
