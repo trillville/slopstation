@@ -346,6 +346,26 @@ def test_full_lanes_run_one_dry_session(run):
     assert callable(calls[0]["on_end_session"])
 
 
+def test_a_session_id_does_not_linger_into_the_next_wake(run, monkeypatch):
+    # The listener logs while it waits (wake_near_miss, wake_clip), and no
+    # session is open then. Those lines used to inherit the id of the session
+    # that had just closed, which pointed at the wrong conversation.
+    waiting_under = []
+    wait = FakeListener.wait_for_wake_capture
+
+    def watched(self, threshold, on_quiet=None, interrupt=None):
+        waiting_under.append(events.current().get("session"))
+        return wait(self, threshold, on_quiet, interrupt)
+
+    monkeypatch.setattr(FakeListener, "wait_for_wake_capture", watched)
+    rc, log, _ = run(["--dry-run"], make_config(), wakes=one_wake() + one_wake())
+    assert rc == "ended"
+    assert waiting_under == [None, None, None], waiting_under
+    first, second = log.find("wake")
+    assert first["_session"] and second["_session"]
+    assert first["_session"] != second["_session"]
+
+
 def test_a_duck_that_did_not_land_marks_the_room_loud(run, monkeypatch):
     cfg = make_config(tvIp="10.0.0.9")
     cfg["voice"]["duckSteps"] = 4
