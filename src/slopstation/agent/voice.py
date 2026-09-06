@@ -30,6 +30,7 @@ from slopstation.agent.speech.audio import (
 )
 from slopstation.agent.speech.ducking import TvDucker
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
+from slopstation.agent.speech.level import dbfs
 from slopstation.agent.speech.preroll import WakeAck
 from slopstation.agent.speech.session import Session
 from slopstation.agent.telemetry import sentry
@@ -132,8 +133,16 @@ def warn_config(voice):
         )
 
 
+class RoomState:
+    """Filled in off-thread: `loud` once a duck was tried and did not land."""
+
+    def __init__(self):
+        self.loud = False
+
+
 def make_ducker(cfg, dry_run):
-    """Return a session volume controller or a no-op."""
+    """Return a session volume controller or a no-op. restore=False hands
+    back a RoomState; None when ducking is off."""
     voice = cfg["voice"]
     duck_steps = int(voice.get("duckSteps", 0) or 0)
     duck_to_pct = int(voice.get("duckToPct", 0) or 0)
@@ -166,15 +175,20 @@ def make_ducker(cfg, dry_run):
     def duck(restore):
         """Off-thread so the session never waits on the TV."""
         if ducker is None:
-            return
+            return None
+        state = RoomState()
 
         def run():
             try:
-                (ducker.unduck if restore else ducker.duck)()
+                if restore:
+                    ducker.unduck()
+                else:
+                    state.loud = ducker.duck() is False
             except Exception as e:
                 log.warn("tv_duck_failed", restore=restore, err=str(e))
 
         threading.Thread(target=run, daemon=True).start()
+        return state
 
     return duck
 
@@ -442,7 +456,12 @@ def main():
             ack.claim()
             log("wake", trigger="follow_up")
         else:
-            log("wake", trigger="wake_word", score=round(score, 2))
+            log(
+                "wake",
+                trigger="wake_word",
+                score=round(score, 2),
+                dbfs=dbfs(capture.peak) if capture is not None else None,
+            )
             if announcer:
                 announcer.abort_current()  # user intent beats a bulletin
         if not stt_live:
@@ -461,7 +480,7 @@ def main():
             # is copied INTO the loop and cannot be back-filled after.
             with sentry.session_trace():
                 # Inside the try so the finally's unduck is always paired with it.
-                duck(restore=False)
+                room = duck(restore=False)
                 asyncio.run(
                     Session(
                         cfg,
@@ -476,6 +495,7 @@ def main():
                         steam=steam,
                         media=media_service,
                         on_end_session=lambda: duck(restore=True),
+                        room=room,
                     ).run()
                 )
         except Exception as e:

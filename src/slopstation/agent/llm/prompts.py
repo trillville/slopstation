@@ -116,9 +116,9 @@ STOP_LISTENING = """\
 Stop listening: close the mic and end the conversation. Call it when the
 user tells you to go away, stop listening, or leave them alone - usually
 because they want to talk to someone else in the room. This is NOT
-end_session: nothing on the TV changes and a running game is untouched. Say
-a short goodbye in the same turn - it is spoken first, and only then does
-the mic close. The wake word reopens it, so this costs the user nothing."""
+end_session: nothing on the TV changes and a running game is untouched. Do
+not say anything with it: the mic closes as the call lands and a sleep tone
+tells the user. The wake word reopens it, so this costs the user nothing."""
 
 GET_NOW_PLAYING = """\
 What game is currently running, if any. session_active is the rig's own

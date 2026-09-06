@@ -86,8 +86,10 @@ def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     readings = iter([20, 23, 23, 40, 40, 25])
     levels = []
     muted = False
-    monkeypatch.setattr(tv, "tv_volume", lambda ip: next(readings))
-    monkeypatch.setattr(tv, "tv_set_volume", lambda ip, level: levels.append(level))
+    monkeypatch.setattr(tv, "tv_volume", lambda ip, timeout=None: next(readings))
+    monkeypatch.setattr(
+        tv, "tv_set_volume", lambda ip, level, timeout=None: levels.append(level)
+    )
 
     def rendering_request(ip, action, arguments, timeout):
         nonlocal muted

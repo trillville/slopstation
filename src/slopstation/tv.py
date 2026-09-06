@@ -16,6 +16,7 @@ class VolumeChange(NamedTuple):
     before: int
     target: int
     after: int
+    writes: int = 0
 
     @property
     def ok(self) -> bool:
@@ -28,6 +29,12 @@ class Tv:
     Construction performs no I/O. Each process owns its instances; the volume
     transaction coordinates instances within a process, not other processes.
     """
+
+    POLLS = 24
+    POLL_GAP_S = 0.1
+    WRITES = 3
+    RETRY_AFTER = 5
+    HTTP_TIMEOUT_S = 1.0
 
     def __init__(self, cfg, log):
         self.ip = cfg.get("tvIp")
@@ -68,7 +75,7 @@ class Tv:
 
     def volume(self):
         with self.volume_transaction():
-            return tv_volume(self.ip) if self.ip else None
+            return tv_volume(self.ip, timeout=self.HTTP_TIMEOUT_S) if self.ip else None
 
     def set_volume(
         self, level: int, maximum: int = 100, *, before: int | None = None
@@ -94,33 +101,47 @@ class Tv:
                 self.log("volume_clamped", asked=asked, set=target, max=maximum)
             if now == target:
                 return VolumeChange(now, target, now)
+            return self._move_volume(now, target)
+
+    def _move_volume(self, now, target):
+        """Retry only an unmoved readback; partial movement may be the remote."""
+        deadline = time.monotonic() + self.POLLS * self.POLL_GAP_S
+        seen = now
+        left = self.POLLS
+        for attempt in range(1, self.WRITES + 1):
             try:
-                tv_set_volume(self.ip, target)
+                tv_set_volume(self.ip, target, timeout=self.HTTP_TIMEOUT_S)
             except Exception as e:
                 self.log.warn("tv_duck_failed", stage="write", err=str(e))
-            # A lost HTTP reply does not prove the write failed.
-            final = self._settle(self.volume, target)
-            return VolumeChange(now, target, now if final is None else final)
-
-    def _settle(self, read, target):
-        # Bound retries by elapsed time as well as count. An in-flight read
-        # can still take its two-second HTTP timeout.
-        deadline = time.monotonic() + 2.4
-        value = None
-        for _ in range(24):
-            if time.monotonic() >= deadline:
+            polls = left if attempt == self.WRITES else min(left, self.RETRY_AFTER)
+            left -= polls
+            value = self._settle(self.volume, target, polls, deadline)
+            if value is None:
                 break
+            seen = value
+            if seen != now or left <= 0 or time.monotonic() >= deadline:
+                break
+        return VolumeChange(now, target, seen, attempt)
+
+    def _settle(self, read, target, polls, deadline):
+        seen = None
+        for i in range(polls):
             value = read()
-            if value == target:
-                return value
-            time.sleep(0.1)
-        return value
+            if value is not None:
+                seen = value
+            if value == target or time.monotonic() >= deadline:
+                return seen
+            if i + 1 < polls:
+                time.sleep(self.POLL_GAP_S)
+        return seen
 
     def muted(self) -> bool | None:
         """Unknown mute state is distinct from unmuted."""
         with self.volume_transaction():
             value = (
-                _read_rendering(self.ip, "GetMute", "CurrentMute") if self.ip else None
+                _read_rendering(self.ip, "GetMute", "CurrentMute", self.HTTP_TIMEOUT_S)
+                if self.ip
+                else None
             )
             return bool(value) if value in (0, 1) else None
 
@@ -131,11 +152,15 @@ class Tv:
                 raise ValueError("mute control needs tvIp - see setup.md")
             try:
                 _rendering_request(
-                    self.ip, "SetMute", f"<DesiredMute>{int(muted)}</DesiredMute>", 2.0
+                    self.ip,
+                    "SetMute",
+                    f"<DesiredMute>{int(muted)}</DesiredMute>",
+                    self.HTTP_TIMEOUT_S,
                 )
             except Exception as e:
                 self.log.warn("tvremote_fail", cmd="mute", err=str(e))
-            if self._settle(self.muted, muted) is not muted:
+            deadline = time.monotonic() + self.POLLS * self.POLL_GAP_S
+            if self._settle(self.muted, muted, self.POLLS, deadline) is not muted:
                 raise RuntimeError(f"mute state {muted} wasn't verified")
             return muted
 

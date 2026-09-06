@@ -60,6 +60,9 @@ intents:
           - "[(can|could) you] open [the] {target}"
           - "[(can|could) you] go to [the] {target}"
           - "[(can|could) you] take me to [the] {target}"
+  # Plain phrases only, no [a|the] template syntax: grammar_gate.closer_in
+  # reuses these literally to catch a closer that arrives with company
+  # ("alright, thanks", "the alfred go away only hands exactly").
   ExitSession:
     data:
       - sentences:
