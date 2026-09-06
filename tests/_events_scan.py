@@ -24,6 +24,7 @@ PC_DYNAMIC = {
         "launchgame",
         "nav",
         "stopgame",
+        "display",
         "office-safety",
         "wake-safety",
     )

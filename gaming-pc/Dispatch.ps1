@@ -6,6 +6,7 @@ $turnFile = 'C:\ProgramData\CouchGaming\turn'
 $launchMarker = 'C:\ProgramData\CouchGaming\launch-app'
 $navMarker = 'C:\ProgramData\CouchGaming\nav-target'
 $stopMarker = 'C:\ProgramData\CouchGaming\stop-app'
+$displayMarker = 'C:\ProgramData\CouchGaming\display-target'
 
 # The anchored lowercase turn pattern prevents path traversal in marker names.
 # Use \z because .NET's $ also matches before a trailing newline. Set the turn
@@ -229,6 +230,22 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       Remove-Item $stopMarker -Force -ErrorAction SilentlyContinue
       Set-Content $stopMarker $id
       Write-Answer 'stop' (Start-CgTask 'StopGame') $turn
+      break }
+  # display: the desktop on the TV or back on the monitor, with no session.
+  # Refused while a session is live or one of its tasks runs: that flow owns
+  # the displays. The Display task re-checks and verifies the profile took.
+  '^display (tv|monitor)( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[3]
+      if (Test-Path $ready) { Write-Answer 'display' 'BUSY' $turn; break }
+      foreach ($name in 'Enter', 'Exit') {
+        $t = Get-ScheduledTask -TaskPath '\CouchGaming\' -TaskName $name -ErrorAction SilentlyContinue
+        if ($t -and $t.State -eq 'Running') { Write-Answer 'display' "BUSY:$name" $turn; break }
+      }
+      if ($t -and $t.State -eq 'Running') { break }
+      Set-Turn $turn
+      Remove-Item $displayMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $displayMarker $Matches[1]
+      Write-Answer 'display' (Start-CgTask 'Display') $turn
       break }
   # disk: free space on each Steam library drive, for "can I install X".
   '^disk\z' {

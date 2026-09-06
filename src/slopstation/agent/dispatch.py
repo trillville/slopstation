@@ -296,6 +296,51 @@ class Dispatch:
             "url": "that page",
         }.get(kind, kind)
 
+    # -- display profile, outside a session ------------------------------------
+
+    DISPLAY_TARGETS = ("tv", "monitor")
+
+    def display(self, target: str) -> Result:
+        """Move the PC's desktop to the TV or back to its monitor with no
+        session: no Puck claim, no Big Picture, no session lock. For `tv` the
+        TV is powered on and switched to the PC first. Refused while a session
+        is live, since the session flow owns the displays."""
+        target = str(target).strip().lower()
+        if target not in self.DISPLAY_TARGETS:
+            return _fail(f"the display goes to the tv or the monitor, not '{target}'")
+        if sessionlock.active():
+            if target == "tv":
+                return _busy("a session is live, so the TV already has the PC")
+            return _busy(
+                "a session is live - end it first, or the game loses its screen"
+            )
+        if self.dry_run:
+            return self._would(f"display {target}")
+        if target == "tv":
+            try:
+                self.tv.power_on()
+                self.tv.select_input(self.cfg["tvGamingCmd"])
+            except Exception as e:
+                return _fail(f"the TV did not take the PC input ({e})")
+        try:
+            out = gamepc.display(target, self.utterance.turn)
+        except Exception as e:
+            self.log.error("display_failed", target=target, err=str(e))
+            return _fail(f"couldn't reach the PC (ssh display {target}: {e})")
+        self.log("display_dispatched", target=target, answer=out)
+        if out == "OK":
+            return _ok(
+                "the desktop is moving to the TV - no controller, the mouse "
+                "and keyboard at the desk drive it"
+                if target == "tv"
+                else "the desktop is going back to the monitor"
+            )
+        if out.startswith("BUSY"):
+            return _busy("the PC refused: a session or one of its tasks is running")
+        if out.startswith("NOTASK:"):
+            return _no_task(out)
+        return _fail(f"the display change failed (ssh display {target}: {out})")
+
     # -- TV --------------------------------------------------------------------
 
     def _volume(self, level: int | None = None, steps: int = 0) -> Result:
