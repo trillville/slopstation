@@ -12,11 +12,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm import paging
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import media_proton
 
 HASH_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
-LIMIT_DEFAULT, LIMIT_MAX = 10, 40
 STATES = {
     "all": None,
     "downloading": "downloading",
@@ -46,7 +46,7 @@ List torrents in qBittorrent: by state (downloading, seeding, completed,
 paused, stalled, errored, active, inactive, all), category, or a name
 fragment. Each row carries the movie or series it belongs to when Radarr or
 Sonarr is waiting on it, so say the title, not the release name. Returns the
-count first and up to `limit` rows, most recently added first."""
+count first and one page of rows, most recently added first."""
     + _OWNERSHIP
 )
 
@@ -96,7 +96,7 @@ and are not changed here. Reports the limits in force afterwards."""
 SEEDING_REPORT = """\
 What is seeding: each torrent's ratio, upload total and seeding time, the
 share limits it is under, and totals. Sorted by ratio, highest first. Returns
-the count and up to `limit` rows."""
+the count and one page of rows."""
 
 ORPHAN_TORRENTS = """\
 Torrents nobody asked for through Radarr or Sonarr: completed torrents that
@@ -109,7 +109,7 @@ Whether qBittorrent's peer traffic is on the VPN: the network interface it is
 bound to, its listening port, the port Proton last forwarded and when, and
 whether the two agree. A disagreement means peers cannot reach it."""
 
-QBIT_LOG = "qBittorrent's recent log lines, warnings and critical by default, newest last. Returns the count and up to `limit` lines."
+QBIT_LOG = "qBittorrent's recent log lines, warnings and critical by default, newest first. Returns the count and one page of lines."
 
 SPECS = [
     ToolSpec(
@@ -119,10 +119,7 @@ SPECS = [
             "state": {"type": "string", "enum": list(STATES)},
             "category": {"type": "string", "description": "exact category name"},
             "name": {"type": "string", "description": "a fragment of the torrent name"},
-            "limit": {
-                "type": "integer",
-                "description": f"rows, default {LIMIT_DEFAULT}, at most {LIMIT_MAX}",
-            },
+            **paging.properties(),
         },
         (),
         risk="read",
@@ -323,12 +320,7 @@ SPECS = [
     ToolSpec(
         "seeding_report",
         SEEDING_REPORT,
-        {
-            "limit": {
-                "type": "integer",
-                "description": f"rows, default {LIMIT_DEFAULT}, at most {LIMIT_MAX}",
-            }
-        },
+        {**paging.properties()},
         (),
         risk="read",
         area="media",
@@ -380,10 +372,7 @@ SPECS = [
                 "type": "boolean",
                 "description": "include normal and info lines",
             },
-            "limit": {
-                "type": "integer",
-                "description": f"lines, default {LIMIT_DEFAULT}, at most {LIMIT_MAX}",
-            },
+            **paging.properties(what="lines"),
         },
         (),
         risk="read",
@@ -394,14 +383,6 @@ SPECS = [
         paged=True,
     ),
 ]
-
-
-def _limit(args, default=LIMIT_DEFAULT, cap=LIMIT_MAX):
-    try:
-        n = int(args.get("limit") or default)
-    except (TypeError, ValueError):
-        n = default
-    return max(1, min(n, cap))
 
 
 def _kbps(value):
@@ -433,7 +414,8 @@ def _row(t, link):
 
 
 def impls(ctx: ToolContext):
-    dispatch, log, media = ctx.dispatch, ctx.log, ctx.media
+    bind = Bindings(ctx, SPECS)
+    log, media = ctx.log, ctx.media
     qbit: Any = getattr(media, "qbit", None)
 
     def _hash(value):
@@ -484,7 +466,7 @@ def impls(ctx: ToolContext):
             {"hash": t.get("hash"), "name": t.get("name"), "state": t.get("state")}
             for t in rows
             if wanted is None or str(t.get("hash", "")).lower() in wanted
-        ][:LIMIT_MAX]
+        ][: paging.CAP]
 
     def _act(name, args, fn, hashes_key="hashes"):
         if hashes_key == "hashes":
@@ -494,9 +476,8 @@ def impls(ctx: ToolContext):
             hashes = [h] if h else None
         if err:
             return err
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"{name} {hashes}")
-            return {"ok": True, "dry_run": True, "detail": f"would {name} {hashes}"}
+        if dry := ctx.preview(f"{name} {hashes}"):
+            return dry
         try:
             fn(hashes)
             return {"ok": True, "torrents": _after(hashes)}
@@ -504,6 +485,7 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool=name, err=str(e))
             return {"ok": False, "error": str(e)}
 
+    @bind
     def list_torrents(args):
         state = str(args.get("state") or "all")
         if state not in STATES:
@@ -521,15 +503,13 @@ def impls(ctx: ToolContext):
         frag = str(args.get("name") or "").lower().strip()
         if frag:
             rows = [t for t in rows if frag in str(t.get("name", "")).lower()]
-        link = _link()
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "count": len(rows),
-            "torrents": [_row(t, link) for t in rows[:limit]],
-            "more": max(0, len(rows) - limit),
-        }
+        out = paging.page(rows, args, "torrents")
+        if out["ok"]:
+            link = _link()
+            out["torrents"] = [_row(t, link) for t in out["torrents"]]
+        return out
 
+    @bind
     def torrent_details(args):
         h, err = _one(args)
         if err:
@@ -583,17 +563,21 @@ def impls(ctx: ToolContext):
             ],
         }
 
+    @bind
     def pause_torrent(args):
         return _act("pause_torrent", args, lambda h: qbit.torrent_action("stop", h))
 
+    @bind
     def resume_torrent(args):
         return _act("resume_torrent", args, lambda h: qbit.torrent_action("start", h))
 
+    @bind
     def recheck_torrent(args):
         return _act(
             "recheck_torrent", args, lambda h: qbit.torrent_action("recheck", h), "hash"
         )
 
+    @bind
     def reannounce_torrent(args):
         return _act(
             "reannounce_torrent",
@@ -602,11 +586,13 @@ def impls(ctx: ToolContext):
             "hash",
         )
 
+    @bind
     def force_start(args):
         return _act(
             "force_start", args, lambda h: qbit.set_force_start(h, True), "hash"
         )
 
+    @bind
     def set_torrent_priority(args):
         position = str(args.get("position") or "")
         if position not in ORDER:
@@ -618,6 +604,7 @@ def impls(ctx: ToolContext):
             "hash",
         )
 
+    @bind.destructive
     def delete_torrent(args):
         h, err = _one(args)
         if err:
@@ -654,36 +641,33 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "no torrent with that hash"}
         name = rows[0].get("name")
         size_gb = round(int(rows[0].get("size", 0) or 0) / 1024**3, 2)
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"delete torrent {h} files={delete_files}")
+
+        def act():
+            try:
+                qbit.delete_torrents([h], delete_files)
+            except Exception as e:
+                log.error("tool_error", tool="delete_torrent", err=str(e))
+                return {"ok": False, "error": str(e)}
             return {
                 "ok": True,
-                "dry_run": True,
-                "detail": f"would delete {name} (files: {delete_files})",
+                "deleted": name,
+                "files_erased": delete_files,
+                "size_gb": size_gb,
             }
-        if not ctx.gate.confirmed(
-            ("torrent", h, delete_files), dispatch.utterance.turn
-        ):
-            log.warn("tool_refused", tool="delete_torrent", reason="unconfirmed")
-            what = f"Remove the torrent {name}" + (
+
+        return Plan(
+            ("torrent", h, delete_files),
+            f"Remove the torrent {name}"
+            + (
                 f" and erase its {size_gb} GB of files?"
                 if delete_files
                 else ", keeping its files?"
-            )
-            return {"ok": False, "acknowledgment": what}
-        try:
-            qbit.delete_torrents([h], delete_files)
-        except Exception as e:
-            log.error("tool_error", tool="delete_torrent", err=str(e))
-            return {"ok": False, "error": str(e)}
-        ctx.gate.done(("torrent", h, delete_files))
-        return {
-            "ok": True,
-            "deleted": name,
-            "files_erased": delete_files,
-            "size_gb": size_gb,
-        }
+            ),
+            act,
+            f"delete torrent {name} (files: {delete_files})",
+        )
 
+    @bind
     def transfer_info(args):
         try:
             info = qbit.transfer_info()
@@ -713,6 +697,7 @@ def impls(ctx: ToolContext):
             "queued_disk_jobs": state.get("queued_io_jobs"),
         }
 
+    @bind
     def set_speed_limits(args):
         down, up = args.get("download_kbps"), args.get("upload_kbps")
         alt = args.get("alternative")
@@ -734,9 +719,8 @@ def impls(ctx: ToolContext):
                 "error": "the alternative limits are global, not per torrent",
             }
         plan = f"limits down={down} up={up} alt={alt} hash={h}"
-        if dispatch.dry_run:
-            log("dry_run_would", action=plan)
-            return {"ok": True, "dry_run": True, "detail": f"would set {plan}"}
+        if dry := ctx.preview(f"set {plan}"):
+            return dry
         try:
             if h:
                 qbit.set_torrent_limits(
@@ -763,6 +747,7 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool="set_speed_limits", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    @bind
     def seeding_report(args):
         try:
             rows = qbit.torrents(filter="seeding")
@@ -772,7 +757,6 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": str(e)}
         rows.sort(key=lambda t: -float(t.get("ratio", 0) or 0))
         link = _link()
-        limit = _limit(args)
 
         def share(t):
             ratio = t.get("ratio_limit", -2)
@@ -786,10 +770,22 @@ def impls(ctx: ToolContext):
                 else ("none" if time_limit == -1 else time_limit),
             }
 
-        return {
-            "ok": True,
-            "count": len(rows),
-            "global_policy": {
+        def shape(t):
+            return {
+                **{
+                    k: _row(t, link)[k]
+                    for k in ("hash", "name", "media", "ratio", "up_kbps", "size_gb")
+                },
+                "uploaded_gb": round(int(t.get("uploaded", 0) or 0) / 1024**3, 2),
+                "seeding_hours": round(int(t.get("seeding_time", 0) or 0) / 3600, 1),
+                **share(t),
+            }
+
+        out = paging.page(
+            rows,
+            args,
+            "torrents",
+            global_policy={
                 "max_ratio": prefs.get("max_ratio")
                 if prefs.get("max_ratio_enabled")
                 else None,
@@ -797,32 +793,15 @@ def impls(ctx: ToolContext):
                 if prefs.get("max_seeding_time_enabled")
                 else None,
             },
-            "total_uploaded_gb": round(
+            total_uploaded_gb=round(
                 sum(int(t.get("uploaded", 0) or 0) for t in rows) / 1024**3, 2
             ),
-            "torrents": [
-                {
-                    **{
-                        k: _row(t, link)[k]
-                        for k in (
-                            "hash",
-                            "name",
-                            "media",
-                            "ratio",
-                            "up_kbps",
-                            "size_gb",
-                        )
-                    },
-                    "uploaded_gb": round(int(t.get("uploaded", 0) or 0) / 1024**3, 2),
-                    "seeding_hours": round(
-                        int(t.get("seeding_time", 0) or 0) / 3600, 1
-                    ),
-                    **share(t),
-                }
-                for t in rows[:limit]
-            ],
-        }
+        )
+        if out["ok"]:
+            out["torrents"] = [shape(t) for t in out["torrents"]]
+        return out
 
+    @bind
     def orphan_torrents(args):
         try:
             rows = qbit.torrents(filter="completed")
@@ -847,12 +826,13 @@ def impls(ctx: ToolContext):
                     "category": t.get("category"),
                     "completed": t.get("completion_on"),
                 }
-                for t in orphans[:LIMIT_MAX]
+                for t in orphans[: paging.CAP]
             ],
             "detail": "none of these was requested through Radarr or Sonarr; "
             "delete_torrent is the cleanup",
         }
 
+    @bind
     def vpn_status(args):
         try:
             prefs = qbit.preferences()
@@ -878,41 +858,25 @@ def impls(ctx: ToolContext):
             and int(forwarded) == listen,
         }
 
+    @bind
     def qbit_log(args):
         try:
             lines = qbit.main_log(warnings_only=not bool(args.get("everything")))
         except Exception as e:
             log.error("tool_error", tool="qbit_log", err=str(e))
             return {"ok": False, "error": str(e)}
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "count": len(lines),
-            "lines": [
+        return paging.page(
+            [
                 {
                     "id": ln.get("id"),
                     "type": ln.get("type"),
                     "ts": ln.get("timestamp"),
                     "msg": ln.get("message"),
                 }
-                for ln in lines[-limit:]
+                for ln in reversed(lines)
             ],
-        }
+            args,
+            "lines",
+        )
 
-    return {
-        "list_torrents": list_torrents,
-        "torrent_details": torrent_details,
-        "pause_torrent": pause_torrent,
-        "resume_torrent": resume_torrent,
-        "recheck_torrent": recheck_torrent,
-        "reannounce_torrent": reannounce_torrent,
-        "force_start": force_start,
-        "set_torrent_priority": set_torrent_priority,
-        "delete_torrent": delete_torrent,
-        "transfer_info": transfer_info,
-        "set_speed_limits": set_speed_limits,
-        "seeding_report": seeding_report,
-        "orphan_torrents": orphan_torrents,
-        "vpn_status": vpn_status,
-        "qbit_log": qbit_log,
-    }
+    return bind.impls()

@@ -26,13 +26,13 @@ class SessionBusy(RuntimeError):
     """The session's previous turn is still running."""
 
 
-class Audited:
-    """A Toolkit whose calls are recorded and whose acknowledgments are kept,
-    so the LAN client gets the receipt a voice user would have heard."""
+class Acknowledged:
+    """A Toolkit whose acknowledgments are kept, so the LAN client gets the
+    receipt a voice user would have heard. Calls are recorded by the Toolkit
+    itself, the same way on every lane."""
 
-    def __init__(self, toolkit, log, acknowledgments):
+    def __init__(self, toolkit, acknowledgments):
         self.toolkit = toolkit
-        self.log = log
         self.acknowledgments = acknowledgments
 
     def render(self, provider):
@@ -40,7 +40,6 @@ class Audited:
 
     def call(self, name, args):
         out = self.toolkit.call(name, args)
-        assistant.record_tool_call(name, args, out, self.log)
         if isinstance(out, dict) and out.get("acknowledgment"):
             self.acknowledgments.append(str(out["acknowledgment"]))
         return out
@@ -125,7 +124,7 @@ class TextApplication:
         try:
             session["dispatch"].begin_utterance(turn, message)
             acknowledgments: list[str] = []
-            tools = Audited(session["toolkit"], self.log, acknowledgments)
+            tools = Acknowledged(session["toolkit"], acknowledgments)
             reply = session["backend"].turn(self.system_text, message, tools)
             if acknowledgments:
                 reply = acknowledgments[-1]

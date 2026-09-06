@@ -477,13 +477,15 @@ class SteamSession:
                 "ok": False,
                 "error": "couldn't reach Steam, so nothing was uninstalled",
             }
-        self.log(
-            "uninstall_queued", appid=appid, verified=bool(app.get("uninstalling"))
-        )
+        verified = bool(app.get("uninstalling"))
+        self.log("uninstall_queued", appid=appid, verified=verified)
         return {
             "ok": True,
-            "detail": "Steam is uninstalling it",
-            "verified": bool(app.get("uninstalling")),
+            "detail": "Steam is uninstalling it"
+            if verified
+            else "Steam accepted the request, but its app list does not show "
+            "the game uninstalling yet - say it was asked for, not done",
+            "verified": verified,
         }
 
     def download_status(self):

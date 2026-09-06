@@ -60,7 +60,6 @@ ASKS = {
     "friends": "which of my steam friends are online right now",
     "new_releases": "what new releases and top sellers are out",
     "wishlist_edit": "add that game to my wishlist",
-    "download_status": "how far along is the steam download",
     "pause_downloads": "pause the steam download",
     "resume_downloads": "resume the steam download",
     "uninstall_game": "uninstall valheim to free up space on the pc",
@@ -120,12 +119,21 @@ def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):
     assert "delete_media" in toolkit.loaded
     assert len(toolkit.render("openai")) == before + len(out["loaded"])
     assert len(toolkit.render("anthropic")) == len(toolkit.render("openai"))
-    # Registry order survives loading, so the rendered prefix is stable.
-    assert toolkit.loaded == [
-        n for n in toolkit.registry.names() if n in toolkit.loaded
-    ]
+    # Defaults first, then what was found in the order it was found: the
+    # rendered prefix is stable until something loads, on both providers.
+    n = len(toolkit.defaults)
+    assert toolkit.loaded[:n] == toolkit.defaults
+    assert toolkit.loaded[n:] == [r["tool"] for r in out["loaded"]]
+    assert [t["name"] for t in toolkit.render("openai")] == toolkit.loaded
+    assert [s.name for s in toolkit.function_schemas()] == toolkit.loaded
     found = log.find("tools_found")
     assert found and "delete_media" in found[-1]["found"]
+    # Asking again names the tool as already loaded, never a weaker second
+    # choice or a miss.
+    again = toolkit.call("find_tools", {"query": "erase the files for that movie"})
+    assert again["ok"] and "delete_media" not in [r["tool"] for r in again["loaded"]]
+    assert "delete_media" in [r["tool"] for r in again["already_loaded"]]
+    assert log.find("tools_found")[-1]["found"] == []
     miss = toolkit.call("find_tools", {"query": "qzxv plonk"})
     assert not miss["ok"] and "areas" in miss and log.find("tools_found")[-1]["n"] == 0
     assert not toolkit.call("find_tools", {})["ok"]

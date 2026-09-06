@@ -5,7 +5,8 @@ import time
 from typing import Any
 
 from slopstation import config
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm import paging
+from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
 from slopstation.agent.tools import library, steamstore
 
 GET_GAME_DETAILS = """\
@@ -31,8 +32,9 @@ in the last two weeks), 'unplayed' (owned, never launched), 'most_played'
 (owned, by lifetime hours), 'recently_updated' (installed games by their
 last install or update). Use this for 'anything on sale', 'what's on my
 wishlist', 'what's popular', 'what have I been playing', 'what have I never
-played'. Steam's own download queue is download_status; Slopstation's
-tracked work is list_operations. Leads with names - not a research task."""
+played'. Returns the count and one page of rows. Steam's own download
+queue is download_status; Slopstation's tracked work is list_operations.
+Leads with names - not a research task."""
 
 SEARCH_STORE = """\
 Search the Steam store with filters and get back names + prices immediately
@@ -55,7 +57,7 @@ the rarest ones held, each with its global unlock rate. Owned games only."""
 
 PLAYTIME = """\
 Hours played across the library: lifetime or the last two weeks, most played
-first, with the total. Returns the count and up to `limit` rows."""
+first, with the total. Returns the count and one page of rows."""
 
 FRIENDS = """\
 The user's Steam friends: who is online or playing and what, then the rest
@@ -92,11 +94,6 @@ SOURCES = [
     "most_played",
     "recently_updated",
 ]
-LIMIT_DEFAULT, LIMIT_MAX = 10, 40
-LIMIT = {
-    "type": "integer",
-    "description": f"rows, default {LIMIT_DEFAULT}, at most {LIMIT_MAX}",
-}
 
 SPECS = [
     ToolSpec(
@@ -134,7 +131,7 @@ SPECS = [
     ToolSpec(
         "list_games",
         LIST_GAMES,
-        {"source": {"type": "string", "enum": SOURCES}},
+        {"source": {"type": "string", "enum": SOURCES}, **paging.properties()},
         ("source",),
         risk="read",
         area="steam",
@@ -150,6 +147,7 @@ SPECS = [
             "recently updated",
         ),
         needs=("steam_data",),
+        paged=True,
     ),
     ToolSpec(
         "search_store",
@@ -191,7 +189,7 @@ SPECS = [
                 "type": "string",
                 "enum": ["hours", "last_played", "name", "updated"],
             },
-            "limit": LIMIT,
+            **paging.properties(),
         },
         (),
         risk="read",
@@ -229,7 +227,7 @@ SPECS = [
         PLAYTIME,
         {
             "period": {"type": "string", "enum": ["all", "two_weeks"]},
-            "limit": LIMIT,
+            **paging.properties(),
         },
         (),
         risk="read",
@@ -244,11 +242,12 @@ SPECS = [
             "time in game",
         ),
         default=False,
+        paged=True,
     ),
     ToolSpec(
         "friends",
         FRIENDS,
-        {"limit": LIMIT},
+        {**paging.properties()},
         (),
         risk="read",
         area="steam",
@@ -268,7 +267,7 @@ SPECS = [
         NEW_RELEASES,
         {
             "section": {"type": "string", "enum": list(steamstore.FEATURED_SECTIONS)},
-            "limit": LIMIT,
+            **paging.properties(),
         },
         (),
         risk="read",
@@ -306,21 +305,15 @@ SPECS = [
 ]
 
 
-def _limit(args):
-    try:
-        n = int(args.get("limit") or LIMIT_DEFAULT)
-    except (TypeError, ValueError):
-        n = LIMIT_DEFAULT
-    return max(1, min(n, LIMIT_MAX))
-
-
 def _day(ts):
     return time.strftime("%Y-%m-%d", time.localtime(ts)) if ts else None
 
 
 def impls(ctx: ToolContext):
+    bind = Bindings(ctx, SPECS)
     log, steam, voice = ctx.log, ctx.steam, ctx.voice
 
+    @bind
     def get_game_details(args):
         appid = int(args.get("appid", 0))
         meta = library.load_meta().get(str(appid))
@@ -419,6 +412,7 @@ def impls(ctx: ToolContext):
             )
         return rows
 
+    @bind
     def list_games(args):
         """Sale/trending/recent lists. wishlist_on_sale and specials come from
         the precomputed state/deals.json (~0 ms); trending, recently_played,
@@ -427,7 +421,7 @@ def impls(ctx: ToolContext):
         if source == "downloading":
             return {
                 "ok": False,
-                "error": "Steam's download status moved to the download_status tool",
+                "error": "Steam's download status is the download_status tool",
             }
         if source == "wishlist_on_sale":
             rows = steamstore.load_deals().get("wishlist_on_sale")
@@ -439,8 +433,7 @@ def impls(ctx: ToolContext):
                     "error": "no wishlist data - either the "
                     "steamId64 isn't set, or the store sync hasn't run yet",
                 }
-            return {"ok": True, "source": source, "games": rows[:10]}
-        if source == "wishlist":
+        elif source == "wishlist":
             steamid = str(config.secrets().get("steamId64", ""))
             if not steamid.isdigit():
                 return {
@@ -450,28 +443,13 @@ def impls(ctx: ToolContext):
             rows = steamstore.fetch_wishlist(steamid)
             if rows is None:
                 return {"ok": False, "error": "couldn't reach the Steam store just now"}
-            return {
-                "ok": True,
-                "source": source,
-                "count": len(rows),
-                "games": rows[:10],
-            }
-        if source == "specials":
-            return {
-                "ok": True,
-                "source": source,
-                "games": steamstore.load_deals().get("specials", [])[:10],
-            }
-        if source == "trending":
-            return {
-                "ok": True,
-                "source": source,
-                "games": steamstore.fetch_trending()[:10],
-            }
-        if source == "recently_played":
+        elif source == "specials":
+            rows = steamstore.load_deals().get("specials", [])
+        elif source == "trending":
+            rows = steamstore.fetch_trending()
+        elif source == "recently_played":
             rows = steamstore.fetch_recently_played()
-            return {"ok": True, "source": source, "games": rows[:10]}
-        if source in ("unplayed", "most_played", "recently_updated"):
+        elif source in ("unplayed", "most_played", "recently_updated"):
             rows = _owned_rows()
             if source == "unplayed":
                 rows = [r for r in rows if r["hours"] == 0]
@@ -481,14 +459,11 @@ def impls(ctx: ToolContext):
             else:
                 rows = [r for r in rows if r["updated"]]
                 rows.sort(key=lambda r: r["updated"] or "", reverse=True)
-            return {
-                "ok": True,
-                "source": source,
-                "count": len(rows),
-                "games": rows[:10],
-            }
-        return {"ok": False, "error": f"unknown source {source}"}
+        else:
+            return {"ok": False, "error": f"unknown source {source}"}
+        return paging.page(list(rows), args, "games", source=source)
 
+    @bind
     def search_store(args):
         """Steam's own filtered search. Tag names come from the caller (spoken
         genres); unknown ones are dropped, term still applies."""
@@ -504,6 +479,7 @@ def impls(ctx: ToolContext):
         )
         return {"ok": True, "count": len(rows), "games": rows}
 
+    @bind
     def search_library(args):
         meta = library.load_meta()
         rows = _owned_rows()
@@ -551,9 +527,9 @@ def impls(ctx: ToolContext):
         rows.sort(key=key, reverse=sort in ("last_played", "updated"))
         for r in rows:
             r["tags"] = (meta.get(str(r["appid"]), {}).get("tags") or [])[:4]
-        limit = _limit(args)
-        return {"ok": True, "count": len(rows), "games": rows[:limit]}
+        return paging.page(rows, args, "games")
 
+    @bind
     def my_achievements(args):
         appid = int(args.get("appid", 0))
         if str(appid) not in library.load().get("owned", {}):
@@ -571,6 +547,7 @@ def impls(ctx: ToolContext):
             **out,
         }
 
+    @bind
     def playtime(args):
         period = str(args.get("period") or "all")
         if period not in ("all", "two_weeks"):
@@ -579,23 +556,23 @@ def impls(ctx: ToolContext):
         key = "hours2w" if period == "two_weeks" else "hours"
         rows = [r for r in rows if r[key] > 0]
         rows.sort(key=lambda r: -r[key])
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "period": period,
-            "total_hours": round(sum(r[key] for r in rows), 1),
-            "count": len(rows),
-            "games": [
+        return paging.page(
+            [
                 {
                     "appid": r["appid"],
                     "name": r["name"],
                     "hours": round(r[key], 1),
                     "last_played": r["last_played"],
                 }
-                for r in rows[:limit]
+                for r in rows
             ],
-        }
+            args,
+            "games",
+            period=period,
+            total_hours=round(sum(r[key] for r in rows), 1),
+        )
 
+    @bind
     def friends(args):
         rows = steamstore.fetch_friends()
         if rows is None:
@@ -604,14 +581,9 @@ def impls(ctx: ToolContext):
                 "error": "the steamApiKey isn't set, so friends can't be read",
             }
         online = [r for r in rows if r["state"] not in ("offline", "unknown")]
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "count": len(rows),
-            "online": len(online),
-            "friends": rows[:limit],
-        }
+        return paging.page(rows, args, "friends", online=len(online))
 
+    @bind
     def new_releases(args):
         section = str(args.get("section") or "new_releases")
         if section not in steamstore.FEATURED_SECTIONS:
@@ -622,14 +594,9 @@ def impls(ctx: ToolContext):
         rows = steamstore.fetch_featured(section)
         if rows is None:
             return {"ok": False, "error": "couldn't reach the Steam store just now"}
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "section": section,
-            "count": len(rows),
-            "games": rows[:limit],
-        }
+        return paging.page(rows, args, "games", section=section)
 
+    @bind
     def wishlist_edit(args):
         action = str(args.get("action") or "")
         if action not in ("add", "remove"):
@@ -642,19 +609,8 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "appid must be positive"}
         if steam is None or not steam.available():
             return {"ok": False, "error": "the Steam account session isn't enrolled"}
-        if ctx.dispatch.dry_run:
-            log("dry_run_would", action=f"wishlist {action} {appid}")
-            return {"ok": True, "dry_run": True, "detail": f"would {action} {appid}"}
+        if dry := ctx.preview(f"wishlist {action} {appid}"):
+            return dry
         return steam.wishlist(appid, action == "add")
 
-    return {
-        "get_game_details": get_game_details,
-        "list_games": list_games,
-        "search_store": search_store,
-        "search_library": search_library,
-        "my_achievements": my_achievements,
-        "playtime": playtime,
-        "friends": friends,
-        "new_releases": new_releases,
-        "wishlist_edit": wishlist_edit,
-    }
+    return bind.impls()

@@ -13,7 +13,7 @@ log = logbook.logger("voice")
 
 # Cross-session context: the last turns, and the tools find_tools loaded,
 # so a follow-up session keeps what the last one found.
-CARRY: dict[str, Any] = {"messages": [], "loaded": [], "t": 0.0}
+CARRY: dict[str, Any] = {"messages": [], "loaded": [], "gate": None, "t": 0.0}
 
 
 def _trim_carry(messages):
@@ -357,6 +357,10 @@ class Session:
                 if self.context is not None
                 else None
             ),
+            # A follow-up keeps the previous session's asks armed: a "yes" to
+            # a question the last session ended on lands here, inside the
+            # gate's own lifetime.
+            gate=CARRY["gate"] if carrying else None,
         )
         if carrying:
             self.toolkit.load(CARRY["loaded"])
@@ -402,4 +406,5 @@ class Session:
         traces.save("voice", msgs, {"provider": self.provider, "dry_run": self.dry_run})
         CARRY["messages"] = _trim_carry(msgs[-8:])
         CARRY["loaded"] = list(self.toolkit.loaded) if self.toolkit else []
+        CARRY["gate"] = self.toolkit.ctx.gate if self.toolkit else None
         CARRY["t"] = time.time()

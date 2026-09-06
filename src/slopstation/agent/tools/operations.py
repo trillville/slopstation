@@ -332,8 +332,13 @@ class OperationStore:
                     return True
         return False
 
-    def for_assistant(self, scope="active", limit=10, acknowledge=False):
-        rows = self.active() if scope == "active" else self.recent(limit)
+    def for_assistant(self, scope="active", limit=10, offset=0, acknowledge=False):
+        """One page of the scope's rows as the model reads them, and the
+        scope's total. Only the rows on the page are acknowledged: a bulletin
+        on a page nobody heard stays pending."""
+        rows = self.active() if scope == "active" else self.recent(offset + limit)
+        total = len(rows) if scope == "active" else len(self.all())
+        rows = rows[offset : offset + limit]
         if acknowledge:
             for row in rows:
                 if row.get("state") in TERMINAL and row.get("announcement_pending"):
@@ -353,8 +358,8 @@ class OperationStore:
                     "finished",
                 )
             }
-            for r in rows[:limit]
-        ]
+            for r in rows
+        ], total
 
 
 def track(store, submission, turn=None):
@@ -362,6 +367,11 @@ def track(store, submission, turn=None):
     so a failed local write reports itself and never invites a second one."""
     if store is None or submission.get("already_available"):
         return submission
+    phase = submission.get("phase") or "searching"
+    authority = str(submission["authority"]).title()
+    detail = (
+        submission.get("detail") or f"{authority} accepted the request and is searching"
+    )
     metadata = {
         k: submission[k]
         for k in (
@@ -377,7 +387,6 @@ def track(store, submission, turn=None):
         )
         if k in submission
     }
-    authority = str(submission["authority"]).title()
     try:
         operation = store.track_external(
             submission["kind"],
@@ -388,13 +397,50 @@ def track(store, submission, turn=None):
             detail=f"{authority} accepted the request",
             metadata=metadata,
         )
-        operation = store.observe(
-            operation["id"],
+        operation = store.observe(operation["id"], RUNNING, {"phase": phase}, detail)
+        return {**submission, "operation_id": operation["id"], "phase": phase}
+    except Exception as e:
+        store.log.error("tool_error", tool="track_media", err=str(e))
+        return {**submission, "tracking": "failed"}
+
+
+def join(store, submission, turn=None):
+    """Record work started on a title outside a request: a grab, a fresh
+    search, an import. When a request for the title is already active the
+    work joins it, so "what is downloading" has one row per title: the
+    request keeps its scope and baselines, and only the commands it waits on
+    and its phase move. Otherwise the work is tracked as its own operation."""
+    if store is None:
+        return submission
+    ref = str(submission["external_ref"])
+    existing = next(
+        (
+            op
+            for op in store.active(submission["kind"])
+            if str(op.get("external_ref")) == ref
+        ),
+        None,
+    )
+    if existing is None:
+        return track(store, submission, turn)
+    phase = submission.get("phase") or "searching"
+    try:
+        if submission.get("command_ids"):
+            store.update_metadata(
+                existing["id"], {"command_ids": submission["command_ids"]}
+            )
+        store.observe(
+            existing["id"],
             RUNNING,
-            {"phase": "searching"},
-            f"{authority} accepted the request and is searching",
+            {"phase": phase},
+            submission.get("detail") or existing.get("detail", ""),
         )
-        return {**submission, "operation_id": operation["id"], "phase": "searching"}
+        return {
+            **submission,
+            "operation_id": existing["id"],
+            "phase": phase,
+            "joined": True,
+        }
     except Exception as e:
         store.log.error("tool_error", tool="track_media", err=str(e))
         return {**submission, "tracking": "failed"}

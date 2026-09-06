@@ -2,8 +2,10 @@
 
 import json
 import time
+from typing import Any
 
 from slopstation.agent.llm import prompts, toolsets
+from slopstation.agent.llm.confirm import ConfirmGate
 from slopstation.agent.llm.registry import AREAS, Registry, ToolContext
 
 # tool spans; the module self-gates: REPL/bench are no-ops
@@ -76,60 +78,15 @@ def system_instruction(cfg, interface="voice", offered=None):
     )
 
 
-class Toolkit:
-    """One conversation's tools: what is offered, what is loaded, how to call.
+class Tools:
+    """How a conversation runs a tool, on every lane: look the name up,
+    refuse what is not loaded, catch what raises, record the call. The
+    Toolkit is the live shape; StaticTools wears it over a bare dict."""
 
-    Offered is every registry tool whose services are present. Loaded starts
-    as the default set and grows when find_tools matches; it never shrinks
-    inside a conversation. Both backends render the loaded set on every
-    request, so a tool found mid-turn is callable on the next one. `on_load`
-    lets the voice lane push the new list into its Pipecat context."""
-
-    def __init__(
-        self,
-        dispatch,
-        log,
-        operations=None,
-        on_stop_listening=None,
-        voice=None,
-        steam=None,
-        media=None,
-        on_load=None,
-    ):
-        self.registry = REGISTRY
-        self.log = log
-        self.on_load = on_load
-        self.ctx = ToolContext(
-            dispatch=dispatch,
-            log=log,
-            operations=operations,
-            on_stop_listening=on_stop_listening,
-            voice=voice,
-            steam=steam,
-            media=media,
-        )
-        self.ctx.toolkit = self
-        self.offered = [s.name for s in REGISTRY.offered(self.ctx.services())]
-        offered = set(self.offered)
-        self.impls = {}
-        for module in toolsets.ALL:
-            # A toolset whose service is absent still has to build cleanly: it
-            # closes over None and is never called.
-            for name, fn in module.impls(self.ctx).items():
-                if name in offered:
-                    self.impls[name] = fn
-        self.loaded = [n for n in self.offered if REGISTRY.get(n).default]
-
-    def load(self, names):
-        """Load offered tools by name; returns the ones newly loaded, in
-        registry order, and tells the voice context when anything changed."""
-        wanted = {n for n in names if n in self.impls and n not in self.loaded}
-        if not wanted:
-            return []
-        self.loaded = [n for n in self.offered if n in self.loaded or n in wanted]
-        if self.on_load is not None:
-            self.on_load()
-        return [n for n in self.loaded if n in wanted]
+    registry = REGISTRY
+    log: Any = None
+    impls: dict
+    loaded: list
 
     def render(self, provider):
         if provider == "openai":
@@ -141,7 +98,8 @@ class Toolkit:
         search step is the pause before a destructive tool, so it has to be
         real. A raising tool becomes an error dict, never a broken turn (an
         Anthropic history with a tool_use and no tool_result fails every
-        later request of that session)."""
+        later request of that session). Every call is recorded here, so no
+        lane can forget to."""
         fn = self.impls.get(name)
         if fn is None:
             return {"ok": False, "error": f"there is no tool called {name}"}
@@ -151,44 +109,97 @@ class Toolkit:
                 "error": f"{name} is not loaded - call find_tools for it first",
             }
         try:
-            return fn(args)
+            out = fn(args)
         except Exception as e:
-            self.log.error("tool_error", tool=name, err=repr(e))
-            return {
+            if self.log is not None:
+                self.log.error("tool_error", tool=name, err=repr(e))
+            out = {
                 "ok": False,
                 "error": "that didn't go through - something upstream failed",
             }
+        record_tool_call(name, args, out, self.log)
+        return out
 
     def function_schemas(self, log=None):
-        """Pipecat schemas for the LOADED tools."""
-        return function_schemas(
-            {n: self.impls[n] for n in self.loaded}, log or self.log
+        """Pipecat schemas for the loaded tools, in loaded order."""
+        return _pipecat_schemas(self, log or self.log)
+
+
+class Toolkit(Tools):
+    """One conversation's tools: what is offered, what is loaded, how to call.
+
+    Offered is every registry tool whose services are present. Loaded starts
+    as the default set and grows when find_tools matches; it never shrinks
+    inside a conversation. Both backends render the loaded set on every
+    request, so a tool found mid-turn is callable on the next one. `on_load`
+    lets the voice lane push the new list into its Pipecat context. `gate`
+    is the confirmation state; a voice follow-up hands the previous
+    session's in, so a yes survives the wake between them."""
+
+    def __init__(
+        self,
+        dispatch,
+        log,
+        operations=None,
+        on_stop_listening=None,
+        voice=None,
+        steam=None,
+        media=None,
+        on_load=None,
+        gate=None,
+    ):
+        self.log = log
+        self.on_load = on_load
+        self.ctx = ToolContext(
+            dispatch=dispatch,
+            log=log,
+            operations=operations,
+            on_stop_listening=on_stop_listening,
+            voice=voice,
+            steam=steam,
+            media=media,
+            gate=gate or ConfirmGate(),
         )
+        self.ctx.toolkit = self
+        self.offered = [s.name for s in REGISTRY.offered(self.ctx.services())]
+        offered = set(self.offered)
+        self.impls = {}
+        for module in toolsets.ALL:
+            # A toolset whose service is absent still has to build cleanly: it
+            # closes over None and is never called.
+            for name, fn in module.impls(self.ctx).items():
+                if name in offered:
+                    self.impls[name] = fn
+        self.defaults = [n for n in self.offered if REGISTRY.get(n).default]
+        self.loaded = list(self.defaults)
+
+    def load(self, names):
+        """Load offered tools by name; returns the ones newly loaded. The
+        defaults stay first and found tools follow in the order they were
+        found, so the rendered prefix is stable until something loads. Tells
+        the voice context when anything changed."""
+        new = [n for n in names if n in self.impls and n not in self.loaded]
+        if not new:
+            return []
+        self.loaded = self.loaded + new
+        if self.on_load is not None:
+            self.on_load()
+        return new
 
 
-class StaticTools:
-    """A plain name->fn dict wearing the Toolkit interface, for the REPL and
-    tests. Renders the registry entry of every name it holds."""
+class StaticTools(Tools):
+    """A plain name->fn dict wearing the Tools interface, for the REPL and
+    tests. Every name it holds is loaded, in registry order."""
 
-    def __init__(self, impls):
+    def __init__(self, impls, log=None):
         self.impls = dict(impls)
+        self.log = log
         self.loaded = [n for n in REGISTRY.names() if n in self.impls]
 
-    def render(self, provider):
-        if provider == "openai":
-            return REGISTRY.openai_tools(self.loaded)
-        return REGISTRY.anthropic_tools(self.loaded)
 
-    def call(self, name, args):
-        fn = self.impls.get(name)
-        if fn is None:
-            return {"ok": False, "error": f"there is no tool called {name}"}
-        return fn(args)
-
-
-def as_tools(tools):
-    """Accept a Toolkit-shaped object or a bare impls dict."""
-    return StaticTools(tools) if isinstance(tools, dict) else tools
+def as_tools(tools, log=None):
+    """Accept a Tools-shaped object or a bare impls dict."""
+    return StaticTools(tools, log) if isinstance(tools, dict) else tools
 
 
 def tool_impls(
@@ -225,28 +236,26 @@ def record_tool_call(name, args, out, log=None):
 
 
 def function_schemas(impls, log):
-    """Build Pipecat schemas that run blocking tools in worker threads."""
+    """Pipecat schemas for a bare impls dict (tests, the REPL); a Toolkit
+    renders its own through `function_schemas()`."""
+    return _pipecat_schemas(as_tools(impls, log), log)
+
+
+def _pipecat_schemas(tools, log):
+    """Pipecat schemas whose handlers run `tools.call` in a worker thread and
+    turn the result into speech: an acknowledgment is spoken as-is with no
+    second model turn, and end_turn closes the turn to a closing mic."""
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
 
-    def wrap(name, fn):
+    def wrap(name):
         async def handler(params):
-            args = dict(params.arguments)
-            try:
-                out = await asyncio.to_thread(fn, args)
-            except Exception as e:
-                # Always return a result so a tool exception cannot hang the turn.
-                log.error("tool_error", tool=name, err=repr(e))
-                out = {
-                    "ok": False,
-                    "error": "that didn't go through - something upstream failed",
-                }
-            # After the call, so the span carries the RESULT. The await above
-            # does not lose the OTel context (contextvars are per-task), so
-            # this still parents onto Pipecat's llm span.
-            record_tool_call(name, args, out, log)
+            # `call` never raises and records the call itself. The await does
+            # not lose the OTel context (contextvars are per-task), so the
+            # span still parents onto Pipecat's llm span.
+            out = await asyncio.to_thread(tools.call, name, dict(params.arguments))
             acknowledgment = (
                 out.get("acknowledgment") if isinstance(out, dict) else None
             )
@@ -272,17 +281,15 @@ def function_schemas(impls, log):
 
         return handler
 
-    # Render only tools present in `impls` - the schema half of the gating.
     return [
         FunctionSchema(
             name=spec.name,
             description=spec.description,
             properties=spec.properties,
             required=list(spec.required),
-            handler=wrap(spec.name, impls[spec.name]),
+            handler=wrap(spec.name),
         )
-        for spec in REGISTRY
-        if spec.name in impls
+        for spec in REGISTRY.select(list(tools.loaded))
     ]
 
 

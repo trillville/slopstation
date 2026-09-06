@@ -14,10 +14,23 @@ import json
 import re
 from typing import Any
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
 from slopstation.agent.tools import apidocs, library
 
 METHODS = ("GET", "POST", "PUT", "DELETE")
+# Status text the media clients raise for an answered-and-refused request.
+HTTP_STATUS_RE = re.compile(r"\bHTTP (\d{3})\b")
+
+
+class HttpFailure(Exception):
+    """The service answered, and refused: a status and the body it sent."""
+
+    def __init__(self, status, body):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.body = body
+
+
 # No empty segments: the blocklist is a string match, so `config//host` must
 # not read differently from `config/host`.
 PATH_RE = re.compile(r"^[A-Za-z0-9_.\-{}]+(/[A-Za-z0-9_.\-{}]+)*$")
@@ -308,6 +321,7 @@ def _qbit_mutates(method, path):
 
 
 def impls(ctx: ToolContext):
+    bind = Bindings(ctx, SPECS)
     dispatch, log, media, steam = ctx.dispatch, ctx.log, ctx.media, ctx.steam
 
     def _run(service, args, send, tag=""):
@@ -353,47 +367,71 @@ def impls(ctx: ToolContext):
             json.dumps(params, sort_keys=True),
             json.dumps(body, sort_keys=True),
         )
-        if method != "GET":
-            if dispatch.dry_run:
-                log("dry_run_would", action=f"{service}: {literal}")
-                return {"ok": True, "dry_run": True, "detail": f"would run {literal}"}
-            if not ctx.gate.confirmed(scope, dispatch.utterance.turn):
-                log.warn(
-                    "tool_refused",
-                    tool=f"{service}_api",
-                    reason="unconfirmed",
-                    path=path,
-                )
-                return {
-                    "ok": False,
-                    "confirm": literal,
-                    "error": "not run yet: read this request back to the user in "
-                    "plain words, and call again unchanged once they say yes",
-                }
-        try:
-            result = send(method, path, params, body)
-        except Exception as e:
-            # Through the scrub: a transport error can quote the URL.
-            err = scrub(str(e))
-            log.error("tool_error", tool=f"{service}_api", err=err)
-            return {"ok": False, "error": err}
-        if method != "GET":
-            ctx.gate.done(scope)
-        result, truncated = _cap(scrub(result))
         asked = getattr(dispatch.utterance, "asked", None) or ""
-        # `api`, not `service`: that name belongs to the log record itself.
-        log(
-            "tool_gap",
-            api=service,
-            method=method,
-            path=path,
-            asked=str(asked)[:120],
+
+        def run():
+            """Send, and answer with one receipt: ok is whether the service
+            did what was asked, never whether the wire worked. Every attempt
+            is a tool_gap with its outcome, so the failures that show what
+            the curated tools lack are counted alongside the successes."""
+            status = None
+            try:
+                result = send(method, path, params, body)
+            except HttpFailure as e:
+                status = e.status
+                body_, truncated = _cap(scrub(e.body))
+                out = {
+                    "ok": False,
+                    "error": f"{service} answered HTTP {status}",
+                    "result": body_,
+                }
+            except Exception as e:
+                # Through the scrub: a transport error can quote the URL.
+                err = scrub(str(e))
+                m = HTTP_STATUS_RE.search(err)
+                status = int(m.group(1)) if m else None
+                log.error("tool_error", tool=f"{service}_api", err=err)
+                out = {"ok": False, "error": err}
+                if method != "GET" and status is None:
+                    out["detail"] = (
+                        "the request may or may not have reached the service - "
+                        "read its state before calling again"
+                    )
+            else:
+                status = 200
+                result, truncated = _cap(scrub(result))
+                out = {"ok": True, "result": result}
+                if truncated:
+                    out["truncated"] = True
+                    out["detail"] = "the response was cut; ask for less or page it"
+            # `api`, not `service`: that name belongs to the log record itself.
+            log(
+                "tool_gap",
+                api=service,
+                method=method,
+                path=path,
+                ok=out["ok"],
+                status=status,
+                asked=str(asked)[:120],
+            )
+            return {"service": service, "request": literal, **out}
+
+        if method == "GET":
+            return run()
+        if dry := ctx.preview(f"run {literal}"):
+            return dry
+        # A refused or unanswered request keeps the ask armed: the model can
+        # try again without asking the user twice.
+        return ctx.confirm(
+            f"{service}_api",
+            scope,
+            {
+                "confirm": literal,
+                "error": "not run yet: read this request back to the user in "
+                "plain words, and call again unchanged once they say yes",
+            },
+            run,
         )
-        out = {"ok": True, "service": service, "request": literal, "result": result}
-        if truncated:
-            out["truncated"] = True
-            out["detail"] = "the response was cut; ask for less or page it"
-        return out
 
     def _arr(client):
         def send(method, path, params, body):
@@ -466,12 +504,16 @@ def impls(ctx: ToolContext):
             value = r.json()
         except ValueError:
             value = r.text[:MAX_RESULT_CHARS]
-        return {
+        envelope = {
             "status": r.status_code,
             "eresult": r.headers.get("X-eresult"),
             "body": value,
         }
+        if r.status_code >= 400:
+            raise HttpFailure(r.status_code, envelope)
+        return envelope
 
+    @bind
     def describe_api(args):
         service = str(args.get("service") or "")
         topic = str(args.get("topic") or "")
@@ -484,18 +526,23 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool="describe_api", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    @bind
     def radarr_api(args):
         return _run("radarr", args, _arr(media.radarr))
 
+    @bind
     def sonarr_api(args):
         return _run("sonarr", args, _arr(media.sonarr))
 
+    @bind
     def prowlarr_api(args):
         return _run("prowlarr", args, _arr(media.prowlarr))
 
+    @bind
     def qbittorrent_api(args):
         return _run("qbittorrent", args, _qbit)
 
+    @bind
     def steam_api(args):
         auth = str(args.get("auth") or "none")
         if auth not in ("none", "key", "account"):
@@ -507,11 +554,4 @@ def impls(ctx: ToolContext):
             tag=f"auth: {auth}",
         )
 
-    return {
-        "describe_api": describe_api,
-        "radarr_api": radarr_api,
-        "sonarr_api": sonarr_api,
-        "prowlarr_api": prowlarr_api,
-        "qbittorrent_api": qbittorrent_api,
-        "steam_api": steam_api,
-    }
+    return bind.impls()

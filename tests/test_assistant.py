@@ -123,10 +123,10 @@ class FakeOperations:
         )
         return {"id": "op-media"}
 
-    def for_assistant(self, scope, limit=10, acknowledge=False):
+    def for_assistant(self, scope, limit=10, offset=0, acknowledge=False):
         self.acknowledged = acknowledge
         self.limit = limit
-        return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}]
+        return [{"id": "op-test", "state": "RUNNING", "title": "Stardew"}], 1
 
     def observe(self, operation_id, state, progress, detail):
         self.observed.append((operation_id, state, progress, detail))

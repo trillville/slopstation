@@ -1,6 +1,7 @@
 """Test the direct API tools: the gate, the blocklist, the scrub, the docs."""
 
 import json
+import sys
 import time
 import types
 
@@ -67,7 +68,7 @@ def test_reads_run_at_once_scrubbed_capped_and_logged(live, log):
     )
     gap = log.find("tool_gap")[-1]
     assert (gap["api"], gap["method"], gap["path"]) == ("radarr", "GET", "movie")
-    assert gap["asked"] == "pause the dune torrent"
+    assert gap["asked"] == "pause the dune torrent" and gap["ok"] is True
     # Tracker URLs carry private-tracker passkeys: redacted; other URLs stay.
     q = tk.call("qbittorrent_api", {"method": "GET", "path": "torrents/info"})
     assert q["result"][0]["tracker"] == "[redacted tracker url]"
@@ -313,6 +314,58 @@ def test_steam_api_injects_the_right_credential(live, monkeypatch):
         "steam_api", {"method": "GET", "path": "ISteamUser/x/v1", "auth": "key"}
     )
     assert not out["ok"] and "KEY123" not in json.dumps(out)
+
+
+def test_a_refused_request_fails_and_keeps_the_ask_armed(live, log, monkeypatch):
+    tk, dispatch, _ = live
+    calls = []
+
+    class R:
+        status_code = 500
+        headers = {}
+        text = "boom"
+
+        def json(self):
+            return {"error": "server"}
+
+    fake_requests = types.SimpleNamespace(
+        request=lambda m, url, **kw: calls.append(m) or R(),
+        RequestException=Exception,
+    )
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    ask = {"method": "POST", "path": "IPlayerService/X/v1", "body": {"a": 1}}
+    assert not tk.call("steam_api", dict(ask))["ok"] and calls == []
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    # The service answered and refused: that is a failure, whatever the wire
+    # did, and the body comes back so the model can say why.
+    out = tk.call("steam_api", dict(ask))
+    assert not out["ok"] and "HTTP 500" in out["error"]
+    assert out["result"]["body"] == {"error": "server"} and "request" in out
+    gap = log.find("tool_gap")[-1]
+    assert gap["ok"] is False and gap["status"] == 500
+    # The ask is still armed: the retry runs without asking the user twice.
+    R.status_code = 200
+    assert tk.call("steam_api", dict(ask))["ok"] and calls == ["POST", "POST"]
+    assert log.find("tool_gap")[-1]["ok"] is True
+    assert not tk.call("steam_api", dict(ask))["ok"], "spent: asked afresh"
+    # A wire failure on a mutation says the outcome is unknown.
+    fake_requests.request = lambda m, url, **kw: (_ for _ in ()).throw(
+        Exception("down")
+    )
+    dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="yes")
+    out = tk.call("steam_api", dict(ask))
+    assert not out["ok"] and "may or may not" in out["detail"]
+    assert log.find("tool_gap")[-1]["status"] is None
+    # An answered refusal from a media client is a status too, not an unknown.
+    dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="")
+    out = tk.call("radarr_api", {"method": "GET", "path": "nope"})
+    assert out["ok"]
+    tk.ctx.media.radarr.call = lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("media service returned HTTP 404 for nope")
+    )
+    out = tk.call("radarr_api", {"method": "GET", "path": "nope"})
+    assert not out["ok"] and "detail" not in out
+    assert log.find("tool_gap")[-1]["status"] == 404
 
 
 def test_a_steam_post_is_confirmed_with_its_credential_in_scope(live, log):

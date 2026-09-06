@@ -1,6 +1,6 @@
 """Tools for movies and series: lookup, requests, and deletion."""
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import operations as operations_mod
 
 _FIND_MEDIA = """\
@@ -158,8 +158,10 @@ def _season_scope(seasons):
 
 def impls(ctx: ToolContext):
     """name -> fn(args: dict) -> dict for the five media tools."""
-    dispatch, log, operations, media = ctx.dispatch, ctx.log, ctx.operations, ctx.media
+    bind = Bindings(ctx, SPECS)
+    log, operations, media = ctx.log, ctx.operations, ctx.media
 
+    @bind
     def find_media(args):
         kind = str(args.get("kind", ""))
         try:
@@ -169,6 +171,7 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool="find_media", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    @bind
     def media_library(args):
         kind = str(args.get("kind", ""))
         try:
@@ -178,23 +181,23 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": str(e)}
 
     def _track_media(submission):
-        return operations_mod.track(operations, submission, dispatch.utterance.turn)
+        return operations_mod.track(operations, submission, ctx.turn())
 
+    @bind
     def request_movie(args):
         try:
             tmdb_id = int(args.get("tmdb_id", 0))
             preset = args.get("preset", "default")
             if tmdb_id <= 0:
                 return {"ok": False, "error": "tmdb_id must be positive"}
-            if dispatch.dry_run:
-                detail = f"would request TMDB {tmdb_id} with preset {preset}"
-                log("dry_run_would", action=detail)
-                return {"ok": True, "dry_run": True, "detail": detail}
+            if dry := ctx.preview(f"request TMDB {tmdb_id} with preset {preset}"):
+                return dry
             return _track_media(media.request_movie(tmdb_id, preset))
         except Exception as e:
             log.error("tool_error", tool="request_movie", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    @bind
     def request_series(args):
         try:
             tvdb_id = int(args.get("tvdb_id", 0))
@@ -229,15 +232,14 @@ def impls(ctx: ToolContext):
                         "error": "season numbers must be positive integers",
                     }
                 seasons = sorted(set(seasons))
-            if dispatch.dry_run:
-                scope = "all normal seasons" if all_seasons else _season_scope(seasons)
-                detail = f"would request TVDB {tvdb_id}, {scope}, with preset {preset}"
-                log("dry_run_would", action=detail)
-                return {"ok": True, "dry_run": True, "detail": detail}
+            scope = "all normal seasons" if all_seasons else _season_scope(seasons)
+            if dry := ctx.preview(
+                f"request TVDB {tvdb_id}, {scope}, with preset {preset}"
+            ):
+                return dry
             submission = media.request_series(tvdb_id, preset, seasons)
             submission["all_seasons"] = all_seasons
             result = _track_media(submission)
-            scope = "all normal seasons" if all_seasons else _season_scope(seasons)
             quality = (
                 "using the default quality profile"
                 if result.get("preset") == "default"
@@ -258,6 +260,7 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool="request_series", err=str(e))
             return {"ok": False, "error": str(e)}
 
+    @bind.destructive
     def delete_media(args):
         try:
             kind = str(args.get("kind", ""))
@@ -289,64 +292,47 @@ def impls(ctx: ToolContext):
                     "error": "season numbers must be positive integers",
                 }
             seasons = sorted(set(seasons))
-        if dispatch.dry_run:
-            scope = "all seasons" if all_seasons else seasons
-            detail = f"would delete {kind} {catalog_id} scope {scope}"
-            log("dry_run_would", action=detail)
-            return {"ok": True, "dry_run": True, "detail": detail}
         try:
             entry = media.library(kind, catalog_id)
-            scope = (kind, catalog_id, tuple(seasons or ()), all_seasons)
-            if entry["in_library"] and not ctx.gate.confirmed(
-                scope, dispatch.utterance.turn
-            ):
-                named = (
-                    " ".join(
-                        str(part) for part in (entry["title"], entry["year"]) if part
-                    )
-                    or f"{kind} {catalog_id}"
-                )
-                if all_seasons:
-                    named += ", every season"
-                elif seasons:
-                    named += ", " + _season_scope(seasons)
-                log.warn(
-                    "tool_refused",
-                    tool="delete_media",
-                    reason="unconfirmed",
-                    catalog_id=catalog_id,
-                )
-                return {
-                    "ok": False,
-                    "acknowledgment": f"Delete {named}? That erases the files.",
-                }
-            covered, command_ids = operations_mod.covered_by_delete(
-                operations, kind, catalog_id, seasons, all_seasons
-            )
-            if kind == "movie":
-                result = media.delete_movie(catalog_id, command_ids)
-            else:
-                result = media.delete_series(
-                    catalog_id,
-                    seasons=seasons,
-                    all_seasons=all_seasons,
-                    command_ids=command_ids,
-                )
-            ctx.gate.done(scope)
-            ctx.gate.done(scope)
-            ctx.gate.done(scope)
-            ctx.gate.done(scope)
-            ctx.gate.done(scope)
-            ctx.gate.done(scope)
-            return operations_mod.record_deleted(operations, covered, result)
         except Exception as e:
             log.error("tool_error", tool="delete_media", err=str(e))
             return {"ok": False, "error": str(e)}
+        named = (
+            " ".join(str(part) for part in (entry["title"], entry["year"]) if part)
+            or f"{kind} {catalog_id}"
+        )
+        if all_seasons:
+            named += ", every season"
+        elif seasons:
+            named += ", " + _season_scope(seasons)
 
-    return {
-        "find_media": find_media,
-        "media_library": media_library,
-        "request_movie": request_movie,
-        "request_series": request_series,
-        "delete_media": delete_media,
-    }
+        def act():
+            try:
+                covered, command_ids = operations_mod.covered_by_delete(
+                    operations, kind, catalog_id, seasons, all_seasons
+                )
+                if kind == "movie":
+                    result = media.delete_movie(catalog_id, command_ids)
+                else:
+                    result = media.delete_series(
+                        catalog_id,
+                        seasons=seasons,
+                        all_seasons=all_seasons,
+                        command_ids=command_ids,
+                    )
+                return operations_mod.record_deleted(operations, covered, result)
+            except Exception as e:
+                log.error("tool_error", tool="delete_media", err=str(e))
+                return {"ok": False, "error": str(e)}
+
+        if not entry["in_library"]:
+            # Nothing on disk to lose: the app never held it, or let go.
+            return act()
+        return Plan(
+            (kind, catalog_id, tuple(seasons or ()), all_seasons),
+            f"Delete {named}? That erases the files.",
+            act,
+            f"delete {named}",
+        )
+
+    return bind.impls()

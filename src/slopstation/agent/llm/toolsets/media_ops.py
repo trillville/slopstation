@@ -12,20 +12,17 @@ import datetime
 import json
 from typing import Any
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm import paging
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
+from slopstation.agent.tools import operations as operations_mod
 from slopstation.agent.tools.media_clients import KINDS, MediaError, _parse_time
 
-LIMIT_DEFAULT, LIMIT_MAX = 10, 40
 GB = 1024**3
 KIND = {"type": "string", "enum": ["movie", "series"]}
 KIND_OR_BOTH = {"type": "string", "enum": ["movie", "series", "both"]}
 CATALOG_ID = {
     "type": "integer",
     "description": "TMDB movie id or TVDB series id from find_media",
-}
-LIMIT = {
-    "type": "integer",
-    "description": f"rows, default {LIMIT_DEFAULT}, at most {LIMIT_MAX}",
 }
 
 BROWSE_MEDIA = """\
@@ -54,19 +51,21 @@ SEARCH_RELEASES = """\
 Candidate releases for one title, as Radarr or Sonarr sees them right now:
 name, size, seeders, quality, indexer, age, and whether the app would accept
 it and why not. For a series pass a season (or an episode number with it).
-Slow - a live search across the indexers. Release names are for the text
+Slow - a live search across the indexers. Returns the count and the 15 the
+app ranks best; there is no further page. Release names are for the text
 lane; speak the title. Take one with grab_release."""
 
 GRAB_RELEASE = """\
-Take one specific release from search_releases: pass its guid and indexer_id.
-The arr app downloads and imports it as its own, so it stays consistent. Use
-this when the automatic choice was wrong or nothing was picked. Watch it
-with import_queue or list_torrents."""
+Take one specific release from search_releases: pass its guid and indexer_id,
+and the catalog_id (and season) you searched with. The arr app downloads and
+imports it as its own, so it stays consistent. Use this when the automatic
+choice was wrong or nothing was picked. The work is tracked: list_operations
+follows it from here."""
 
 RETRY_SEARCH = """\
 Kick off a fresh search for a stuck title: a movie, a whole series, or one
-season. The app searches in the background; check back with import_queue or
-list_operations."""
+season. The app searches in the background and the work is tracked: check
+back with list_operations."""
 
 SET_MONITORED = """\
 Monitor or unmonitor a movie, a whole series, or named seasons. Unmonitored
@@ -97,7 +96,8 @@ Import a finished download the app did not import on its own, by its
 download id from import_queue. The app's own match and verdict are used for
 each file: when it could not match a file, or rejected one (a sample, not an
 upgrade), the result lists those files with the reasons and nothing is
-imported."""
+imported. This cannot tell the app what an unmatched file is; that needs the
+app's own interface. The import is tracked: list_operations follows it."""
 
 MEDIA_HISTORY = """\
 Recent events in Radarr and Sonarr: grabs, imports, failures, deletions, with
@@ -148,7 +148,7 @@ SPECS = [
             "sort": {"type": "string", "enum": ["recent", "largest", "title", "year"]},
             "genre": {"type": "string"},
             "unmonitored_only": {"type": "boolean"},
-            "limit": LIMIT,
+            **paging.properties(),
         },
         ("kind",),
         "read",
@@ -179,7 +179,7 @@ SPECS = [
     _spec(
         "missing_media",
         MISSING_MEDIA,
-        {"kind": KIND, "limit": LIMIT},
+        {"kind": KIND, **paging.properties()},
         ("kind",),
         "read",
         (
@@ -194,7 +194,7 @@ SPECS = [
     _spec(
         "calendar",
         CALENDAR,
-        {"kind": KIND_OR_BOTH, "days": {"type": "integer"}, "limit": LIMIT},
+        {"kind": KIND_OR_BOTH, "days": {"type": "integer"}, **paging.properties()},
         (),
         "read",
         (
@@ -228,8 +228,14 @@ SPECS = [
     _spec(
         "grab_release",
         GRAB_RELEASE,
-        {"kind": KIND, "guid": {"type": "string"}, "indexer_id": {"type": "integer"}},
-        ("kind", "guid", "indexer_id"),
+        {
+            "kind": KIND,
+            "catalog_id": CATALOG_ID,
+            "guid": {"type": "string"},
+            "indexer_id": {"type": "integer"},
+            "season": {"type": "integer", "description": "the season searched"},
+        },
+        ("kind", "catalog_id", "guid", "indexer_id"),
         "act",
         ("grab release", "download that one", "take this release", "manual grab"),
     ),
@@ -281,7 +287,7 @@ SPECS = [
     _spec(
         "import_queue",
         IMPORT_QUEUE,
-        {"kind": KIND_OR_BOTH, "limit": LIMIT},
+        {"kind": KIND_OR_BOTH, **paging.properties()},
         (),
         "read",
         (
@@ -329,7 +335,7 @@ SPECS = [
                 "type": "string",
                 "enum": ["any", "grabbed", "imported", "failed", "deleted"],
             },
-            "limit": LIMIT,
+            **paging.properties(),
         },
         (),
         "read",
@@ -377,7 +383,7 @@ SPECS = [
         {
             "query": {"type": "string"},
             "category": {"type": "string", "enum": ["any", "movies", "tv"]},
-            "limit": LIMIT,
+            **paging.properties(),
         },
         ("query",),
         "read",
@@ -414,14 +420,6 @@ def _num(value, missing=-1):
     """An integer field, with 0 kept as 0: `or -1` would lose season zero,
     the specials."""
     return missing if value is None else int(value)
-
-
-def _limit(args, default=LIMIT_DEFAULT, cap=LIMIT_MAX):
-    try:
-        n = int(args.get("limit") or default)
-    except (TypeError, ValueError):
-        n = default
-    return max(1, min(n, cap))
 
 
 def _gb(value):
@@ -467,7 +465,7 @@ def _series_row(row):
 
 
 def impls(ctx: ToolContext):
-    dispatch, log, media = ctx.dispatch, ctx.log, ctx.media
+    log, media, operations = ctx.log, ctx.media, ctx.operations
 
     def _client(kind):
         return media._client(kind)
@@ -506,8 +504,16 @@ def impls(ctx: ToolContext):
 
         return run
 
+    bind = Bindings(ctx, SPECS, wrap=_guard)
+
+    def _join(submission, **extra):
+        """Track work the service just accepted, joining the title's live
+        request when there is one."""
+        return {**operations_mod.join(operations, submission, ctx.turn()), **extra}
+
     # -- reads ---------------------------------------------------------------
 
+    @bind
     def browse_media(args):
         kind, err = _kind(args)
         if err:
@@ -538,9 +544,9 @@ def impls(ctx: ToolContext):
         if key is None:
             return {"ok": False, "error": "sort must be recent, largest, title or year"}
         items.sort(key=key, reverse=sort in ("recent", "largest", "year"))
-        limit = _limit(args)
-        return {"ok": True, "kind": kind, "count": len(items), "items": items[:limit]}
+        return paging.page(items, args, "items", kind=kind)
 
+    @bind
     def media_details(args):
         kind, err = _kind(args)
         if err:
@@ -603,16 +609,21 @@ def impls(ctx: ToolContext):
         out["seasons"] = [seasons[k] for k in sorted(seasons)]
         return out
 
+    @bind
     def missing_media(args):
         kind, err = _kind(args)
         if err:
             return err
         client = _client(kind)
-        limit = _limit(args)
+        bounds, err = paging.window(args)
+        if err:
+            return err
+        limit, offset = bounds
         sort_key, direction = WANTED_SORT[kind]
+        # One window from the app for each list: the offset walks both.
         params = {
             "page": 1,
-            "pageSize": limit,
+            "pageSize": offset + limit,
             "sortKey": sort_key,
             "sortDirection": direction,
         }
@@ -637,19 +648,25 @@ def impls(ctx: ToolContext):
                 "aired": str(r.get("airDateUtc") or "")[:10],
             }
 
+        missing_total = int(
+            missing.get("totalRecords", len(missing.get("records", []))) or 0
+        )
+        cutoff_total = int(
+            cutoff.get("totalRecords", len(cutoff.get("records", []))) or 0
+        )
+        after = offset + limit
         return {
             "ok": True,
             "kind": kind,
-            "missing_count": missing.get(
-                "totalRecords", len(missing.get("records", []))
-            ),
-            "missing": [shape(r) for r in missing.get("records", [])[:limit]],
-            "below_cutoff_count": cutoff.get(
-                "totalRecords", len(cutoff.get("records", []))
-            ),
-            "below_cutoff": [shape(r) for r in cutoff.get("records", [])[:limit]],
+            "offset": offset,
+            "missing_count": missing_total,
+            "missing": [shape(r) for r in missing.get("records", [])[offset:after]],
+            "below_cutoff_count": cutoff_total,
+            "below_cutoff": [shape(r) for r in cutoff.get("records", [])[offset:after]],
+            "next_offset": after if after < max(missing_total, cutoff_total) else None,
         }
 
+    @bind
     def calendar(args):
         kinds, err = _kinds(args)
         if err:
@@ -709,15 +726,11 @@ def impls(ctx: ToolContext):
                         }
                     )
         rows.sort(key=lambda r: str(r["when"]))
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "from": start.isoformat(),
-            "to": end.isoformat(),
-            "count": len(rows),
-            "items": rows[:limit],
-        }
+        return paging.page(
+            rows, args, "items", **{"from": start.isoformat(), "to": end.isoformat()}
+        )
 
+    @bind
     def search_releases(args):
         kind, err = _kind(args)
         if err:
@@ -774,6 +787,7 @@ def impls(ctx: ToolContext):
             "releases": rows[:15],
         }
 
+    @bind
     def import_queue(args):
         kinds, err = _kinds(args)
         if err:
@@ -810,9 +824,9 @@ def impls(ctx: ToolContext):
                         "download_id": r.get("downloadId"),
                     }
                 )
-        limit = _limit(args)
-        return {"ok": True, "count": len(rows), "items": rows[:limit]}
+        return paging.page(rows, args, "items")
 
+    @bind
     def media_history(args):
         kinds, err = _kinds(args)
         if err:
@@ -823,15 +837,20 @@ def impls(ctx: ToolContext):
                 "ok": False,
                 "error": "event must be any, grabbed, imported, failed or deleted",
             }
-        limit = _limit(args)
+        bounds, err = paging.window(args)
+        if err:
+            return err
+        limit, offset = bounds
         rows = []
         total = 0
         for kind in kinds:
             client = _client(kind)
             include = "includeMovie" if kind == "movie" else "includeSeries"
+            # Each app serves its own newest window; the merge below is
+            # sliced to the page, so the offset is honoured across both.
             params: dict[str, Any] = {
                 "page": 1,
-                "pageSize": limit,
+                "pageSize": offset + limit,
                 "sortKey": "date",
                 "sortDirection": "descending",
                 include: "true",
@@ -859,8 +878,9 @@ def impls(ctx: ToolContext):
                     }
                 )
         rows.sort(key=lambda r: r["when"], reverse=True)
-        return {"ok": True, "count": total, "items": rows[:limit]}
+        return paging.page(rows[offset:], args, "items", total=total)
 
+    @bind
     def media_health(args):
         out: dict[str, Any] = {"ok": True, "health": [], "indexers": []}
         clients = [media.radarr, media.sonarr] + (
@@ -907,6 +927,7 @@ def impls(ctx: ToolContext):
         out["healthy"] = not out["health"] and not out["indexers"]
         return out
 
+    @bind
     def movie_collections(args):
         want = str(args.get("name") or "").lower()
         collections = media.radarr.get("collection") or []
@@ -937,8 +958,9 @@ def impls(ctx: ToolContext):
                 }
             )
         rows.sort(key=lambda r: str(r["collection"] or "").lower())
-        return {"ok": True, "count": len(rows), "collections": rows[:LIMIT_MAX]}
+        return {"ok": True, "count": len(rows), "collections": rows[: paging.CAP]}
 
+    @bind
     def search_indexers(args):
         query = str(args.get("query") or "").strip()
         if not query:
@@ -964,85 +986,49 @@ def impls(ctx: ToolContext):
             if isinstance(r, dict)
         ]
         rows.sort(key=lambda r: -(r["seeders"] or 0))
-        limit = _limit(args)
-        return {
-            "ok": True,
-            "query": query,
-            "count": len(rows),
-            "releases": rows[:limit],
-        }
+        return paging.page(rows, args, "releases", query=query)
 
     # -- acts ----------------------------------------------------------------
 
+    @bind
     def grab_release(args):
         kind, err = _kind(args)
         if err:
             return err
         guid = str(args.get("guid") or "").strip()
         try:
+            catalog_id = int(args.get("catalog_id"))
             indexer_id = int(args.get("indexer_id"))
+            season = None if args.get("season") is None else int(args["season"])
         except (TypeError, ValueError):
-            return {"ok": False, "error": "indexer_id must be an integer"}
+            return {
+                "ok": False,
+                "error": "catalog_id and indexer_id (and season) must be integers",
+            }
         if not guid:
             return {"ok": False, "error": "pass the release guid from search_releases"}
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"grab {kind} release {guid[:40]}")
-            return {
-                "ok": True,
-                "dry_run": True,
-                "detail": f"would grab release {guid[:40]}",
-            }
-        try:
-            _client(kind).post("release", {"guid": guid, "indexerId": indexer_id})
-        except MediaError as e:
-            if "HTTP 404" in str(e):
-                # The app keeps search results for half an hour; after that the
-                # guid means nothing to it.
-                return {
-                    "ok": False,
-                    "error": "that release is no longer in the app's search "
-                    "results - run search_releases again and grab from the new list",
-                }
-            raise
-        return {
-            "ok": True,
-            "detail": f"{_client(kind).name} is downloading it; watch import_queue or list_torrents",
-        }
+        if dry := ctx.preview(f"grab {kind} release {guid[:40]}"):
+            return dry
+        return _join(media.grab_release(kind, catalog_id, guid, indexer_id, season))
 
+    @bind
     def retry_search(args):
         kind, err = _kind(args)
         if err:
             return err
-        row, err = _row(kind, args.get("catalog_id"))
-        if err:
-            return err
-        payload: dict[str, Any]
+        try:
+            catalog_id = int(args.get("catalog_id"))
+            season = None if args.get("season") is None else int(args["season"])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "catalog_id and season must be integers"}
         if kind == "movie":
-            payload = {"name": "MoviesSearch", "movieIds": [row["id"]]}
-        elif args.get("season") is not None:
-            payload = {
-                "name": "SeasonSearch",
-                "seriesId": row["id"],
-                "seasonNumber": int(args["season"]),
-            }
-        else:
-            payload = {"name": "SeriesSearch", "seriesId": row["id"]}
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"{payload['name']} for {row.get('title')}")
-            return {
-                "ok": True,
-                "dry_run": True,
-                "detail": f"would run {payload['name']}",
-            }
-        cmd = _client(kind).post("command", payload) or {}
-        return {
-            "ok": True,
-            "command": payload["name"],
-            "command_id": cmd.get("id"),
-            "title": row.get("title"),
-            "detail": "searching in the background",
-        }
+            season = None
+        scope = f"season {season}" if season is not None else "all of it"
+        if dry := ctx.preview(f"search again for {kind} {catalog_id}, {scope}"):
+            return dry
+        return _join(media.search_again(kind, catalog_id, season))
 
+    @bind
     def set_monitored(args):
         kind, err = _kind(args)
         if err:
@@ -1062,16 +1048,10 @@ def impls(ctx: ToolContext):
                 "error": "seasons applies to a series and must be a non-empty list",
             }
         scope = f"seasons {seasons}" if seasons else "everything"
-        if dispatch.dry_run:
-            log(
-                "dry_run_would",
-                action=f"set monitored={monitored} on {row.get('title')} {scope}",
-            )
-            return {
-                "ok": True,
-                "dry_run": True,
-                "detail": f"would set monitored={monitored} on {scope}",
-            }
+        if dry := ctx.preview(
+            f"set monitored={monitored} on {row.get('title')} {scope}"
+        ):
+            return dry
         # A deep copy: the row's season dicts came from the app's own answer.
         updated = json.loads(json.dumps(row))
         if kind == "movie" or not seasons:
@@ -1093,6 +1073,7 @@ def impls(ctx: ToolContext):
             "scope": scope,
         }
 
+    @bind
     def set_quality_profile(args):
         kind, err = _kind(args)
         if err:
@@ -1102,9 +1083,8 @@ def impls(ctx: ToolContext):
             return err
         preset = str(args.get("preset") or "")
         profile_id, profile_name = media._profile(kind, preset)
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"profile {profile_name} on {row.get('title')}")
-            return {"ok": True, "dry_run": True, "detail": f"would set {profile_name}"}
+        if dry := ctx.preview(f"set profile {profile_name} on {row.get('title')}"):
+            return dry
         if int(row.get("qualityProfileId", 0) or 0) == profile_id:
             return {
                 "ok": True,
@@ -1121,6 +1101,7 @@ def impls(ctx: ToolContext):
             "changed": True,
         }
 
+    @bind.destructive
     def resolve_queue_item(args):
         kind, err = _kind(args)
         if err:
@@ -1158,40 +1139,36 @@ def impls(ctx: ToolContext):
             "removeFromClient": "true" if remove else "false",
             "blocklist": "true" if blocklist else "false",
         }
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"remove queue {kind}/{queue_id} {params}")
-            return {
-                "ok": True,
-                "dry_run": True,
-                "detail": f"would remove the download for {title}",
-            }
-        scope = ("queue", kind, queue_id, remove, blocklist)
-        if destructive and not ctx.gate.confirmed(scope, dispatch.utterance.turn):
-            log.warn("tool_refused", tool="resolve_queue_item", reason="unconfirmed")
-            if blocklist:
-                what = (
-                    f"Mark the release for {title} as failed, which erases what has "
-                    "arrived, never takes that release again, and looks for another?"
-                )
-            else:
-                what = f"Cancel the download for {title} and erase what has arrived?"
-            return {"ok": False, "acknowledgment": what}
-        client.delete(f"queue/{queue_id}", params)
-        if destructive:
-            ctx.gate.done(scope)
-        out = {
-            "ok": True,
-            "title": title,
-            "removed_from_client": remove,
-            "blocklisted": blocklist,
-        }
-        if not destructive:
-            out["detail"] = (
-                "the queue item is forgotten; the torrent stays in qBittorrent "
-                "unowned - delete_torrent removes it"
-            )
-        return out
 
+        def act():
+            client.delete(f"queue/{queue_id}", params)
+            out = {
+                "ok": True,
+                "title": title,
+                "removed_from_client": remove,
+                "blocklisted": blocklist,
+            }
+            if not destructive:
+                out["detail"] = (
+                    "the queue item is forgotten; the torrent stays in qBittorrent "
+                    "unowned - delete_torrent removes it"
+                )
+            return out
+
+        preview = f"remove queue {kind}/{queue_id} for {title} {params}"
+        if not destructive:
+            # Forgetting alone erases nothing: no question to ask.
+            return ctx.preview(preview) or act()
+        if blocklist:
+            ask = (
+                f"Mark the release for {title} as failed, which erases what has "
+                "arrived, never takes that release again, and looks for another?"
+            )
+        else:
+            ask = f"Cancel the download for {title} and erase what has arrived?"
+        return Plan(("queue", kind, queue_id, remove, blocklist), ask, act, preview)
+
+    @bind
     def manual_import(args):
         kind, err = _kind(args)
         if err:
@@ -1199,101 +1176,19 @@ def impls(ctx: ToolContext):
         download_id = str(args.get("download_id") or "").strip()
         if not download_id:
             return {"ok": False, "error": "pass the download id from import_queue"}
-        client = _client(kind)
-        candidates = (
-            client.get(
-                "manualimport",
-                {"downloadId": download_id, "filterExistingFiles": "true"},
-            )
-            or []
-        )
-        files = []
-        unmatched = []
-        rejected = []
-        for c in candidates:
-            if not isinstance(c, dict):
-                continue
-            reasons = [
-                str(r.get("reason") or r) for r in (c.get("rejections") or []) if r
-            ]
-            if reasons:
-                # The app's own verdict: ManualImport would import it anyway.
-                rejected.append(
-                    {"file": c.get("relativePath") or c.get("path"), "why": reasons[:3]}
-                )
-                continue
-            entry: dict[str, Any] = {
-                "path": c.get("path"),
-                "quality": c.get("quality"),
-                "languages": c.get("languages") or [],
-                "downloadId": download_id,
-            }
-            if kind == "movie":
-                movie = c.get("movie") or {}
-                if not movie.get("id"):
-                    unmatched.append(c.get("relativePath") or c.get("path"))
-                    continue
-                entry["movieId"] = movie["id"]
-            else:
-                series = c.get("series") or {}
-                episodes = c.get("episodes") or []
-                if not series.get("id") or not episodes:
-                    unmatched.append(c.get("relativePath") or c.get("path"))
-                    continue
-                entry["seriesId"] = series["id"]
-                entry["episodeIds"] = [e.get("id") for e in episodes if e.get("id")]
-            files.append(entry)
-        if unmatched or rejected or not files:
+        found = media.import_candidates(kind, download_id)
+        files = found["files"]
+        if found["unmatched"] or found["rejected"] or not files:
             return {
                 "ok": False,
                 "error": "the app could not match or would reject some files, "
                 "so nothing was imported",
-                "unmatched": unmatched[:10],
-                "rejected": rejected[:10],
+                "unmatched": found["unmatched"][:10],
+                "rejected": found["rejected"][:10],
                 "matched": len(files),
             }
-        if dispatch.dry_run:
-            log(
-                "dry_run_would",
-                action=f"manual import {len(files)} file(s) for {download_id}",
-            )
-            return {
-                "ok": True,
-                "dry_run": True,
-                "detail": f"would import {len(files)} file(s)",
-            }
-        cmd = (
-            client.post(
-                "command",
-                {"name": "ManualImport", "files": files, "importMode": "auto"},
-            )
-            or {}
-        )
-        return {
-            "ok": True,
-            "files": len(files),
-            "command_id": cmd.get("id"),
-            "detail": "importing",
-        }
+        if dry := ctx.preview(f"manual import {len(files)} file(s) for {download_id}"):
+            return dry
+        return _join(media.manual_import(kind, download_id, found), files=len(files))
 
-    return {
-        name: _guard(name, fn)
-        for name, fn in {
-            "browse_media": browse_media,
-            "media_details": media_details,
-            "missing_media": missing_media,
-            "calendar": calendar,
-            "search_releases": search_releases,
-            "grab_release": grab_release,
-            "retry_search": retry_search,
-            "set_monitored": set_monitored,
-            "set_quality_profile": set_quality_profile,
-            "import_queue": import_queue,
-            "resolve_queue_item": resolve_queue_item,
-            "manual_import": manual_import,
-            "media_history": media_history,
-            "media_health": media_health,
-            "movie_collections": movie_collections,
-            "search_indexers": search_indexers,
-        }.items()
-    }
+    return bind.impls()

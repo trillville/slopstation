@@ -1,7 +1,7 @@
 """The one tool that acts on the tool set itself: find_tools."""
 
 from slopstation.agent.llm import toolsearch
-from slopstation.agent.llm.registry import AREAS, ToolContext, ToolSpec
+from slopstation.agent.llm.registry import AREAS, Bindings, ToolContext, ToolSpec
 
 FIND_TOOLS = """\
 Find and load more tools. Only a small set is loaded at first; many more
@@ -9,9 +9,10 @@ exist for torrents, disk space, movie and TV management, Steam data and
 downloads, the house's own state, and raw API calls. Call this BEFORE saying
 something cannot be done: pass what the user wants in a few plain words
 ('pause a torrent', 'what airs this week', 'free disk space'). The matches
-are loaded at once and stay loaded, so call them straight after. On a miss
-the result lists the areas and how many tools each holds: search again with
-other words, or say plainly that there is no tool for it - never guess."""
+are loaded at once and stay loaded, so call them straight after; a match
+that was already loaded is named too. On a miss the result lists the areas
+and how many tools each holds: search again with other words, or say plainly
+that there is no tool for it - never guess."""
 
 SPECS = [
     ToolSpec(
@@ -32,6 +33,9 @@ SPECS = [
 
 
 def impls(ctx: ToolContext):
+    bind = Bindings(ctx, SPECS)
+
+    @bind
     def find_tools(args):
         query = str(args.get("query") or "").strip()
         if not query:
@@ -39,26 +43,26 @@ def impls(ctx: ToolContext):
         toolkit = ctx.toolkit
         # Only tools this toolkit can offer: a tool whose service is absent
         # must not be found, or the model is told it is loaded and then told
-        # it does not exist.
+        # it does not exist. Loaded tools stay in the search, so asking twice
+        # names the same tool twice rather than a weaker second choice.
         unreachable = set(toolkit.registry.names()) - set(toolkit.offered)
-        matches = toolsearch.search(
-            toolkit.registry, query, exclude=unreachable | set(toolkit.loaded)
-        )
+        matches = toolsearch.search(toolkit.registry, query, exclude=unreachable)
         if matches:
-            names = toolkit.load([spec.name for spec, _ in matches])
-            ctx.log("tools_found", query=query[:120], found=names, n=len(names))
+            new = toolkit.load([spec.name for spec, _ in matches])
+            ctx.log("tools_found", query=query[:120], found=new, n=len(new))
+            rows = [
+                {
+                    "tool": spec.name,
+                    "does": toolsearch.summary(spec),
+                    "area": spec.area,
+                    "risk": spec.risk,
+                }
+                for spec, _ in matches
+            ]
             return {
                 "ok": True,
-                "loaded": [
-                    {
-                        "tool": spec.name,
-                        "does": toolsearch.summary(spec),
-                        "area": spec.area,
-                        "risk": spec.risk,
-                    }
-                    for spec, _ in matches
-                    if spec.name in names
-                ],
+                "loaded": [r for r in rows if r["tool"] in new],
+                "already_loaded": [r for r in rows if r["tool"] not in new],
                 "detail": "these tools are loaded now - call the right one directly",
             }
         by_area = toolkit.registry.by_area(set(toolkit.offered) - set(toolkit.loaded))
@@ -74,4 +78,4 @@ def impls(ctx: ToolContext):
             "user there is no tool for this",
         }
 
-    return {"find_tools": find_tools}
+    return bind.impls()

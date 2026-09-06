@@ -396,20 +396,198 @@ class MediaService:
             ],
         }
 
-    def retry_search(self, operation):
-        external_ref = int(operation["external_ref"])
-        if self._operation_kind(operation) == "movie":
+    def _search(self, kind, row_id, seasons=None):
+        """Start the app's search for one title (a movie, a whole series, or
+        the given seasons); the command ids to watch."""
+        if kind == "movie":
             command = self._one(
                 self.radarr.post(
-                    "command", {"name": "MoviesSearch", "movieIds": [external_ref]}
+                    "command", {"name": "MoviesSearch", "movieIds": [int(row_id)]}
                 ),
                 "Radarr",
                 "search command",
             )
             return [int(command["id"])]
+        return self._search_series(int(row_id), seasons)
+
+    def retry_search(self, operation):
         metadata = operation.get("metadata") or {}
-        seasons = self._seasons(metadata.get("seasons"))
-        return self._search_series(external_ref, seasons)
+        return self._search(
+            self._operation_kind(operation),
+            operation["external_ref"],
+            self._seasons(metadata.get("seasons")),
+        )
+
+    # -- work on a title the library already holds ------------------------------
+
+    def _held(self, kind, catalog_id):
+        """The app's row for a catalog id, or the plain error for a title the
+        library does not hold."""
+        row = self._library_row(kind, catalog_id)
+        if row is None:
+            raise MediaError(f"that {kind} is not in the library - request it first")
+        return row
+
+    def _baselines(self, kind, row, seasons=None):
+        """The file ids on disk before new work starts, so a later observation
+        does not call an upgrade done because the old file is still there."""
+        if kind == "movie":
+            return {
+                "baseline_file_id": self._movie_file_id(int(row["id"]))
+                if row.get("hasFile")
+                else None
+            }
+        rows = self.sonarr.get("episode", {"seriesId": int(row["id"])})
+        files = {}
+        for episode in self._target_episodes(rows, seasons, monitored_only=False):
+            if not episode.get("hasFile"):
+                continue
+            try:
+                files[str(int(episode["id"]))] = int(episode["episodeFileId"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode file has no id") from e
+        return {"baseline_episode_files": files}
+
+    def grab_release(self, kind, catalog_id, guid, indexer_id, season=None):
+        """Hand one release from the app's own search to the app, which
+        downloads and imports it as its own. The submission tracks it."""
+        row = self._held(kind, catalog_id)
+        seasons = None if season is None else [int(season)]
+        client = self._client(kind)
+        title = _clean_text(row.get("title")) or f"{kind} {catalog_id}"
+        baselines = self._baselines(kind, row, seasons)
+        try:
+            client.post("release", {"guid": str(guid), "indexerId": int(indexer_id)})
+        except MediaError as e:
+            if "HTTP 404" in str(e):
+                # The app keeps search results for half an hour; after that the
+                # guid means nothing to it.
+                raise MediaError(
+                    "that release is no longer in the app's search results - run "
+                    "search_releases again and grab from the new list"
+                ) from e
+            raise
+        return self._submission(
+            kind,
+            row["id"],
+            title,
+            catalog_id,
+            seasons=seasons,
+            phase="grabbed",
+            detail=f"{client.name} accepted the release and handed it to the "
+            "download client",
+            **baselines,
+        )
+
+    def search_again(self, kind, catalog_id, season=None):
+        """A fresh search for a held title: the whole of it, or one season."""
+        row = self._held(kind, catalog_id)
+        seasons = None if season is None else [int(season)]
+        title = _clean_text(row.get("title")) or f"{kind} {catalog_id}"
+        command_ids = self._search(kind, row["id"], seasons)
+        return self._submission(
+            kind,
+            row["id"],
+            title,
+            catalog_id,
+            seasons=seasons,
+            command_ids=command_ids,
+            phase="searching",
+            detail=f"{self._client(kind).name} is searching again",
+        )
+
+    def import_candidates(self, kind, download_id):
+        """What the app would import for a finished download, by its own match
+        and verdict: the files it matched and accepts, the ones it could not
+        match, and the ones it rejects (a sample, not an upgrade), with the
+        title the matched files belong to."""
+        client = self._client(kind)
+        rows = client.get(
+            "manualimport", {"downloadId": download_id, "filterExistingFiles": "true"}
+        )
+        files: list[dict] = []
+        unmatched: list = []
+        rejected: list = []
+        parent = None
+        seasons: set[int] = set()
+        for c in rows or []:
+            if not isinstance(c, dict):
+                continue
+            name = c.get("relativePath") or c.get("path")
+            reasons = [
+                str(r.get("reason") or r) for r in (c.get("rejections") or []) if r
+            ]
+            if reasons:
+                rejected.append({"file": name, "why": reasons[:3]})
+                continue
+            entry: dict = {
+                "path": c.get("path"),
+                "quality": c.get("quality"),
+                "languages": c.get("languages") or [],
+                "downloadId": download_id,
+            }
+            owner = c.get("movie" if kind == "movie" else "series") or {}
+            episodes = c.get("episodes") or []
+            if not owner.get("id") or (kind == "series" and not episodes):
+                unmatched.append(name)
+                continue
+            if kind == "movie":
+                entry["movieId"] = owner["id"]
+            else:
+                entry["seriesId"] = owner["id"]
+                entry["episodeIds"] = [e.get("id") for e in episodes if e.get("id")]
+                seasons.update(
+                    int(e["seasonNumber"])
+                    for e in episodes
+                    if e.get("seasonNumber") is not None
+                )
+            parent = parent or owner
+            files.append(entry)
+        return {
+            "files": files,
+            "unmatched": unmatched,
+            "rejected": rejected,
+            "parent": parent,
+            "seasons": sorted(n for n in seasons if n > 0) or None,
+        }
+
+    def manual_import(self, kind, download_id, candidates):
+        """Import the matched files of `import_candidates`; the submission
+        tracks the import against the title they belong to."""
+        parent = candidates["parent"] or {}
+        client = self._client(kind)
+        spec = _kind(kind)
+        row = self._one(
+            client.get(f"{spec['resource']}/{int(parent['id'])}"),
+            client.name,
+            spec["resource"],
+        )
+        title = _clean_text(row.get("title")) or f"{kind} {parent['id']}"
+        seasons = candidates.get("seasons") if kind == "series" else None
+        baselines = self._baselines(kind, row, seasons)
+        command = self._one(
+            client.post(
+                "command",
+                {
+                    "name": "ManualImport",
+                    "files": candidates["files"],
+                    "importMode": "auto",
+                },
+            ),
+            client.name,
+            "import command",
+        )
+        return self._submission(
+            kind,
+            row["id"],
+            title,
+            row.get(spec["id_key"]),
+            seasons=seasons,
+            command_ids=[int(command["id"])],
+            phase="importing",
+            detail=f"{client.name} is importing {len(candidates['files'])} file(s)",
+            **baselines,
+        )
 
     @staticmethod
     def _episode_metadata_ready(rows, seasons):
@@ -562,15 +740,20 @@ class MediaService:
         external_ref,
         title,
         catalog_id,
-        preset,
-        profile,
-        already_available,
+        preset=None,
+        profile=None,
+        already_available=False,
         seasons=None,
         baseline_file_id=None,
         baseline_episode_files=None,
         search_pending=False,
         command_ids=None,
+        phase="searching",
+        detail=None,
     ):
+        """What one accepted piece of work looks like to the operation store.
+        A request carries its preset and profile; work on a held title
+        (a grab, a search, an import) carries the phase it starts in."""
         out = {
             "ok": True,
             "kind": f"{kind}_acquisition",
@@ -578,10 +761,14 @@ class MediaService:
             "external_ref": str(external_ref),
             "title": title,
             "catalog_id": catalog_id,
-            "preset": str(preset or "default").lower(),
-            "profile": profile,
             "already_available": already_available,
+            "phase": phase,
         }
+        if preset is not None:
+            out["preset"] = str(preset or "default").lower()
+            out["profile"] = profile
+        if detail is not None:
+            out["detail"] = detail
         if kind == "series":
             out["seasons"] = seasons
         if baseline_file_id is not None:
@@ -683,6 +870,16 @@ class MediaService:
             return "searching"
         return "waiting_for_match"
 
+    def _idle_phase(self, client, command_ids, previous_phase):
+        """The phase when nothing of the title's is in the queue: a download
+        that was there is now importing; a release just grabbed has not
+        reached the client yet; otherwise the search commands say."""
+        if previous_phase == "downloading":
+            return "importing"
+        if previous_phase == "grabbed":
+            return "grabbed"
+        return self._command_phase(client, command_ids)
+
     @staticmethod
     def _queue_records(client, id_key, wanted_id):
         queue = client.get("queue", {"page": 1, "pageSize": 1000})
@@ -745,15 +942,14 @@ class MediaService:
                 else "the movie download is active"
             )
         else:
-            phase = (
-                "importing"
-                if previous_phase == "downloading"
-                else self._command_phase(self.radarr, command_ids)
-            )
+            phase = self._idle_phase(self.radarr, command_ids, previous_phase)
             progress = {"phase": phase}
             detail = (
                 "Radarr is importing the requested movie file"
                 if phase == "importing"
+                else "Radarr handed the release to the download client and is "
+                "waiting for it to appear"
+                if phase == "grabbed"
                 else "Radarr is searching for an acceptable movie release"
                 if phase == "searching"
                 else "no acceptable movie release is available yet; Radarr is watching"
@@ -860,15 +1056,14 @@ class MediaService:
                     else f"download is active; {ready} of {total} episodes are imported"
                 )
             else:
-                phase = (
-                    "importing"
-                    if previous_phase == "downloading"
-                    else self._command_phase(self.sonarr, command_ids)
-                )
+                phase = self._idle_phase(self.sonarr, command_ids, previous_phase)
                 progress["phase"] = phase
                 detail = (
                     f"Sonarr is importing episodes; {ready} of {total} are ready"
                     if phase == "importing"
+                    else "Sonarr handed the release to the download client and is "
+                    "waiting for it to appear"
+                    if phase == "grabbed"
                     else "Sonarr is searching for acceptable episode releases"
                     if phase == "searching"
                     else "no acceptable episode release is available yet; Sonarr is watching"

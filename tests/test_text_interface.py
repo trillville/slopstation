@@ -58,7 +58,7 @@ class FakeOperations:
     def observe(self, operation_id, state, progress, detail):
         return {"id": operation_id, "state": state, "progress": progress}
 
-    def for_assistant(self, scope, limit=10, acknowledge=False):
+    def for_assistant(self, scope, limit=10, offset=0, acknowledge=False):
         return [
             {
                 "id": "op-andor",
@@ -66,7 +66,7 @@ class FakeOperations:
                 "state": "RUNNING",
                 "progress": {"phase": "waiting_for_match"},
             }
-        ]
+        ], 1
 
 
 class FakeMedia:

@@ -34,9 +34,9 @@ TOOL_DESCRIPTION = (
     "movies and TV shows, checking download or import status, torrents and "
     "qBittorrent (what is downloading or seeding, pausing, cleaning up), disk "
     "space and files under the media root, the Steam game library and store, "
-    "Steam downloads and installs, launching or quitting a game, the TV, "
-    "Slopstation's own tracked operations, and questions like "
-    '"is the house up" or "did anything break". When no purpose-built tool '
+    "Steam downloads and installs, launching or quitting a game, the TV and "
+    "the PC's power and display, and Slopstation's own tracked operations. "
+    "When no purpose-built tool "
     "fits, it can call Radarr, Sonarr, Prowlarr, qBittorrent and Steam's APIs "
     "directly. It reaches real hardware and real download services.\n\n"
     "Send a SELF-CONTAINED request. Slopstation cannot see this conversation, "

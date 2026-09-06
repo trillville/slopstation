@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm import paging
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import storage
 
 DISK_USAGE = """\
@@ -71,7 +72,7 @@ SPECS = [
                 "type": "string",
                 "description": "Movies, TV, torrents, or a path below one; empty for the root",
             },
-            "limit": {"type": "integer", "description": "rows, default 10, at most 50"},
+            **paging.properties(cap=50),
         },
         (),
         risk="read",
@@ -143,7 +144,8 @@ SPECS = [
 
 
 def impls(ctx: ToolContext):
-    dispatch, log, media = ctx.dispatch, ctx.log, ctx.media
+    bind = Bindings(ctx, SPECS)
+    log, media = ctx.log, ctx.media
 
     def _root():
         root = storage.media_root()
@@ -191,6 +193,7 @@ def impls(ctx: ToolContext):
             log.warn("file_index_failed", err=str(e))
             return None, None, str(e)
 
+    @bind
     def disk_usage(args):
         root, err = _root()
         if err:
@@ -223,20 +226,22 @@ def impls(ctx: ToolContext):
             out["arr_view"] = arr
         return out
 
+    @bind
     def largest_items(args):
         root, err = _root()
         if err:
             return err
         under = str(args.get("under") or "")
-        try:
-            limit = int(args.get("limit") or 10)
-        except (TypeError, ValueError):
-            limit = 10
-        rows = storage.largest_items(root, under, limit)
+        bounds, err = paging.window(args, cap=50)
+        if err:
+            return err
+        limit, offset = bounds
+        rows = storage.largest_items(root, under, offset + limit)
         if not rows and under and storage._inside(root, under) is None:
             return {"ok": False, "error": "that path is not under the media root"}
-        return {"ok": True, "under": under or "/", "count": len(rows), "items": rows}
+        return paging.page(rows, args, "items", cap=50, under=under or "/")
 
+    @bind
     def orphan_files(args):
         root, err = _root()
         if err:
@@ -257,6 +262,7 @@ def impls(ctx: ToolContext):
             "stray_downloads": out["stray_downloads"][:40],
         }
 
+    @bind.destructive
     def delete_path(args):
         root, err = _root()
         if err:
@@ -289,36 +295,30 @@ def impls(ctx: ToolContext):
                     "ok": False,
                     "error": "a torrent in qBittorrent still covers that path: use delete_torrent",
                 }
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"delete {target}")
-            return {"ok": True, "dry_run": True, "detail": f"would delete {rel}"}
         size, files = (
             storage.tree_size(target) if target.is_dir() else (target.stat().st_size, 1)
         )
-        if not ctx.gate.confirmed(("path", str(resolved)), dispatch.utterance.turn):
-            log.warn("tool_refused", tool="delete_path", reason="unconfirmed")
-            return {
-                "ok": False,
-                "acknowledgment": f"Delete {rel} - {files} file(s), {round(size / 1024**3, 2)} GB? That cannot be undone.",
-            }
-        try:
-            out = storage.delete(target)
-        except Exception as e:
-            log.error("tool_error", tool="delete_path", err=str(e))
-            return {"ok": False, "error": str(e)}
-        ctx.gate.done(("path", str(resolved)))
-        return {"ok": True, **out}
 
+        def act():
+            try:
+                return {"ok": True, **storage.delete(target)}
+            except Exception as e:
+                log.error("tool_error", tool="delete_path", err=str(e))
+                return {"ok": False, "error": str(e)}
+
+        return Plan(
+            ("path", str(resolved)),
+            f"Delete {rel} - {files} file(s), {round(size / 1024**3, 2)} GB? "
+            "That cannot be undone.",
+            act,
+            f"delete {rel}",
+        )
+
+    @bind
     def drive_health(args):
         root, err = _root()
         if err:
             return err
         return {"ok": True, **storage.drive_health(root)}
 
-    return {
-        "disk_usage": disk_usage,
-        "largest_items": largest_items,
-        "orphan_files": orphan_files,
-        "delete_path": delete_path,
-        "drive_health": drive_health,
-    }
+    return bind.impls()

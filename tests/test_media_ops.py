@@ -7,7 +7,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation.agent.llm import assistant
-from slopstation.agent.tools import media
+from slopstation.agent.tools import media, operations
 from slopstation.agent.tools.media_clients import MediaError
 
 NOW = datetime.datetime.now(datetime.UTC)
@@ -80,9 +80,14 @@ def stack():
             {"id": 10, "name": "Movie UHD"},
             {"id": 11, "name": "Movie HD"},
         ],
+        **{
+            "movie/1": {"id": 1, "tmdbId": 438631, "title": "Dune", "hasFile": True},
+            "movie/2": {"id": 2, "tmdbId": 348, "title": "Alien", "hasFile": False},
+        },
         moviefile=lambda p: (
             [
                 {
+                    "id": 501,
                     "relativePath": "Dune.mkv",
                     "size": 60 * 1024**3,
                     "quality": {"quality": {"name": "Remux-2160p"}},
@@ -437,42 +442,42 @@ def test_search_releases_and_grab(rig, stack):
         "search_releases",
         {"kind": "series", "catalog_id": 81189, "season": 1, "episode": 9},
     )["ok"]
-    grabbed = tk.call("grab_release", {"kind": "movie", "guid": "g1", "indexer_id": 3})
+    grab = {"kind": "movie", "catalog_id": 438631, "guid": "g1", "indexer_id": 3}
+    grabbed = tk.call("grab_release", grab)
     assert grabbed["ok"] and radarr.posts[-1] == (
         "release",
         {"guid": "g1", "indexerId": 3},
     )
-    assert not tk.call("grab_release", {"kind": "movie", "guid": "", "indexer_id": 3})[
-        "ok"
-    ]
-    assert not tk.call(
-        "grab_release", {"kind": "movie", "guid": "g1", "indexer_id": "x"}
-    )["ok"]
+    assert grabbed["phase"] == "grabbed" and grabbed["title"] == "Dune"
+    assert not tk.call("grab_release", {**grab, "guid": ""})["ok"]
+    assert not tk.call("grab_release", {**grab, "indexer_id": "x"})["ok"]
+    assert (
+        "not in the library"
+        in tk.call("grab_release", {**grab, "catalog_id": 1})["error"]
+    )
+    # The app forgets its search results after half an hour.
+    radarr.post = lambda endpoint, payload: (_ for _ in ()).throw(
+        MediaError("Radarr: HTTP 404 for release")
+    )
+    assert "search_releases again" in tk.call("grab_release", grab)["error"]
 
 
 def test_retry_monitor_and_profile_changes(rig, stack):
     tk, _, _ = rig
     _, radarr, sonarr, _ = stack
-    assert (
-        tk.call("retry_search", {"kind": "movie", "catalog_id": 348})["command"]
-        == "MoviesSearch"
-    )
+    out = tk.call("retry_search", {"kind": "movie", "catalog_id": 348})
+    assert out["ok"] and out["phase"] == "searching" and out["command_ids"] == [99]
     assert radarr.posts[-1] == ("command", {"name": "MoviesSearch", "movieIds": [2]})
-    assert (
-        tk.call("retry_search", {"kind": "series", "catalog_id": 81189, "season": 2})[
-            "command"
-        ]
-        == "SeasonSearch"
-    )
+    out = tk.call("retry_search", {"kind": "series", "catalog_id": 81189, "season": 2})
+    assert out["ok"] and out["seasons"] == [2]
     assert sonarr.posts[-1][1] == {
         "name": "SeasonSearch",
         "seriesId": 5,
         "seasonNumber": 2,
     }
-    assert (
-        tk.call("retry_search", {"kind": "series", "catalog_id": 81189})["command"]
-        == "SeriesSearch"
-    )
+    out = tk.call("retry_search", {"kind": "series", "catalog_id": 81189})
+    assert out["ok"] and sonarr.posts[-1][1]["name"] == "SeriesSearch"
+    assert not tk.call("retry_search", {"kind": "series", "catalog_id": "x"})["ok"]
     # Unmonitor one season, leaving the rest.
     out = tk.call(
         "set_monitored",
@@ -586,6 +591,7 @@ def test_queue_resolution_is_gated_and_manual_import_matches(rig, stack):
     assert not tk.call("resolve_queue_item", {"kind": "movie", "queue_id": 8})["ok"]
     imported = tk.call("manual_import", {"kind": "movie", "download_id": "ABC123"})
     assert imported["ok"] and imported["files"] == 1
+    assert imported["phase"] == "importing" and imported["title"] == "Alien"
     cmd = radarr.posts[-1][1]
     assert (
         cmd["name"] == "ManualImport"
@@ -681,9 +687,10 @@ def test_dry_run_and_failures_come_back_as_errors(stack):
     tk = assistant.Toolkit(dispatch, log, media=svc)
     tk.load(["grab_release", "resolve_queue_item", "browse_media", "set_monitored"])
     assert (
-        tk.call("grab_release", {"kind": "movie", "guid": "g1", "indexer_id": 3})[
-            "dry_run"
-        ]
+        tk.call(
+            "grab_release",
+            {"kind": "movie", "catalog_id": 438631, "guid": "g1", "indexer_id": 3},
+        )["dry_run"]
         and not radarr.posts
     )
     assert (
@@ -701,3 +708,66 @@ def test_dry_run_and_failures_come_back_as_errors(stack):
     out = tk.call("browse_media", {"kind": "movie"})
     assert not out["ok"] and "unexpected GET movie" in out["error"]
     assert log.find("tool_error")[-1]["tool"] == "browse_media"
+
+
+def test_work_on_a_held_title_is_tracked_and_joins_its_request(stack):
+    svc, radarr, sonarr, _ = stack
+    log = CapturingLog("voice")
+    store = operations.OperationStore(log)
+    dispatch = types.SimpleNamespace(
+        dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
+    )
+    tk = assistant.Toolkit(dispatch, log, media=svc, operations=store)
+    tk.load(["grab_release", "retry_search", "manual_import"])
+    # A grab on a title nobody requested is its own operation, with the file
+    # it already held as the baseline, so the upgrade is not called done
+    # because the old file is still there.
+    grabbed = tk.call(
+        "grab_release",
+        {"kind": "movie", "catalog_id": 438631, "guid": "g1", "indexer_id": 3},
+    )
+    assert grabbed["ok"] and "joined" not in grabbed
+    op = store.get(grabbed["operation_id"])
+    assert (op["kind"], op["external_ref"], op["title"]) == (
+        "movie_acquisition",
+        "1",
+        "Dune",
+    )
+    assert op["progress"] == {"phase": "grabbed"}
+    assert op["metadata"]["baseline_file_id"] == 501 and op["turn"] == "aa0001"
+    # The monitor keeps that phase until the client shows the download.
+    seen = svc.observe(op)
+    assert not seen["complete"] and seen["progress"]["phase"] == "grabbed"
+    # A fresh search for the same title joins the operation rather than
+    # opening a second row: baselines stay, the commands watched change.
+    searched = tk.call("retry_search", {"kind": "movie", "catalog_id": 438631})
+    assert searched["ok"] and searched["joined"]
+    assert searched["operation_id"] == op["id"] and len(store.active()) == 1
+    op = store.get(op["id"])
+    assert op["progress"]["phase"] == "searching"
+    assert op["metadata"]["command_ids"] == [99]
+    assert op["metadata"]["baseline_file_id"] == 501
+    # A request keeps its scope when a one-season search joins it.
+    request = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        metadata={"catalog_id": 81189, "seasons": [1, 2], "command_ids": [1]},
+    )
+    joined = tk.call(
+        "retry_search", {"kind": "series", "catalog_id": 81189, "season": 2}
+    )
+    assert joined["joined"] and joined["operation_id"] == request["id"]
+    metadata = store.get(request["id"])["metadata"]
+    assert metadata["seasons"] == [1, 2] and metadata["command_ids"] == [99]
+    # An import is tracked from its importing phase.
+    imported = tk.call("manual_import", {"kind": "movie", "download_id": "ABC123"})
+    assert imported["ok"] and store.get(imported["operation_id"])["progress"] == {
+        "phase": "importing"
+    }
+    rows, total = store.for_assistant("active", limit=2)
+    assert total == 3 and [r["title"] for r in rows] == ["Dune", "Breaking Bad"]
+    assert [
+        r["title"] for r in store.for_assistant("active", limit=2, offset=2)[0]
+    ] == ["Alien"]

@@ -337,6 +337,11 @@ def test_client_mutations_post_the_shape_and_read_back(pinned, seams):
         and out["verified"]
         and seams.posts[-1][0] == "IClientCommService/UninstallClientApp/v1"
     )
+    assert out["detail"] == "Steam is uninstalling it"
+    # Accepted but not shown: the receipt says asked-for, not done.
+    seams.state["apps"] = [{"appid": 10, "app": "Game", "changing": False}]
+    out = pinned.uninstall(10)
+    assert out["ok"] and not out["verified"] and "not done" in out["detail"]
     # An eresult other than 1 is a refusal with the code, never an exception.
     seams.state["install_eresult"] = "15"
     pinned._post = lambda method, data, timeout=20: (None, "15")

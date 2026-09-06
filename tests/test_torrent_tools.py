@@ -241,7 +241,9 @@ def rig(log):
 def test_list_torrents_links_media_filters_and_pages(rig):
     tk, qbit, _ = rig
     out = tk.call("list_torrents", {"state": "all", "limit": 2})
-    assert out["ok"] and out["count"] == 3 and out["more"] == 1
+    assert out["ok"] and out["count"] == 3 and out["next_offset"] == 2
+    rest = tk.call("list_torrents", {"state": "all", "limit": 2, "offset": 2})
+    assert len(rest["torrents"]) == 1 and rest["next_offset"] is None
     # Newest first, and the linked one names its movie, not its release.
     assert [r["hash"] for r in out["torrents"]] == [SEEDING, LINKED]
     dune = out["torrents"][1]

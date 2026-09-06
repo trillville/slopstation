@@ -8,7 +8,7 @@ whether or not anything happened.
 
 from __future__ import annotations
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import library
 
 DOWNLOAD_STATUS = """\
@@ -50,7 +50,8 @@ SPECS = [
             "steam queue",
             "is it still downloading",
         ),
-        default=False,
+        # Default: "how far along is the download" is asked from the couch
+        # too often to cost a search first.
         needs=("steam_account",),
     ),
     ToolSpec(
@@ -105,6 +106,7 @@ SPECS = [
 
 
 def impls(ctx: ToolContext):
+    bind = Bindings(ctx, SPECS)
     dispatch, log, steam = ctx.dispatch, ctx.log, ctx.steam
 
     def _ready():
@@ -112,6 +114,7 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "the Steam account session isn't enrolled"}
         return None
 
+    @bind
     def download_status(args):
         if err := _ready():
             return err
@@ -133,13 +136,8 @@ def impls(ctx: ToolContext):
             appid = int(appid) if appid is not None else None
         except (TypeError, ValueError):
             return {"ok": False, "error": "appid must be an integer"}
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"{action} downloads {appid or 'all'}")
-            return {
-                "ok": True,
-                "dry_run": True,
-                "detail": f"would {action} {appid or 'all downloads'}",
-            }
+        if dry := ctx.preview(f"{action} {appid or 'all downloads'}"):
+            return dry
         try:
             if appid is None:
                 return steam.enable_downloads(action == "resume")
@@ -155,12 +153,15 @@ def impls(ctx: ToolContext):
             )
         return out
 
+    @bind
     def pause_downloads(args):
         return _switch("pause", args)
 
+    @bind
     def resume_downloads(args):
         return _switch("resume", args)
 
+    @bind.destructive
     def uninstall_game(args):
         if err := _ready():
             return err
@@ -174,29 +175,23 @@ def impls(ctx: ToolContext):
         playing = dispatch.now_playing()
         if playing.ok and str(playing.detail) == str(appid):
             return {"ok": False, "error": f"{name} is running - quit it first"}
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"uninstall {appid}")
-            return {"ok": True, "dry_run": True, "detail": f"would uninstall {name}"}
-        if not ctx.gate.confirmed(("uninstall", appid), dispatch.utterance.turn):
-            log.warn(
-                "tool_refused", tool="uninstall_game", reason="unconfirmed", appid=appid
-            )
-            return {"ok": False, "acknowledgment": f"Uninstall {name} from the PC?"}
-        try:
-            out = steam.uninstall(appid)
-        except Exception as e:
-            log.error("uninstall_error", appid=appid, err=str(e))
-            return {
-                "ok": False,
-                "error": "couldn't reach Steam, so nothing was uninstalled",
-            }
-        if out.get("ok"):
-            ctx.gate.done(("uninstall", appid))
-        return {**out, "name": name}
 
-    return {
-        "download_status": download_status,
-        "pause_downloads": pause_downloads,
-        "resume_downloads": resume_downloads,
-        "uninstall_game": uninstall_game,
-    }
+        def act():
+            try:
+                out = steam.uninstall(appid)
+            except Exception as e:
+                log.error("uninstall_error", appid=appid, err=str(e))
+                return {
+                    "ok": False,
+                    "error": "couldn't reach Steam, so nothing was uninstalled",
+                }
+            return {**out, "name": name}
+
+        return Plan(
+            ("uninstall", appid),
+            f"Uninstall {name} from the PC?",
+            act,
+            f"uninstall {name}",
+        )
+
+    return bind.impls()

@@ -5,7 +5,7 @@ import subprocess
 import urllib.parse
 
 from slopstation import gamepc, sessionlock
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
 from slopstation.agent.tools import library
 
 STORE_SEARCH = "https://store.steampowered.com/search/?term="
@@ -353,6 +353,7 @@ def known_appids():
 
 
 def impls(ctx: ToolContext):
+    bind = Bindings(ctx, SPECS)
     dispatch, log = ctx.dispatch, ctx.log
     operations, steam, voice = ctx.operations, ctx.steam, ctx.voice
 
@@ -363,6 +364,7 @@ def impls(ctx: ToolContext):
         log.warn("tool_refused", tool=tool, reason="unknown_appid", appid=appid)
         return {"ok": False, "error": f"appid {appid} is not in the catalog"}
 
+    @bind
     def launch_game(args):
         appid = int(args.get("appid", 0))
         if refused := _unknown("launch_game", appid):
@@ -376,6 +378,7 @@ def impls(ctx: ToolContext):
         r = dispatch.play_game(appid)
         return {"ok": r.ok, "detail": r.detail}
 
+    @bind
     def quit_game(args):
         appid = int(args.get("appid", 0))
         if refused := _unknown("quit_game", appid):
@@ -383,6 +386,7 @@ def impls(ctx: ToolContext):
         r = dispatch.quit_game(appid)
         return {"ok": r.ok, "detail": r.detail}
 
+    @bind
     def install_game(args):
         """Get an owned-but-not-installed game downloading. Two paths, in
         order: the account session queues it silently when that lane is
@@ -393,10 +397,8 @@ def impls(ctx: ToolContext):
             return refused
         if library.installed_name(appid) is not None:
             return {"ok": False, "error": "that game is already installed"}
-        if dispatch.dry_run:
-            detail = f"would start the download for appid {appid}"
-            log("dry_run_would", action=detail)
-            return {"ok": True, "dry_run": True, "detail": detail}
+        if dry := ctx.preview(f"start the download for appid {appid}"):
+            return dry
         if steam is not None and steam.available():
             try:
                 r = steam.install(appid)
@@ -431,6 +433,7 @@ def impls(ctx: ToolContext):
             }
         return {"ok": False, "error": r.detail}
 
+    @bind
     def nav(args):
         """Big Picture navigation. downloads/library/store need no appid;
         game_page needs an OWNED one, store_page any."""
@@ -525,6 +528,7 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": f"unknown nav target {target}"}
         return {"ok": r.ok, "detail": r.detail}
 
+    @bind
     def session(args):
         action = args.get("action")
         if action == "switch_input":
@@ -537,6 +541,7 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": f"unknown action {action}"}
         return {"ok": r.ok, "detail": r.detail}
 
+    @bind
     def volume(args):
         action = args.get("action")
         if action == "set":
@@ -553,6 +558,7 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": f"unknown action {action}"}
         return {"ok": r.ok, "detail": r.detail}
 
+    @bind
     def stop_listening(args):
         """Acts on the CONVERSATION rather than the room. Not dry-run gated,
         unlike everything in dispatch.py: closing our own mic changes nothing
@@ -571,6 +577,7 @@ def impls(ctx: ToolContext):
             "end_turn": True,
         }
 
+    @bind
     def get_now_playing(args):
         # The PC reports RunningAppID 0 all through a launch, which reads as
         # "nothing is playing" while start_session says "already starting".
@@ -596,6 +603,7 @@ def impls(ctx: ToolContext):
             "launching": launching,
         }
 
+    @bind
     def tv_status(args):
         out: dict = {"ok": True}
         for key, read in (
@@ -610,6 +618,7 @@ def impls(ctx: ToolContext):
                 out.setdefault("errors", []).append(f"{key}: {e}")
         return out
 
+    @bind
     def pc_status(args):
         out: dict = {"ok": True, "session_active": sessionlock.active()}
         try:
@@ -673,10 +682,12 @@ def impls(ctx: ToolContext):
                 out["steam_online_error"] = str(e)
         return out
 
+    @bind
     def display(args):
         r = dispatch.display(str(args.get("target") or ""))
         return {"ok": r.ok, "detail": r.detail}
 
+    @bind
     def pc_power(args):
         action = str(args.get("action") or "")
         if action not in ("wake", "sleep"):
@@ -686,9 +697,8 @@ def impls(ctx: ToolContext):
                 "ok": False,
                 "error": "a session is live - end it first, or the TV goes dark mid-game",
             }
-        if dispatch.dry_run:
-            log("dry_run_would", action=f"pc {action}")
-            return {"ok": True, "dry_run": True, "detail": f"would {action} the PC"}
+        if dry := ctx.preview(f"{action} the PC"):
+            return dry
         try:
             if action == "wake":
                 from slopstation import couch
@@ -704,17 +714,4 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "the PC refused: a session or a game is live"}
         return {"ok": False, "error": f"the PC answered {out}"}
 
-    return {
-        "launch_game": launch_game,
-        "session": session,
-        "volume": volume,
-        "stop_listening": stop_listening,
-        "get_now_playing": get_now_playing,
-        "quit_game": quit_game,
-        "nav": nav,
-        "install_game": install_game,
-        "tv_status": tv_status,
-        "pc_status": pc_status,
-        "display": display,
-        "pc_power": pc_power,
-    }
+    return bind.impls()

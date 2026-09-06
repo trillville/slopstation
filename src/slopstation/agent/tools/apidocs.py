@@ -22,16 +22,6 @@ MAX_CHARS = 7000
 FETCH_TIMEOUT_S = 20
 # The arr documents are about a megabyte; anything past this is not one.
 MAX_DOC_BYTES = 4 * 1024 * 1024
-# The arr documents are about a megabyte; anything past this is not one.
-MAX_DOC_BYTES = 4 * 1024 * 1024
-# The arr documents are about a megabyte; anything past this is not one.
-MAX_DOC_BYTES = 4 * 1024 * 1024
-# The arr documents are about a megabyte; anything past this is not one.
-MAX_DOC_BYTES = 4 * 1024 * 1024
-# The arr documents are about a megabyte; anything past this is not one.
-MAX_DOC_BYTES = 4 * 1024 * 1024
-# The arr documents are about a megabyte; anything past this is not one.
-MAX_DOC_BYTES = 4 * 1024 * 1024
 
 # For the arr apps the live path is the app's own; the fallback is the same
 # document as published by the project, for when the app does not serve it.

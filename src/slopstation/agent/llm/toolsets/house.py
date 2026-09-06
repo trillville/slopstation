@@ -1,6 +1,7 @@
 """Tools that read the house's own state: operations, and later the lanes."""
 
-from slopstation.agent.llm.registry import ToolContext, ToolSpec
+from slopstation.agent.llm import paging
+from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
 
 LIST_OPERATIONS = """\
 Read Slopstation's durable operations. Use scope 'active' for current work and
@@ -10,10 +11,7 @@ work, imports, or recent completion: current operation state never comes from
 the catalog or conversation memory. Report each operation's actual phase: only
 phase=downloading is downloading; name every other phase accurately. Never
 infer current state from conversation history, the catalog, or an absent
-download. Returns the count and up to `limit` rows."""
-
-LIMIT_DEFAULT = 10
-LIMIT_MAX = 25
+download. Returns the count and one page of rows."""
 
 SPECS = [
     ToolSpec(
@@ -21,11 +19,7 @@ SPECS = [
         LIST_OPERATIONS,
         {
             "scope": {"type": "string", "enum": ["active", "recent"]},
-            "limit": {
-                "type": "integer",
-                "description": f"rows to return, default {LIMIT_DEFAULT}, "
-                f"at most {LIMIT_MAX}",
-            },
+            **paging.properties(cap=25),
         },
         (),
         risk="read",
@@ -45,20 +39,24 @@ SPECS = [
 
 
 def impls(ctx: ToolContext):
+    bind = Bindings(ctx, SPECS)
     dispatch, operations = ctx.dispatch, ctx.operations
 
+    @bind
     def list_operations(args):
         scope = args.get("scope", "active")
         if scope not in ("active", "recent"):
             return {"ok": False, "error": f"unknown operation scope {scope}"}
-        try:
-            limit = int(args.get("limit") or LIMIT_DEFAULT)
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "limit must be an integer"}
-        limit = max(1, min(limit, LIMIT_MAX))
-        rows = operations.for_assistant(
-            scope, limit=limit, acknowledge=(scope == "recent" and not dispatch.dry_run)
+        bounds, err = paging.window(args, cap=25)
+        if err:
+            return err
+        limit, offset = bounds
+        rows, total = operations.for_assistant(
+            scope,
+            limit=limit,
+            offset=offset,
+            acknowledge=(scope == "recent" and not dispatch.dry_run),
         )
-        return {"ok": True, "scope": scope, "count": len(rows), "operations": rows}
+        return paging.page(rows, args, "operations", cap=25, total=total, scope=scope)
 
-    return {"list_operations": list_operations}
+    return bind.impls()
