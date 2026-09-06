@@ -9,10 +9,11 @@ goes through the arr apps, which own the downloads.
 from __future__ import annotations
 
 import datetime
+import json
 from typing import Any
 
 from slopstation.agent.llm.registry import ToolContext, ToolSpec
-from slopstation.agent.tools.media_clients import KINDS, MediaError
+from slopstation.agent.tools.media_clients import KINDS, MediaError, _parse_time
 
 LIMIT_DEFAULT, LIMIT_MAX = 10, 40
 GB = 1024**3
@@ -83,17 +84,20 @@ resolve_queue_item and its download id for manual_import."""
 
 RESOLVE_QUEUE_ITEM = """\
 Remove one item from Radarr's or Sonarr's queue by queue id. By default the
-download is removed from qBittorrent too, which erases its data, so the first
-call answers with what would go and acts only when called again unchanged
-after the user says yes. blocklist true also tells the app never to grab that
-release again (and to look for another). remove_from_client false leaves the
-torrent alone and only forgets the queue item."""
+download is removed from qBittorrent too, which erases its data. blocklist
+true marks the release failed so the app never takes it again and looks for
+another; the app then removes the download itself (its default), so that
+erases data too. Either way the first call answers with what would happen
+and acts only when called again unchanged after the user says yes. With
+remove_from_client false and no blocklist, the app only forgets the queue
+item: the torrent stays in qBittorrent, unowned, until delete_torrent."""
 
 MANUAL_IMPORT = """\
 Import a finished download the app did not import on its own, by its
-download id from import_queue. The app's own match is used for each file;
-when it could not match a file, the result lists the files instead and
-nothing is imported."""
+download id from import_queue. The app's own match and verdict are used for
+each file: when it could not match a file, or rejected one (a sample, not an
+upgrade), the result lists those files with the reasons and nothing is
+imported."""
 
 MEDIA_HISTORY = """\
 Recent events in Radarr and Sonarr: grabs, imports, failures, deletions, with
@@ -390,21 +394,19 @@ SPECS = [
 ]
 
 PROWLARR_CATEGORIES = {"movies": [2000], "tv": [5000]}
+# History event ids, per app, so the filter runs server-side and the count
+# is the app's total. Radarr: grabbed 1, downloadFolderImported 3,
+# downloadFailed 4, movieFileDeleted 6, movieFolderImported 7. Sonarr:
+# grabbed 1, seriesFolderImported 2, downloadFolderImported 3, downloadFailed
+# 4, episodeFileDeleted 5.
 HISTORY_EVENTS = {
-    "grabbed": ("grabbed",),
-    "imported": (
-        "downloadfolderimported",
-        "seriesfolderimported",
-        "movieFileImported".lower(),
-        "episodefileimported",
-    ),
-    "failed": ("downloadfailed", "episodefiledeleted", "moviefiledeleted"),
-    "deleted": (
-        "moviefiledeleted",
-        "episodefiledeleted",
-        "seriesdeleted",
-        "moviedeleted",
-    ),
+    "movie": {"grabbed": [1], "imported": [3, 7], "failed": [4], "deleted": [6]},
+    "series": {"grabbed": [1], "imported": [2, 3], "failed": [4], "deleted": [5]},
+}
+# What the apps sort their wanted lists by; anything else is silently the default.
+WANTED_SORT = {
+    "movie": ("movieMetadata.sortTitle", "ascending"),
+    "series": ("episodes.airDateUtc", "descending"),
 }
 
 
@@ -504,16 +506,20 @@ def impls(ctx: ToolContext):
         kind, err = _kind(args)
         if err:
             return err
-        rows = _client(kind).get(KINDS[kind]["resource"]) or []
-        shape = _movie_row if kind == "movie" else _series_row
-        items = [shape(r) for r in rows if isinstance(r, dict)]
+        rows = [
+            r
+            for r in _client(kind).get(KINDS[kind]["resource"]) or []
+            if isinstance(r, dict)
+        ]
         genre = str(args.get("genre") or "").lower()
         if genre:
-            items = [
-                i
-                for i, r in zip(items, rows, strict=False)
+            rows = [
+                r
+                for r in rows
                 if any(genre in str(g).lower() for g in (r.get("genres") or []))
             ]
+        shape = _movie_row if kind == "movie" else _series_row
+        items = [shape(r) for r in rows]
         if args.get("unmonitored_only"):
             items = [i for i in items if not i["monitored"]]
         sort = str(args.get("sort") or "recent")
@@ -564,7 +570,7 @@ def impls(ctx: ToolContext):
             ]
             return out
         episodes = client.get("episode", {"seriesId": row["id"]}) or []
-        now = datetime.datetime.now(datetime.UTC).isoformat()
+        now = datetime.datetime.now(datetime.UTC)
         seasons: dict[int, dict] = {}
         for e in episodes:
             if not isinstance(e, dict):
@@ -579,7 +585,8 @@ def impls(ctx: ToolContext):
                     "monitored": False,
                 },
             )
-            aired = str(e.get("airDateUtc") or "") and str(e.get("airDateUtc")) <= now
+            air = _parse_time(str(e.get("airDateUtc") or "").replace("Z", "+00:00"))
+            aired = air is not None and air <= now
             if e.get("hasFile"):
                 s["held"] += 1
             elif aired:
@@ -596,12 +603,15 @@ def impls(ctx: ToolContext):
             return err
         client = _client(kind)
         limit = _limit(args)
+        sort_key, direction = WANTED_SORT[kind]
         params = {
             "page": 1,
             "pageSize": limit,
-            "sortKey": "airDateUtc" if kind == "series" else "title",
-            "includeSeries": "true",
+            "sortKey": sort_key,
+            "sortDirection": direction,
         }
+        if kind == "series":
+            params["includeSeries"] = "true"
         missing = client.get("wanted/missing", params) or {}
         cutoff = client.get("wanted/cutoff", params) or {}
 
@@ -656,10 +666,19 @@ def impls(ctx: ToolContext):
                 if not isinstance(r, dict):
                     continue
                 if kind == "movie":
-                    when = (
-                        r.get("digitalRelease")
-                        or r.get("physicalRelease")
-                        or r.get("inCinemas")
+                    # The app lists a film when ANY of its dates is in the
+                    # window; show the one that is, not the first one set.
+                    dates = [
+                        str(r.get(k) or "")[:10]
+                        for k in ("digitalRelease", "physicalRelease", "inCinemas")
+                    ]
+                    when = next(
+                        (
+                            d
+                            for d in dates
+                            if d and start.isoformat() <= d <= end.isoformat()
+                        ),
+                        next((d for d in dates if d), ""),
                     )
                     rows.append(
                         {
@@ -778,8 +797,9 @@ def impls(ctx: ToolContext):
                         else None,
                         "percent": round(100 * (size - left) / size) if size else None,
                         "warnings": [
-                            m.get("messages") or m.get("title")
+                            f"{m.get('title')}: {text}" if m.get("title") else str(text)
                             for m in (r.get("statusMessages") or [])
+                            for text in (m.get("messages") or [m.get("title")])
                         ][:3],
                         "download_id": r.get("downloadId"),
                     }
@@ -792,32 +812,33 @@ def impls(ctx: ToolContext):
         if err:
             return err
         event = str(args.get("event") or "any")
-        if event != "any" and event not in HISTORY_EVENTS:
+        if event != "any" and event not in HISTORY_EVENTS["movie"]:
             return {
                 "ok": False,
                 "error": "event must be any, grabbed, imported, failed or deleted",
             }
+        limit = _limit(args)
         rows = []
+        total = 0
         for kind in kinds:
             client = _client(kind)
             include = "includeMovie" if kind == "movie" else "includeSeries"
-            history = (
-                client.get(
-                    "history",
-                    {
-                        "page": 1,
-                        "pageSize": 100,
-                        "sortKey": "date",
-                        "sortDirection": "descending",
-                        include: "true",
-                    },
-                )
-                or {}
-            )
-            for r in history.get("records", []) if isinstance(history, dict) else []:
-                et = str(r.get("eventType") or "").lower()
-                if event != "any" and et not in HISTORY_EVENTS[event]:
-                    continue
+            params: dict[str, Any] = {
+                "page": 1,
+                "pageSize": limit,
+                "sortKey": "date",
+                "sortDirection": "descending",
+                include: "true",
+            }
+            if event != "any":
+                # Server-side, so the count is the app's total, not a window.
+                params["eventType"] = HISTORY_EVENTS[kind][event]
+            history = client.get("history", params) or {}
+            if not isinstance(history, dict):
+                continue
+            records = history.get("records", [])
+            total += int(history.get("totalRecords", len(records)) or 0)
+            for r in records:
                 parent = r.get("movie" if kind == "movie" else "series") or {}
                 rows.append(
                     {
@@ -832,8 +853,7 @@ def impls(ctx: ToolContext):
                     }
                 )
         rows.sort(key=lambda r: r["when"], reverse=True)
-        limit = _limit(args)
-        return {"ok": True, "count": len(rows), "items": rows[:limit]}
+        return {"ok": True, "count": total, "items": rows[:limit]}
 
     def media_health(args):
         out: dict[str, Any] = {"ok": True, "health": [], "indexers": []}
@@ -966,7 +986,18 @@ def impls(ctx: ToolContext):
                 "dry_run": True,
                 "detail": f"would grab release {guid[:40]}",
             }
-        _client(kind).post("release", {"guid": guid, "indexerId": indexer_id})
+        try:
+            _client(kind).post("release", {"guid": guid, "indexerId": indexer_id})
+        except MediaError as e:
+            if "HTTP 404" in str(e):
+                # The app keeps search results for half an hour; after that the
+                # guid means nothing to it.
+                return {
+                    "ok": False,
+                    "error": "that release is no longer in the app's search "
+                    "results - run search_releases again and grab from the new list",
+                }
+            raise
         return {
             "ok": True,
             "detail": f"{_client(kind).name} is downloading it; watch import_queue or list_torrents",
@@ -1035,13 +1066,12 @@ def impls(ctx: ToolContext):
                 "dry_run": True,
                 "detail": f"would set monitored={monitored} on {scope}",
             }
-        updated = dict(row)
+        # A deep copy: the row's season dicts came from the app's own answer.
+        updated = json.loads(json.dumps(row))
         if kind == "movie" or not seasons:
+            # The whole title: only its own flag, as the app's UI does. Touching
+            # every season would rewrite every episode's flag underneath.
             updated["monitored"] = monitored
-            if kind == "series":
-                for s in updated.get("seasons") or []:
-                    if int(s.get("seasonNumber", 0) or 0) > 0:
-                        s["monitored"] = monitored
         else:
             wanted = {int(s) for s in seasons}
             for s in updated.get("seasons") or []:
@@ -1095,6 +1125,9 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "queue_id must be an integer"}
         remove = bool(args.get("remove_from_client", True))
         blocklist = bool(args.get("blocklist", False))
+        # Marking a release failed makes the app remove the download itself
+        # (its default) and grab another, so blocklist erases data too.
+        destructive = remove or blocklist
         client = _client(kind)
         include = "includeMovie" if kind == "movie" else "includeSeries"
         queue = (
@@ -1126,22 +1159,32 @@ def impls(ctx: ToolContext):
                 "dry_run": True,
                 "detail": f"would remove the download for {title}",
             }
-        if remove and not ctx.gate.confirmed(
-            ("queue", kind, queue_id, blocklist), dispatch.utterance.turn
-        ):
+        scope = ("queue", kind, queue_id, remove, blocklist)
+        if destructive and not ctx.gate.confirmed(scope, dispatch.utterance.turn):
             log.warn("tool_refused", tool="resolve_queue_item", reason="unconfirmed")
-            what = f"Cancel the download for {title} and erase what has arrived"
-            what += ", and never take that release again?" if blocklist else "?"
+            if blocklist:
+                what = (
+                    f"Mark the release for {title} as failed, which erases what has "
+                    "arrived, never takes that release again, and looks for another?"
+                )
+            else:
+                what = f"Cancel the download for {title} and erase what has arrived?"
             return {"ok": False, "acknowledgment": what}
         client.delete(f"queue/{queue_id}", params)
-        if remove:
-            ctx.gate.done(("queue", kind, queue_id, blocklist))
-        return {
+        if destructive:
+            ctx.gate.done(scope)
+        out = {
             "ok": True,
             "title": title,
             "removed_from_client": remove,
             "blocklisted": blocklist,
         }
+        if not destructive:
+            out["detail"] = (
+                "the queue item is forgotten; the torrent stays in qBittorrent "
+                "unowned - delete_torrent removes it"
+            )
+        return out
 
     def manual_import(args):
         kind, err = _kind(args)
@@ -1160,8 +1203,18 @@ def impls(ctx: ToolContext):
         )
         files = []
         unmatched = []
+        rejected = []
         for c in candidates:
             if not isinstance(c, dict):
+                continue
+            reasons = [
+                str(r.get("reason") or r) for r in (c.get("rejections") or []) if r
+            ]
+            if reasons:
+                # The app's own verdict: ManualImport would import it anyway.
+                rejected.append(
+                    {"file": c.get("relativePath") or c.get("path"), "why": reasons[:3]}
+                )
                 continue
             entry: dict[str, Any] = {
                 "path": c.get("path"),
@@ -1184,11 +1237,13 @@ def impls(ctx: ToolContext):
                 entry["seriesId"] = series["id"]
                 entry["episodeIds"] = [e.get("id") for e in episodes if e.get("id")]
             files.append(entry)
-        if unmatched or not files:
+        if unmatched or rejected or not files:
             return {
                 "ok": False,
-                "error": "the app could not match every file, so nothing was imported",
+                "error": "the app could not match or would reject some files, "
+                "so nothing was imported",
                 "unmatched": unmatched[:10],
+                "rejected": rejected[:10],
                 "matched": len(files),
             }
         if dispatch.dry_run:

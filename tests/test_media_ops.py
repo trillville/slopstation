@@ -24,9 +24,10 @@ class Arr:
     def __init__(self, name, **answers):
         self.name = name
         self.answers = answers
-        self.posts, self.puts, self.deletes = [], [], []
+        self.gets, self.posts, self.puts, self.deletes = [], [], [], []
 
     def get(self, endpoint, params=None):
+        self.gets.append((endpoint, params))
         value = self.answers.get(endpoint)
         if value is None:
             raise MediaError(f"{self.name}: unexpected GET {endpoint}")
@@ -146,7 +147,9 @@ def stack():
                 }
             ]
         },
+        # Honours the server-side event filter: a grab is event 1.
         history=lambda p: {
+            "totalRecords": 1 if 1 in (p.get("eventType") or [1]) else 0,
             "records": [
                 {
                     "date": "2026-09-04T10:00:00Z",
@@ -156,6 +159,8 @@ def stack():
                     "quality": {"quality": {"name": "Bluray-1080p"}},
                 }
             ]
+            if 1 in (p.get("eventType") or [1])
+            else [],
         },
         health=[
             {
@@ -406,9 +411,8 @@ def test_search_releases_and_grab(rig, stack):
         "search_releases", {"kind": "series", "catalog_id": 81189, "season": 1}
     )
     assert season["releases"][0]["name"].startswith("Breaking.Bad")
-    assert sonarr.answers["release"]({"seriesId": 5, "seasonNumber": 1})[0][
-        "params"
-    ] == {"seriesId": 5, "seasonNumber": 1}
+    # What the tool actually asked Sonarr for.
+    assert sonarr.gets[-1] == ("release", {"seriesId": 5, "seasonNumber": 1})
     ep = tk.call(
         "search_releases",
         {"kind": "series", "catalog_id": 81189, "season": 1, "episode": 2},
@@ -464,6 +468,21 @@ def test_retry_monitor_and_profile_changes(rig, stack):
     assert [s["monitored"] for s in put["seasons"]] == [False, True, False] and put[
         "monitored"
     ] is True
+    # The app's own row is not mutated underneath.
+    assert [s["monitored"] for s in sonarr.answers["series"][0]["seasons"]] == [
+        False,
+        True,
+        True,
+    ]
+    # The whole series: only its own flag moves, as the app's UI does; the
+    # seasons (and so every episode) are left as the user set them.
+    whole = tk.call(
+        "set_monitored", {"kind": "series", "catalog_id": 81189, "monitored": False}
+    )
+    assert whole["ok"] and whole["scope"] == "everything"
+    put = sonarr.puts[-1][1]
+    assert put["monitored"] is False
+    assert [s["monitored"] for s in put["seasons"]] == [False, True, True]
     assert tk.call(
         "set_monitored", {"kind": "movie", "catalog_id": 348, "monitored": True}
     )["ok"]
@@ -506,7 +525,9 @@ def test_queue_resolution_is_gated_and_manual_import_matches(rig, stack):
         and q["items"][0]["title"] == "Alien"
         and q["items"][0]["problem"] == "warning"
     )
-    assert q["items"][0]["warnings"] == [["No files found are eligible for import"]]
+    assert q["items"][0]["warnings"] == [
+        "Alien.1979.mkv: No files found are eligible for import"
+    ]
     assert q["items"][0]["queue_id"] == 7 and q["items"][0]["download_id"] == "ABC123"
     asked = tk.call(
         "resolve_queue_item", {"kind": "movie", "queue_id": 7, "blocklist": True}
@@ -514,7 +535,7 @@ def test_queue_resolution_is_gated_and_manual_import_matches(rig, stack):
     assert (
         not asked["ok"]
         and "Alien" in asked["acknowledgment"]
-        and "never take that release" in asked["acknowledgment"]
+        and "never takes that release again" in asked["acknowledgment"]
     )
     assert radarr.deletes == []
     dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
@@ -542,14 +563,59 @@ def test_queue_resolution_is_gated_and_manual_import_matches(rig, stack):
     )
     unmatched = tk.call("manual_import", {"kind": "movie", "download_id": "ZZZ"})
     assert not unmatched["ok"] and unmatched["unmatched"] == ["x.mkv"]
+    # A file the app itself rejects (a sample) blocks the import: ManualImport
+    # would take it anyway, and the later file would win.
+    radarr.answers["manualimport"] = lambda p: [
+        {
+            "path": "/data/torrents/Alien/Alien.1979.mkv",
+            "relativePath": "Alien.1979.mkv",
+            "quality": {"quality": {"name": "Bluray-1080p"}},
+            "languages": [],
+            "movie": {"id": 2},
+        },
+        {
+            "path": "/data/torrents/Alien/sample.mkv",
+            "relativePath": "sample.mkv",
+            "quality": {"quality": {"name": "Bluray-1080p"}},
+            "languages": [],
+            "movie": {"id": 2},
+            "rejections": [{"reason": "Sample", "type": "permanent"}],
+        },
+    ]
+    n = len(radarr.posts)
+    blocked = tk.call("manual_import", {"kind": "movie", "download_id": "ABC123"})
+    assert not blocked["ok"] and blocked["rejected"] == [
+        {"file": "sample.mkv", "why": ["Sample"]}
+    ]
+    assert blocked["matched"] == 1 and len(radarr.posts) == n
+    # Blocklisting without removal still erases (the app removes failed
+    # downloads itself), so it is gated too, with its own wording.
+    dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="")
+    asked = tk.call(
+        "resolve_queue_item",
+        {
+            "kind": "movie",
+            "queue_id": 7,
+            "remove_from_client": False,
+            "blocklist": True,
+        },
+    )
+    assert (
+        not asked["ok"] and "never takes that release again" in asked["acknowledgment"]
+    )
+    # Forgetting alone says where the torrent ends up.
+    assert "delete_torrent" in kept["detail"]
 
 
 def test_history_health_collections_and_indexer_search(rig, stack):
     tk, _, _ = rig
-    _, _, _, prowlarr = stack
+    _, radarr, _, prowlarr = stack
     hist = tk.call("media_history", {"event": "grabbed"})
     assert hist["count"] == 1 and hist["items"][0]["release"] == "Alien.1979.REL"
+    # The filter is the app's, by its event ids, so the count is a total.
+    assert radarr.gets[-1][1]["eventType"] == [1]
     assert tk.call("media_history", {"event": "deleted"})["count"] == 0
+    assert radarr.gets[-1][1]["eventType"] == [6]
     assert not tk.call("media_history", {"event": "exploded"})["ok"]
     health = tk.call("media_health", {})
     assert health["ok"] and not health["healthy"]
@@ -571,9 +637,7 @@ def test_history_health_collections_and_indexer_search(rig, stack):
         "search_indexers", {"query": "some documentary", "category": "movies"}
     )
     assert found["ok"] and found["releases"][0]["indexer"] == "IX"
-    assert prowlarr.answers["search"]({"query": "q", "categories": [2000]})[0][
-        "params"
-    ]["categories"] == [2000]
+    assert prowlarr.gets[-1][1]["categories"] == [2000]
     assert not tk.call("search_indexers", {"query": ""})["ok"]
 
 
