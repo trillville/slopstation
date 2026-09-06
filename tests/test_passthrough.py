@@ -286,6 +286,22 @@ def test_steam_api_injects_the_right_credential(live, monkeypatch):
     assert tk.call("steam_api", doc)["ok"]
     assert sent[-1][2]["data"] == "[1, 2]"
     assert sent[-1][2]["headers"]["Content-Type"] == "application/json"
+    # So does a nested object; a flat one stays a form (sessionid endpoints).
+    nested_doc = {
+        "method": "POST",
+        "path": "store.steampowered.com/x",
+        "body": {"items": [{"appid": 1}]},
+    }
+    tk.call("steam_api", nested_doc)
+    tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0005", asked="yes")
+    assert tk.call("steam_api", nested_doc)["ok"]
+    assert sent[-1][2]["data"] == json.dumps({"items": [{"appid": 1}]})
+    assert sent[-1][2]["headers"]["Content-Type"] == "application/json"
+    flat_doc = {"method": "POST", "path": "store.steampowered.com/x", "body": {"a": 1}}
+    tk.call("steam_api", flat_doc)
+    tk.ctx.dispatch.utterance = types.SimpleNamespace(turn="bb0006", asked="yes")
+    assert tk.call("steam_api", flat_doc)["ok"] and sent[-1][2]["data"] == {"a": 1}
+    assert "Content-Type" not in sent[-1][2]["headers"]
     # An account call without an enrolled session fails plainly.
     out = tk.call(
         "steam_api",

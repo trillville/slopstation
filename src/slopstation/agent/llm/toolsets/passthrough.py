@@ -480,9 +480,10 @@ def impls(ctx: ToolContext):
             )
             if host == "api.steampowered.com" and nested and "input_json" not in body:
                 data = {"input_json": json.dumps(body)}
-            elif isinstance(body, list):
-                # The store and community sites take a JSON document, never a
-                # form; requests cannot encode a list as one anyway.
+            elif nested:
+                # The store and community sites take flat fields as a form
+                # (sessionid-style endpoints) and anything nested as a JSON
+                # document: a form cannot carry a list or a nested object.
                 data = json.dumps(body)
                 headers["Content-Type"] = "application/json"
             else:
