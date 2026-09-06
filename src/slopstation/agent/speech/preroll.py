@@ -78,6 +78,11 @@ class WakeCapture:
             fn, self._on_quiet = self._on_quiet, None
             threading.Thread(target=fn, daemon=True).start()
 
+    @property
+    def peak(self) -> float:
+        """Loudest hop so far (RMS), wake phrase included."""
+        return self._peak
+
     def disarm_deadline(self) -> None:
         """Disable the chime deadline after handing audio to the session."""
         self._chime_deadline = False
@@ -106,10 +111,16 @@ class WakeCapture:
         return self._pcm
 
 
+class PrerollAudioFrame(InputAudioRawFrame):
+    """A replayed hop. The STT hears it as mic audio; level.RoomLevel tells
+    it from live audio in-band, so nothing depends on pipecat's frame
+    ordering between processors."""
+
+
 def _frames(pcm: bytes) -> list:
     """The PCM as input frames on the wake loop's 80 ms hop."""
     return [
-        InputAudioRawFrame(
+        PrerollAudioFrame(
             audio=pcm[i : i + CHUNK_BYTES], sample_rate=SAMPLE_RATE, num_channels=1
         )
         for i in range(0, len(pcm), CHUNK_BYTES)

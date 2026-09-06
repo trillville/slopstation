@@ -87,8 +87,10 @@ def test_volume_steps_clamps_and_mutes(monkeypatch, sent):
     readings = iter([20, 23, 23, 40, 40, 25])
     levels = []
     keys = []
-    monkeypatch.setattr(tv, "tv_volume", lambda ip: next(readings))
-    monkeypatch.setattr(tv, "tv_set_volume", lambda ip, level: levels.append(level))
+    monkeypatch.setattr(tv, "tv_volume", lambda ip, timeout=None: next(readings))
+    monkeypatch.setattr(
+        tv, "tv_set_volume", lambda ip, level, timeout=None: levels.append(level)
+    )
     monkeypatch.setattr(TvRemote, "press", lambda self, key, n: keys.append((key, n)))
     d, _ = harness()
     assert d.volume_up().ok
