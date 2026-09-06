@@ -54,6 +54,19 @@ ASKS = {
     "media_health": "is radarr ok, media stack health and indexer status",
     "movie_collections": "do i have all the alien movies in the collection",
     "search_indexers": "search the indexers for a documentary release",
+    "search_library": "which of my games have controller support and i never played",
+    "my_achievements": "how many achievements do i have in valheim",
+    "playtime": "how many hours have i played in total",
+    "friends": "which of my steam friends are online right now",
+    "new_releases": "what new releases and top sellers are out",
+    "wishlist_edit": "add that game to my wishlist",
+    "download_status": "how far along is the steam download",
+    "pause_downloads": "pause the steam download",
+    "resume_downloads": "resume the steam download",
+    "uninstall_game": "uninstall valheim to free up space on the pc",
+    "tv_status": "is the tv on and how loud is it",
+    "pc_status": "is the pc awake and how much room is there to install",
+    "pc_power": "put the pc to sleep",
 }
 
 

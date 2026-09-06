@@ -25,6 +25,7 @@ def test_every_spec_is_well_formed():
         "delete_torrent",
         "delete_path",
         "resolve_queue_item",
+        "uninstall_game",
     }
     # Destructive tools are never in the default set: the search step is a
     # natural pause before them.
@@ -62,10 +63,16 @@ def test_every_offered_spec_has_an_implementation():
     # Absent services drop exactly the tools that need them.
     bare = assistant.tool_impls(dispatch, log)
     dropped = set(assistant.REGISTRY.names()) - set(bare)
-    absent = {"operations", "media", "torrents", "prowlarr"}
+    absent = {"operations", "media", "torrents", "prowlarr", "steam_account"}
     assert dropped == {s.name for s in assistant.REGISTRY if absent & set(s.needs)}
     off = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
-    assert set(bare) - set(off) == {"list_games", "search_store", "steam_api"}
+    # The kill switch drops exactly the tools that need the data lane.
+    assert set(bare) - set(off) == {
+        s.name for s in assistant.REGISTRY if "steam_data" in s.needs
+    }
+    assert {"list_games", "search_store", "steam_api", "friends"} <= set(bare) - set(
+        off
+    )
 
 
 def test_renders_follow_the_registry_order_and_filter():

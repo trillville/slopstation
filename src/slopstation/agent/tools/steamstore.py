@@ -325,6 +325,237 @@ def fetch_hltb(name: str) -> dict | None:
     return hltb
 
 
+# --- the wider data lane (keyless, or the account's own key) ------------------
+
+
+def _strip_html(text: str, limit: int = 400) -> str:
+    text = re.sub(r"<br\s*/?>", " ", str(text or ""))
+    text = re.sub(r"<[^>]+>", "", text)
+    return library.ascii_only(re.sub(r"\s+", " ", text)).strip()[:limit]
+
+
+def fetch_appdetails(appid: int) -> dict | None:
+    """The store's appdetails data block for one app, or None."""
+    d = _get(
+        f"{STORE}/api/appdetails", {"appids": int(appid), "cc": _cc(), "l": "english"}
+    )
+    entry = (d or {}).get(str(int(appid))) or {}
+    return entry.get("data") if entry.get("success") else None
+
+
+def fetch_dlc(appid: int, data: dict | None = None) -> list[dict]:
+    """The DLC list with prices, from appdetails' ids and GetItems."""
+    data = data if data is not None else fetch_appdetails(appid)
+    ids = [int(a) for a in (data or {}).get("dlc", []) or []][:30]
+    priced = store_items(ids)
+    return [{"appid": a, **priced[a]} for a in ids if a in priced]
+
+
+def fetch_requirements(appid: int, data: dict | None = None) -> dict | None:
+    data = data if data is not None else fetch_appdetails(appid)
+    req = (data or {}).get("pc_requirements") or {}
+    if not isinstance(req, dict) or not req:
+        return None
+    return {
+        k: _strip_html(v)
+        for k, v in (
+            ("minimum", req.get("minimum")),
+            ("recommended", req.get("recommended")),
+        )
+        if v
+    }
+
+
+def fetch_release(appid: int, data: dict | None = None) -> dict | None:
+    data = data if data is not None else fetch_appdetails(appid)
+    if not data:
+        return None
+    rd = data.get("release_date") or {}
+    return {
+        "date": rd.get("date"),
+        "coming_soon": bool(rd.get("coming_soon")),
+        "developers": (data.get("developers") or [])[:3],
+        "publishers": (data.get("publishers") or [])[:2],
+    }
+
+
+def fetch_players_now(appid: int) -> int | None:
+    d = _get(
+        f"{API}/ISteamUserStats/GetNumberOfCurrentPlayers/v1/", {"appid": int(appid)}
+    )
+    count = ((d or {}).get("response", {}) or {}).get("player_count")
+    return int(count) if isinstance(count, int) else None
+
+
+def fetch_achievements(appid: int) -> dict | None:
+    """The account's progress in one game against the global unlock rates.
+    Needs the API key; None without it or when the game has none."""
+    creds = library.steam_creds()
+    if not creds:
+        return None
+    key, steamid = creds
+    schema = _get(
+        f"{API}/ISteamUserStats/GetSchemaForGame/v2/",
+        {"key": key, "appid": int(appid), "l": "english"},
+    )
+    defined = (
+        ((schema or {}).get("game", {}) or {}).get("availableGameStats", {}) or {}
+    ).get("achievements", []) or []
+    if not defined:
+        return None
+    names = {a.get("name"): a for a in defined if a.get("name")}
+    mine = _get(
+        f"{API}/ISteamUserStats/GetPlayerAchievements/v1/",
+        {"key": key, "steamid": steamid, "appid": int(appid)},
+    )
+    got = ((mine or {}).get("playerstats", {}) or {}).get("achievements", []) or []
+    rates = _get(
+        f"{API}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/",
+        {"gameid": int(appid)},
+    )
+    pct = {
+        a.get("name"): float(a.get("percent", 0) or 0)
+        for a in ((rates or {}).get("achievementpercentages", {}) or {}).get(
+            "achievements", []
+        )
+        or []
+    }
+    unlocked = [a for a in got if a.get("achieved")]
+    missing = [a for a in got if not a.get("achieved")]
+
+    def row(a):
+        meta = names.get(a.get("apiname"), {})
+        return {
+            "name": library.ascii_only(meta.get("displayName") or a.get("apiname", "")),
+            "desc": library.ascii_only(meta.get("description") or "")[:120],
+            "global_pct": round(pct.get(a.get("apiname"), 0.0), 1),
+            "unlocked": time.strftime(
+                "%Y-%m-%d", time.localtime(a.get("unlocktime", 0))
+            )
+            if a.get("unlocktime")
+            else None,
+        }
+
+    unlocked.sort(key=lambda a: -int(a.get("unlocktime", 0) or 0))
+    missing.sort(key=lambda a: -pct.get(a.get("apiname"), 0.0))
+    return {
+        "total": len(defined),
+        "unlocked": len(unlocked),
+        "percent": round(100 * len(unlocked) / len(defined)) if defined else 0,
+        "recent": [row(a) for a in unlocked[:5]],
+        # Closest to done: the most commonly earned ones still missing.
+        "next_up": [row(a) for a in missing[:5]],
+        "rarest_held": [
+            row(a)
+            for a in sorted(unlocked, key=lambda a: pct.get(a.get("apiname"), 100))[:3]
+        ],
+    }
+
+
+_PERSONA = {
+    0: "offline",
+    1: "online",
+    2: "busy",
+    3: "away",
+    4: "snooze",
+    5: "trading",
+    6: "playing",
+}
+
+
+def fetch_friends() -> list[dict] | None:
+    """Friends with their state and what they play, online first. Needs the
+    key; friends whose profiles hide their status show as unknown."""
+    creds = library.steam_creds()
+    if not creds:
+        return None
+    key, steamid = creds
+    d = _get(
+        f"{API}/ISteamUser/GetFriendList/v1/",
+        {"key": key, "steamid": steamid, "relationship": "friend"},
+    )
+    ids = [
+        f.get("steamid")
+        for f in ((d or {}).get("friendslist", {}) or {}).get("friends", []) or []
+        if f.get("steamid")
+    ]
+    rows: list[dict] = []
+    for i in range(0, len(ids), 100):
+        s = _get(
+            f"{API}/ISteamUser/GetPlayerSummaries/v2/",
+            {"key": key, "steamids": ",".join(ids[i : i + 100])},
+        )
+        for p in ((s or {}).get("response", {}) or {}).get("players", []) or []:
+            state = int(p.get("personastate", 0) or 0)
+            rows.append(
+                {
+                    "name": library.ascii_only(p.get("personaname", "")),
+                    "state": "playing"
+                    if p.get("gameid")
+                    else _PERSONA.get(state, "unknown"),
+                    "playing": library.ascii_only(p.get("gameextrainfo", "")) or None,
+                    "appid": int(p["gameid"])
+                    if str(p.get("gameid", "")).isdigit()
+                    else None,
+                    "last_seen": time.strftime(
+                        "%Y-%m-%d", time.localtime(p.get("lastlogoff", 0))
+                    )
+                    if p.get("lastlogoff")
+                    else None,
+                }
+            )
+    rows.sort(
+        key=lambda r: (
+            r["state"] == "offline",
+            r["state"] != "playing",
+            r["name"].lower(),
+        )
+    )
+    return rows
+
+
+FEATURED_SECTIONS = ("new_releases", "top_sellers", "coming_soon")
+
+
+def fetch_featured(section: str, cc: str | None = None) -> list[dict]:
+    """One of the store's front-page feeds: new_releases, top_sellers,
+    coming_soon. Curated by Steam, a couple dozen each."""
+    if section not in FEATURED_SECTIONS:
+        return []
+    d = _get(f"{STORE}/api/featuredcategories", {"cc": cc or _cc(), "l": "english"})
+    items = ((d or {}).get(section, {}) or {}).get("items", []) or []
+    out = []
+    for it in items:
+        if it.get("id") in library.NOT_GAMES:
+            continue
+        out.append(
+            {
+                "appid": it.get("id"),
+                "name": library.ascii_only(it.get("name", "")),
+                "discount": int(it.get("discount_percent", 0) or 0),
+                "final": (it.get("final_price", 0) or 0) / 100 or None,
+            }
+        )
+    return out
+
+
+def fetch_wishlist(steamid: str, cc: str | None = None) -> list[dict]:
+    """The whole wishlist with prices, in the user's own priority order."""
+    d = _get(f"{API}/IWishlistService/GetWishlist/v1/", {"steamid": steamid})
+    items = ((d or {}).get("response", {}) or {}).get("items", []) or []
+    items = [it for it in items if it.get("appid")]
+    items.sort(key=lambda it: int(it.get("priority", 0) or 0))
+    priced = store_items([int(it["appid"]) for it in items], cc)
+    return [
+        {
+            "appid": int(it["appid"]),
+            "priority": it.get("priority"),
+            **priced.get(int(it["appid"]), {}),
+        }
+        for it in items
+    ]
+
+
 def load_deals() -> dict:
     return statefile.load(deals_file(), {})
 

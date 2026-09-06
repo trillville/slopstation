@@ -230,6 +230,29 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       Set-Content $stopMarker $id
       Write-Answer 'stop' (Start-CgTask 'StopGame') $turn
       break }
+  # disk: free space on each Steam library drive, for "can I install X".
+  '^disk\z' {
+      $out = @()
+      foreach ($root in (Get-SteamRoots)) {
+        try {
+          $d = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
+          $out += [pscustomobject]@{ root = $root; drive = $d.Name
+            free = [long]$d.AvailableFreeSpace; total = [long]$d.TotalSize }
+        } catch { }
+      }
+      ConvertTo-Json -InputObject @($out) -Compress -Depth 3
+      break }
+  # sleep: suspend the PC. Refused (BUSY) while a session is live or a game
+  # runs, so it can never end what is on the TV.
+  '^sleep( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[2]
+      if (Test-Path $ready) { Write-Answer 'sleep' 'BUSY' $turn; break }
+      $run = Get-RunningAppId
+      if ($run -and $run -ne 0) { Write-Answer 'sleep' "BUSY:$run" $turn; break }
+      Set-Turn $turn
+      Start-Process -FilePath 'rundll32.exe' -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0'
+      Write-Answer 'sleep' 'OK' $turn
+      break }
   # collections: library collections as [{name,id}] JSON. Skip entries that
   # cannot be parsed from Steam's cloud-storage file.
   '^collections\z' {

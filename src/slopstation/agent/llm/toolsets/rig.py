@@ -1,5 +1,6 @@
 """Tools for the rig itself: the session, the TV, the mic, and Big Picture."""
 
+import json
 import urllib.parse
 
 from slopstation import gamepc, sessionlock
@@ -65,6 +66,23 @@ collections by name (pass it in `collection` - on a miss the result lists
 the real ones, so use those rather than guessing again). 'search' shows
 store results for `query`. 'web' opens any page on store.steampowered.com
 or steamcommunity.com given in `url` - sale events, curators, a profile."""
+
+TV_STATUS = """\
+The TV as it is right now: power state over the serial line, and the volume
+and mute readback over the network. Read only; the answer to 'is the TV on'
+and 'how loud is it'."""
+
+PC_STATUS = """\
+The gaming PC as it is right now: reachable or asleep, whether a session is
+live and its turn, what Steam reports running, whether Steam is signed in
+online, and the free space on each Steam library drive - the answer to 'can
+I install that' and 'is the PC awake'. Reaching an asleep PC takes a few
+seconds to time out."""
+
+PC_POWER = """\
+Wake the gaming PC (a magic packet; it takes a minute to come up, and
+start_session does this itself) or put it to sleep. Sleep is refused while a
+session is live or a game is running, so it cannot end what is on the TV."""
 
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this
@@ -140,7 +158,14 @@ SPECS = [
         (),
         risk="read",
         area="session",
-        keywords=("now playing", "what is running", "is the pc busy", "session"),
+        keywords=(
+            "now playing",
+            "what is running",
+            "currently running",
+            "what game is on",
+            "is the pc busy",
+            "session",
+        ),
     ),
     ToolSpec(
         "quit_game",
@@ -232,6 +257,52 @@ SPECS = [
         risk="act",
         area="session",
         keywords=("install", "download game", "not installed", "queue download"),
+    ),
+]
+
+
+SPECS += [
+    ToolSpec(
+        "tv_status",
+        TV_STATUS,
+        {},
+        (),
+        risk="read",
+        area="session",
+        keywords=(
+            "is the tv on",
+            "tv status",
+            "how loud",
+            "current volume",
+            "is it muted",
+        ),
+        default=False,
+    ),
+    ToolSpec(
+        "pc_status",
+        PC_STATUS,
+        {},
+        (),
+        risk="read",
+        area="session",
+        keywords=(
+            "is the pc awake",
+            "pc status",
+            "steam library free space",
+            "is steam online",
+            "room to install",
+        ),
+        default=False,
+    ),
+    ToolSpec(
+        "pc_power",
+        PC_POWER,
+        {"action": {"type": "string", "enum": ["wake", "sleep"]}},
+        ("action",),
+        risk="act",
+        area="session",
+        keywords=("wake the pc", "sleep the pc", "turn off the pc", "power", "suspend"),
+        default=False,
     ),
 ]
 
@@ -480,6 +551,90 @@ def impls(ctx: ToolContext):
             "launching": launching,
         }
 
+    def tv_status(args):
+        out: dict = {"ok": True}
+        for key, read in (
+            ("power", dispatch.tv.power_state),
+            ("volume", dispatch.tv.volume),
+            ("muted", dispatch.tv.muted),
+        ):
+            try:
+                out[key] = read()
+            except Exception as e:
+                out[key] = None
+                out.setdefault("errors", []).append(f"{key}: {e}")
+        return out
+
+    def pc_status(args):
+        out: dict = {"ok": True, "session_active": sessionlock.active()}
+        try:
+            status = gamepc.status()
+            out["reachable"] = True
+            out["ready"] = status != "NOTREADY"
+            out["session_turn"] = status if status != "NOTREADY" else None
+        except Exception as e:
+            out["reachable"] = False
+            out["detail"] = (
+                f"the PC did not answer over SSH ({type(e).__name__}); it is asleep or off"
+            )
+            return out
+        try:
+            playing = gamepc.playing()
+            appid = int(playing) if playing.isdigit() else 0
+            out["running"] = (
+                {"appid": appid, "name": library.installed_name(appid)}
+                if appid
+                else None
+            )
+        except Exception as e:
+            out["running_error"] = str(e)
+        try:
+            rows = json.loads(gamepc.disk() or "[]")
+            out["steam_drives"] = [
+                {
+                    "drive": r.get("drive"),
+                    "free_gb": round(int(r.get("free", 0) or 0) / 1024**3, 1),
+                    "total_gb": round(int(r.get("total", 0) or 0) / 1024**3, 1),
+                }
+                for r in rows
+                if isinstance(r, dict)
+            ]
+        except Exception as e:
+            out["steam_drives_error"] = str(e)
+        if steam is not None and steam.available():
+            try:
+                out["steam_online"] = steam.client_online()
+            except Exception as e:
+                out["steam_online_error"] = str(e)
+        return out
+
+    def pc_power(args):
+        action = str(args.get("action") or "")
+        if action not in ("wake", "sleep"):
+            return {"ok": False, "error": "action must be wake or sleep"}
+        if action == "sleep" and sessionlock.active():
+            return {
+                "ok": False,
+                "error": "a session is live - end it first, or the TV goes dark mid-game",
+            }
+        if dispatch.dry_run:
+            log("dry_run_would", action=f"pc {action}")
+            return {"ok": True, "dry_run": True, "detail": f"would {action} the PC"}
+        try:
+            if action == "wake":
+                from slopstation import couch
+
+                couch.wol()
+                return {"ok": True, "detail": "wake packet sent - give it a minute"}
+            out = gamepc.sleep(dispatch.utterance.turn)
+        except Exception as e:
+            return {"ok": False, "error": f"couldn't reach the PC ({e})"}
+        if out == "OK":
+            return {"ok": True, "detail": "the PC is going to sleep"}
+        if out.startswith("BUSY"):
+            return {"ok": False, "error": "the PC refused: a session or a game is live"}
+        return {"ok": False, "error": f"the PC answered {out}"}
+
     return {
         "launch_game": launch_game,
         "session": session,
@@ -489,4 +644,7 @@ def impls(ctx: ToolContext):
         "quit_game": quit_game,
         "nav": nav,
         "install_game": install_game,
+        "tv_status": tv_status,
+        "pc_status": pc_status,
+        "pc_power": pc_power,
     }

@@ -547,8 +547,8 @@ def test_list_games_and_search_store_refuse_a_bad_ask(impls):
     assert "list_games" in impls and "search_store" in impls
     r = impls["list_games"]({"source": "nope"})
     assert not r["ok"] and "unknown source" in r["error"], r
-    r = impls["list_games"]({"source": "downloading"})  # no account session here
-    assert not r["ok"] and "enrolled" in r["error"], r
+    r = impls["list_games"]({"source": "downloading"})  # moved to its own tool
+    assert not r["ok"] and "download_status" in r["error"], r
     r = impls["search_store"]({})  # neither term nor tags
     assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
 
@@ -579,9 +579,11 @@ def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
     gated = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
     assert "list_games" not in gated and "search_store" not in gated
     assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
-    # Thirteen base tools minus the store pair and steam_api the switch drops.
+    # What remains is exactly the tools that need no service at all.
     assert "steam_api" not in gated
-    assert len(assistant.function_schemas(gated, log)) == 10
+    assert {s.name for s in assistant.function_schemas(gated, log)} == {
+        s.name for s in assistant.REGISTRY if not s.needs
+    }
 
 
 # -- Tool errors ---------------------------------------------------------------
@@ -603,7 +605,7 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     # A dead token must not end the request: it falls through to the TV path.
     assert inst["ok"] and "press Install" in inst["detail"], inst
     assert navd == [("details", INSTALLED)], navd
-    dl = rimpls["list_games"]({"source": "downloading"})
+    dl = rimpls["download_status"]({})
     assert not dl["ok"] and "Steam" in dl["error"], dl
     assert {"install_error", "download_status_error"} <= set(log.events())
 

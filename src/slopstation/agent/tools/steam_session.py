@@ -26,6 +26,11 @@ UA = (
 
 # EAuthTokenPlatformType - WebBrowser is 2; MobileApp (3) is the flagged one.
 PLATFORM_WEBBROWSER = 2
+# SetClientAppUpdateState's `action`. The field is in Steam's protobufs; its
+# values are not documented, so these are the store site's own and every call
+# re-reads the app list and reports the paused flag Steam actually holds. If
+# the readback disagrees, these two numbers are what to fix.
+UPDATE_ACTIONS = {"pause": 1, "resume": 2}
 # Delay between GET retries.
 _RETRY_BACKOFF_S = 0.3
 
@@ -260,8 +265,9 @@ class SteamSession:
     def client_online(self):
         return self._target() is not None
 
-    def app_list(self):
-        """Return installation and download status for changing apps."""
+    def app_list(self, filters="changing"):
+        """Return installation and download status for changing apps (or, with
+        filters="installed", everything installed)."""
         tgt = self._target()
         if not tgt:
             return {}
@@ -273,7 +279,7 @@ class SteamSession:
                 "client_instanceid": tgt["instanceid"],
                 "fields": "games",
                 "include_client_info": "true",
-                "filters": "changing",
+                "filters": filters,
             },
         )
         out = {}
@@ -289,6 +295,8 @@ class SteamSession:
                 "installed": bool(a.get("installed")),
                 "changing": bool(a.get("changing")),
                 "paused": bool(a.get("download_paused")),
+                "uninstalling": bool(a.get("uninstalling")),
+                "running": bool(a.get("running")),
                 "downloaded": done,
                 "total": total,
                 # -1 is Steam's "not in the queue"; None speaks better.
@@ -345,9 +353,113 @@ class SteamSession:
             "verified": bool(queued),
         }
 
+    def _mutate(self, method, appid, extra, what):
+        """One ClientComm mutation against the target client -> (eresult, None),
+        or (None, an error dict) when there is no client or Steam refused. Empty 200s are the norm; X-eresult != 1 is
+        the failure signal."""
+        tgt = self._target()
+        if not tgt:
+            return None, {
+                "ok": False,
+                "error": "the gaming PC isn't online in Steam right now",
+            }
+        data = {
+            "access_token": self.access_token(),
+            "client_instanceid": tgt["instanceid"],
+            **extra,
+        }
+        if appid is not None:
+            data["appid"] = int(appid)
+        _, eresult = self._post(f"IClientCommService/{method}/v1", data)
+        if eresult not in (None, "1"):
+            self.log.warn("clientcomm_refused", what=what, appid=appid, eresult=eresult)
+            return None, {
+                "ok": False,
+                "error": f"Steam refused ({what}, code {eresult})",
+            }
+        return eresult, None
+
+    def set_update_state(self, appid, action):
+        """Pause or resume one app's download; reports the paused flag Steam
+        holds afterwards, which is the only proof the action meant what we
+        think it does. Never raises."""
+        if action not in UPDATE_ACTIONS:
+            return {
+                "ok": False,
+                "error": f"action must be one of {list(UPDATE_ACTIONS)}",
+            }
+        try:
+            eresult, err = self._mutate(
+                "SetClientAppUpdateState",
+                appid,
+                {"action": UPDATE_ACTIONS[action]},
+                action,
+            )
+            if err:
+                return err
+            time.sleep(1.5)
+            app = self.app_list().get(int(appid), {})
+        except Exception as e:
+            self.log.error("update_state_error", appid=appid, action=action, err=str(e))
+            return {
+                "ok": False,
+                "error": f"couldn't reach Steam to {action} the download",
+            }
+        self.log(
+            "update_state_set", appid=appid, action=action, paused=app.get("paused")
+        )
+        return {
+            "ok": True,
+            "action": action,
+            "paused": app.get("paused"),
+            "changing": app.get("changing", False),
+            "verified": bool(app) and app.get("paused") == (action == "pause"),
+        }
+
+    def enable_downloads(self, enable):
+        """The client's global download switch. Never raises."""
+        try:
+            _, err = self._mutate(
+                "EnableOrDisableDownloads",
+                None,
+                {"enable": "true" if enable else "false"},
+                "enable_downloads" if enable else "disable_downloads",
+            )
+        except Exception as e:
+            self.log.error("downloads_switch_error", err=str(e))
+            return {"ok": False, "error": "couldn't reach Steam to switch downloads"}
+        if err:
+            return err
+        self.log("downloads_switched", enabled=bool(enable))
+        return {"ok": True, "downloads_enabled": bool(enable)}
+
+    def uninstall(self, appid):
+        """Uninstall one app on the target client; the changing list shows it
+        uninstalling. Never raises."""
+        appid = int(appid)
+        try:
+            _, err = self._mutate("UninstallClientApp", appid, {}, "uninstall")
+            if err:
+                return err
+            time.sleep(1.5)
+            app = self.app_list().get(appid, {})
+        except Exception as e:
+            self.log.error("uninstall_error", appid=appid, err=str(e))
+            return {
+                "ok": False,
+                "error": "couldn't reach Steam, so nothing was uninstalled",
+            }
+        self.log(
+            "uninstall_queued", appid=appid, verified=bool(app.get("uninstalling"))
+        )
+        return {
+            "ok": True,
+            "detail": "Steam is uninstalling it",
+            "verified": bool(app.get("uninstalling")),
+        }
+
     def download_status(self):
-        """Apps mid-change, most-complete first - the list_games 'downloading'
-        source."""
+        """Apps mid-change, most-complete first - the download_status tool."""
         rows = []
         for appid, a in self.app_list().items():
             if not a["changing"] and a["total"] <= a["downloaded"]:

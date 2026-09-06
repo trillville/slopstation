@@ -108,6 +108,16 @@ def nav(kind: str, arg: object = None, turn: str | None = None) -> str:
     return ssh_intent(nav_cmd(kind, arg), turn)
 
 
+def disk() -> str:
+    """Free space on each Steam library drive, as JSON rows."""
+    return ssh("disk", timeout=15)
+
+
+def sleep(turn: str | None = None) -> str:
+    """Put the PC to sleep; Dispatch refuses (BUSY) while a session is live."""
+    return ssh_intent("sleep", turn)
+
+
 def nav_cmd(kind: str, arg: object = None) -> str:
     return f"nav {kind}" + (f" {arg}" if arg not in (None, "") else "")
 
@@ -136,7 +146,9 @@ VERBS = (
     "launch",
     "stop",
     "nav",
+    "disk",
+    "sleep",
 )
 
-# Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE DENIED, and
-# BUSY:<appid> NOTASK:<name> FAILED:<code> with an argument after the colon.
+# Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE BUSY DENIED,
+# and BUSY:<appid> NOTASK:<name> FAILED:<code> with an argument after the colon.

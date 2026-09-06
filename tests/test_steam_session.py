@@ -290,6 +290,51 @@ def test_install_with_the_pc_offline_is_an_honest_asleep(session, seams):
     assert not any("InstallClientApp" in m for m, _ in seams.posts), "never called"
 
 
+def test_client_mutations_post_the_shape_and_read_back(pinned, seams):
+    seams.state["sessions"] = two_clients()
+    seams.state["apps"] = [
+        {"appid": 10, "app": "Game", "changing": True, "download_paused": True}
+    ]
+    out = pinned.set_update_state(10, "pause")
+    method, data = seams.posts[-1]
+    assert method == "IClientCommService/SetClientAppUpdateState/v1"
+    assert data == {
+        "access_token": "tok",
+        "client_instanceid": "111",
+        "action": 1,
+        "appid": 10,
+    }
+    assert out == {
+        "ok": True,
+        "action": "pause",
+        "paused": True,
+        "changing": True,
+        "verified": True,
+    }
+    # A resume the app list does not yet reflect is reported unverified.
+    out = pinned.set_update_state(10, "resume")
+    assert out["ok"] and out["verified"] is False and seams.posts[-1][1]["action"] == 2
+    assert not pinned.set_update_state(10, "dance")["ok"]
+    out = pinned.enable_downloads(False)
+    assert out == {"ok": True, "downloads_enabled": False}
+    assert seams.posts[-1] == (
+        "IClientCommService/EnableOrDisableDownloads/v1",
+        {"access_token": "tok", "client_instanceid": "111", "enable": "false"},
+    )
+    seams.state["apps"] = [
+        {"appid": 10, "app": "Game", "changing": True, "uninstalling": True}
+    ]
+    out = pinned.uninstall(10)
+    assert (
+        out["ok"]
+        and out["verified"]
+        and seams.posts[-1][0] == "IClientCommService/UninstallClientApp/v1"
+    )
+    # An eresult other than 1 is a refusal with the code, never an exception.
+    seams.state["sessions"] = []
+    assert "isn't online" in pinned.uninstall(10)["error"]
+
+
 def test_download_status_lists_changing_apps_most_complete_first(session, seams):
     seams.state["sessions"] = [{"client_instanceid": "111", "machine_name": "pc"}]
     seams.state["apps"] = [
