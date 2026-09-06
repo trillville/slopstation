@@ -306,8 +306,8 @@ def stack():
         indexerstatus=[
             {
                 "indexerId": 3,
-                "disabledTill": "2026-09-06T00:00:00Z",
-                "mostRecentFailure": "2026-09-05T00:00:00Z",
+                "disabledTill": iso(1),
+                "mostRecentFailure": iso(-1),
             }
         ],
         search=lambda p: [
@@ -677,8 +677,22 @@ def test_history_health_collections_and_indexer_search(rig, stack):
     )
     assert (
         health["indexers"][0]["indexer"] == "IX"
+        and health["indexers"][0]["disabled"]
         and health["indexers"][0]["disabled_till"]
     )
+    # Prowlarr keeps the row after the indexer recovers, with disabledTill
+    # cleared: history, not a problem. With the apps' messages gone too, the
+    # stack is healthy even though the row is still listed.
+    radarr.answers["health"] = []
+    prowlarr.answers["indexerstatus"] = [
+        {"indexerId": 3, "disabledTill": None, "mostRecentFailure": iso(-9)}
+    ]
+    health = tk.call("media_health", {})
+    assert health["healthy"] and not health["indexers"][0]["disabled"]
+    assert health["indexers"][0]["failure"] == iso(-9)
+    # An expired disable is over too.
+    prowlarr.answers["indexerstatus"] = [{"indexerId": 3, "disabledTill": iso(-1)}]
+    assert tk.call("media_health", {})["healthy"]
     coll = tk.call("movie_collections", {"name": "alien"})
     assert (
         coll["count"] == 1

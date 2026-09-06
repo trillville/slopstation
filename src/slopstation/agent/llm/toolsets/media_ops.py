@@ -108,8 +108,10 @@ returns the count and the rows, newest first."""
 
 MEDIA_HEALTH = """\
 Health messages from Radarr, Sonarr and Prowlarr, and each Prowlarr indexer's
-status (disabled until when, last failure). The answer to 'is the media stack
-OK'. Read only."""
+status (disabled until when, last failure). healthy is false only for a live
+problem: a health message, or an indexer disabled right now; an old failure on
+an indexer that has recovered is listed but does not count. The answer to 'is
+the media stack OK'. Read only."""
 
 MOVIE_COLLECTIONS = """\
 Radarr's movie collections (all the Alien films, the Bond films): for each,
@@ -908,19 +910,31 @@ def impls(ctx: ToolContext):
                     for i in (media.prowlarr.get("indexer") or [])
                     if isinstance(i, dict) and "id" in i
                 }
+                # Prowlarr keeps a status row for every indexer that has ever
+                # failed and clears disabledTill when it recovers, so a row
+                # is history; a disabledTill still ahead is the problem.
+                now = datetime.datetime.now(datetime.UTC)
                 for s in media.prowlarr.get("indexerstatus") or []:
+                    till = _parse_time(s.get("disabledTill"))
                     out["indexers"].append(
                         {
                             "indexer": names.get(int(s.get("indexerId", 0) or 0)),
+                            "disabled": bool(till and till > now),
                             "disabled_till": s.get("disabledTill"),
                             "failure": s.get("mostRecentFailure"),
                         }
                     )
             except MediaError as e:
                 out["indexers"].append(
-                    {"indexer": None, "failure": f"prowlarr unreachable: {e}"}
+                    {
+                        "indexer": None,
+                        "disabled": True,
+                        "failure": f"prowlarr unreachable: {e}",
+                    }
                 )
-        out["healthy"] = not out["health"] and not out["indexers"]
+        out["healthy"] = not out["health"] and not any(
+            i["disabled"] for i in out["indexers"]
+        )
         return out
 
     @bind
