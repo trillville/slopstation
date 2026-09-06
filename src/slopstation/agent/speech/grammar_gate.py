@@ -39,11 +39,10 @@ _PUNCT = ",.!?"
 # "alfred"), so the bar sits above 80.
 _WHOLE_ANCHOR = 90
 
-# Carry nothing around a closer: "okay thanks", "yeah, never mind".
+# Carry nothing around a closer: "okay thanks", "yeah, never mind". No word
+# of a closer belongs here ("that's all"); "all right" is joined first.
 FILLERS = GREETINGS | {
     "alright",
-    "all",
-    "right",
     "yeah",
     "yep",
     "cool",
@@ -136,6 +135,7 @@ def closer_in(
     the anchor counts whatever follows. Only there: in a quiet room
     "actually alfred cancel the download" is a command."""
     words = [w for w in (t.strip(_PUNCT).lower() for t in text.split()) if w]
+    words = " ".join(words).replace("all right", "alright").split()
     if not words:
         return None
     longest = max(len(c.split()) for c in closers)
