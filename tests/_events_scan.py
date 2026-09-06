@@ -67,18 +67,9 @@ def _args(text, start):
     return text[start : i - 1]
 
 
-def python_files():
-    """Every emitter in the package. haptic_test.py is excluded: it carries
-    event names of its own and a lane literal "lane", which the frozen sets
-    would otherwise have to hold."""
-    for p in helpers.package_modules():
-        if p.name != "haptic_test.py":
-            yield p
-
-
 def scan_python():
     out = {}
-    for path in python_files():
+    for path in helpers.package_modules():
         text = path.read_text(encoding="utf-8")
         for rx in _PY:
             for m in rx.finditer(text):
@@ -120,7 +111,7 @@ def scan_bat():
 def scan_lanes():
     """Lane literals: logger("...") and the events.emit("...") callers."""
     lanes = set()
-    for path in python_files():
+    for path in helpers.package_modules():
         text = path.read_text(encoding="utf-8")
         lanes.update(re.findall(r"logger\(\"(\w+)\"\)", text))
         lanes.update(m.group("lane") for m in _PY[1].finditer(text) if m.group("lane"))
