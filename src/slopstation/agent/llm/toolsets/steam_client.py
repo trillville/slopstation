@@ -53,6 +53,7 @@ SPECS = [
         # Default: "how far along is the download" is asked from the couch
         # too often to cost a search first.
         needs=("steam_account",),
+        busy="checking Steam",
     ),
     ToolSpec(
         "pause_downloads",
@@ -69,6 +70,7 @@ SPECS = [
         ),
         default=False,
         needs=("steam_account",),
+        busy="pausing Steam",
     ),
     ToolSpec(
         "resume_downloads",
@@ -85,6 +87,7 @@ SPECS = [
         ),
         default=False,
         needs=("steam_account",),
+        busy="resuming Steam",
     ),
     ToolSpec(
         "uninstall_game",

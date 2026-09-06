@@ -127,7 +127,15 @@ first."""
 
 
 def _spec(
-    name, description, props, required, risk, keywords, needs=("media",), paged=False
+    name,
+    description,
+    props,
+    required,
+    risk,
+    keywords,
+    needs=("media",),
+    paged=False,
+    busy=None,
 ):
     return ToolSpec(
         name,
@@ -140,6 +148,7 @@ def _spec(
         default=False,
         needs=needs,
         paged=paged,
+        busy=busy,
     )
 
 
@@ -165,6 +174,7 @@ SPECS = [
             "by genre",
         ),
         paged=True,
+        busy="checking the library",
     ),
     _spec(
         "media_details",
@@ -179,6 +189,7 @@ SPECS = [
             "which episodes are missing",
             "file size",
         ),
+        busy="checking the library",
     ),
     _spec(
         "missing_media",
@@ -194,6 +205,7 @@ SPECS = [
             "not downloaded yet",
         ),
         paged=True,
+        busy="checking what's missing",
     ),
     _spec(
         "calendar",
@@ -209,6 +221,7 @@ SPECS = [
             "when is the next episode",
         ),
         paged=True,
+        busy="checking the calendar",
     ),
     _spec(
         "search_releases",
@@ -228,6 +241,7 @@ SPECS = [
             "pick a release",
             "interactive search",
         ),
+        busy="searching the indexers",
     ),
     _spec(
         "grab_release",
@@ -246,6 +260,7 @@ SPECS = [
         ("kind", "catalog_id", "guid", "indexer_id"),
         "act",
         ("grab release", "download that one", "take this release", "manual grab"),
+        busy="grabbing it",
     ),
     _spec(
         "retry_search",
@@ -265,6 +280,7 @@ SPECS = [
             "stuck download",
             "nothing found",
         ),
+        busy="starting the search",
     ),
     _spec(
         "set_monitored",
@@ -311,6 +327,7 @@ SPECS = [
             "why is it stuck",
         ),
         paged=True,
+        busy="checking the queue",
     ),
     _spec(
         "resolve_queue_item",
@@ -338,6 +355,7 @@ SPECS = [
         ("kind", "download_id"),
         "act",
         ("manual import", "import it anyway", "force import", "import the download"),
+        busy="importing",
     ),
     _spec(
         "media_history",
@@ -360,6 +378,7 @@ SPECS = [
             "what happened to",
         ),
         paged=True,
+        busy="checking the history",
     ),
     _spec(
         "media_health",
@@ -375,6 +394,7 @@ SPECS = [
             "prowlarr health",
             "media stack",
         ),
+        busy="checking the media stack",
     ),
     _spec(
         "movie_collections",
@@ -389,6 +409,7 @@ SPECS = [
             "franchise",
             "which are missing from the set",
         ),
+        busy="checking the collections",
     ),
     _spec(
         "search_indexers",
@@ -409,6 +430,7 @@ SPECS = [
         ),
         needs=("prowlarr",),
         paged=True,
+        busy="searching the indexers",
     ),
 ]
 

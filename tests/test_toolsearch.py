@@ -280,3 +280,39 @@ def test_the_prompt_maps_the_areas_from_the_offered_set():
     # Nothing beyond the defaults offered: no map at all, rather than a lie.
     defaults = [s.name for s in assistant.REGISTRY if s.default]
     assert assistant.tools_map(defaults) == ""
+
+
+def test_busy_phrases_come_from_the_spec_with_the_game_named(toolkit, monkeypatch):
+    from slopstation.agent.speech import session
+    from slopstation.agent.tools import library
+
+    assert toolkit.busy_phrase("download_status", {}) == "checking Steam"
+    assert toolkit.busy_phrase("find_tools", {"query": "x"}) == "one moment"
+    # A local read has no phrase: the lane falls back to its tone.
+    assert toolkit.busy_phrase("list_operations", {}) is None
+    assert toolkit.busy_phrase("no_such_tool", {}) is None
+    # {game} is the title behind the appid: installed, else owned, else plain.
+    monkeypatch.setattr(
+        library, "installed_name", lambda a: "Valheim" if a == 1 else None
+    )
+    monkeypatch.setattr(
+        library, "load", lambda: {"owned": {"2": {"name": "Stardew Valley"}}}
+    )
+    assert toolkit.busy_phrase("launch_game", {"appid": 1}) == "starting Valheim"
+    assert (
+        toolkit.busy_phrase("install_game", {"appid": "2"})
+        == "installing Stardew Valley"
+    )
+    assert (
+        toolkit.busy_phrase("get_game_details", {"appid": 3}) == "checking on that game"
+    )
+    assert toolkit.busy_phrase("launch_game", {}) == "starting that game"
+    # One switch turns the whole processor off; so does a zero threshold.
+    log = toolkit.log
+    assert session.busy_stage({"busyEnabled": False}, log, toolkit) is None
+    assert session.busy_stage({"busyAfterMs": 0}, log, toolkit) is None
+    on = session.busy_stage(
+        {"busyAfterMs": 500, "busyPhrase": " hang on "}, log, toolkit
+    )
+    assert on is not None and on.after_s == 0.5 and on.phrase == "hang on"
+    assert on.phrases("download_status", {}) == "checking Steam"

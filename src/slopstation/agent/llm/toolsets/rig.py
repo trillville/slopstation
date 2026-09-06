@@ -118,6 +118,7 @@ SPECS = [
         risk="act",
         area="session",
         keywords=("play", "launch", "start game", "open game", "run"),
+        busy="starting {game}",
     ),
     ToolSpec(
         "session",
@@ -183,6 +184,7 @@ SPECS = [
             "is the pc busy",
             "session",
         ),
+        busy="checking the PC",
     ),
     ToolSpec(
         "quit_game",
@@ -192,6 +194,7 @@ SPECS = [
         risk="act",
         area="session",
         keywords=("quit", "close game", "exit game", "stop game", "kill"),
+        busy="quitting {game}",
     ),
     ToolSpec(
         "nav",
@@ -260,6 +263,7 @@ SPECS = [
             "search the store on the tv",
             "open a page",
         ),
+        busy="opening it",
     ),
     ToolSpec(
         "install_game",
@@ -274,6 +278,7 @@ SPECS = [
         risk="act",
         area="session",
         keywords=("install", "download game", "not installed", "queue download"),
+        busy="installing {game}",
     ),
 ]
 
@@ -294,6 +299,7 @@ SPECS += [
             "is it muted",
         ),
         default=False,
+        busy="checking the TV",
     ),
     ToolSpec(
         "pc_status",
@@ -310,6 +316,7 @@ SPECS += [
             "room to install",
         ),
         default=False,
+        busy="checking the PC",
     ),
     ToolSpec(
         "display",
@@ -332,6 +339,7 @@ SPECS += [
         ),
         # Default: with only `session` loaded, "put the desktop on the TV"
         # became an input switch that started a session (2026-09-06 logs).
+        busy="moving the desktop",
     ),
     ToolSpec(
         "pc_power",

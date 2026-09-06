@@ -26,6 +26,27 @@ def _trim_carry(messages):
     return msgs
 
 
+def busy_stage(voice, log, toolkit):
+    """The busy tone, between the model and the speech, or None when the
+    config turns it off. A tool call still out after busyAfterMs gets one
+    acknowledgment per turn: the tool's own phrase from its spec, else
+    busyPhrase, else the busy earcon. busyEnabled false, or busyAfterMs 0,
+    is off."""
+    if not voice.get("busyEnabled", True):
+        return None
+    after_ms = int(voice.get("busyAfterMs", 800) or 0)
+    if after_ms <= 0:
+        return None
+    from slopstation.agent.speech.busy import BusyTone
+
+    return BusyTone(
+        log,
+        after_s=after_ms / 1000,
+        phrase=str(voice.get("busyPhrase", "") or ""),
+        phrases=toolkit.busy_phrase if toolkit is not None else None,
+    )
+
+
 def _make_tts(voice, secrets):
     from pipecat.services.deepgram.tts import DeepgramTTSService
 
@@ -321,7 +342,6 @@ class Session:
             server_tools,
             system_instruction,
         )
-        from slopstation.agent.speech.busy import BusyTone
 
         voice, secrets = self.voice, self.secrets
         carrying = time.time() - CARRY["t"] < voice["followupCarryS"]
@@ -398,17 +418,9 @@ class Session:
                     "be invisible again",
                 )
         stages = [user_agg, llm]
-        # Between the model and the speech: a tool call still out after this
-        # long gets the busy earcon (or a phrase), once per turn. 0 is off.
-        busy_ms = int(voice.get("busyAfterMs", 800) or 0)
-        if busy_ms > 0:
-            stages.append(
-                BusyTone(
-                    log,
-                    after_s=busy_ms / 1000,
-                    phrase=str(voice.get("busyPhrase", "") or ""),
-                )
-            )
+        busy = busy_stage(voice, log, self.toolkit)
+        if busy is not None:
+            stages.append(busy)
         return stages + [_make_tts(voice, secrets), transport.output(), asst_agg]
 
     def _save_and_carry(self):

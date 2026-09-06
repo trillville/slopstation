@@ -63,6 +63,7 @@ SPECS = [
         ),
         default=False,
         needs=("media",),
+        busy="checking the drives",
     ),
     ToolSpec(
         "largest_items",
@@ -86,6 +87,7 @@ SPECS = [
         default=False,
         needs=("media",),
         paged=True,
+        busy="measuring the folders",
     ),
     ToolSpec(
         "orphan_files",
@@ -103,6 +105,7 @@ SPECS = [
         ),
         default=False,
         needs=("media",),
+        busy="checking the files",
     ),
     ToolSpec(
         "delete_path",
@@ -139,6 +142,7 @@ SPECS = [
         ),
         default=False,
         needs=("media",),
+        busy="checking the drive",
     ),
 ]
 

@@ -202,7 +202,7 @@ def _params_schema(extra=None):
     return props
 
 
-def _spec(name, description, needs, keywords, extra=None):
+def _spec(name, description, needs, keywords, extra=None, busy=None):
     return ToolSpec(
         name,
         description,
@@ -213,6 +213,7 @@ def _spec(name, description, needs, keywords, extra=None):
         keywords=keywords,
         default=False,
         needs=needs,
+        busy=busy,
     )
 
 
@@ -233,30 +234,35 @@ SPECS = [
         keywords=("api documentation", "endpoint", "openapi", "how to call", "docs"),
         default=False,
         needs=("media",),
+        busy="reading the docs",
     ),
     _spec(
         "radarr_api",
         RADARR_API,
         ("media",),
         ("radarr api", "raw radarr call", "movies api", "direct call"),
+        busy="calling Radarr",
     ),
     _spec(
         "sonarr_api",
         SONARR_API,
         ("media",),
         ("sonarr api", "raw sonarr call", "series api", "direct call"),
+        busy="calling Sonarr",
     ),
     _spec(
         "prowlarr_api",
         PROWLARR_API,
         ("prowlarr",),
         ("prowlarr api", "indexers api", "raw prowlarr call", "direct call"),
+        busy="calling Prowlarr",
     ),
     _spec(
         "qbittorrent_api",
         QBITTORRENT_API,
         ("torrents",),
         ("qbittorrent api", "raw torrent call", "qbit", "direct call"),
+        busy="calling qBittorrent",
     ),
     _spec(
         "steam_api",
@@ -264,6 +270,7 @@ SPECS = [
         ("steam_data",),
         ("steam api", "steam web api", "raw steam call", "direct call"),
         extra={"auth": {"type": "string", "enum": ["none", "key", "account"]}},
+        busy="calling Steam",
     ),
 ]
 

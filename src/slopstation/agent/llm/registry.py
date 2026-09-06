@@ -63,6 +63,12 @@ class ToolSpec:
     # A paged tool lists rows: it takes a limit, returns the count first and a
     # capped page. The registry test holds it to that.
     paged: bool = False
+    # What the voice lane says when this tool has kept the user waiting (the
+    # busy tone): a few words in the present tense, "checking Steam". {game}
+    # is filled with the title behind the appid argument. None means the
+    # lane's own fallback, the earcon or the configured phrase. Only tools
+    # that reach a network or the PC need one; a local read never fires it.
+    busy: str | None = None
 
     def anthropic(self) -> dict[str, Any]:
         return {

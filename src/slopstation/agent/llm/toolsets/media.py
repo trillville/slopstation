@@ -63,6 +63,7 @@ SPECS = [
         area="media",
         keywords=("movie", "series", "show", "tmdb", "tvdb", "which one", "lookup"),
         needs=("media",),
+        busy="searching",
     ),
     ToolSpec(
         "media_library",
@@ -79,6 +80,7 @@ SPECS = [
         area="media",
         keywords=("do i have", "downloaded", "which seasons", "library", "available"),
         needs=("media",),
+        busy="checking the library",
     ),
     ToolSpec(
         "request_movie",
@@ -92,6 +94,7 @@ SPECS = [
         area="media",
         keywords=("download movie", "get the movie", "request", "radarr", "4k"),
         needs=("media",),
+        busy="asking Radarr",
     ),
     ToolSpec(
         "request_series",
@@ -120,6 +123,7 @@ SPECS = [
             "episodes",
         ),
         needs=("media",),
+        busy="asking Sonarr",
     ),
     ToolSpec(
         "delete_media",
@@ -146,6 +150,7 @@ SPECS = [
         keywords=("delete", "remove", "erase", "cancel download", "free space"),
         default=False,
         needs=("media",),
+        busy="deleting",
     ),
 ]
 
