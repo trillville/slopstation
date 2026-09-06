@@ -716,6 +716,48 @@ def test_nav_remaps_targets_and_guards_the_catalog(monkeypatch, dispatch, log):
     assert not navimpls["nav"]({"target": "store_page", "appid": 0})["ok"]
 
 
+def test_nav_reaches_the_newer_pages_search_and_allowed_urls(
+    monkeypatch, dispatch, log
+):
+    seen = []
+    monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
+    navimpls = assistant.tool_impls(dispatch, log)
+    nav = navimpls["nav"]
+    for target in ("friends", "settings", "screenshots", "wishlist"):
+        assert nav({"target": target})["ok"]
+    assert seen[-4:] == [
+        (t, None) for t in ("friends", "settings", "screenshots", "wishlist")
+    ]
+    # Per-game pages take any appid; the tool maps its names onto the verb's.
+    assert nav({"target": "dlc", "appid": 1478500})["ok"] and seen[-1] == (
+        "dlc",
+        1478500,
+    )
+    assert nav({"target": "community_hub", "appid": 1478500})["ok"]
+    assert seen[-1] == ("hub", 1478500)
+    assert nav({"target": "verify_files", "appid": INSTALLED})["ok"]
+    assert seen[-1] == ("validate", INSTALLED)
+    assert not nav({"target": "workshop"})["ok"], "a per-game page needs the appid"
+    # news is both: the feed without an appid, one game's with.
+    assert nav({"target": "news"})["ok"] and seen[-1] == ("news", None)
+    assert nav({"target": "news", "appid": INSTALLED})["ok"]
+    assert seen[-1] == ("news", INSTALLED)
+    # search builds a store URL with the words encoded.
+    assert nav({"target": "search", "query": "co-op roguelike & friends"})["ok"]
+    assert seen[-1] == (
+        "url",
+        "https://store.steampowered.com/search/?term=co-op+roguelike+%26+friends",
+    )
+    assert not nav({"target": "search", "query": " "})["ok"]
+    # web takes the two Steam hosts and nothing else.
+    assert nav({"target": "web", "url": "https://steamcommunity.com/id/someone/"})["ok"]
+    assert seen[-1] == ("url", "https://steamcommunity.com/id/someone/")
+    r = nav({"target": "web", "url": "https://example.com/store.steampowered.com/"})
+    assert not r["ok"] and "store.steampowered.com" in r["error"]
+    assert not nav({"target": "web", "url": "http://store.steampowered.com/"})["ok"]
+    assert not nav({"target": "web", "url": "javascript:alert(1)"})["ok"]
+
+
 def test_nav_resolves_a_collection_by_name_and_lists_them_on_a_miss(
     monkeypatch, dispatch, log
 ):

@@ -186,6 +186,37 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
       Set-Content $navMarker "collection $($Matches[1])"
       Write-Answer 'nav' (Start-CgTask 'Nav') $turn
       break }
+  # More Big Picture pages, no argument. 'news' spans two patterns like
+  # 'store': the feed here, one game's news below (digits required).
+  '^nav (friends|settings|screenshots|wishlist|news)( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[3]
+      if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
+      Set-Turn $turn
+      Remove-Item $navMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $navMarker $Matches[1]
+      Write-Answer 'nav' (Start-CgTask 'Nav') $turn
+      break }
+  # One game's DLC list, community hub, workshop, news, or a file check.
+  '^nav (dlc|hub|workshop|news|validate) (\d{1,10})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[4]
+      if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
+      Set-Turn $turn
+      Remove-Item $navMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $navMarker "$($Matches[1]) $($Matches[2])"
+      Write-Answer 'nav' (Start-CgTask 'Nav') $turn
+      break }
+  # Any store or community page. Two hosts, a bounded charset with no
+  # whitespace, so the URL can never swallow the turn. The same text lives in
+  # gamepc.py (refused before the wire) and Nav-BigPicture.ps1 (re-checked
+  # before it becomes a steam://openurl).
+  '^nav url (https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{1,300})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+      $turn = $Matches[3]
+      if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
+      Set-Turn $turn
+      Remove-Item $navMarker -Force -ErrorAction SilentlyContinue
+      Set-Content $navMarker "url $($Matches[1])"
+      Write-Answer 'nav' (Start-CgTask 'Nav') $turn
+      break }
   # stop: quit the running game. The appid is REQUIRED and re-checked against
   # RunningAppID, so a raced/wrong id refuses (BUSY:<other>) instead of killing
   # the wrong game. The StopGame task quits it and re-focuses Big Picture.

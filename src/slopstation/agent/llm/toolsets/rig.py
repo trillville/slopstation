@@ -1,8 +1,12 @@
 """Tools for the rig itself: the session, the TV, the mic, and Big Picture."""
 
-from slopstation import sessionlock
+import urllib.parse
+
+from slopstation import gamepc, sessionlock
 from slopstation.agent.llm.registry import ToolContext, ToolSpec
 from slopstation.agent.tools import library
+
+STORE_SEARCH = "https://store.steampowered.com/search/?term="
 
 LAUNCH_GAME = """\
 Launch a game from the catalog by appid. Starts a session automatically if
@@ -48,16 +52,19 @@ Picture stays up. It also clears the way when a different game is blocking
 a launch."""
 
 NAV = """\
-Navigate the Big Picture UI on the TV during a live session. target:
-'downloads' (download queue), 'library' (library home), 'store' (store
-front page) - none need an appid; 'game_page' (a game's library page with
-its Play button - for 'show me <game>', OWNED games only) and 'store_page'
-(any game's store page, owned or not - for 'open the store page for
-<game>', and the way to put a game the user wants to BUY or INSTALL on the
-TV so they can hit the button with the controller); 'collection' shows one
-of the user's own library collections by name (pass it in `collection` - if
-the name doesn't match, the result lists the real ones, so use those rather
-than guessing again)."""
+Navigate the Big Picture UI on the TV during a live session. Pages that need
+nothing else: 'downloads', 'library', 'store', 'friends', 'settings',
+'screenshots', 'wishlist', 'news'. Pages for one game, by appid: 'game_page'
+(an OWNED game's library page with its Play button - 'show me <game>'),
+'store_page' (any game's store page, owned or not - the way to put a game
+the user wants to BUY or INSTALL on the TV so they can press the button),
+'dlc' (its DLC list), 'community_hub' (reviews, discussions, guides),
+'workshop', 'news' (its patch notes when an appid is given), 'verify_files'
+(check its files). 'collection' shows one of the user's own library
+collections by name (pass it in `collection` - on a miss the result lists
+the real ones, so use those rather than guessing again). 'search' shows
+store results for `query`. 'web' opens any page on store.steampowered.com
+or steamcommunity.com given in `url` - sale events, curators, a profile."""
 
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this
@@ -154,19 +161,40 @@ SPECS = [
                     "downloads",
                     "library",
                     "store",
+                    "friends",
+                    "settings",
+                    "screenshots",
+                    "wishlist",
+                    "news",
                     "game_page",
                     "store_page",
+                    "dlc",
+                    "community_hub",
+                    "workshop",
+                    "verify_files",
                     "collection",
+                    "search",
+                    "web",
                 ],
             },
             "appid": {
                 "type": "integer",
-                "description": "required for game_page (must "
-                "be owned) and store_page (any Steam appid)",
+                "description": "for game_page (must be owned), store_page, dlc, "
+                "community_hub, workshop, verify_files (any Steam appid), and "
+                "optionally news",
             },
             "collection": {
                 "type": "string",
                 "description": "collection name, for target=collection",
+            },
+            "query": {
+                "type": "string",
+                "description": "store search words, for target=search",
+            },
+            "url": {
+                "type": "string",
+                "description": "a store.steampowered.com or steamcommunity.com "
+                "page, for target=web",
             },
         },
         ("target",),
@@ -179,6 +207,16 @@ SPECS = [
             "big picture",
             "downloads page",
             "collection",
+            "wishlist page",
+            "friends list",
+            "settings",
+            "screenshots",
+            "dlc",
+            "workshop",
+            "community hub",
+            "verify files",
+            "search the store on the tv",
+            "open a page",
         ),
     ),
     ToolSpec(
@@ -329,7 +367,43 @@ def impls(ctx: ToolContext):
                     "collections": [r["name"] for r in rows],
                 }
             r = dispatch.nav("collection", cid)
-        elif target in ("downloads", "library", "store"):
+        elif target in ("dlc", "community_hub", "workshop", "verify_files"):
+            # Any Steam appid: these pages exist for games the user does not
+            # own too, and a DLC list is one way to put a purchase on the TV.
+            appid = int(appid or 0)
+            if appid <= 0:
+                return {"ok": False, "error": "I need the game's appid"}
+            kind = {"community_hub": "hub", "verify_files": "validate"}.get(
+                target, target
+            )
+            r = dispatch.nav(kind, appid)
+        elif target == "news":
+            appid = int(appid or 0)
+            r = dispatch.nav("news", appid if appid > 0 else None)
+        elif target == "search":
+            query = str(args.get("query") or "").strip()
+            if not query:
+                return {"ok": False, "error": "search needs the words to search for"}
+            url = STORE_SEARCH + urllib.parse.quote_plus(query[:120])
+            r = dispatch.nav("url", url)
+        elif target == "web":
+            url = str(args.get("url") or "").strip()
+            if not gamepc.NAV_URL_RE.fullmatch(url):
+                return {
+                    "ok": False,
+                    "error": "web opens store.steampowered.com or "
+                    "steamcommunity.com pages only, as a plain https URL",
+                }
+            r = dispatch.nav("url", url)
+        elif target in (
+            "downloads",
+            "library",
+            "store",
+            "friends",
+            "settings",
+            "screenshots",
+            "wishlist",
+        ):
             r = dispatch.nav(target)
         else:
             return {"ok": False, "error": f"unknown nav target {target}"}

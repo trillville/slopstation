@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime
 
@@ -109,6 +110,17 @@ def nav(kind: str, arg: object = None, turn: str | None = None) -> str:
 
 def nav_cmd(kind: str, arg: object = None) -> str:
     return f"nav {kind}" + (f" {arg}" if arg not in (None, "") else "")
+
+
+# The PC's `nav url` allowlist, character for character: two Steam hosts, a
+# bounded URL charset with no whitespace (so `--turn` can never be absorbed).
+# test_gaming_pc_scripts holds the three copies (here, Dispatch.ps1,
+# Nav-BigPicture.ps1) equal.
+NAV_URL_PATTERN = (
+    r"https://(?:store\.steampowered\.com|steamcommunity\.com)/"
+    r"[A-Za-z0-9/_.~?=&%+-]{1,300}"
+)
+NAV_URL_RE = re.compile(NAV_URL_PATTERN)
 
 
 # The verb surface, one name per Dispatch.ps1 switch arm (test_turn compares).
