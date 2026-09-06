@@ -321,6 +321,7 @@ class Session:
             server_tools,
             system_instruction,
         )
+        from slopstation.agent.speech.busy import BusyTone
 
         voice, secrets = self.voice, self.secrets
         carrying = time.time() - CARRY["t"] < voice["followupCarryS"]
@@ -396,7 +397,19 @@ class Session:
                     reason="pipecat client shape moved - searches will "
                     "be invisible again",
                 )
-        return [user_agg, llm, _make_tts(voice, secrets), transport.output(), asst_agg]
+        stages = [user_agg, llm]
+        # Between the model and the speech: a tool call still out after this
+        # long gets the busy earcon (or a phrase), once per turn. 0 is off.
+        busy_ms = int(voice.get("busyAfterMs", 800) or 0)
+        if busy_ms > 0:
+            stages.append(
+                BusyTone(
+                    log,
+                    after_s=busy_ms / 1000,
+                    phrase=str(voice.get("busyPhrase", "") or ""),
+                )
+            )
+        return stages + [_make_tts(voice, secrets), transport.output(), asst_agg]
 
     def _save_and_carry(self):
         """Dump the transcript and retain the last complete turns."""

@@ -22,6 +22,7 @@ PYTHON = {
     "audio_rebuild_failed": {"err", "retry_s"},
     "audio_teardown_failed": {"err"},
     "buzz_failed": {"err", "pattern"},
+    "busy_tone": {"after_ms", "kind", "tool"},
     "buzz_sent": {"pattern"},
     "cancel_void_failed": {"err"},
     "checkin": {"monitor"},
