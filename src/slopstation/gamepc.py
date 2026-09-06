@@ -113,6 +113,12 @@ def disk() -> str:
     return ssh("disk", timeout=15)
 
 
+def display(target: str, turn: str | None = None) -> str:
+    """Put the desktop on the TV or back on the monitor, with no session.
+    Dispatch refuses (BUSY) while a session is live or its tasks run."""
+    return ssh_intent(f"display {target}", turn)
+
+
 def sleep(turn: str | None = None) -> str:
     """Put the PC to sleep; Dispatch refuses (BUSY) while a session is live."""
     return ssh_intent("sleep", turn)
@@ -148,6 +154,7 @@ VERBS = (
     "nav",
     "disk",
     "sleep",
+    "display",
 )
 
 # Answers: OK NOTREADY ALREADY NOTRUNNING NOTINSTALLED RUNNING IDLE BUSY DENIED,
