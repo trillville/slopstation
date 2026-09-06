@@ -18,13 +18,16 @@ finalizing). Describe finalizing as finalizing, never as a download. For
 Slopstation's tracked work (media requests too) use list_operations."""
 
 PAUSE_DOWNLOADS = """\
-Pause Steam downloads on the PC: one game by appid, or every download when no
-appid is given. Reports the paused flag Steam holds afterwards, so say what
-actually happened. Harmless and reversible."""
+Pause Steam downloads on the PC: one game by appid, or with no appid the
+client's global download switch, which stops everything. Reports the paused
+flags Steam holds afterwards, so say what actually happened. Harmless and
+reversible."""
 
 RESUME_DOWNLOADS = """\
-Resume Steam downloads on the PC: one game by appid, or every download when
-no appid is given. Reports the paused flag Steam holds afterwards."""
+Resume Steam downloads on the PC: one game by appid, or with no appid the
+client's global download switch. The switch does not un-pause a game that
+was paused on its own; pass that game's appid. Reports the paused flags
+Steam holds afterwards."""
 
 UNINSTALL_GAME = """\
 Uninstall a game from the PC to free its disk space. Refused for the game
@@ -144,10 +147,11 @@ def impls(ctx: ToolContext):
         except Exception as e:
             log.error("download_switch_error", action=action, err=str(e))
             return {"ok": False, "error": f"couldn't reach Steam to {action}"}
-        if out.get("ok") and not out.get("verified"):
+        if out.get("ok") and out.get("verified") is False:
             out["detail"] = (
-                "Steam accepted the request but its app list does not yet show "
-                f"the download as {'paused' if action == 'pause' else 'running'}"
+                "Steam accepted the request but its app list still shows the "
+                f"download as {'running' if action == 'pause' else 'paused'} - "
+                "say so plainly rather than claiming it worked"
             )
         return out
 
@@ -186,6 +190,8 @@ def impls(ctx: ToolContext):
                 "ok": False,
                 "error": "couldn't reach Steam, so nothing was uninstalled",
             }
+        if out.get("ok"):
+            ctx.gate.done(("uninstall", appid))
         return {**out, "name": name}
 
     return {

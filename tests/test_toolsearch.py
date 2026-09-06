@@ -87,8 +87,6 @@ def toolkit(log):
 
 def test_every_tool_is_found_by_its_own_summary_and_its_ask(toolkit):
     for spec in assistant.REGISTRY:
-        hits = [s.name for s, _ in toolsearch.search(toolkit.registry, spec.name)]
-        assert spec.name in hits, f"{spec.name} not found by its own name"
         summary = toolsearch.summary(spec)
         hits = [s.name for s, _ in toolsearch.search(toolkit.registry, summary)]
         assert spec.name in hits, (
@@ -131,6 +129,49 @@ def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):
     assert not miss["ok"] and "areas" in miss and log.find("tools_found")[-1]["n"] == 0
     assert not toolkit.call("find_tools", {})["ok"]
     assert not toolkit.call("no_such_tool", {})["ok"]
+
+
+def test_find_tools_offers_only_what_this_toolkit_can_run(log):
+    # No qBittorrent: the torrent tools are not offered, so a torrent ask must
+    # not report them loaded, and the toolkit must not run them either way.
+    dispatch = types.SimpleNamespace(
+        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
+    )
+    tk = assistant.Toolkit(
+        dispatch, log, media=types.SimpleNamespace(qbit=None, prowlarr=None)
+    )
+    out = tk.call("find_tools", {"query": "pause the dune torrent"})
+    names = {r["tool"] for r in out.get("loaded", [])}
+    assert "pause_torrent" not in names and names <= set(tk.loaded), out
+    refused = tk.call("pause_torrent", {"hashes": ["all"]})
+    assert not refused["ok"] and "no tool called" in refused["error"]
+    # Offered but not loaded is refused too: the search step is real.
+    assert "delete_media" in tk.offered and "delete_media" not in tk.loaded
+    refused = tk.call("delete_media", {"kind": "movie", "catalog_id": 1})
+    assert not refused["ok"] and "find_tools" in refused["error"]
+    # A raising tool is an error dict, and the turn goes on.
+    tk.impls["find_tools"] = lambda a: (_ for _ in ()).throw(ValueError("kaboom"))
+    out = tk.call("find_tools", {"query": "x"})
+    assert not out["ok"] and log.find("tool_error")[-1]["tool"] == "find_tools"
+
+
+def test_common_name_words_do_not_load_unrelated_tools(toolkit):
+    # 'game', 'search', 'set' and 'status' are in many tool names; an ordinary
+    # ask that contains one of them must not pull in a pile of tools, least
+    # of all a destructive one.
+    for ask in (
+        "set the volume to 20",
+        "what game is running",
+        "put on the apple tv input",
+    ):
+        hits = [
+            s.name
+            for s, _ in toolsearch.search(toolkit.registry, ask, set(toolkit.loaded))
+        ]
+        assert "uninstall_game" not in hits and len(hits) <= 2, (ask, hits)
+    assert toolsearch.summary(assistant.REGISTRY.get("delete_path")).endswith(
+        "file or folder inside the media root, given as a path relative to it (e.g. 'torrents/Some.Release' or 'Movies/Old Film (1999)')."
+    )
 
 
 def test_on_load_fires_once_per_change_with_the_new_schemas(log):

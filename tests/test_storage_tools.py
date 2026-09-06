@@ -32,12 +32,27 @@ def root(tmp_path, monkeypatch):
 
 
 class Arr:
-    def __init__(self, name, files):
+    """The endpoints the file index really uses: Radarr's movie rows carry
+    their file, Sonarr's episode files are asked per series."""
+
+    def __init__(self, name, files, down=False):
         self.name = name
         self.files = files
+        self.down = down
 
     def get(self, endpoint, params=None):
-        if endpoint in ("moviefile", "episodefile"):
+        if self.down:
+            from slopstation.agent.tools.media_clients import MediaError
+
+            raise MediaError(f"{self.name} is unreachable")
+        if endpoint == "movie":
+            return [
+                {"id": i, "movieFile": {"path": p}} for i, p in enumerate(self.files)
+            ]
+        if endpoint == "series":
+            return [{"id": 5}]
+        if endpoint == "episodefile":
+            assert params == {"seriesId": 5}, params
             return [{"path": p} for p in self.files]
         if endpoint == "diskspace":
             return [{"path": "/data", "freeSpace": 500 * GB, "totalSpace": 14000 * GB}]
@@ -59,16 +74,18 @@ class Qbit:
 
 @pytest.fixture
 def rig(root):
+    from slopstation.agent.tools import media as media_mod
+
     log = CapturingLog("voice")
     dispatch = types.SimpleNamespace(
         dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
     )
-    media = types.SimpleNamespace(
-        cfg={},
-        radarr=Arr("Radarr", ["/data/Movies/Dune (2021)/Dune.mkv"]),
-        sonarr=Arr("Sonarr", ["/data/TV/Andor/Season 01/Andor.S01E01.mkv"]),
+    media = media_mod.MediaService(
+        {},
+        log,
+        Arr("Radarr", ["/data/Movies/Dune (2021)/Dune.mkv"]),
+        Arr("Sonarr", ["/data/TV/Andor/Season 01/Andor.S01E01.mkv"]),
         qbit=Qbit(root),
-        prowlarr=None,
     )
     tk = assistant.Toolkit(dispatch, log, media=media)
     tk.load([s.name for s in assistant.REGISTRY if s.area == "storage"])
@@ -111,7 +128,7 @@ def test_orphan_files_cross_the_arr_records_and_the_torrents(rig):
     assert [r["path"] for r in out["stray_downloads"]] == ["torrents/Leftover.Stuff"]
 
 
-def test_delete_path_is_guarded_gated_and_final(rig, root, log=None):
+def test_delete_path_is_guarded_gated_and_final(rig, root):
     tk, dispatch, log = rig
     for bad in ("", "Movies", "TV", "torrents", "..", "../x", "Movies/Nope (2000)"):
         r = tk.call("delete_path", {"path": bad})
@@ -137,6 +154,34 @@ def test_delete_path_is_guarded_gated_and_final(rig, root, log=None):
     dispatch.dry_run = True
     dry = tk.call("delete_path", {"path": "torrents/Leftover.Stuff/x.bin"})
     assert dry["dry_run"] and (root / "torrents" / "Leftover.Stuff" / "x.bin").exists()
+    dispatch.dry_run = False
+    # With an arr app unreadable, nothing is deletable and nothing is an orphan.
+    tk.ctx.media.sonarr.down = True
+    unsure = tk.call("delete_path", {"path": "torrents/Leftover.Stuff/x.bin"})
+    assert not unsure["ok"] and "could not read" in unsure["error"]
+    assert not tk.call("orphan_files", {})["ok"]
+    tk.ctx.media.sonarr.down = False
+
+
+def test_junctions_are_never_deleted_through(rig, root):
+    import subprocess
+
+    tk, dispatch, _ = rig
+    link = root / "torrents" / "JunctionIn"
+    target = root / "Movies" / "Dune (2021)"
+    r = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True
+    )
+    if r.returncode != 0:
+        pytest.skip("cannot create a junction here")
+    # A junction under torrents resolves to a real folder under Movies. It is
+    # neither a stray download nor a deletable path, and its size is not
+    # counted twice.
+    orphans = tk.call("orphan_files", {})
+    assert "torrents/JunctionIn" not in [r["path"] for r in orphans["stray_downloads"]]
+    assert not tk.call("delete_path", {"path": "torrents/JunctionIn"})["ok"]
+    assert target.exists()
+    assert storage.tree_size(root / "torrents")[1] == 2
 
 
 def test_drive_health_reads_the_last_smart_warning(rig):

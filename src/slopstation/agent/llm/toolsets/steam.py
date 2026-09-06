@@ -236,6 +236,8 @@ SPECS = [
         area="steam",
         keywords=(
             "hours played",
+            "hours have i played",
+            "how many hours",
             "playtime",
             "how much have i played",
             "total hours",
@@ -349,6 +351,9 @@ def impls(ctx: ToolContext):
             def from_details():
                 data = steamstore.fetch_appdetails(appid)
                 out: dict[str, Any] = {}
+                if data is None:
+                    # One store call failed; do not let each facet retry it.
+                    return out
                 if "dlc" in details:
                     out["dlc"] = steamstore.fetch_dlc(appid, data)
                 if "requirements" in details:
@@ -366,7 +371,8 @@ def impls(ctx: ToolContext):
                     try:
                         value = f.result()
                     except Exception as e:
-                        log.warn("facet_failed", facet=k, appid=appid, err=str(e))
+                        facet = ",".join(sorted(details)) if k == "_details" else k
+                        log.warn("facet_failed", facet=facet, appid=appid, err=str(e))
                         value = None
                     if k == "_details" and isinstance(value, dict):
                         facets.update(value)
@@ -442,11 +448,13 @@ def impls(ctx: ToolContext):
                     "error": "steamId64 isn't set, so the wishlist can't be read",
                 }
             rows = steamstore.fetch_wishlist(steamid)
+            if rows is None:
+                return {"ok": False, "error": "couldn't reach the Steam store just now"}
             return {
                 "ok": True,
                 "source": source,
                 "count": len(rows),
-                "games": rows[:LIMIT_MAX],
+                "games": rows[:10],
             }
         if source == "specials":
             return {
@@ -612,6 +620,8 @@ def impls(ctx: ToolContext):
                 "error": f"section must be one of {', '.join(steamstore.FEATURED_SECTIONS)}",
             }
         rows = steamstore.fetch_featured(section)
+        if rows is None:
+            return {"ok": False, "error": "couldn't reach the Steam store just now"}
         limit = _limit(args)
         return {
             "ok": True,
@@ -635,21 +645,7 @@ def impls(ctx: ToolContext):
         if ctx.dispatch.dry_run:
             log("dry_run_would", action=f"wishlist {action} {appid}")
             return {"ok": True, "dry_run": True, "detail": f"would {action} {appid}"}
-        method = "AddToWishlist" if action == "add" else "RemoveFromWishlist"
-        try:
-            _, eresult = steam._post(
-                f"IWishlistService/{method}/v1",
-                {"access_token": steam.access_token(), "appid": appid},
-            )
-        except Exception as e:
-            log.error("wishlist_edit_error", appid=appid, err=str(e))
-            return {"ok": False, "error": "couldn't reach Steam to change the wishlist"}
-        if eresult not in (None, "1"):
-            return {
-                "ok": False,
-                "error": f"Steam refused the wishlist change (code {eresult})",
-            }
-        return {"ok": True, "appid": appid, "action": action}
+        return steam.wishlist(appid, action == "add")
 
     return {
         "get_game_details": get_game_details,

@@ -242,6 +242,8 @@ SPECS = [
         keywords=(
             "torrent priority",
             "move to top",
+            "top of the queue",
+            "move that torrent",
             "queue position",
             "download first",
         ),
@@ -467,6 +469,7 @@ def impls(ctx: ToolContext):
         )
 
     def _link():
+        """For reads: an unreadable queue means rows show no owner."""
         try:
             return media.download_index()
         except Exception as e:
@@ -475,7 +478,7 @@ def impls(ctx: ToolContext):
 
     def _after(hashes):
         """The state qBittorrent holds after an action, for the reply."""
-        rows = qbit.torrents() if hashes == "all" else qbit.torrents()
+        rows = qbit.torrents()
         wanted = None if hashes == "all" else set(hashes)
         return [
             {"hash": t.get("hash"), "name": t.get("name"), "state": t.get("state")}
@@ -620,7 +623,16 @@ def impls(ctx: ToolContext):
         if err:
             return err
         delete_files = bool(args.get("delete_files", False))
-        link = _link().get(h)
+        try:
+            # Strict: an unread queue must refuse, not pass as unlinked.
+            link = media.download_index(strict=True).get(h)
+        except Exception as e:
+            log.warn("download_index_failed", err=str(e))
+            return {
+                "ok": False,
+                "error": "could not read Radarr's or Sonarr's queue, so cannot "
+                "tell whether this download is theirs - try again shortly",
+            }
         if link:
             log.warn(
                 "tool_refused",
@@ -664,6 +676,7 @@ def impls(ctx: ToolContext):
         except Exception as e:
             log.error("tool_error", tool="delete_torrent", err=str(e))
             return {"ok": False, "error": str(e)}
+        ctx.gate.done(("torrent", h, delete_files))
         return {
             "ok": True,
             "deleted": name,
@@ -697,12 +710,14 @@ def impls(ctx: ToolContext):
             )
             if state.get("free_space_on_disk") is not None
             else None,
-            "queued_downloads": state.get("queued_io_jobs"),
+            "queued_disk_jobs": state.get("queued_io_jobs"),
         }
 
     def set_speed_limits(args):
         down, up = args.get("download_kbps"), args.get("upload_kbps")
         alt = args.get("alternative")
+        if alt is not None and not isinstance(alt, bool):
+            return {"ok": False, "error": "alternative must be true or false"}
         h = _hash(args.get("hash")) if args.get("hash") else None
         if args.get("hash") and h is None:
             return {"ok": False, "error": "that is not a torrent hash"}
@@ -811,17 +826,16 @@ def impls(ctx: ToolContext):
     def orphan_torrents(args):
         try:
             rows = qbit.torrents(filter="completed")
-            link = media.download_index()
-            known = media.known_download_ids()
+            link = media.download_index(strict=True)
+            unlinked = [t for t in rows if str(t.get("hash", "")).lower() not in link]
+            orphans = [
+                t
+                for t in unlinked
+                if not media.download_known(str(t.get("hash", "")).lower())
+            ]
         except Exception as e:
             log.error("tool_error", tool="orphan_torrents", err=str(e))
             return {"ok": False, "error": str(e)}
-        orphans = [
-            t
-            for t in rows
-            if str(t.get("hash", "")).lower() not in link
-            and str(t.get("hash", "")).lower() not in known
-        ]
         return {
             "ok": True,
             "count": len(orphans),
@@ -845,9 +859,13 @@ def impls(ctx: ToolContext):
         except Exception as e:
             log.error("tool_error", tool="vpn_status", err=str(e))
             return {"ok": False, "error": str(e)}
-        proton = media_proton.read_proton_port_state()
+        try:
+            proton = media_proton.read_proton_port_state()
+        except Exception as e:
+            proton = {"state": "unreadable", "detail": str(e)}
         listen = int(prefs.get("listen_port", 0) or 0)
         forwarded = proton.get("port") if isinstance(proton, dict) else None
+        active = isinstance(proton, dict) and proton.get("state") == "active"
         return {
             "ok": True,
             "interface": prefs.get("current_interface_name")
@@ -855,7 +873,9 @@ def impls(ctx: ToolContext):
             "bound_address": prefs.get("current_interface_address"),
             "listen_port": listen,
             "proton": proton,
-            "ports_agree": forwarded is not None and int(forwarded) == listen,
+            "ports_agree": active
+            and forwarded is not None
+            and int(forwarded) == listen,
         }
 
     def qbit_log(args):

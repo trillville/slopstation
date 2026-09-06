@@ -37,8 +37,12 @@ def impls(ctx: ToolContext):
         if not query:
             return {"ok": False, "error": "say what the user wants, in a few words"}
         toolkit = ctx.toolkit
+        # Only tools this toolkit can offer: a tool whose service is absent
+        # must not be found, or the model is told it is loaded and then told
+        # it does not exist.
+        unreachable = set(toolkit.registry.names()) - set(toolkit.offered)
         matches = toolsearch.search(
-            toolkit.registry, query, exclude=set(toolkit.loaded)
+            toolkit.registry, query, exclude=unreachable | set(toolkit.loaded)
         )
         if matches:
             names = toolkit.load([spec.name for spec, _ in matches])
@@ -53,6 +57,7 @@ def impls(ctx: ToolContext):
                         "risk": spec.risk,
                     }
                     for spec, _ in matches
+                    if spec.name in names
                 ],
                 "detail": "these tools are loaded now - call the right one directly",
             }

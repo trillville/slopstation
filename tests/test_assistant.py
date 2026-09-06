@@ -755,13 +755,18 @@ def test_nav_reaches_the_newer_pages_search_and_allowed_urls(
     assert nav({"target": "news"})["ok"] and seen[-1] == ("news", None)
     assert nav({"target": "news", "appid": INSTALLED})["ok"]
     assert seen[-1] == ("news", INSTALLED)
-    # search builds a store URL with the words encoded.
+    # search builds a store URL with the words encoded, trimmed to fit the
+    # PC's URL length when the encoding blows up.
     assert nav({"target": "search", "query": "co-op roguelike & friends"})["ok"]
     assert seen[-1] == (
         "url",
         "https://store.steampowered.com/search/?term=co-op+roguelike+%26+friends",
     )
+    assert nav({"target": "search", "query": "'" * 120})["ok"]
+    assert len(seen[-1][1]) <= len("https://store.steampowered.com/") + 300
     assert not nav({"target": "search", "query": " "})["ok"]
+    # The two front pages are pages too.
+    assert nav({"target": "web", "url": "https://steamcommunity.com/"})["ok"]
     # web takes the two Steam hosts and nothing else.
     assert nav({"target": "web", "url": "https://steamcommunity.com/id/someone/"})["ok"]
     assert seen[-1] == ("url", "https://steamcommunity.com/id/someone/")

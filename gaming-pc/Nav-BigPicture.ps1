@@ -34,7 +34,7 @@ try {
         'validate'    { if ($arg -match '^\d{1,10}$') { "steam://validate/$arg" } else { $null } }
         # Re-checked against the same allowlist Dispatch used: the URL becomes
         # part of a steam://openurl and nothing else may.
-        'url'         { if ($arg -match '^https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{1,300}$') { "steam://openurl/$arg" } else { $null } }
+        'url'         { if ($arg -match '^https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{0,300}$') { "steam://openurl/$arg" } else { $null } }
         default      { $null }
     }
     if (-not $url) { throw "unrecognized nav target: '$target'" }

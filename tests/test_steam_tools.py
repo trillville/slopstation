@@ -109,9 +109,9 @@ class FakeSteam:
         self.calls.append(("uninstall", appid))
         return {"ok": True, "detail": "Steam is uninstalling it", "verified": True}
 
-    def _post(self, method, data):
-        self.calls.append(("post", method, dict(data)))
-        return None, "1"
+    def wishlist(self, appid, add):
+        self.calls.append(("wishlist", appid, add))
+        return {"ok": True, "appid": appid, "action": "add" if add else "remove"}
 
 
 @pytest.fixture
@@ -313,9 +313,8 @@ def test_achievements_new_releases_and_wishlist_edit(rig, monkeypatch):
     )
     assert not tk.call("new_releases", {"section": "hidden_gems"})["ok"]
     out = tk.call("wishlist_edit", {"appid": UNOWNED, "action": "add"})
-    assert out["ok"] and steam.calls[-1][1] == "IWishlistService/AddToWishlist/v1"
-    assert steam.calls[-1][2] == {"access_token": "tok", "appid": UNOWNED}
-    steam._post = lambda m, d: (None, "15")
+    assert out["ok"] and steam.calls[-1] == ("wishlist", UNOWNED, True)
+    steam.wishlist = lambda a, add: {"ok": False, "error": "Steam refused (code 15)"}
     assert (
         "code 15"
         in tk.call("wishlist_edit", {"appid": UNOWNED, "action": "remove"})["error"]
@@ -346,7 +345,7 @@ def test_steam_client_tools_report_what_steam_holds(rig, log):
         "verified": False,
     }
     out = tk.call("pause_downloads", {"appid": INSTALLED})
-    assert out["ok"] and "does not yet show" in out["detail"]
+    assert out["ok"] and "still shows the download as running" in out["detail"]
     # Uninstall: not installed, running, gated, then done.
     assert not tk.call("uninstall_game", {"appid": OWNED})["ok"]
     playing["appid"] = INSTALLED
@@ -411,6 +410,40 @@ def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
     monkeypatch.setattr(gamepc, "ssh", down)
     pc = tk.call("pc_status", {})
     assert pc["ok"] and pc["reachable"] is False and "asleep" in pc["detail"]
+    # ssh exit 255 is no connection; any other exit is the PC answering.
+    import subprocess
+
+    def denied(cmd, **kw):
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(gamepc, "ssh", denied)
+    pc = tk.call("pc_status", {})
+    assert pc["reachable"] is True and "version skew" in pc["detail"]
+
+    def unreachable(cmd, **kw):
+        raise subprocess.CalledProcessError(255, cmd)
+
+    monkeypatch.setattr(gamepc, "ssh", unreachable)
+    assert tk.call("pc_status", {})["reachable"] is False
+    # Two library roots on one drive report one drive.
+    answers["disk"] = json.dumps(
+        [
+            {
+                "root": "c:\\steam",
+                "drive": "C:\\",
+                "free": 1024**3,
+                "total": 2 * 1024**3,
+            },
+            {
+                "root": "c:\\games",
+                "drive": "C:\\",
+                "free": 1024**3,
+                "total": 2 * 1024**3,
+            },
+        ]
+    )
+    monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: answers[cmd.split()[0]])
+    assert len(tk.call("pc_status", {})["steam_drives"]) == 1
     # Power: wake sends the packet; sleep is refused while a session is live.
     woke = []
     monkeypatch.setattr("slopstation.couch.wol", lambda: woke.append(1))

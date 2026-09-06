@@ -17,15 +17,26 @@ from slopstation.agent.llm.registry import ToolContext, ToolSpec
 from slopstation.agent.tools import apidocs, library
 
 METHODS = ("GET", "POST", "PUT", "DELETE")
-PATH_RE = re.compile(r"^[A-Za-z0-9/_.\-{}]{1,200}$")
+# No empty segments: the blocklist is a string match, so `config//host` must
+# not read differently from `config/host`.
+PATH_RE = re.compile(r"^[A-Za-z0-9_.\-{}]+(/[A-Za-z0-9_.\-{}]+)*$")
 MAX_RESULT_CHARS = 8000
 
 SECRET_KEY_RE = re.compile(
-    r"(api[_-]?key|token|password|passwd|secret|passkey|authorization|cookie)",
+    r"(api[_-]?key|token|password|passwd|secret|passkey|authorization|cookie|magnet)",
     re.I,
 )
-# Private trackers put the account passkey in the announce URL.
-TRACKER_RE = re.compile(r"^(udp|https?)://\S*(announce|passkey|authkey)", re.I)
+# Private trackers put the account passkey in the announce URL; a magnet link
+# carries every tracker URL-encoded.
+TRACKER_RE = re.compile(
+    r"^(udp|wss?|https?)://\S*(announce|scrape|passkey|authkey)|^magnet:", re.I
+)
+# A credential inside a longer string: a query parameter, a URL, an error.
+SECRET_PARAM_RE = re.compile(
+    r"(?i)\b(key|api_?key|access_token|token|passkey|authkey|password)=[^&\s\"']+"
+)
+# Servarr provider resources carry credentials as fields [{name, value}].
+SECRET_PRIVACY = ("password", "apikey")
 
 # Operator settings: changed at a keyboard, not from the couch. Prefixes,
 # matched against the path with its leading slash stripped.
@@ -50,17 +61,61 @@ ARR_BLOCKED_WRITE = (
     "indexerproxy",
     "development",
 )
-ARR_BLOCKED_READ = ("config/host", "system/backup", "config/downloadclient")
+# Reads that are settings pages or credential stores in their own right.
+ARR_BLOCKED_READ = (
+    "config",
+    "system/backup",
+    "downloadclient",
+    "notification",
+    "applications",
+    "indexerproxy",
+)
+# Commands that restart or rewrite the app rather than act on media.
+ARR_BLOCKED_COMMANDS = ("applicationupdate", "backup", "restart", "reset")
 QBIT_BLOCKED = (
     "app/shutdown",
     "app/setPreferences",
     "app/setCookies",
-    "rss/",
+    "rss",
     "search/installPlugin",
     "search/uninstallPlugin",
     "search/updatePlugins",
     "torrents/removeCategories",
     "torrents/deleteTags",
+)
+# qBittorrent runs the same action for GET and POST (only a newer server
+# answers 405 for the wrong verb), so the method the model wrote is not what
+# decides whether a call mutates. Everything outside this read set is gated.
+QBIT_READS = (
+    "torrents/info",
+    "torrents/properties",
+    "torrents/files",
+    "torrents/trackers",
+    "torrents/webseeds",
+    "torrents/pieceStates",
+    "torrents/pieceHashes",
+    "torrents/categories",
+    "torrents/tags",
+    "torrents/count",
+    "torrents/export",
+    "transfer/info",
+    "transfer/speedLimitsMode",
+    "transfer/downloadLimit",
+    "transfer/uploadLimit",
+    "app/version",
+    "app/webapiVersion",
+    "app/buildInfo",
+    "app/preferences",
+    "app/defaultSavePath",
+    "app/networkInterfaceList",
+    "app/networkInterfaceAddressList",
+    "sync/maindata",
+    "sync/torrentPeers",
+    "log/main",
+    "log/peers",
+    "search/status",
+    "search/results",
+    "search/plugins",
 )
 STEAM_HOSTS = ("api.steampowered.com", "store.steampowered.com", "steamcommunity.com")
 
@@ -191,16 +246,29 @@ SPECS = [
 
 
 def scrub(value):
-    """Redact secret-shaped fields and tracker URLs, recursively."""
+    """Redact secret-shaped fields, provider credential fields, tracker and
+    magnet URLs, and credentials inside strings, recursively."""
     if isinstance(value, dict):
-        return {
-            k: ("[redacted]" if SECRET_KEY_RE.search(str(k)) else scrub(v))
-            for k, v in value.items()
-        }
+        out = {}
+        # {name: "apiKey", value: ...} / {privacy: "password", value: ...}
+        field_secret = (
+            SECRET_KEY_RE.search(str(value.get("name", "")))
+            or str(value.get("privacy", "")).lower() in SECRET_PRIVACY
+        )
+        for k, v in value.items():
+            if SECRET_KEY_RE.search(str(k)) or (field_secret and k == "value"):
+                out[k] = "[redacted]"
+            else:
+                out[k] = scrub(v)
+        return out
     if isinstance(value, list):
         return [scrub(v) for v in value]
-    if isinstance(value, str) and TRACKER_RE.match(value):
-        return "[redacted tracker url]"
+    if isinstance(value, str):
+        if TRACKER_RE.match(value):
+            return "[redacted tracker url]"
+        return SECRET_PARAM_RE.sub(
+            lambda m: m.group(0).split("=")[0] + "=[redacted]", value
+        )
     return value
 
 
@@ -211,24 +279,38 @@ def _cap(result):
     return text[:MAX_RESULT_CHARS] + " ...", True
 
 
-def _blocked(service, method, path):
+def _under(path, prefixes):
+    """Whole-segment prefix match: `tag` covers `tag` and `tag/3`, not `tags`."""
     p = path.lower()
+    return any(p == b.lower() or p.startswith(b.lower() + "/") for b in prefixes)
+
+
+def _blocked(service, method, path, body=None):
     if service in ("radarr", "sonarr", "prowlarr"):
-        if method != "GET" and p.startswith(ARR_BLOCKED_WRITE):
+        if method != "GET" and _under(path, ARR_BLOCKED_WRITE):
             return True
-        if p.startswith(ARR_BLOCKED_READ):
+        if _under(path, ARR_BLOCKED_READ):
             return True
+        if method != "GET" and _under(path, ("command",)) and isinstance(body, dict):
+            if str(body.get("name", "")).lower() in ARR_BLOCKED_COMMANDS:
+                return True
     if service == "qbittorrent":
-        return any(p.startswith(b.lower()) for b in QBIT_BLOCKED)
+        return _under(path, QBIT_BLOCKED)
     return False
+
+
+def _qbit_mutates(method, path):
+    return method != "GET" or not _under(path, QBIT_READS)
 
 
 def impls(ctx: ToolContext):
     dispatch, log, media, steam = ctx.dispatch, ctx.log, ctx.media, ctx.steam
 
-    def _run(service, args, send):
+    def _run(service, args, send, tag=""):
+        """`tag` names anything beyond method, path and body that the user is
+        confirming (the Steam credential), so it is shown and in the scope."""
         method = str(args.get("method") or "GET").upper()
-        path = str(args.get("path") or "").strip().lstrip("/")
+        path = str(args.get("path") or "").strip().strip("/")
         params = args.get("params") or {}
         body = args.get("body")
         if method not in METHODS:
@@ -239,7 +321,10 @@ def impls(ctx: ToolContext):
             body is not None and not isinstance(body, dict)
         ):
             return {"ok": False, "error": "params and body must be objects"}
-        if _blocked(service, method, path):
+        if service == "qbittorrent" and _qbit_mutates(method, path):
+            # An action is an action whatever verb the model wrote.
+            method = "POST"
+        if _blocked(service, method, path, body):
             log.warn(
                 "tool_refused", tool=f"{service}_api", reason="blocklisted", path=path
             )
@@ -250,20 +335,22 @@ def impls(ctx: ToolContext):
             }
         literal = (
             f"{method} /{path}"
+            + (f" ({tag})" if tag else "")
             + (f" ?{json.dumps(params)}" if params else "")
             + (f" {json.dumps(body)}" if body is not None else "")
+        )
+        scope = (
+            service,
+            method,
+            path,
+            tag,
+            json.dumps(params, sort_keys=True),
+            json.dumps(body, sort_keys=True),
         )
         if method != "GET":
             if dispatch.dry_run:
                 log("dry_run_would", action=f"{service}: {literal}")
                 return {"ok": True, "dry_run": True, "detail": f"would run {literal}"}
-            scope = (
-                service,
-                method,
-                path,
-                json.dumps(params, sort_keys=True),
-                json.dumps(body, sort_keys=True),
-            )
             if not ctx.gate.confirmed(scope, dispatch.utterance.turn):
                 log.warn(
                     "tool_refused",
@@ -280,8 +367,12 @@ def impls(ctx: ToolContext):
         try:
             result = send(method, path, params, body)
         except Exception as e:
-            log.error("tool_error", tool=f"{service}_api", err=str(e))
-            return {"ok": False, "error": str(e)}
+            # Through the scrub: a transport error can quote the URL.
+            err = scrub(str(e))
+            log.error("tool_error", tool=f"{service}_api", err=err)
+            return {"ok": False, "error": err}
+        if method != "GET":
+            ctx.gate.done(scope)
         result, truncated = _cap(scrub(result))
         asked = getattr(dispatch.utterance, "asked", None) or ""
         # `api`, not `service`: that name belongs to the log record itself.
@@ -305,10 +396,13 @@ def impls(ctx: ToolContext):
         return send
 
     def _qbit(method, path, params, body):
-        # qBittorrent takes form fields, not JSON; a GET carries them as query.
+        # qBittorrent takes form fields, not JSON. A read carries its params
+        # in the query; an action posts them as form fields.
         if method == "GET":
-            return media.qbit.call("GET", path, params={**params, **(body or {})})
-        return media.qbit.call(method, path, params=params or None, payload=body or {})
+            return media.qbit.call("GET", path, params=params or None)
+        return media.qbit.call(
+            method, path, params=None, payload={**params, **(body or {})}
+        )
 
     def _steam(method, path, params, body, auth):
         import requests
@@ -332,14 +426,18 @@ def impls(ctx: ToolContext):
             params.setdefault("steamid", creds[1])
         if not url.endswith("/") and host == "api.steampowered.com":
             url += "/"
-        r = requests.request(
-            method,
-            url,
-            params=params,
-            data=body if method != "GET" else None,
-            timeout=20,
-            headers={"Accept": "application/json"},
-        )
+        try:
+            r = requests.request(
+                method,
+                url,
+                params=params,
+                data=body if method != "GET" else None,
+                timeout=20,
+                headers={"Accept": "application/json"},
+            )
+        except requests.RequestException as e:
+            # Never the message: it quotes the URL, credential and all.
+            raise RuntimeError(f"steam request failed ({type(e).__name__})") from None
         try:
             value = r.json()
         except ValueError:
@@ -378,7 +476,12 @@ def impls(ctx: ToolContext):
         auth = str(args.get("auth") or "none")
         if auth not in ("none", "key", "account"):
             return {"ok": False, "error": "auth must be none, key or account"}
-        return _run("steam", args, lambda m, p, q, b: _steam(m, p, q, b, auth))
+        return _run(
+            "steam",
+            args,
+            lambda m, p, q, b: _steam(m, p, q, b, auth),
+            tag=f"auth: {auth}",
+        )
 
     return {
         "describe_api": describe_api,

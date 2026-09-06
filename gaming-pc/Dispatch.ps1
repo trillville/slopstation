@@ -209,7 +209,7 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   # whitespace, so the URL can never swallow the turn. The same text lives in
   # gamepc.py (refused before the wire) and Nav-BigPicture.ps1 (re-checked
   # before it becomes a steam://openurl).
-  '^nav url (https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{1,300})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
+  '^nav url (https://(?:store\.steampowered\.com|steamcommunity\.com)/[A-Za-z0-9/_.~?=&%+-]{0,300})( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       $turn = $Matches[3]
       if (-not (Test-Path $ready)) { Write-Answer 'nav' 'NOTREADY' $turn; break }
       Set-Turn $turn
@@ -233,24 +233,36 @@ switch -Regex ($env:SSH_ORIGINAL_COMMAND) {
   # disk: free space on each Steam library drive, for "can I install X".
   '^disk\z' {
       $out = @()
+      $seen = @{}
       foreach ($root in (Get-SteamRoots)) {
         try {
           $d = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
+          if ($seen.ContainsKey($d.Name)) { continue }
+          $seen[$d.Name] = $true
           $out += [pscustomobject]@{ root = $root; drive = $d.Name
             free = [long]$d.AvailableFreeSpace; total = [long]$d.TotalSize }
         } catch { }
       }
       ConvertTo-Json -InputObject @($out) -Compress -Depth 3
       break }
-  # sleep: suspend the PC. Refused (BUSY) while a session is live or a game
-  # runs, so it can never end what is on the TV.
+  # sleep: suspend the PC. Refused (BUSY) while a session is live, a game
+  # runs, or someone is signed in at the desk, so it can never end what is on
+  # the TV or under someone's hands. The suspend runs in a child powershell
+  # through the typed .NET call (Suspend, not Hibernate): rundll32's
+  # SetSuspendState misreads its arguments and hibernates. SetSuspendState
+  # blocks until the PC wakes, so the child is fire-and-forget and OK means
+  # "asked", not "asleep".
   '^sleep( --turn ((?-i:[0-9a-f]{1,8})))?\z' {
       $turn = $Matches[2]
       if (Test-Path $ready) { Write-Answer 'sleep' 'BUSY' $turn; break }
       $run = Get-RunningAppId
       if ($run -and $run -ne 0) { Write-Answer 'sleep' "BUSY:$run" $turn; break }
-      Set-Turn $turn
-      Start-Process -FilePath 'rundll32.exe' -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0'
+      $desk = $false
+      try { $desk = [bool](quser 2>$null | Select-String -Pattern '\sActive\s') } catch { }
+      if ($desk) { Write-Answer 'sleep' 'BUSY:desk' $turn; break }
+      Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-Command',
+        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState('Suspend', `$false, `$false)")
       Write-Answer 'sleep' 'OK' $turn
       break }
   # collections: library collections as [{name,id}] JSON. Skip entries that

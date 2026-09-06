@@ -341,6 +341,9 @@ class Session:
         # Built after the gate so its request_stop can ride here. When
         # find_tools loads more, the context's tool list is replaced; Pipecat
         # re-reads it on the next inference and registers the new handlers.
+        # on_load runs on the tool's worker thread (asyncio.to_thread), not
+        # the loop: set_tools is one attribute assignment, so that is safe,
+        # and the loop only reads the list after the tool result lands.
         self.toolkit = Toolkit(
             dispatcher,
             log,

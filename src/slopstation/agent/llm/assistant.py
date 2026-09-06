@@ -137,10 +137,27 @@ class Toolkit:
         return REGISTRY.anthropic_tools(self.loaded)
 
     def call(self, name, args):
+        """Run one loaded tool. Unloaded is refused even when offered: the
+        search step is the pause before a destructive tool, so it has to be
+        real. A raising tool becomes an error dict, never a broken turn (an
+        Anthropic history with a tool_use and no tool_result fails every
+        later request of that session)."""
         fn = self.impls.get(name)
         if fn is None:
             return {"ok": False, "error": f"there is no tool called {name}"}
-        return fn(args)
+        if name not in self.loaded:
+            return {
+                "ok": False,
+                "error": f"{name} is not loaded - call find_tools for it first",
+            }
+        try:
+            return fn(args)
+        except Exception as e:
+            self.log.error("tool_error", tool=name, err=repr(e))
+            return {
+                "ok": False,
+                "error": "that didn't go through - something upstream failed",
+            }
 
     def function_schemas(self, log=None):
         """Pipecat schemas for the LOADED tools."""

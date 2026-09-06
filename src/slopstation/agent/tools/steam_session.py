@@ -26,11 +26,10 @@ UA = (
 
 # EAuthTokenPlatformType - WebBrowser is 2; MobileApp (3) is the flagged one.
 PLATFORM_WEBBROWSER = 2
-# SetClientAppUpdateState's `action`. The field is in Steam's protobufs; its
-# values are not documented, so these are the store site's own and every call
-# re-reads the app list and reports the paused flag Steam actually holds. If
-# the readback disagrees, these two numbers are what to fix.
-UPDATE_ACTIONS = {"pause": 1, "resume": 2}
+# SetClientAppUpdateState's `action`, per Valve's own method description
+# ("1 to resume downloading, 0 to pause downloading"). Every call still
+# re-reads the app list and reports the paused flag Steam actually holds.
+UPDATE_ACTIONS = {"pause": 0, "resume": 1}
 # Delay between GET retries.
 _RETRY_BACKOFF_S = 0.3
 
@@ -354,12 +353,12 @@ class SteamSession:
         }
 
     def _mutate(self, method, appid, extra, what):
-        """One ClientComm mutation against the target client -> (eresult, None),
-        or (None, an error dict) when there is no client or Steam refused. Empty 200s are the norm; X-eresult != 1 is
-        the failure signal."""
+        """One ClientComm mutation against the target client. Returns None on
+        success, or an error dict when there is no client or Steam refused.
+        Empty 200s are the norm; X-eresult != 1 is the failure signal."""
         tgt = self._target()
         if not tgt:
-            return None, {
+            return {
                 "ok": False,
                 "error": "the gaming PC isn't online in Steam right now",
             }
@@ -373,11 +372,11 @@ class SteamSession:
         _, eresult = self._post(f"IClientCommService/{method}/v1", data)
         if eresult not in (None, "1"):
             self.log.warn("clientcomm_refused", what=what, appid=appid, eresult=eresult)
-            return None, {
+            return {
                 "ok": False,
                 "error": f"Steam refused ({what}, code {eresult})",
             }
-        return eresult, None
+        return None
 
     def set_update_state(self, appid, action):
         """Pause or resume one app's download; reports the paused flag Steam
@@ -389,7 +388,7 @@ class SteamSession:
                 "error": f"action must be one of {list(UPDATE_ACTIONS)}",
             }
         try:
-            eresult, err = self._mutate(
+            err = self._mutate(
                 "SetClientAppUpdateState",
                 appid,
                 {"action": UPDATE_ACTIONS[action]},
@@ -417,28 +416,57 @@ class SteamSession:
         }
 
     def enable_downloads(self, enable):
-        """The client's global download switch. Never raises."""
+        """The client's global download switch, with the same readback as a
+        per-app change: the paused flags of everything changing. Never
+        raises."""
         try:
-            _, err = self._mutate(
+            err = self._mutate(
                 "EnableOrDisableDownloads",
                 None,
                 {"enable": "true" if enable else "false"},
                 "enable_downloads" if enable else "disable_downloads",
             )
+            if err:
+                return err
+            time.sleep(1.5)
+            apps = self.app_list()
         except Exception as e:
             self.log.error("downloads_switch_error", err=str(e))
             return {"ok": False, "error": "couldn't reach Steam to switch downloads"}
-        if err:
-            return err
-        self.log("downloads_switched", enabled=bool(enable))
-        return {"ok": True, "downloads_enabled": bool(enable)}
+        paused = [a["paused"] for a in apps.values() if a.get("changing")]
+        verified = None if not paused else all(p == (not enable) for p in paused)
+        self.log("downloads_switched", enabled=bool(enable), verified=verified)
+        return {
+            "ok": True,
+            "downloads_enabled": bool(enable),
+            "changing": len(paused),
+            "verified": verified,
+        }
+
+    def wishlist(self, appid, add):
+        """Add to or remove from the account's wishlist. Never raises."""
+        method = "AddToWishlist" if add else "RemoveFromWishlist"
+        try:
+            _, eresult = self._post(
+                f"IWishlistService/{method}/v1",
+                {"access_token": self.access_token(), "appid": int(appid)},
+            )
+        except Exception as e:
+            self.log.error("wishlist_edit_error", appid=appid, err=str(e))
+            return {"ok": False, "error": "couldn't reach Steam to change the wishlist"}
+        if eresult not in (None, "1"):
+            return {
+                "ok": False,
+                "error": f"Steam refused the wishlist change (code {eresult})",
+            }
+        return {"ok": True, "appid": int(appid), "action": "add" if add else "remove"}
 
     def uninstall(self, appid):
         """Uninstall one app on the target client; the changing list shows it
         uninstalling. Never raises."""
         appid = int(appid)
         try:
-            _, err = self._mutate("UninstallClientApp", appid, {}, "uninstall")
+            err = self._mutate("UninstallClientApp", appid, {}, "uninstall")
             if err:
                 return err
             time.sleep(1.5)

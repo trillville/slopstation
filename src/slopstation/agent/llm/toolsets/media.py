@@ -332,6 +332,12 @@ def impls(ctx: ToolContext):
                     all_seasons=all_seasons,
                     command_ids=command_ids,
                 )
+            ctx.gate.done(scope)
+            ctx.gate.done(scope)
+            ctx.gate.done(scope)
+            ctx.gate.done(scope)
+            ctx.gate.done(scope)
+            ctx.gate.done(scope)
             return operations_mod.record_deleted(operations, covered, result)
         except Exception as e:
             log.error("tool_error", tool="delete_media", err=str(e))

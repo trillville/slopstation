@@ -202,7 +202,11 @@ class FakeMedia:
         self.sonarr = types.SimpleNamespace(name="Sonarr", get=lambda *a, **k: [])
         self.cfg = {}
 
-    def download_index(self):
+    fail_link = False
+
+    def download_index(self, strict=False):
+        if self.fail_link:
+            raise RuntimeError("Sonarr's queue could not be read")
         return {
             LINKED: {
                 "kind": "movie",
@@ -213,8 +217,8 @@ class FakeMedia:
             }
         }
 
-    def known_download_ids(self):
-        return {LINKED, SEEDING}
+    def download_known(self, download_id):
+        return download_id in {LINKED, SEEDING}
 
 
 @pytest.fixture
@@ -305,6 +309,12 @@ def test_delete_torrent_refuses_a_linked_torrent_and_gates_an_orphan(
     rig, log, monkeypatch
 ):
     tk, qbit, dispatch = rig
+    # An unread queue refuses: it cannot pass as "not linked".
+    tk.ctx.media.fail_link = True
+    unsure = tk.call("delete_torrent", {"hash": ORPHAN, "delete_files": True})
+    assert not unsure["ok"] and "could not read" in unsure["error"]
+    assert not tk.call("orphan_torrents", {})["ok"]
+    tk.ctx.media.fail_link = False
     refused = tk.call("delete_torrent", {"hash": LINKED, "delete_files": True})
     assert (
         not refused["ok"]
@@ -368,6 +378,9 @@ def test_transfer_info_and_speed_limits(rig):
     assert not tk.call("set_speed_limits", {"download_kbps": -1})["ok"]
     assert not tk.call("set_speed_limits", {"download_kbps": True})["ok"]
     assert not tk.call("set_speed_limits", {"hash": SEEDING, "alternative": True})["ok"]
+    assert not tk.call("set_speed_limits", {"alternative": "false"})["ok"], (
+        "a string is not a switch"
+    )
     assert not tk.call("set_speed_limits", {"hash": "bad", "upload_kbps": 1})["ok"]
 
 
@@ -386,12 +399,29 @@ def test_seeding_orphans_vpn_and_log(rig, monkeypatch):
     monkeypatch.setattr(
         media_proton,
         "read_proton_port_state",
-        lambda path=None, now=None: {"status": "ok", "port": 51820, "age_s": 30},
+        lambda path=None, now=None: {"status": "ok", "port": 51820, "state": "active"},
     )
     vpn = tk.call("vpn_status", {})
     assert vpn["ok"] and vpn["interface"] == "ProtonVPN" and vpn["ports_agree"] is True
     qbit.prefs["listen_port"] = 6881
     assert tk.call("vpn_status", {})["ports_agree"] is False
+    # A stale Proton reading never agrees, and an unreadable log is an answer.
+    qbit.prefs["listen_port"] = 51820
+    monkeypatch.setattr(
+        media_proton,
+        "read_proton_port_state",
+        lambda path=None, now=None: {"status": "ok", "port": 51820, "state": "stale"},
+    )
+    assert tk.call("vpn_status", {})["ports_agree"] is False
+    monkeypatch.setattr(
+        media_proton,
+        "read_proton_port_state",
+        lambda path=None, now=None: (_ for _ in ()).throw(
+            RuntimeError("log unreadable")
+        ),
+    )
+    out = tk.call("vpn_status", {})
+    assert out["ok"] and out["proton"]["state"] == "unreadable"
     lines = tk.call("qbit_log", {})
     assert (
         lines["ok"]

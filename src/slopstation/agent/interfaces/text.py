@@ -39,12 +39,7 @@ class Audited:
         return self.toolkit.render(provider)
 
     def call(self, name, args):
-        # Let the LAN client receive tool failures as HTTP 500.
-        try:
-            out = self.toolkit.call(name, args)
-        except Exception:
-            assistant.record_tool_call(name, args, {"ok": False}, self.log)
-            raise
+        out = self.toolkit.call(name, args)
         assistant.record_tool_call(name, args, out, self.log)
         if isinstance(out, dict) and out.get("acknowledgment"):
             self.acknowledgments.append(str(out["acknowledgment"]))

@@ -258,9 +258,17 @@ class QbittorrentClient:
         return "|".join(hashes)
 
     def torrents(
-        self, filter=None, category=None, sort=None, reverse=False, limit=None
+        self,
+        filter=None,
+        category=None,
+        sort=None,
+        reverse=False,
+        limit=None,
+        hashes=None,
     ):
         params = {}
+        if hashes:
+            params["hashes"] = self._hashes(hashes)
         if filter:
             params["filter"] = filter
         if category is not None:

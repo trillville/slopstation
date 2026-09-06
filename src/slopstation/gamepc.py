@@ -128,7 +128,7 @@ def nav_cmd(kind: str, arg: object = None) -> str:
 # Nav-BigPicture.ps1) equal.
 NAV_URL_PATTERN = (
     r"https://(?:store\.steampowered\.com|steamcommunity\.com)/"
-    r"[A-Za-z0-9/_.~?=&%+-]{1,300}"
+    r"[A-Za-z0-9/_.~?=&%+-]{0,300}"
 )
 NAV_URL_RE = re.compile(NAV_URL_PATTERN)
 

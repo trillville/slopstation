@@ -8,6 +8,7 @@ reads before it parameterises a passthrough call.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import time
@@ -19,6 +20,18 @@ from slopstation import paths
 CACHE_S = 24 * 3600
 MAX_CHARS = 7000
 FETCH_TIMEOUT_S = 20
+# The arr documents are about a megabyte; anything past this is not one.
+MAX_DOC_BYTES = 4 * 1024 * 1024
+# The arr documents are about a megabyte; anything past this is not one.
+MAX_DOC_BYTES = 4 * 1024 * 1024
+# The arr documents are about a megabyte; anything past this is not one.
+MAX_DOC_BYTES = 4 * 1024 * 1024
+# The arr documents are about a megabyte; anything past this is not one.
+MAX_DOC_BYTES = 4 * 1024 * 1024
+# The arr documents are about a megabyte; anything past this is not one.
+MAX_DOC_BYTES = 4 * 1024 * 1024
+# The arr documents are about a megabyte; anything past this is not one.
+MAX_DOC_BYTES = 4 * 1024 * 1024
 
 # For the arr apps the live path is the app's own; the fallback is the same
 # document as published by the project, for when the app does not serve it.
@@ -55,7 +68,10 @@ def cache_file(service: str) -> paths.pathlib.Path:
 
 def _urlopen(url: str) -> str:
     with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_S) as r:
-        return r.read().decode("utf-8", "replace")
+        raw = r.read(MAX_DOC_BYTES + 1)
+    if len(raw) > MAX_DOC_BYTES:
+        raise ValueError("document too large")
+    return raw.decode("utf-8", "replace")
 
 
 def fetch(service: str, base_url: str | None = None, opener=_urlopen, now=time.time):
@@ -79,7 +95,13 @@ def fetch(service: str, base_url: str | None = None, opener=_urlopen, now=time.t
     for url in urls:
         try:
             text = opener(url)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            TimeoutError,
+            OSError,
+            ValueError,
+        ) as e:
             last = e
             continue
         if src["kind"] == "openapi":
@@ -91,6 +113,11 @@ def fetch(service: str, base_url: str | None = None, opener=_urlopen, now=time.t
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(text, encoding="utf-8")
         return text
+    # Every source failed: a stale copy beats no answer.
+    try:
+        return f.read_text(encoding="utf-8")
+    except OSError:
+        pass
     raise RuntimeError(f"could not fetch {service} documentation: {last}")
 
 
@@ -150,8 +177,19 @@ def slice_openapi(text: str, topic: str) -> dict:
 def slice_markdown(text: str, topic: str) -> list[str]:
     """The sections (heading to next heading) whose heading or body mention
     the topic, the heading match first."""
-    want = topic.lower()
-    sections = re.split(r"\n(?=#{1,4} )", text)
+    want = topic.lower().strip()
+    # Split on headings outside fenced code, where a `# comment` is code.
+    sections: list[str] = []
+    fenced = False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("```"):
+            fenced = not fenced
+        if not fenced and re.match(r"#{1,4} ", line) and sections:
+            sections.append(line)
+        elif sections:
+            sections[-1] += line
+        else:
+            sections.append(line)
     by_heading = [s for s in sections if want in s.split("\n", 1)[0].lower()]
     by_body = [s for s in sections if s not in by_heading and want in s.lower()]
     return by_heading + by_body

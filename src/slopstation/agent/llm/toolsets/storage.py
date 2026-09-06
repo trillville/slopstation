@@ -113,6 +113,8 @@ SPECS = [
         keywords=(
             "delete file",
             "delete folder",
+            "delete that folder",
+            "folder from the disk",
             "remove files",
             "erase folder",
             "clean up disk",
@@ -153,42 +155,41 @@ def impls(ctx: ToolContext):
         return root, None
 
     def _arr_files(root: Path) -> set[Path]:
-        """Host paths of every file Radarr and Sonarr hold."""
+        """Host paths of every file Radarr and Sonarr hold. Raises when an
+        app cannot be read: callers decide whether a partial index is safe."""
         known = set()
-        for client, resource in (
-            (media.radarr, "moviefile"),
-            (media.sonarr, "episodefile"),
-        ):
-            try:
-                rows = client.get(resource) or []
-            except Exception as e:
-                log.warn("file_index_failed", authority=client.name, err=str(e))
-                continue
-            for row in rows if isinstance(rows, list) else []:
-                hp = storage.host_path(root, str(row.get("path") or ""))
-                if hp is not None:
-                    try:
-                        known.add(hp.resolve())
-                    except OSError:
-                        continue
+        for path in media.arr_files():
+            hp = storage.host_path(root, path)
+            if hp is not None:
+                try:
+                    known.add(hp.resolve())
+                except OSError:
+                    continue
         return known
 
     def _torrent_paths() -> set[Path]:
+        """Every torrent's content path. A torrent still fetching metadata has
+        none and is skipped: its save path is the whole torrents folder."""
         qbit = getattr(media, "qbit", None)
         if qbit is None:
             return set()
         out = set()
-        try:
-            for t in qbit.torrents():
-                cp = t.get("content_path") or t.get("save_path")
-                if cp:
-                    try:
-                        out.add(Path(str(cp)).resolve())
-                    except OSError:
-                        continue
-        except Exception as e:
-            log.warn("torrent_paths_failed", err=str(e))
+        for t in qbit.torrents():
+            cp = t.get("content_path")
+            if cp:
+                try:
+                    out.add(Path(str(cp)).resolve())
+                except OSError:
+                    continue
         return out
+
+    def _index(root: Path):
+        """Both indexes, or None with the reason when one cannot be read."""
+        try:
+            return _arr_files(root), _torrent_paths(), None
+        except Exception as e:
+            log.warn("file_index_failed", err=str(e))
+            return None, None, str(e)
 
     def disk_usage(args):
         root, err = _root()
@@ -240,7 +241,14 @@ def impls(ctx: ToolContext):
         root, err = _root()
         if err:
             return err
-        out = storage.orphan_files(root, _arr_files(root), _torrent_paths())
+        known, torrents, why = _index(root)
+        if why is not None:
+            return {
+                "ok": False,
+                "error": f"could not read what the media apps hold ({why}), so "
+                "nothing can be called an orphan right now",
+            }
+        out = storage.orphan_files(root, known, torrents)
         return {
             "ok": True,
             "unknown_media_count": len(out["unknown_media"]),
@@ -262,13 +270,20 @@ def impls(ctx: ToolContext):
                 "or does not exist",
             }
         resolved = target.resolve()
-        for known in _arr_files(root):
+        known_files, torrents, why = _index(root)
+        if why is not None:
+            return {
+                "ok": False,
+                "error": f"could not read what the media apps hold ({why}), so "
+                "cannot tell whether this is still theirs - try again shortly",
+            }
+        for known in known_files:
             if known == resolved or resolved in known.parents:
                 return {
                     "ok": False,
                     "error": "Radarr or Sonarr still holds a file there: use delete_media",
                 }
-        for tp in _torrent_paths():
+        for tp in torrents:
             if tp == resolved or resolved in tp.parents or tp in resolved.parents:
                 return {
                     "ok": False,
@@ -287,10 +302,12 @@ def impls(ctx: ToolContext):
                 "acknowledgment": f"Delete {rel} - {files} file(s), {round(size / 1024**3, 2)} GB? That cannot be undone.",
             }
         try:
-            return {"ok": True, **storage.delete(target)}
+            out = storage.delete(target)
         except Exception as e:
             log.error("tool_error", tool="delete_path", err=str(e))
             return {"ok": False, "error": str(e)}
+        ctx.gate.done(("path", str(resolved)))
+        return {"ok": True, **out}
 
     def drive_health(args):
         root, err = _root()

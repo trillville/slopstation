@@ -596,11 +596,13 @@ class MediaService:
 
     # -- what the arr apps hold, keyed by download ------------------------------
 
-    def download_index(self):
+    def download_index(self, strict=False):
         """{infohash lower: {kind, title, queue_id, authority}} for every queue
         item Radarr and Sonarr are waiting on. This is the torrent-to-media
         link: a torrent in here belongs to an arr app, which owns its identity,
-        location and lifecycle."""
+        location and lifecycle. With strict, a queue that cannot be read
+        raises, because a decision that hangs on the link (deleting) must not
+        treat an unread queue as an empty one."""
         out = {}
         for kind, client, id_key, include in (
             ("movie", self.radarr, "movie", "includeMovie"),
@@ -612,6 +614,8 @@ class MediaService:
                 )
             except MediaError as e:
                 self.log.warn("queue_read_failed", authority=client.name, err=str(e))
+                if strict:
+                    raise MediaError(f"{client.name}'s queue could not be read") from e
                 continue
             for row in (
                 (queue or {}).get("records", []) if isinstance(queue, dict) else []
@@ -629,23 +633,37 @@ class MediaService:
                 }
         return out
 
-    def known_download_ids(self):
-        """Every infohash the arr apps have ever grabbed or imported, from
-        their histories. A completed torrent outside this set is an orphan:
-        nobody asked for it through Radarr or Sonarr."""
-        known = set()
+    def download_known(self, download_id):
+        """Whether either arr app's history has ever seen this infohash. Asked
+        per hash with the history filter, because a page of recent history
+        would miss an old import still seeding under the app's control."""
         for client in (self.radarr, self.sonarr):
-            try:
-                history = client.get("history", {"page": 1, "pageSize": 1000})
-            except MediaError as e:
-                self.log.warn("history_read_failed", authority=client.name, err=str(e))
-                continue
+            history = client.get(
+                "history", {"page": 1, "pageSize": 1, "downloadId": download_id}
+            )
             rows = history.get("records", []) if isinstance(history, dict) else []
-            for row in rows:
-                download_id = str(row.get("downloadId") or "").lower()
-                if download_id:
-                    known.add(download_id)
-        return known
+            if rows:
+                return True
+        return False
+
+    def arr_files(self):
+        """Host-independent container paths of every file Radarr and Sonarr
+        hold, from the movie rows (movieFile.path) and each series' episode
+        files. Raises when an app cannot be read: a partial index would let a
+        held file look deletable."""
+        paths = set()
+        for row in self.radarr.get("movie") or []:
+            if isinstance(row, dict) and isinstance(row.get("movieFile"), dict):
+                path = row["movieFile"].get("path")
+                if path:
+                    paths.add(str(path))
+        for series in self.sonarr.get("series") or []:
+            if not isinstance(series, dict) or "id" not in series:
+                continue
+            for f in self.sonarr.get("episodefile", {"seriesId": series["id"]}) or []:
+                if isinstance(f, dict) and f.get("path"):
+                    paths.add(str(f["path"]))
+        return paths
 
     @staticmethod
     def _command_phase(client, command_ids):
@@ -1165,15 +1183,13 @@ def from_config(cfg, secrets, log):
                 api_version="v1",
             )
         except MediaConfigurationError as e:
-            log.warn("lane_disabled", what="prowlarr_tools", reason=str(e))
+            log("lane_disabled", what="prowlarr_tools", reason=str(e))
     else:
-        log.warn(
-            "lane_disabled", what="prowlarr_tools", reason="prowlarrApiKey missing"
-        )
+        log("lane_disabled", what="prowlarr_tools", reason="prowlarrApiKey missing")
     try:
         qbit = _qbit_from_config(media_cfg, secrets)
     except MediaConfigurationError as e:
-        log.warn("lane_disabled", what="torrent_tools", reason=str(e))
+        log("lane_disabled", what="torrent_tools", reason=str(e))
     return MediaService(media_cfg, log, radarr, sonarr, prowlarr=prowlarr, qbit=qbit)
 
 

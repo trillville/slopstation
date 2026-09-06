@@ -408,7 +408,11 @@ def fetch_achievements(appid: int) -> dict | None:
         f"{API}/ISteamUserStats/GetPlayerAchievements/v1/",
         {"key": key, "steamid": steamid, "appid": int(appid)},
     )
-    got = ((mine or {}).get("playerstats", {}) or {}).get("achievements", []) or []
+    stats = (mine or {}).get("playerstats", {}) or {}
+    if stats.get("success") is False:
+        # An unowned game, or a private profile: no progress to report.
+        return None
+    got = stats.get("achievements", []) or []
     rates = _get(
         f"{API}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/",
         {"gameid": int(appid)},
@@ -487,12 +491,16 @@ def fetch_friends() -> list[dict] | None:
         )
         for p in ((s or {}).get("response", {}) or {}).get("players", []) or []:
             state = int(p.get("personastate", 0) or 0)
+            # A private profile answers offline for everyone; say unknown.
+            visible = int(p.get("communityvisibilitystate", 3) or 3) == 3
             rows.append(
                 {
                     "name": library.ascii_only(p.get("personaname", "")),
                     "state": "playing"
                     if p.get("gameid")
-                    else _PERSONA.get(state, "unknown"),
+                    else _PERSONA.get(state, "unknown")
+                    if visible
+                    else "unknown",
                     "playing": library.ascii_only(p.get("gameextrainfo", "")) or None,
                     "appid": int(p["gameid"])
                     if str(p.get("gameid", "")).isdigit()
@@ -517,13 +525,16 @@ def fetch_friends() -> list[dict] | None:
 FEATURED_SECTIONS = ("new_releases", "top_sellers", "coming_soon")
 
 
-def fetch_featured(section: str, cc: str | None = None) -> list[dict]:
+def fetch_featured(section: str, cc: str | None = None) -> list[dict] | None:
     """One of the store's front-page feeds: new_releases, top_sellers,
-    coming_soon. Curated by Steam, a couple dozen each."""
+    coming_soon. Curated by Steam, a couple dozen each. None when the store
+    did not answer, so an outage is never read as an empty feed."""
     if section not in FEATURED_SECTIONS:
         return []
     d = _get(f"{STORE}/api/featuredcategories", {"cc": cc or _cc(), "l": "english"})
-    items = ((d or {}).get(section, {}) or {}).get("items", []) or []
+    if d is None:
+        return None
+    items = (d.get(section, {}) or {}).get("items", []) or []
     out = []
     for it in items:
         if it.get("id") in library.NOT_GAMES:
@@ -539,10 +550,13 @@ def fetch_featured(section: str, cc: str | None = None) -> list[dict]:
     return out
 
 
-def fetch_wishlist(steamid: str, cc: str | None = None) -> list[dict]:
-    """The whole wishlist with prices, in the user's own priority order."""
+def fetch_wishlist(steamid: str, cc: str | None = None) -> list[dict] | None:
+    """The whole wishlist with prices, in the user's own priority order. None
+    when Steam did not answer."""
     d = _get(f"{API}/IWishlistService/GetWishlist/v1/", {"steamid": steamid})
-    items = ((d or {}).get("response", {}) or {}).get("items", []) or []
+    if d is None:
+        return None
+    items = (d.get("response", {}) or {}).get("items", []) or []
     items = [it for it in items if it.get("appid")]
     items.sort(key=lambda it: int(it.get("priority", 0) or 0))
     priced = store_items([int(it["appid"]) for it in items], cc)

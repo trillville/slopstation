@@ -123,6 +123,22 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
     assert log.find("tool_refused")[-1]["reason"] == "blocklisted"
     # Prowlarr reads on indexers are fine: the blocklist is on writes.
     assert tk.call("prowlarr_api", {"method": "GET", "path": "indexer"})["ok"]
+    # Whole segments: blocking `tag` does not block `tags`; `config//host`
+    # and `Config/Host/` are still config/host.
+    assert not tk.call("radarr_api", {"method": "POST", "path": "tag", "body": {}})[
+        "ok"
+    ]
+    assert tk.call("radarr_api", {"method": "GET", "path": "tags"})["ok"]
+    media.radarr.calls.clear()  # the one read that was meant to go through
+    assert not tk.call("radarr_api", {"method": "GET", "path": "config//host"})["ok"]
+    assert not tk.call("radarr_api", {"method": "GET", "path": "/Config/Host/"})["ok"]
+    # Provider lists are credential stores: read-blocked too.
+    assert not tk.call("radarr_api", {"method": "GET", "path": "downloadclient"})["ok"]
+    # Commands that restart or rewrite the app are settings, not media work.
+    assert not tk.call(
+        "radarr_api",
+        {"method": "POST", "path": "command", "body": {"name": "ApplicationUpdate"}},
+    )["ok"]
     assert not tk.call("radarr_api", {"method": "PATCH", "path": "movie"})["ok"]
     assert not tk.call("radarr_api", {"method": "GET", "path": "../secrets"})["ok"]
     assert not tk.call("radarr_api", {"method": "GET", "path": "movie", "params": [1]})[
@@ -146,12 +162,26 @@ def test_dry_run_reports_a_mutation_without_sending_it(log):
     assert (
         out["dry_run"] and "POST /command" in out["detail"] and media.radarr.calls == []
     )
-    # qBittorrent GETs fold body fields into the query, since its API is form-shaped.
+    # qBittorrent runs any action on GET too, so the verb the model wrote does
+    # not decide: a read goes through as a GET with its query; anything else is
+    # a mutation and is gated (dry run here), whatever the method said.
     tk.call(
         "qbittorrent_api",
-        {"method": "GET", "path": "torrents/info", "body": {"filter": "paused"}},
+        {"method": "GET", "path": "torrents/info", "params": {"filter": "paused"}},
     )
     assert media.qbit.calls[-1] == ("GET", "torrents/info", {"filter": "paused"}, None)
+    out = tk.call(
+        "qbittorrent_api",
+        {
+            "method": "GET",
+            "path": "torrents/delete",
+            "params": {"hashes": "all", "deleteFiles": "true"},
+        },
+    )
+    assert out["dry_run"] and "POST /torrents/delete" in out["detail"]
+    assert media.qbit.calls[-1][1] == "torrents/info", (
+        "the delete never reached the client"
+    )
 
 
 def test_offered_only_with_the_matching_service(log):
@@ -226,6 +256,32 @@ def test_steam_api_injects_the_right_credential(live, monkeypatch):
     assert not tk.call("steam_api", {"method": "GET", "path": "x", "auth": "magic"})[
         "ok"
     ]
+
+    # A transport failure names the failure type only: the URL held the key.
+    def boom(m, url, **kw):
+        import requests as real_requests
+
+        raise real_requests.ConnectionError(
+            f"Max retries exceeded with url: {url}?key=KEY123"
+        )
+
+    monkeypatch.setattr(fake_requests, "request", boom)
+    monkeypatch.setattr(fake_requests, "RequestException", Exception, raising=False)
+    out = tk.call(
+        "steam_api", {"method": "GET", "path": "ISteamUser/x/v1", "auth": "key"}
+    )
+    assert not out["ok"] and "KEY123" not in json.dumps(out)
+
+
+def test_a_steam_post_is_confirmed_with_its_credential_in_scope(live, log):
+    tk, dispatch, _ = live
+    ask = {"method": "POST", "path": "IPlayerService/X/v1", "body": {"a": 1}}
+    first = tk.call("steam_api", {**ask, "auth": "none"})
+    assert not first["ok"] and "(auth: none)" in first["confirm"]
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    # A different credential is a different request: asked again, not run.
+    again = tk.call("steam_api", {**ask, "auth": "account"})
+    assert not again["ok"] and "(auth: account)" in again["confirm"]
 
 
 # --- describe_api -------------------------------------------------------------
@@ -334,4 +390,34 @@ def test_scrub_is_recursive_and_keeps_the_rest():
         "url": "[redacted tracker url]",
         "b": "fine",
     }
+    # Servarr providers carry credentials as fields [{name, value}].
+    fields = {
+        "name": "qBittorrent",
+        "fields": [
+            {"name": "host", "value": "127.0.0.1"},
+            {"name": "password", "value": "hunter2"},
+            {"name": "apiKey", "value": "REALKEY"},
+            {"name": "note", "value": "x", "privacy": "password"},
+        ],
+    }
+    out = passthrough.scrub(fields)
+    assert [f["value"] for f in out["fields"]] == [
+        "127.0.0.1",
+        "[redacted]",
+        "[redacted]",
+        "[redacted]",
+    ]
+    assert out["name"] == "qBittorrent", "a provider's own name is not a secret"
+    # Magnet links and scrape URLs carry passkeys; credentials inside strings go too.
+    assert passthrough.scrub({"magnet_uri": "magnet:?xt=1"}) == {
+        "magnet_uri": "[redacted]"
+    }
+    assert passthrough.scrub(["magnet:?xt=1&tr=x"]) == ["[redacted tracker url]"]
+    assert (
+        passthrough.scrub("https://t.example/SECRET/scrape") == "[redacted tracker url]"
+    )
+    assert (
+        passthrough.scrub("failed: https://api/x?key=KEY123&access_token=TOK&steamid=1")
+        == "failed: https://api/x?key=[redacted]&access_token=[redacted]&steamid=1"
+    )
     assert time.time() > 0  # keeps the import honest

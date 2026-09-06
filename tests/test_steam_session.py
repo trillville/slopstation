@@ -298,10 +298,11 @@ def test_client_mutations_post_the_shape_and_read_back(pinned, seams):
     out = pinned.set_update_state(10, "pause")
     method, data = seams.posts[-1]
     assert method == "IClientCommService/SetClientAppUpdateState/v1"
+    # 0 pauses, 1 resumes: Valve's own description of the field.
     assert data == {
         "access_token": "tok",
         "client_instanceid": "111",
-        "action": 1,
+        "action": 0,
         "appid": 10,
     }
     assert out == {
@@ -313,10 +314,16 @@ def test_client_mutations_post_the_shape_and_read_back(pinned, seams):
     }
     # A resume the app list does not yet reflect is reported unverified.
     out = pinned.set_update_state(10, "resume")
-    assert out["ok"] and out["verified"] is False and seams.posts[-1][1]["action"] == 2
+    assert out["ok"] and out["verified"] is False and seams.posts[-1][1]["action"] == 1
     assert not pinned.set_update_state(10, "dance")["ok"]
     out = pinned.enable_downloads(False)
-    assert out == {"ok": True, "downloads_enabled": False}
+    # The global switch reads back too: every changing app is paused.
+    assert out == {
+        "ok": True,
+        "downloads_enabled": False,
+        "changing": 1,
+        "verified": True,
+    }
     assert seams.posts[-1] == (
         "IClientCommService/EnableOrDisableDownloads/v1",
         {"access_token": "tok", "client_instanceid": "111", "enable": "false"},
@@ -331,6 +338,19 @@ def test_client_mutations_post_the_shape_and_read_back(pinned, seams):
         and seams.posts[-1][0] == "IClientCommService/UninstallClientApp/v1"
     )
     # An eresult other than 1 is a refusal with the code, never an exception.
+    seams.state["install_eresult"] = "15"
+    pinned._post = lambda method, data, timeout=20: (None, "15")
+    refused = pinned.uninstall(10)
+    assert not refused["ok"] and "code 15" in refused["error"]
+    pinned._post = seams.post
+    # Wishlist edits ride the same session.
+    out = pinned.wishlist(10, True)
+    assert out == {"ok": True, "appid": 10, "action": "add"}
+    assert seams.posts[-1] == (
+        "IWishlistService/AddToWishlist/v1",
+        {"access_token": "tok", "appid": 10},
+    )
+    # No client at all is a plain answer.
     seams.state["sessions"] = []
     assert "isn't online" in pinned.uninstall(10)["error"]
 

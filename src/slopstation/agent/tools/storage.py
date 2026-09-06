@@ -50,9 +50,17 @@ def _usage(mount) -> dict:
     }
 
 
+def _is_link(entry) -> bool:
+    """A symlink or an NTFS junction: never followed, never deleted through."""
+    try:
+        return entry.is_symlink() or entry.is_junction()
+    except OSError:
+        return True
+
+
 def tree_size(path: Path) -> tuple[int, int]:
-    """(bytes, files) under a path, following no links. Errors on a single
-    entry are skipped: a locked file must not fail the whole answer."""
+    """(bytes, files) under a path, following no links or junctions. Errors
+    on a single entry are skipped: a locked file must not fail the answer."""
     total = files = 0
     stack = [path]
     while stack:
@@ -61,6 +69,8 @@ def tree_size(path: Path) -> tuple[int, int]:
             with os.scandir(current) as it:
                 for entry in it:
                     try:
+                        if _is_link(entry):
+                            continue
                         if entry.is_dir(follow_symlinks=False):
                             stack.append(Path(entry.path))
                         elif entry.is_file(follow_symlinks=False):
@@ -172,16 +182,18 @@ def orphan_files(root: Path, known: set[Path], torrent_paths: set[Path]) -> dict
         except OSError:
             entries = []
         for entry in entries:
+            if _is_link(entry):
+                continue
             try:
                 ep = Path(entry.path).resolve()
+                covered = any(
+                    ep == t or ep in t.parents or t in ep.parents for t in torrent_paths
+                )
+                if covered:
+                    continue
+                size, _ = tree_size(ep) if entry.is_dir() else (entry.stat().st_size, 1)
             except OSError:
                 continue
-            covered = any(
-                ep == t or ep in t.parents or t in ep.parents for t in torrent_paths
-            )
-            if covered:
-                continue
-            size, _ = tree_size(ep) if entry.is_dir() else (entry.stat().st_size, 1)
             stray.append(
                 {
                     "path": str(Path(entry.path).relative_to(root)).replace("\\", "/"),
@@ -195,7 +207,14 @@ def orphan_files(root: Path, known: set[Path], torrent_paths: set[Path]) -> dict
 
 def deletable(root: Path, rel: str) -> Path | None:
     """The absolute path for a delete, or None when the target is the root,
-    a top folder, outside the root, or absent."""
+    a top folder, outside the root, absent, or a link or junction (which
+    would resolve to, and delete, its target)."""
+    unresolved = root / str(rel).replace("\\", "/").lstrip("/")
+    try:
+        if unresolved.is_symlink() or unresolved.is_junction():
+            return None
+    except OSError:
+        return None
     target = _inside(root, rel)
     if target is None or not target.exists():
         return None

@@ -1134,6 +1134,8 @@ def impls(ctx: ToolContext):
             what += ", and never take that release again?" if blocklist else "?"
             return {"ok": False, "acknowledgment": what}
         client.delete(f"queue/{queue_id}", params)
+        if remove:
+            ctx.gate.done(("queue", kind, queue_id, blocklist))
         return {
             "ok": True,
             "title": title,

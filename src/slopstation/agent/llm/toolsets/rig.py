@@ -1,6 +1,7 @@
 """Tools for the rig itself: the session, the TV, the mic, and Big Picture."""
 
 import json
+import subprocess
 import urllib.parse
 
 from slopstation import gamepc, sessionlock
@@ -68,9 +69,8 @@ store results for `query`. 'web' opens any page on store.steampowered.com
 or steamcommunity.com given in `url` - sale events, curators, a profile."""
 
 TV_STATUS = """\
-The TV as it is right now: power state over the serial line, and the volume
-and mute readback over the network. Read only; the answer to 'is the TV on'
-and 'how loud is it'."""
+The TV as it is right now: power state, volume and mute, read back over the
+network. Read only; the answer to 'is the TV on' and 'how loud is it'."""
 
 PC_STATUS = """\
 The gaming PC as it is right now: reachable or asleep, whether a session is
@@ -82,7 +82,8 @@ seconds to time out."""
 PC_POWER = """\
 Wake the gaming PC (a magic packet; it takes a minute to come up, and
 start_session does this itself) or put it to sleep. Sleep is refused while a
-session is live or a game is running, so it cannot end what is on the TV."""
+session is live, a game is running, or someone is signed in at the desk, so
+it cannot end what is on the TV or under someone's hands."""
 
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this
@@ -301,7 +302,15 @@ SPECS += [
         ("action",),
         risk="act",
         area="session",
-        keywords=("wake the pc", "sleep the pc", "turn off the pc", "power", "suspend"),
+        keywords=(
+            "wake the pc",
+            "sleep the pc",
+            "pc to sleep",
+            "put the pc",
+            "turn off the pc",
+            "power",
+            "suspend",
+        ),
         default=False,
     ),
 ]
@@ -455,7 +464,14 @@ def impls(ctx: ToolContext):
             query = str(args.get("query") or "").strip()
             if not query:
                 return {"ok": False, "error": "search needs the words to search for"}
-            url = STORE_SEARCH + urllib.parse.quote_plus(query[:120])
+            # Trim until the encoded URL fits the PC's allowlist length.
+            words = query[:120]
+            url = STORE_SEARCH + urllib.parse.quote_plus(words)
+            while words and not gamepc.NAV_URL_RE.fullmatch(url):
+                words = words[:-1]
+                url = STORE_SEARCH + urllib.parse.quote_plus(words)
+            if not words:
+                return {"ok": False, "error": "those search words cannot be encoded"}
             r = dispatch.nav("url", url)
         elif target == "web":
             url = str(args.get("url") or "").strip()
@@ -572,11 +588,27 @@ def impls(ctx: ToolContext):
             out["reachable"] = True
             out["ready"] = status != "NOTREADY"
             out["session_turn"] = status if status != "NOTREADY" else None
-        except Exception as e:
+        except subprocess.CalledProcessError as e:
+            if e.returncode == 255:
+                # ssh's own exit code: no connection.
+                out["reachable"] = False
+                out["detail"] = "the PC did not answer over SSH; it is asleep or off"
+                return out
+            out["reachable"] = True
+            out["detail"] = (
+                f"the PC answered but refused the status verb (exit {e.returncode}) "
+                "- a version skew; run the doctor"
+            )
+            return out
+        except (subprocess.TimeoutExpired, TimeoutError, OSError):
             out["reachable"] = False
             out["detail"] = (
-                f"the PC did not answer over SSH ({type(e).__name__}); it is asleep or off"
+                "the PC did not answer over SSH in time; it is asleep or off"
             )
+            return out
+        except Exception as e:
+            out["reachable"] = True
+            out["detail"] = f"the PC answered but its status was unreadable: {e}"
             return out
         try:
             playing = gamepc.playing()
@@ -590,15 +622,19 @@ def impls(ctx: ToolContext):
             out["running_error"] = str(e)
         try:
             rows = json.loads(gamepc.disk() or "[]")
-            out["steam_drives"] = [
-                {
-                    "drive": r.get("drive"),
-                    "free_gb": round(int(r.get("free", 0) or 0) / 1024**3, 1),
-                    "total_gb": round(int(r.get("total", 0) or 0) / 1024**3, 1),
-                }
-                for r in rows
-                if isinstance(r, dict)
-            ]
+            drives: dict[str, dict] = {}
+            for r in rows:
+                if isinstance(r, dict) and r.get("drive"):
+                    # Two library roots on one drive are one drive.
+                    drives.setdefault(
+                        str(r["drive"]).lower(),
+                        {
+                            "drive": r.get("drive"),
+                            "free_gb": round(int(r.get("free", 0) or 0) / 1024**3, 1),
+                            "total_gb": round(int(r.get("total", 0) or 0) / 1024**3, 1),
+                        },
+                    )
+            out["steam_drives"] = list(drives.values())
         except Exception as e:
             out["steam_drives_error"] = str(e)
         if steam is not None and steam.available():
