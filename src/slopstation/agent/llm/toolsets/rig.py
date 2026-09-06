@@ -18,8 +18,12 @@ SESSION = """\
 Control the session: end_session, start_session, switch_input (with input
 name; the valid names are in the system prompt). Ending the session and
 switching input both interrupt what is on the TV, so never take either as a
-guess. start_session returns while the session is still coming up - don't
-call nav in the same turn; say it's starting and let the user ask again."""
+guess. switch_input only changes which input the TV shows; putting the PC's
+DESKTOP on the TV, or back on the monitor, is the display tool, not this.
+nav and launch_game start a session themselves when none is live, so
+start_session is for 'start a session' said plainly. start_session returns
+while the session is still coming up - don't call nav in the same turn; say
+it's starting and let the user ask again."""
 
 VOLUME = """\
 Adjust the TV volume: up, down, set (with level), mute (a toggle). Harmless -
@@ -54,7 +58,9 @@ Picture stays up. It also clears the way when a different game is blocking
 a launch."""
 
 NAV = """\
-Navigate the Big Picture UI on the TV during a live session. Pages that need
+Navigate the Big Picture UI on the TV. With no session live this starts one
+and opens the page once Big Picture is up, about fifteen seconds later: say
+the page is coming, and never call start_session first. Pages that need
 nothing else: 'downloads', 'library', 'store', 'friends', 'settings',
 'screenshots', 'wishlist', 'news'. Pages for one game, by appid: 'game_page'
 (an OWNED game's library page with its Play button - 'show me <game>'),
@@ -86,14 +92,14 @@ session is live, a game is running, or someone is signed in at the desk, so
 it cannot end what is on the TV or under someone's hands."""
 
 DISPLAY = """\
-Move the PC's desktop between screens with NO session: 'tv' puts the desktop
-on the TV (the TV is switched to the PC first) for a one-off, for using the
-PC on the TV without Steam Big Picture, or to fix a profile stuck the wrong
-way; 'monitor' puts it back on the desk monitor. The controller is not part
-of this - the mouse and keyboard at the desk drive it - and nothing puts the
-display back on its own: say so. Not the session: 'back to the office' means
-END the session, which restores the monitor itself. Refused while a session
-is live."""
+Put the PC's DESKTOP on the TV, or back on the desk monitor, with NO
+session: 'tv' switches the TV to the PC and moves the desktop there, for
+using the PC on the TV without Steam Big Picture or to fix a display stuck
+the wrong way; 'monitor' puts it back on the desk. Mouse and keyboard only -
+the controller is not part of this - and nothing moves it back on its own:
+say so. This is what 'desktop' or 'monitor' means when no session is live.
+Refused while a session is live: then 'back to the monitor' and 'back to
+the office' mean end_session, which restores the monitor itself."""
 
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this
@@ -313,6 +319,8 @@ SPECS += [
         risk="act",
         area="session",
         keywords=(
+            "desktop",
+            "monitor",
             "desktop on the tv",
             "put the pc on the tv",
             "display profile",
@@ -322,7 +330,8 @@ SPECS += [
             "switch the display",
             "without big picture",
         ),
-        default=False,
+        # Default: with only `session` loaded, "put the desktop on the TV"
+        # became an input switch that started a session (2026-09-06 logs).
     ),
     ToolSpec(
         "pc_power",

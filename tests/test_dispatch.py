@@ -270,10 +270,10 @@ def test_quit_game_correlated_wire_ssh_outcomes_and_wrong_game_refusal(
 
 
 def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
-    monkeypatch, host
+    monkeypatch, host, spawned
 ):
     monkeypatch.setattr(library, "installed_name", lambda a: None)
-    seed_lock(None)
+    seed_lock(10)  # a session is live: the page goes straight to the wire
     d, log = harness()
     wire = []
     host(lambda cmd, **kw: wire.append(cmd) or "OK")
@@ -300,21 +300,40 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     assert not r.ok and r.earcon == "fail" and len(wire) == n, (r, wire[-1])
     r = d.nav("url", "https://store.steampowered.com/a b")
     assert not r.ok and len(wire) == n
+    # Mid-start (fresh lock, host pre-READY): an honest busy, and the reply
+    # must not tell the model to start what is already starting.
     host("NOTREADY")
     r = d.nav("downloads")
-    assert not r.ok and r.earcon == "busy", r
-    assert "start one first" in r.detail, r
-    # Mid-start (fresh lock) is a distinct busy from no-session: the reply must
-    # not tell the model to start what is already starting.
-    seed_lock(10)
-    r = d.nav("downloads")
     assert not r.ok and r.earcon == "busy" and "starting" in r.detail, r
+    # No session at all: the page is the reason to start one. The couch
+    # launch is spawned with the page queued for READY, the wire is never
+    # touched, and the reply says the page is coming.
     seed_lock(None)
-    # An unknown kind is refused HERE and never reaches the wire.
-    wire2 = []
-    host(lambda cmd, **kw: wire2.append(cmd) or "OK")
+    n = len(wire)
+    r = d.nav("wishlist")
+    assert r.ok and "wishlist" in r.detail and "Big Picture is up" in r.detail, r
+    assert len(wire) == n and spawned, (wire, spawned)
+    argv = spawned[-1]
+    assert argv[argv.index("start") :] == [
+        "start",
+        "--nav",
+        "wishlist",
+        "--turn",
+        "4c1d0e",
+    ]
+    assert log.find("session_dispatched")[-1]["nav"] == ["wishlist"]
+    r = d.nav("details", 400)
+    assert r.ok and spawned[-1][-5:] == ["--nav", "details", "400", "--turn", "4c1d0e"]
+    # A URL off the allowlist is still refused before anything starts.
+    m = len(spawned)
+    assert not d.nav("url", "https://evil.example/steam").ok and len(spawned) == m
+    # An unknown kind is refused HERE and never starts anything.
     r = d.nav("bogus")
-    assert not r.ok and r.earcon == "fail" and not wire2, (r, wire2)
+    assert not r.ok and r.earcon == "fail" and len(spawned) == m, r
+    # Dry run says what it would start.
+    dry, _ = harness(dry_run=True)
+    assert "couch.py start --nav wishlist" in dry.nav("wishlist").detail
+    seed_lock(10)
     host(ssh_down)
     d, _ = harness()
     assert d.nav("downloads").earcon == "fail"

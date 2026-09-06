@@ -305,7 +305,8 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     }
     si_tz = assistant.system_instruction({**CFG_MIN, "voice": zoned})
     assert f"{time.strftime('%Y-%m-%d')} in America/Los_Angeles" in flat(si_tz)
-    assert "apple tv" in flat(si) and "'gaming' starts a session" in flat(si)
+    assert "apple tv" in flat(si) and "Switching the TV to 'gaming'" in flat(si)
+    assert "DESK MONITOR" in flat(si) and "display tool is the one way" in flat(si)
     assert "clamped" in flat(si) and "blind toggle" in flat(si)
     # Out-of-catalog carve-out, so mishear-repair can't force a wrong match.
     assert "isn't in the library" in flat(si)

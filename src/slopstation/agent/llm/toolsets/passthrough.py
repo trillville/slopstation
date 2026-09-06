@@ -165,7 +165,10 @@ PROWLARR_API = (
 QBITTORRENT_API = (
     "Any qBittorrent v2 call on the authenticated session: method, path under "
     "/api/v2 (e.g. torrents/info, transfer/info), query params for GET, form "
-    "fields as `body` for POST. " + _RESEARCH
+    "fields as `body` for POST. A loaded tool that already answers comes "
+    "first: seeding_report carries the share limits and global policy, "
+    "transfer_info the speeds. A path that is not a documented read is "
+    "treated as an action and asked about, so never invent one. " + _RESEARCH
 )
 STEAM_API = """\
 Any Steam web call: GET or POST to api.steampowered.com (pass the interface

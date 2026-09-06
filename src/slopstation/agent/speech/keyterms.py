@@ -159,6 +159,19 @@ def load_titles(count, rows=None):
     ][:count]
 
 
+# The house's own words, in spoken form. Flux hears "seeding" as "seating"
+# and "wishlist" as two words without them (2026-09-06 logs). A handful,
+# ahead of the titles, since each one is a mishear on every ask.
+HOUSE_TERMS = (
+    "wishlist",
+    "seeding",
+    "torrent",
+    "big picture",
+    "desktop",
+    "monitor",
+)
+
+
 def stt_keyterms(voice, wake_phrase, catalog=None):
     """Everything Flux is told to expect, in the form it will hear it:
     titles, collection names, tag/genre words.
@@ -168,7 +181,7 @@ def stt_keyterms(voice, wake_phrase, catalog=None):
     query words carry none. Truncation is logged out loud - a silently short
     list reads as full coverage."""
     catalog = catalog or library.Catalog.load()
-    terms = [wake_phrase]
+    terms = [wake_phrase, *HOUSE_TERMS]
     for name in load_titles(voice["keytermCount"], catalog.installed):
         terms += titles.keyterm_forms(name)
     terms += [

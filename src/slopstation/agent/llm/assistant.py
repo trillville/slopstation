@@ -51,14 +51,13 @@ def system_instruction(cfg, interface="voice", offered=None):
         f"It is {time.strftime('%H:%M')} on {time.strftime('%Y-%m-%d')}"
         + (f" in {tz}." if tz else " local time.")
     ]
-    if inputs:
-        gaming = next(
-            (k for k, v in inputs.items() if v == cfg.get("tvGamingCmd")), None
+    gaming = next((k for k, v in inputs.items() if v == cfg.get("tvGamingCmd")), None)
+    tail.append(
+        prompts.SCREENS.format(
+            inputs=", ".join(inputs) or "none configured",
+            gaming=gaming or "the PC's input",
         )
-        tail.append(
-            f"TV inputs: {', '.join(inputs)}"
-            + (f"; '{gaming}' starts a session if none is running." if gaming else ".")
-        )
+    )
     tail.append(
         f"Volume runs 0-{voice['volumeMax']}, higher requests are clamped - "
         "confirm the level the tool actually returns. Mute is a blind toggle "
