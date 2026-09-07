@@ -971,8 +971,6 @@ class MediaService:
                         f"Sonarr has no {self._episode_label(missing)} for {title}"
                     )
             if profile_changed:
-                # `rows` when the episode scope already fetched them, so this
-                # costs a read only when it is the first to need one.
                 baseline_episode_files = self._baselines(
                     "series", series, seasons, episode_ids=episode_ids, rows=rows
                 )["baseline_episode_files"]
