@@ -128,7 +128,8 @@ them together with the heartbeat count:
     burst or the whole op raised), `tv_duck_deficit` (warn: steps still owed —
     the next session's close retries them), `tv_duck_slow` (warn: an
     announcement waited `waited` seconds for the room to come down and spoke
-    anyway, so that bulletin landed over a loud TV). Substring gotcha:
+    anyway - a slow soundbar, or a TV that dropped off the network and is
+    timing out; every bulletin warns while that lasts). Substring gotcha:
     `tv_unducked` does not contain "tv_duck", so match the event names, never
     a `tv_duck` substring.
   - `gate_match` / `gate_miss` / `stt_final` carry `confidence` (mean per-word,

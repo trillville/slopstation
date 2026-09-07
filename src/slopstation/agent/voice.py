@@ -466,8 +466,6 @@ def main():
         if score is None:
             # A bulletin just finished: the mic opens for a follow-up with no
             # wake word, and no chime - the announcement was the cue.
-            if announcer:
-                announcer.follow_up.clear()
             ack.claim()
             log("wake", trigger="follow_up")
         else:
@@ -487,7 +485,10 @@ def main():
             continue
         log("session_open")
         if announcer:
+            # Active first, then the follow-up consumed: the announcer never
+            # sees a gap where neither is set and restores under this session.
             announcer.session_active.set()
+            announcer.follow_up.clear()
         ending = "close"
         try:
             # One trace id for the whole session, in the spans and in every
