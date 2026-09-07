@@ -756,7 +756,11 @@ def test_abandon_missing_unmonitors_the_gap(svc):
             "metadata": {"seasons": None},
         }
     )
-    assert result == {"have": 1, "missing": [{"season": 1, "episodes": 2}]}
+    assert result == {
+        "have": 1,
+        "missing": [{"season": 1, "episodes": 2}],
+        "episode_ids": [1, 2],
+    }
     assert svc.sonarr.puts[-1] == (
         "episode/monitor",
         {"episodeIds": [1, 2], "monitored": False},
@@ -773,8 +777,145 @@ def test_abandon_missing_unmonitors_the_gap(svc):
         ]
     )
     result = svc.abandon_missing({"kind": "movie_acquisition", "external_ref": "32"})
-    assert result == {"have": 0, "missing": []}
+    assert result == {"have": 0, "missing": [], "episode_ids": []}
     assert svc.radarr.puts[-1][1]["monitored"] is False
+
+
+def _cancel_fixture(svc):
+    """A request with one episode imported, one missing and downloading, and
+    two searches out: one queued, one already started."""
+    svc.sonarr.set(
+        library=[{"id": 5, "tvdbId": 81189, "title": "Breaking Bad"}],
+        episodes=[
+            {"id": 101, "seasonNumber": 1, "monitored": True, "hasFile": True},
+            {"id": 102, "seasonNumber": 1, "monitored": True, "hasFile": False},
+        ],
+        queue={
+            "records": [
+                {"id": 720, "seriesId": 5, "episodeId": 102, "downloadId": "d1"},
+                # Another request's episode: a cancel must leave it alone.
+                {"id": 721, "seriesId": 5, "episodeId": 999, "downloadId": "d2"},
+            ]
+        },
+        commands={1: {"status": "queued"}, 2: {"status": "started"}},
+    )
+    for row in svc.sonarr.episodes:
+        row["airDateUtc"] = "2008-01-20T00:00:00Z"
+    return {
+        "kind": "series_acquisition",
+        "external_ref": "5",
+        "metadata": {"catalog_id": 81189, "seasons": [1], "command_ids": [1, 2]},
+    }
+
+
+def test_cancel_stops_the_search_and_keeps_what_imported(svc, monkeypatch):
+    """Unmonitor the missing episode, recall only the search that has not
+    started, drop only that scope's download - in that order, so the running
+    search finds nothing left to grab."""
+    operation = _cancel_fixture(svc)
+    assert svc.cancel_targets(operation) == {"have": 1, "missing": 1, "downloads": 1}
+    calls = []
+    for verb in ("put", "delete"):
+        original = getattr(svc.sonarr, verb)
+
+        def traced(endpoint, payload=None, _verb=verb, _original=original):
+            calls.append((_verb, endpoint))
+            return _original(endpoint, payload)
+
+        monkeypatch.setattr(svc.sonarr, verb, traced)
+    assert svc.cancel_request(operation) == {
+        "ok": True,
+        "kind": "series",
+        "have": 1,
+        "unmonitored": 1,
+        "downloads_canceled": 1,
+        "searches_canceled": 1,
+        "searches_running": 1,
+    }
+    assert calls == [
+        ("put", "episode/monitor"),
+        ("delete", "command/1"),
+        ("delete", "queue/720"),
+    ]
+    assert svc.sonarr.puts[-1][1] == {"episodeIds": [102], "monitored": False}
+    assert svc.sonarr.episodes[0]["monitored"] and svc.sonarr.episodes[0]["hasFile"]
+
+
+def test_cancel_counts_a_search_that_starts_before_the_recall_lands(svc, monkeypatch):
+    """409 means it started between the read and the delete. Anything else
+    is a real failure."""
+    operation = _cancel_fixture(svc)
+    monkeypatch.setitem(svc.sonarr.commands, 2, {"status": "queued"})
+
+    def refuse(endpoint, params=None):
+        if endpoint == "command/2":
+            raise media_clients.MediaError("returned HTTP 409 for /api/v3/command/2")
+        svc.sonarr.deletes.append((endpoint, params))
+
+    monkeypatch.setattr(svc.sonarr, "delete", refuse)
+    result = svc.cancel_request(operation)
+    assert result["searches_canceled"] == 1 and result["searches_running"] == 1
+
+    def fail(endpoint, params=None):
+        raise media_clients.MediaError("returned HTTP 500 for /api/v3/command/1")
+
+    monkeypatch.setattr(svc.sonarr, "delete", fail)
+    with pytest.raises(media_clients.MediaError, match="HTTP 500"):
+        svc.cancel_request(operation)
+
+
+def test_cancel_of_a_pending_episode_request_leaves_the_series_alone(svc):
+    """A request whose episode ids Sonarr has not named yet carries its scope
+    as the requested pairs alone. Read as no scope at all, a cancel would take
+    every monitored episode of the series."""
+    svc.sonarr.set(
+        library=[{"id": 5, "tvdbId": 81189, "title": "Breaking Bad"}],
+        # Somebody else's work, downloading right now.
+        episodes=[
+            {
+                "id": 201,
+                "seasonNumber": 2,
+                "episodeNumber": 1,
+                "monitored": True,
+                "hasFile": False,
+                "airDateUtc": "2009-03-08T00:00:00Z",
+            }
+        ],
+        queue={
+            "records": [
+                {"id": 730, "seriesId": 5, "episodeId": 201, "downloadId": "d9"}
+            ]
+        },
+    )
+    pending = {
+        "kind": "series_acquisition",
+        "external_ref": "5",
+        "metadata": {"catalog_id": 81189, "episodes": [[4, 13]]},
+    }
+    assert svc.cancel_targets(pending) == {"have": 0, "missing": 0, "downloads": 0}
+    assert svc.cancel_request(pending)["downloads_canceled"] == 0
+    assert svc.sonarr.puts == [] and svc.sonarr.deletes == []
+
+    # Once Sonarr names the episode, the cancel acts on that one and no other.
+    svc.sonarr.episodes.append(
+        {
+            "id": 413,
+            "seasonNumber": 4,
+            "episodeNumber": 13,
+            "monitored": True,
+            "hasFile": False,
+            "airDateUtc": "2008-11-20T00:00:00Z",
+        }
+    )
+    svc.sonarr.queue["records"].append(
+        {"id": 731, "seriesId": 5, "episodeId": 413, "downloadId": "d10"}
+    )
+    assert svc.cancel_request(pending)["downloads_canceled"] == 1
+    assert svc.sonarr.puts == [
+        ("episode/monitor", {"episodeIds": [413], "monitored": False})
+    ]
+    assert [endpoint for endpoint, _ in svc.sonarr.deletes] == ["queue/731"]
+    assert svc.sonarr.episodes[0]["monitored"]
 
 
 # --- movies -------------------------------------------------------------------
@@ -1310,13 +1451,16 @@ def test_delete_movie_cancels_its_downloads(svc):
         },
     )
     svc.radarr.commands[8] = {"id": 8, "status": "started"}
-    removed_movie = svc.delete_movie(438631, [8])
+    svc.radarr.commands[9] = {"id": 9, "status": "queued"}
+    removed_movie = svc.delete_movie(438631, [8, 9])
     assert removed_movie["downloads_canceled"] == 1
     assert removed_movie["files_deleted"] == 1
     assert svc.radarr.puts[0][1]["monitored"] is False
-    # The two queue rows are one download and one removal.
+    # The two queue rows are one download and one removal. Command 8 has
+    # started, which the app refuses to cancel, so only 9 is recalled -
+    # deleting the movie is what stops 8 from grabbing anything.
     assert svc.radarr.deletes == [
-        ("command/8", None),
+        ("command/9", None),
         (
             "queue/700",
             {

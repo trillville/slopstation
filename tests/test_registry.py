@@ -29,6 +29,7 @@ def test_every_spec_is_well_formed():
                 assert "appid" in spec.properties, spec.name
     destructive = {s.name for s in assistant.REGISTRY if s.risk == "destructive"}
     assert destructive == {
+        "cancel_request",
         "delete_media",
         "delete_torrent",
         "delete_path",

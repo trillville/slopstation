@@ -45,6 +45,7 @@ ASKS = {
     "search_releases": "do a manual search for releases of that movie",
     "grab_release": "grab that release and download that one",
     "retry_search": "search again for it, the download is stuck",
+    "cancel_request": "cancel that request, i asked for the wrong thing",
     "set_monitored": "stop tracking that show, unmonitor it",
     "set_quality_profile": "change the quality profile to 4k",
     "import_queue": "why is the import stuck, show the queue warnings",
