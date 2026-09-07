@@ -66,7 +66,7 @@ class FakeArr:
             return dict(self.lookup_by_id)
         if endpoint in ("movie", "series"):
             return [dict(row) for row in self.library]
-        if endpoint.startswith("movie/"):
+        if endpoint.startswith(("movie/", "series/")):
             wanted = int(endpoint.split("/")[1])
             return next(dict(row) for row in self.library if row["id"] == wanted)
         if endpoint == "episode":
@@ -865,11 +865,10 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
     added = svc.sonarr.posts[0][1]
     assert added["rootFolderPath"] == "/data/TV"
     assert added["addOptions"]["monitor"] == "none"
-    monitored = {
-        r["seasonNumber"]: r["monitored"] for r in svc.sonarr.puts[0][1]["seasons"]
-    }
-    assert monitored == {0: False, 1: False, 2: True}
+    # Sonarr is still adding the series, so nothing is written to it yet.
+    assert svc.sonarr.puts == []
     assert not [post for post in svc.sonarr.posts if post[0] == "command"]
+    svc.sonarr.set(library=[dict(svc.sonarr.created)])
     assert series["seasons"] == [2] and series["search_pending"]
     pending = {
         "kind": "series_acquisition",
@@ -903,6 +902,11 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
         ]
     )
     assert svc.dispatch_pending_series_search(pending)
+    monitored = {
+        r["seasonNumber"]: r["monitored"] for r in svc.sonarr.puts[0][1]["seasons"]
+    }
+    assert monitored == {0: False, 1: False, 2: True}
+    assert svc.sonarr.puts[0][1]["monitored"]
     assert svc.sonarr.puts[-1] == (
         "episode/monitor",
         {"episodeIds": [102], "monitored": True},
@@ -932,6 +936,45 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
         ("command", {"name": "SeasonSearch", "seriesId": 41, "seasonNumber": 1}),
         ("command", {"name": "SeasonSearch", "seriesId": 41, "seasonNumber": 2}),
     ]
+
+
+def test_series_monitoring_waits_for_sonarr_to_finish_adding(svc):
+    """Sonarr rewrites the series while it is still acting on the add options,
+    so the monitored state is written only once it has cleared them."""
+    svc.sonarr.set(
+        library=[
+            {
+                "id": 41,
+                "tvdbId": 81189,
+                "title": "Breaking Bad",
+                "monitored": False,
+                "addOptions": {"monitor": "none"},
+                "seasons": [{"seasonNumber": 1, "monitored": False}],
+            }
+        ],
+        episodes=[
+            {
+                "id": 102,
+                "seasonNumber": 1,
+                "monitored": False,
+                "hasFile": False,
+                "airDateUtc": "2020-01-01T00:00:00Z",
+            }
+        ],
+    )
+    pending = {
+        "kind": "series_acquisition",
+        "external_ref": "41",
+        "metadata": {"seasons": [1], "search_pending": True},
+    }
+    assert not svc.dispatch_pending_series_search(pending)
+    assert svc.sonarr.puts == []
+
+    svc.sonarr.library[0]["addOptions"] = None
+    assert svc.dispatch_pending_series_search(pending)
+    written = svc.sonarr.puts[0][1]
+    assert written["monitored"]
+    assert [r["monitored"] for r in written["seasons"]] == [True]
 
 
 def test_search_retry_waits_for_a_search_capable_indexer(svc):
