@@ -264,6 +264,7 @@ class GrammarGate(FrameProcessor):
         loud=None,
         closers=None,
         level=None,
+        addressed=False,
     ):
         super().__init__()
         self.matcher = matcher
@@ -279,6 +280,9 @@ class GrammarGate(FrameProcessor):
         self.loud = loud
         self.closers = closers if closers is not None else load_closers()
         self.level = level  # level.RoomLevel; None = unmeasured
+        # The wake word was heard, or the mic opened on purpose (a follow-up).
+        # Until then the first turn without it means the wake was the TV's.
+        self._addressed = addressed
         self._speaking = 0.0  # ts of the open user turn; 0 = closed
         self._dispatching = 0  # blocking calls in flight
         self._assistant_pending = 0.0  # ts of a transcript handed to the LLM
@@ -474,6 +478,7 @@ class GrammarGate(FrameProcessor):
                 if not stripped:
                     # Pre-roll means a pause-style wake transcribes as just
                     # "hey jarvis": swallow it, no earcon, no LLM turn.
+                    self._addressed = True
                     self.log(
                         "stt_final",
                         text=text,
@@ -492,6 +497,19 @@ class GrammarGate(FrameProcessor):
             if text and loud and not addressed and self.wake_word:
                 # A bare "the alfred go away" in a loud room is still us.
                 addressed = mentions_anchor(original, self.wake_word)
+            if addressed:
+                self._addressed = True
+            elif text and self.wake_word and not self._addressed:
+                self.log(
+                    "turn_dropped",
+                    text=text,
+                    reason="false_wake",
+                    confidence=conf,
+                    level_db=room["level_db"],
+                    quiet_ms=room["quiet_ms"],
+                )
+                await self.push_frame(EndWorkerFrame(reason="false wake"))
+                return
             if text and not addressed and loud:
                 # Loud room: speech that did not address us is the TV.
                 self.log(

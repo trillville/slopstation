@@ -143,8 +143,10 @@ them together with the heartbeat count:
     `dbfs`, the loudest hop of the pre-roll: the talker or the un-ducked TV,
     whichever reached the mic louder.
   - `turn_dropped` is a transcript the gate refused, with `reason`:
-    `after_stop` (arrived after stop_listening) or `unaddressed` (a loud
-    room — the duck did not land — and no wake prefix). `stt_final
+    `after_stop` (arrived after stop_listening), `unaddressed` (a loud
+    room — the duck did not land — and no wake prefix) or `false_wake` (the
+    first transcript after a wake-word open carried no wake word, so the TV
+    woke it; the session ends there). `stt_final
     outcome=wake_only` is a transcript that was just the wake phrase.
     `gate_match` with `closer` is a closing phrase caught with company
     ("alright, thanks") rather than by the whole-utterance grammar.
