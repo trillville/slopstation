@@ -485,23 +485,26 @@ def main():
             with sentry.session_trace():
                 # Inside the try so the finally's unduck is always paired with it.
                 room = duck(restore=False)
-                asyncio.run(
-                    Session(
-                        cfg,
-                        secrets,
-                        matcher,
-                        args.dry_run,
-                        input_idx,
-                        output_idx,
-                        capture,
-                        operations=operation_store,
-                        ack=ack,
-                        steam=steam,
-                        media=media_service,
-                        on_end_session=lambda: duck(restore=True),
-                        room=room,
-                    ).run()
+                session = Session(
+                    cfg,
+                    secrets,
+                    matcher,
+                    args.dry_run,
+                    input_idx,
+                    output_idx,
+                    capture,
+                    operations=operation_store,
+                    ack=ack,
+                    steam=steam,
+                    media=media_service,
+                    on_end_session=lambda: duck(restore=True),
+                    room=room,
                 )
+                asyncio.run(session.run())
+                if session.audio_failed:
+                    # Nothing reached the speaker: the fail chime is the only
+                    # cue the couch gets.
+                    ending = "fail"
         except Exception as e:
             log.error("session_crashed", err=repr(e))
             # The event is the alertable half; this is the stack trace, which

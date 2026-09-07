@@ -94,6 +94,54 @@ def _make_llm(voice, secrets, system_text):
     )
 
 
+class _PipecatErrors:
+    """Pipecat logs its own errors to loguru; a transport write failure pushes
+    no frame, so a dead speaker otherwise reads as a clean session."""
+
+    OUTPUT = "pipecat.transports.base_output"
+
+    def __init__(self):
+        self.count = 0
+        self.output = 0
+        self.first = ""
+        self._sink: int | None = None
+
+    def __enter__(self):
+        try:
+            from loguru import logger as loguru_log
+
+            self._sink = loguru_log.add(
+                self._record,
+                level="ERROR",
+                filter=lambda r: (r["name"] or "").startswith("pipecat."),
+            )
+        except Exception as e:
+            log.warn("pipeline_watch_failed", err=str(e))
+        return self
+
+    def _record(self, message):
+        record = message.record
+        self.count += 1
+        if record["name"] == self.OUTPUT:
+            self.output += 1
+        if not self.first:
+            self.first = str(record["message"])[:200]
+
+    def __exit__(self, *exc):
+        if self._sink is not None:
+            try:
+                from loguru import logger as loguru_log
+
+                loguru_log.remove(self._sink)
+            except Exception:
+                pass
+        if self.count:
+            log.error(
+                "pipeline_error", err=self.first, count=self.count, output=self.output
+            )
+        return False
+
+
 class Session:
     """A voice pipeline running from wake until idle or an exit phrase."""
 
@@ -125,6 +173,7 @@ class Session:
         self.provider = self.voice["assistantProvider"]
         self.context = None  # the LLM lane's, once built
         self.toolkit = None  # the LLM lane's tools, once built
+        self.audio_failed = False  # the speaker stopped taking frames
 
     async def run(self):
         from pipecat.frames.frames import (
@@ -306,14 +355,16 @@ class Session:
         if self.capture is not None:
             self.capture.disarm_deadline()
         feeder.capture = self.capture
+        errors = _PipecatErrors()
         try:
-            await runner.add_workers(worker)
-            await runner.run()
-            if not started:
-                raise RuntimeError(
-                    "pipeline setup failed before StartFrame - "
-                    "the underlying error is console-only"
-                )
+            with errors:
+                await runner.add_workers(worker)
+                await runner.run()
+                if not started:
+                    raise RuntimeError(
+                        "pipeline setup failed before StartFrame - "
+                        "the underlying error is console-only"
+                    )
         finally:
             # pipecat (still in 1.8.1) never terminates the PyAudio handle it
             # creates and exposes no public cleanup; a fresh transport per wake
@@ -325,6 +376,7 @@ class Session:
                     pa.terminate()
                 except Exception as e:
                     log.warn("pyaudio_terminate_failed", err=str(e))
+        self.audio_failed = errors.output > 0
         self._save_and_carry()
 
     def _assistant_stages(self, transport, dispatcher, gate):

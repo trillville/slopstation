@@ -256,6 +256,8 @@ def run(monkeypatch, stubbed):
         calls = []
 
         class FakeSession:
+            audio_failed = False
+
             def __init__(
                 self,
                 cfg,
