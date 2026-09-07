@@ -1530,6 +1530,18 @@ class MediaService:
             if int(row.get("seasonNumber", 0) or 0) in seasons
         )
 
+    def episodes_in_scope(self, tvdb_id, episodes):
+        """Resolve requested (season, episode) pairs to Sonarr's ids, for a
+        request whose ids were never resolved because Sonarr was still adding
+        the series. The rows that exist by now; a pair Sonarr never populated
+        has nothing to act on."""
+        series = self._library_row("series", int(tvdb_id))
+        if series is None:
+            return []
+        rows = self.sonarr.get("episode", {"seriesId": int(series["id"])})
+        ids, _ = self._episode_ids_for(rows, self._episodes(episodes))
+        return ids
+
     def delete_series(
         self,
         tvdb_id,

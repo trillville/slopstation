@@ -869,6 +869,71 @@ def test_partial_search_announcement_reports_the_files_gained(
     assert "nothing better" not in done["summary"]
 
 
+def test_delete_season_cancels_a_request_still_waiting_for_its_episode_ids(
+    stack, tracked, monkeypatch
+):
+    """A request whose episodes Sonarr has not named yet belongs to the
+    seasons those episodes are in. Left active, its pending search would
+    monitor them again and start the download the deletion just stopped."""
+    _, _, sonarr, _ = stack
+    tk, store, dispatch = tracked
+    monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
+    pending = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        metadata={"catalog_id": 81189, "episodes": [[1, 2]], "search_pending": True},
+    )
+    other_season = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        work_id="command:other",
+        metadata={"catalog_id": 81189, "episodes": [[2, 1]], "search_pending": True},
+    )
+    ask = {"kind": "series", "catalog_id": 81189, "seasons": [1]}
+    assert not tk.call("delete_media", ask)["ok"]
+    monkeypatch.setattr(dispatch.utterance, "turn", "aa0003")
+    deleted = tk.call("delete_media", ask)
+    assert deleted["ok"], deleted
+    assert deleted["operations_canceled"] == [pending["id"]]
+    assert store.get(pending["id"])["state"] == operations.CANCELED
+    assert store.get(other_season["id"])["state"] == operations.RUNNING
+
+
+def test_delete_season_trims_it_from_a_pending_request_spanning_seasons(
+    stack, tracked, monkeypatch
+):
+    """A pending request the delete only partly covers keeps the seasons it
+    still owns and loses the rest - the pairs left behind are what its search
+    would ask for once Sonarr names them."""
+    _, _, sonarr, _ = stack
+    tk, store, dispatch = tracked
+    monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
+    spanning = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        metadata={
+            "catalog_id": 81189,
+            "episodes": [[1, 2], [2, 1]],
+            "scope_label": "episodes S01E02, S02E01",
+            "search_pending": True,
+        },
+    )
+    ask = {"kind": "series", "catalog_id": 81189, "seasons": [1]}
+    assert not tk.call("delete_media", ask)["ok"]
+    monkeypatch.setattr(dispatch.utterance, "turn", "aa0004")
+    assert tk.call("delete_media", ask)["ok"]
+    kept = store.get(spanning["id"])
+    assert kept["state"] == operations.RUNNING
+    assert kept["metadata"]["episodes"] == [[2, 1]]
+    assert kept["metadata"]["scope_label"] == "episodes S02E01"
+
+
 def test_delete_season_cancels_only_covered_work_and_retains_other_episodes(
     stack, tracked, monkeypatch
 ):
