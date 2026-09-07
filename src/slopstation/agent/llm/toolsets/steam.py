@@ -127,6 +127,7 @@ SPECS = [
             "player count",
             "release date",
         ),
+        busy="checking on {game}",
     ),
     ToolSpec(
         "list_games",
@@ -148,6 +149,7 @@ SPECS = [
         ),
         needs=("steam_data",),
         paged=True,
+        busy="checking Steam",
     ),
     ToolSpec(
         "search_store",
@@ -171,6 +173,7 @@ SPECS = [
         area="steam",
         keywords=("find a game", "search store", "genre", "under", "co-op", "buy"),
         needs=("steam_data",),
+        busy="searching the store",
     ),
     ToolSpec(
         "search_library",
@@ -221,6 +224,7 @@ SPECS = [
         ),
         default=False,
         needs=("steam_data",),
+        busy="checking Steam",
     ),
     ToolSpec(
         "playtime",
@@ -261,6 +265,7 @@ SPECS = [
         default=False,
         needs=("steam_data",),
         paged=True,
+        busy="checking Steam",
     ),
     ToolSpec(
         "new_releases",
@@ -282,6 +287,7 @@ SPECS = [
         default=False,
         needs=("steam_data",),
         paged=True,
+        busy="checking the store",
     ),
     ToolSpec(
         "wishlist_edit",
@@ -301,6 +307,7 @@ SPECS = [
         ),
         default=False,
         needs=("steam_account",),
+        busy="updating the wishlist",
     ),
 ]
 

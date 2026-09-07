@@ -136,6 +136,7 @@ SPECS = [
         default=False,
         needs=("torrents",),
         paged=True,
+        busy="checking the torrents",
     ),
     ToolSpec(
         "torrent_details",
@@ -153,6 +154,7 @@ SPECS = [
         ),
         default=False,
         needs=("torrents",),
+        busy="checking the torrents",
     ),
     ToolSpec(
         "pause_torrent",
@@ -287,6 +289,7 @@ SPECS = [
         ),
         default=False,
         needs=("torrents",),
+        busy="checking the torrents",
     ),
     ToolSpec(
         "set_speed_limits",
@@ -328,6 +331,7 @@ SPECS = [
         default=False,
         needs=("torrents",),
         paged=True,
+        busy="checking the torrents",
     ),
     ToolSpec(
         "orphan_torrents",
@@ -345,6 +349,7 @@ SPECS = [
         ),
         default=False,
         needs=("torrents",),
+        busy="checking the torrents",
     ),
     ToolSpec(
         "vpn_status",
@@ -363,6 +368,7 @@ SPECS = [
         ),
         default=False,
         needs=("torrents",),
+        busy="checking the VPN",
     ),
     ToolSpec(
         "qbit_log",
@@ -381,6 +387,7 @@ SPECS = [
         default=False,
         needs=("torrents",),
         paged=True,
+        busy="reading the log",
     ),
 ]
 

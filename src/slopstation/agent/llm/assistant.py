@@ -184,6 +184,20 @@ class Toolkit(Tools):
         self.defaults = [n for n in self.offered if REGISTRY.get(n).default]
         self.loaded = list(self.defaults)
 
+    def busy_phrase(self, name, args):
+        """What to say when `name` has kept the user waiting: the spec's busy
+        phrase with {game} filled from the appid argument, or None when the
+        tool has none (the lane then falls back to its tone or phrase)."""
+        try:
+            phrase = REGISTRY.get(name).busy
+        except KeyError:
+            return None
+        if not phrase:
+            return None
+        if "{game}" in phrase:
+            phrase = phrase.replace("{game}", game_title(args.get("appid")))
+        return phrase
+
     def load(self, names):
         """Load offered tools by name; returns the ones newly loaded. The
         defaults stay first and found tools follow in the order they were
@@ -233,6 +247,19 @@ def tool_impls(
         steam=steam,
         media=media,
     ).impls
+
+
+def game_title(appid):
+    """The title behind an appid for a spoken phrase: installed name, owned
+    name, or "that game" when the catalog has neither. Never an id aloud."""
+    try:
+        appid = int(appid)
+    except (TypeError, ValueError):
+        return "that game"
+    name = library.installed_name(appid)
+    if name is None:
+        name = library.load().get("owned", {}).get(str(appid), {}).get("name")
+    return name or "that game"
 
 
 def record_tool_call(name, args, out, log=None):

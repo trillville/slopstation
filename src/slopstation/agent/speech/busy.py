@@ -36,14 +36,17 @@ EARCON = "busy"
 
 class BusyTone(FrameProcessor):
     """One acknowledgment per turn for a tool call that has kept the user
-    waiting. `phrase` empty plays the busy earcon; otherwise the phrase is
-    spoken."""
+    waiting. `phrases(tool, args)` is the tool's own words, from its spec,
+    or None; then `phrase`, the configured fallback; then the busy earcon."""
 
-    def __init__(self, log, after_s: float = AFTER_S, phrase: str = "") -> None:
+    def __init__(
+        self, log, after_s: float = AFTER_S, phrase: str = "", phrases=None
+    ) -> None:
         super().__init__()
         self.log = log
         self.after_s = float(after_s)
         self.phrase = phrase.strip()
+        self.phrases = phrases
         self._timers: dict[str, asyncio.Task] = {}
         self._spoke = False  # this turn
 
@@ -70,7 +73,7 @@ class BusyTone(FrameProcessor):
         if self._spoke or frame.tool_call_id in self._timers:
             return
         self._timers[frame.tool_call_id] = asyncio.create_task(
-            self._fire(frame.tool_call_id, frame.function_name)
+            self._fire(frame.tool_call_id, frame.function_name, frame.arguments)
         )
 
     def _disarm(self, tool_call_id: str) -> None:
@@ -82,20 +85,34 @@ class BusyTone(FrameProcessor):
         for tool_call_id in list(self._timers):
             self._disarm(tool_call_id)
 
-    async def _fire(self, tool_call_id: str, tool: str) -> None:
+    def _words(self, tool: str, args) -> str:
+        """The tool's own phrase, else the configured one, else empty (tone)."""
+        if self.phrases is not None:
+            try:
+                own = self.phrases(tool, dict(args or {}))
+            except Exception as e:
+                self.log.warn("busy_phrase_failed", tool=tool, err=str(e))
+                own = None
+            if own:
+                return str(own).strip()
+        return self.phrase
+
+    async def _fire(self, tool_call_id: str, tool: str, args=None) -> None:
         await asyncio.sleep(self.after_s)
         self._timers.pop(tool_call_id, None)
         if self._spoke:
             return
         self._spoke = True
+        words = self._words(tool, args)
         self.log(
             "busy_tone",
             tool=tool,
             after_ms=int(self.after_s * 1000),
-            kind="phrase" if self.phrase else "earcon",
+            kind="phrase" if words else "earcon",
+            text=words or None,
         )
-        if self.phrase:
-            await self.push_frame(TTSSpeakFrame(self.phrase))
+        if words:
+            await self.push_frame(TTSSpeakFrame(words))
         else:
             await self.push_frame(
                 OutputAudioRawFrame(

@@ -28,6 +28,7 @@ SPECS = [
         risk="read",
         area="house",
         keywords=("find tools", "more tools", "can you", "is there a way", "how do i"),
+        busy="one moment",
     ),
 ]
 

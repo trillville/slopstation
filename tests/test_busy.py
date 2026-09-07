@@ -40,9 +40,9 @@ def drive(monkeypatch):
     """Feed timed frames to a BusyTone with push_frame stubbed; returns what it
     pushed besides the frames it forwarded, and its log."""
 
-    def _drive(script, phrase=""):
+    def _drive(script, phrase="", phrases=None):
         log = CapturingLog("voice")
-        busy = BusyTone(log, after_s=AFTER, phrase=phrase)
+        busy = BusyTone(log, after_s=AFTER, phrase=phrase, phrases=phrases)
         pushed = []
 
         async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
@@ -123,3 +123,47 @@ def test_a_phrase_is_spoken_instead_of_the_earcon(drive):
     assert len(spoken) == 1 and isinstance(spoken[0], TTSSpeakFrame)
     assert spoken[0].text == "one moment"
     assert log.find("busy_tone")[-1]["kind"] == "phrase"
+    assert log.find("busy_tone")[-1]["text"] == "one moment"
+
+
+def test_the_tools_own_words_come_first_then_the_fallbacks(drive):
+    seen = []
+
+    def phrases(tool, args):
+        seen.append((tool, args))
+        if tool == "boom":
+            raise ZeroDivisionError("a lookup that raises")
+        return {"download_status": "checking Steam"}.get(tool)
+
+    # The tool's own phrase, with the arguments it was called with.
+    call = FunctionCallInProgressFrame(
+        function_name="download_status",
+        tool_call_id="a",
+        arguments={"appid": 7},
+        cancel_on_interruption=True,
+    )
+    spoken, log = drive(
+        [call, AFTER * 2, finished("a")], phrase="hang on", phrases=phrases
+    )
+    assert spoken[0].text == "checking Steam" and seen == [
+        ("download_status", {"appid": 7})
+    ]
+    assert log.find("busy_tone")[-1]["text"] == "checking Steam"
+    # No phrase of its own: the configured one.
+    spoken, _ = drive(
+        [started("b", "list_operations"), AFTER * 2, finished("b")],
+        phrase="hang on",
+        phrases=phrases,
+    )
+    assert spoken[0].text == "hang on"
+    # No phrase anywhere: the earcon.
+    spoken, _ = drive(
+        [started("c", "list_operations"), AFTER * 2, finished("c")], phrases=phrases
+    )
+    assert isinstance(spoken[0], OutputAudioRawFrame)
+    # A lookup that raises is logged and falls back; the turn is not broken.
+    spoken, log = drive(
+        [started("d", "boom"), AFTER * 2, finished("d")], phrases=phrases
+    )
+    assert isinstance(spoken[0], OutputAudioRawFrame)
+    assert log.find("busy_phrase_failed")[-1]["tool"] == "boom"

@@ -20,6 +20,13 @@ def test_every_spec_is_well_formed():
             # says it returns the count, so "the rest" is one more call.
             assert {"limit", "offset"} <= set(spec.properties), spec.name
             assert "count" in spec.description, spec.name
+        if spec.busy:
+            # Spoken while the user waits: a few words, and {game} only where
+            # the tool takes an appid to fill it from.
+            assert len(spec.busy.split()) <= 4, f"{spec.name}: long busy phrase"
+            assert spec.busy == spec.busy.strip() and not spec.busy.endswith(".")
+            if "{game}" in spec.busy:
+                assert "appid" in spec.properties, spec.name
     destructive = {s.name for s in assistant.REGISTRY if s.risk == "destructive"}
     assert destructive == {
         "delete_media",
