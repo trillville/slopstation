@@ -10,7 +10,7 @@ from typing import Any
 from slopstation.agent.speech import audio, earcons
 
 CHUNK = 3200  # 100 ms per write; abort latency bound
-DUCK_WAIT_S = 2.5  # how long a bulletin waits for the room to come down
+DUCK_WAIT_S = 1.0  # how long a bulletin waits for the room to come down
 HANDOFF_S = 5.0  # how long a ducked room waits for the session taking it over
 
 
