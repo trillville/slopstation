@@ -242,6 +242,11 @@ class MediaMonitor(Monitor):
 
     def _dispatch_search_retry(self, operation, now):
         metadata = operation.get("metadata") or {}
+        # The first search has not been dispatched yet, so there is nothing to
+        # retry - and a request whose scope Sonarr could not resolve yet would
+        # retry as the whole series.
+        if metadata.get("search_pending"):
+            return operation
         if not metadata.get("search_retry_pending") or now < int(
             metadata.get("search_retry_after", 0) or 0
         ):
@@ -436,6 +441,14 @@ def main(argv=None):
             else:
                 seasons = metadata.get("seasons")
                 episode_ids = metadata.get("episode_ids")
+                if episode_ids is None and metadata.get("episodes"):
+                    # A request still waiting for Sonarr to name its episodes
+                    # has an episode scope all the same. Without resolving it
+                    # here the scope reads as absent, which means every season
+                    # - and this deletes files.
+                    episode_ids = service.episodes_in_scope(
+                        metadata["catalog_id"], metadata["episodes"]
+                    )
                 result = service.delete_series(
                     metadata["catalog_id"],
                     seasons=seasons,

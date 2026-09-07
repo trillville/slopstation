@@ -446,7 +446,10 @@ def covered_by_delete(
     A movie is covered outright; a series only when the delete's scope holds
     every season its request asked for, so a partial delete leaves the
     request tracking the seasons it still owns. `episode_ids` names the
-    episodes the service resolved for this deletion before changing state."""
+    episodes the service resolved for this deletion before changing state.
+    A request whose episode ids Sonarr could not name yet is covered by the
+    seasons its episodes belong to: leaving it active is what would let the
+    pending search start the download again once Sonarr catches up."""
     rows: list[dict] = []
     command_ids: list = []
     for operation in (
@@ -457,12 +460,15 @@ def covered_by_delete(
             continue
         requested = metadata.get("seasons")
         explicit = metadata.get("episode_ids")
+        pending = metadata.get("episodes")
         if not (
             kind == "movie"
             or all_seasons
             or (
                 set(explicit) <= set(episode_ids)
                 if explicit is not None
+                else {int(pair[0]) for pair in pending} <= set(seasons or [])
+                if pending
                 else requested is not None and set(requested) <= set(seasons or [])
             )
         ):

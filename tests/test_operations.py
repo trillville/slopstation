@@ -399,6 +399,83 @@ def test_failed_search_retry_backs_off_longer(log):
     assert failed["metadata"]["search_retry_pending"]
 
 
+def test_a_retry_waits_for_the_pending_search(log):
+    """A request whose first search has not been dispatched has nothing to
+    retry: retrying it would search a scope Sonarr cannot name yet, which for
+    an episode request is the whole series."""
+    store = operations.OperationStore(log)
+    pending_op = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "43",
+        "It's Always Sunny in Philadelphia",
+        metadata={
+            "catalog_id": 75805,
+            "episodes": [[4, 13]],
+            "search_pending": True,
+            "search_retry_pending": True,
+            "search_retry_after": 2000,
+        },
+    )
+    pending_media = FakeMedia(
+        result={
+            "complete": False,
+            "progress": {"phase": "searching"},
+            "detail": "Sonarr is still populating episode metadata",
+        }
+    )
+    monitor = operations_monitors.MediaMonitor(store, pending_media, log)
+    monitor.reconcile_once(now=3000)
+    assert not pending_media.retries
+    assert store.get(pending_op["id"])["metadata"]["search_pending"]
+    # Once the pending search has gone out, the retry is scoped and runs.
+    pending_media.search_ready = True
+    monitor.reconcile_once(now=3000)
+    assert pending_media.retries == [pending_op["id"]]
+
+
+def test_abandoning_a_pending_episode_request_keeps_the_series(log, monkeypatch):
+    """The scope of a request Sonarr has not finished adding is its episodes,
+    not every season - reading it as absent deletes the whole library entry
+    and its files."""
+    store = operations.OperationStore(log)
+    pending_op = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "43",
+        "It's Always Sunny in Philadelphia",
+        metadata={
+            "catalog_id": 75805,
+            "episodes": [[4, 13]],
+            "search_pending": True,
+            "command_ids": [7],
+        },
+    )
+    deletions = []
+
+    class FakeService:
+        def episodes_in_scope(self, tvdb_id, episodes):
+            assert (tvdb_id, episodes) == (75805, [[4, 13]])
+            return [413]
+
+        def delete_series(self, tvdb_id, **kwargs):
+            deletions.append((tvdb_id, kwargs))
+            return {"ok": True, "detail": "deleted 1 selected episode"}
+
+    monkeypatch.setattr(
+        operations_monitors.media, "from_config", lambda *a, **kw: FakeService()
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert operations_monitors.main(["abandon", pending_op["id"], "--execute"]) == 0
+    assert len(deletions) == 1
+    tvdb_id, kwargs = deletions[0]
+    assert tvdb_id == 75805
+    assert kwargs["all_seasons"] is False
+    assert kwargs["episode_ids"] == [413]
+    assert kwargs["seasons"] is None
+    assert store.get(pending_op["id"])["state"] == operations.CANCELED
+
+
 def test_cli_lists_operations(log):
     store = operations.OperationStore(log)
     retry_op = _movie(store, "61", "Heat", 949, 10)

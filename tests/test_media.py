@@ -1200,6 +1200,10 @@ def test_request_episodes_on_a_new_series_resolves_ids_when_sonarr_is_ready(svc)
         "command",
         {"name": "EpisodeSearch", "episodeIds": [413]},
     )
+    # The scope an abandonment reads back, so a pending request is never
+    # mistaken for one with no scope at all.
+    assert svc.episodes_in_scope(75805, [[4, 13]]) == [413]
+    assert svc.episodes_in_scope(75805, [[4, 99]]) == []
 
 
 # --- positive completion evidence ---------------------------------------------
