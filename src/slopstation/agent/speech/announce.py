@@ -163,6 +163,7 @@ class Announcer:
         expected = self.abort.is_set() or self.follow_up.is_set()
         if expected and self.session_active.wait(HANDOFF_S):
             return
+        self.follow_up.clear()
         self.duck(restore=True)
 
     def _deliver(self, kind, operation_id, key, item):

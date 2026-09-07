@@ -608,6 +608,7 @@ def test_a_follow_up_that_opens_no_session_gives_the_room_back(log, monkeypatch)
     announce_an_install(store)
     # A wedged mic never consumes the follow-up: the room must not stay quiet.
     assert wait_for(lambda: order == ["duck", "speak", "unduck"]), order
+    assert not ann.follow_up.is_set(), "a stale follow-up would stall the next one"
     ann.stop()
 
 
