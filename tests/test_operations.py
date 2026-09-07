@@ -566,6 +566,8 @@ def announcer_with_a_ducker(log, monkeypatch, order, follow_up):
         return DuckedRoom()
 
     def play(pcm):
+        if ann.abort.is_set():
+            return False
         order.append("speak")
         return True
 
@@ -598,6 +600,20 @@ def test_a_follow_up_hands_the_ducked_room_to_the_session(log, monkeypatch):
     # It opens with the duck already in place; its own close pays it back.
     assert not wait_for(lambda: "unduck" in order, timeout=0.3), order
     assert order == ["duck", "speak"]
+    assert not ann.follow_up.is_set(), "the session taking over consumed it"
+    ann.stop()
+
+
+def test_a_wake_during_the_wait_for_a_session_is_not_this_bulletins(log, monkeypatch):
+    monkeypatch.setattr(announce, "HANDOFF_S", 0.1)
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=False)
+    ann.session_active.set()  # session A is open when the bulletin arrives
+    announce_an_install(store)
+    ann.abort_current()  # session B's wake, while the bulletin still waits
+    ann.session_active.clear()  # B has closed
+    # A stale abort must neither cut the bulletin nor keep the room down.
+    assert wait_for(lambda: order == ["duck", "speak", "unduck"]), order
     ann.stop()
 
 

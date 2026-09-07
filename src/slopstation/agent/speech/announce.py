@@ -111,9 +111,9 @@ class Announcer:
             if item is None:
                 return
             kind, operation_id, key = item
-            self.abort.clear()
             while self.session_active.is_set():
                 time.sleep(0.5)
+            self.abort.clear()
             if kind == "terminal":
                 item = next(
                     (
@@ -165,9 +165,9 @@ class Announcer:
         if self.abort.is_set() or self.follow_up.is_set():
             self.session_active.wait(HANDOFF_S)
         with self.handoff:
+            self.follow_up.clear()
             if self.abort.is_set() or self.session_active.is_set():
                 return
-            self.follow_up.clear()
             self.duck(restore=True)
 
     def _deliver(self, kind, operation_id, key, item):
