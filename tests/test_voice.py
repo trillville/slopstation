@@ -348,6 +348,16 @@ def test_full_lanes_run_one_dry_session(run):
     assert callable(calls[0]["on_end_session"])
 
 
+def test_the_announcer_gets_the_ducker_a_session_uses(run):
+    cfg = make_config(tvIp="10.0.0.9")
+    cfg["voice"]["duckSteps"] = 4
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert FakeAnnouncer.made, "a live run announces"
+    room = FakeAnnouncer.made[0].duck(restore=False)
+    # A bulletin waits on this before it speaks, so the duck lands first.
+    assert room is not None and room.settled.wait(2)
+
+
 def test_a_duck_that_did_not_land_marks_the_room_loud(run, monkeypatch):
     cfg = make_config(tvIp="10.0.0.9")
     cfg["voice"]["duckSteps"] = 4

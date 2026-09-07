@@ -134,10 +134,13 @@ def warn_config(voice):
 
 
 class RoomState:
-    """Filled in off-thread: `loud` once a duck was tried and did not land."""
+    """Filled in off-thread: `loud` once a duck was tried and did not land.
+    `settled` is set when the attempt is over, for a caller that must not
+    start until the room is down."""
 
     def __init__(self):
         self.loud = False
+        self.settled = threading.Event()
 
 
 def make_ducker(cfg, dry_run):
@@ -186,6 +189,8 @@ def make_ducker(cfg, dry_run):
                     state.loud = ducker.duck() is False
             except Exception as e:
                 log.warn("tv_duck_failed", restore=restore, err=str(e))
+            finally:
+                state.settled.set()
 
         threading.Thread(target=run, daemon=True).start()
         return state
@@ -276,11 +281,16 @@ def main():
     from slopstation.agent.tools import operations as operations_mod
     from slopstation.agent.tools import operations_monitors
 
+    # Built here, not at the wake loop: the announcer ducks with it too, and a
+    # bulletin can arrive before the first wake.
+    duck = make_ducker(cfg, args.dry_run)
+
     operation_store = operations_mod.OperationStore(log)
     announcer = None
     if stt_live and not args.dry_run:
         announcer = announce.Announcer(voice, secrets, log)
         announcer.store = operation_store
+        announcer.duck = duck
         operation_store.on_terminal = announcer.submit
         operation_store.on_notification = announcer.submit_notification
         for operation in operation_store.pending_announcements():
@@ -416,8 +426,6 @@ def main():
         # This lane's own cron monitor: its death pages on its own, and the
         # listener's stays green. No-ops without a sentryDsn.
         checkin.start("voice", cfg)
-
-    duck = make_ducker(cfg, args.dry_run)
 
     session_ctx = None
     while True:

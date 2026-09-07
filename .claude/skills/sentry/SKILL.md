@@ -126,9 +126,11 @@ them together with the heartbeat count:
     `reason=user_adjusted|no_readback`), `tv_duck_skipped` (the on-gate:
     `state=standby|unknown` or `reason=no_readback`), `tv_duck_failed` (a key
     burst or the whole op raised), `tv_duck_deficit` (warn: steps still owed —
-    the next session's close retries them). Substring gotcha: `tv_unducked`
-    does not contain "tv_duck", so match the event names, never a `tv_duck`
-    substring.
+    the next session's close retries them), `tv_duck_slow` (warn: an
+    announcement waited `waited` seconds for the room to come down and spoke
+    anyway, so that bulletin landed over a loud TV). Substring gotcha:
+    `tv_unducked` does not contain "tv_duck", so match the event names, never
+    a `tv_duck` substring.
   - `gate_match` / `gate_miss` / `stt_final` carry `confidence` (mean per-word,
     from Flux) — bad transcript vs bad phrasing. Absent on turns where Flux
     sent no per-word data. They also carry the room:

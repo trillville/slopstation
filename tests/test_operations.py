@@ -543,6 +543,63 @@ def test_unmonitored_request_is_canceled(log):
     assert store.get(canceled_op["id"])["state"] == operations.CANCELED
 
 
+class DuckedRoom:
+    """What make_ducker hands back once the attempt is over."""
+
+    def __init__(self):
+        self.loud = False
+        self.settled = threading.Event()
+        self.settled.set()
+
+
+def announcer_with_a_ducker(log, monkeypatch, order, follow_up):
+    """An announcer whose duck and playback record the order they ran in."""
+    voice = dict(helpers.CONFIG["voice"])
+    voice["followUpAfterAnnounce"] = follow_up
+    ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    store = operations.OperationStore(log, on_terminal=ann.submit)
+    monkeypatch.setattr(ann, "store", store)
+    monkeypatch.setattr(announce, "synth", lambda *a, **kw: b"speech")
+
+    def duck(restore):
+        order.append("unduck" if restore else "duck")
+        return DuckedRoom()
+
+    def play(pcm):
+        order.append("speak")
+        return True
+
+    monkeypatch.setattr(ann, "duck", duck)
+    monkeypatch.setattr(ann, "_play", play)
+    return ann, store
+
+
+def announce_an_install(store):
+    op = store.track_steam_install(20, "Team Fortress Classic", verified=True)
+    store.observe(op["id"], operations.SUCCEEDED, {"percent": 100}, "fully installed")
+    return op
+
+
+def test_the_room_is_ducked_before_the_bulletin_not_after_it(log, monkeypatch):
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=False)
+    announce_an_install(store)
+    assert wait_for(lambda: order[-1:] == ["unduck"]), order
+    assert order == ["duck", "speak", "unduck"]
+    ann.stop()
+
+
+def test_a_follow_up_keeps_the_room_down_for_the_session(log, monkeypatch):
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=True)
+    announce_an_install(store)
+    assert wait_for(lambda: ann.follow_up.is_set())
+    # The session opens with the duck already in place; its close pays it back.
+    assert not wait_for(lambda: "unduck" in order, timeout=0.3), order
+    assert order == ["duck", "speak"]
+    ann.stop()
+
+
 def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
     voice = dict(helpers.CONFIG["voice"])
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)

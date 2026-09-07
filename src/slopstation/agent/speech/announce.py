@@ -10,6 +10,7 @@ from typing import Any
 from slopstation.agent.speech import audio, earcons
 
 CHUNK = 3200  # 100 ms per write; abort latency bound
+DUCK_WAIT_S = 2.5  # how long a bulletin waits for the room to come down
 
 
 def synth(text, api_key, voice_model):
@@ -36,6 +37,7 @@ class Announcer:
         self.secrets = secrets
         self.log = log
         self.store: Any = None  # the OperationStore, attached by main()
+        self.duck: Any = None  # the session ducker, attached by main()
         self.session_active = threading.Event()
         self.abort = threading.Event()
         self.follow_up = threading.Event()
@@ -133,29 +135,59 @@ class Announcer:
                 )
             if item is None:
                 continue  # already heard via pull
+            self._duck_room()
             try:
-                done = self.speak(item["summary"])
-            except Exception as e:
-                self.log.warn(
-                    "announce_failed",
-                    operation=operation_id,
-                    err=str(e),
-                    fallback="earcon",
+                self._deliver(kind, operation_id, key, item)
+            finally:
+                self._restore_room()
+
+    def _duck_room(self):
+        """Take the room down BEFORE the bulletin. The ducker runs off-thread
+        so a voice session never waits on the TV; here the waiting is the
+        point, but a slow set must not hold the bulletin forever."""
+        if self.duck is None:
+            return
+        room = self.duck(restore=False)
+        if room is not None and not room.settled.wait(DUCK_WAIT_S):
+            self.log.warn("tv_duck_slow", waited=DUCK_WAIT_S)
+
+    def _restore_room(self):
+        """Leave the room down when a session is taking over: it opens with
+        the duck already in place and its own close pays the ledger back.
+        `abort` covers the wake that has not opened its session yet."""
+        if self.duck is None:
+            return
+        if self.abort.is_set() or self.session_active.is_set():
+            return
+        if self.follow_up.is_set():
+            return
+        self.duck(restore=True)
+
+    def _deliver(self, kind, operation_id, key, item):
+        """Speak one bulletin and record what the couch actually heard."""
+        try:
+            done = self.speak(item["summary"])
+        except Exception as e:
+            self.log.warn(
+                "announce_failed",
+                operation=operation_id,
+                err=str(e),
+                fallback="earcon",
+            )
+            try:
+                self._play(earcons.pcm("announce"))
+            except OSError as e2:
+                self.log.error(
+                    "announce_earcon_failed", operation=operation_id, err=str(e2)
                 )
-                try:
-                    self._play(earcons.pcm("announce"))
-                except OSError as e2:
-                    self.log.error(
-                        "announce_earcon_failed", operation=operation_id, err=str(e2)
-                    )
-                continue
-            if done:
-                if kind == "terminal":
-                    self.store.mark_delivered(operation_id)
-                else:
-                    self.store.mark_notification_delivered(operation_id, key)
-                self.log("operation_announced", operation=operation_id)
-                if self.follow_up_enabled:
-                    self.follow_up.set()
+            return
+        if done:
+            if kind == "terminal":
+                self.store.mark_delivered(operation_id)
             else:
-                self.log("announce_cut_short", operation=operation_id)
+                self.store.mark_notification_delivered(operation_id, key)
+            self.log("operation_announced", operation=operation_id)
+            if self.follow_up_enabled:
+                self.follow_up.set()
+        else:
+            self.log("announce_cut_short", operation=operation_id)
