@@ -1060,6 +1060,148 @@ def test_series_upgrade_completes_on_new_episode_files(svc):
     assert svc.observe(upgrade_operation)["complete"]
 
 
+def test_request_episodes_touches_only_those_episodes(svc):
+    """A held series asked for by episode: the named episodes are monitored
+    and searched one by one; no season flag moves and no SeasonSearch runs."""
+    svc.sonarr.set(
+        library=[
+            {
+                "id": 42,
+                "tvdbId": 75805,
+                "title": "It's Always Sunny in Philadelphia",
+                "qualityProfileId": 20,
+                "monitored": False,
+                "seasons": [
+                    {"seasonNumber": 4, "monitored": False},
+                    {"seasonNumber": 10, "monitored": False},
+                ],
+            }
+        ],
+        episodes=[
+            {
+                "id": 413,
+                "seasonNumber": 4,
+                "episodeNumber": 13,
+                "monitored": False,
+                "hasFile": False,
+                "airDateUtc": "2008-11-20T00:00:00Z",
+            },
+            {
+                "id": 412,
+                "seasonNumber": 4,
+                "episodeNumber": 12,
+                "monitored": False,
+                "hasFile": False,
+                "airDateUtc": "2008-11-13T00:00:00Z",
+            },
+            {
+                "id": 1004,
+                "seasonNumber": 10,
+                "episodeNumber": 4,
+                "monitored": False,
+                "hasFile": False,
+                "airDateUtc": "2015-02-04T00:00:00Z",
+            },
+        ],
+    )
+    submission = svc.request_series(
+        75805, episodes=[{"season": 10, "episode": 4}, {"season": 4, "episode": 13}]
+    )
+    assert submission["episode_ids"] == [413, 1004]
+    assert submission["episodes"] == [[4, 13], [10, 4]]
+    assert "seasons" not in submission
+    assert submission["scope_label"] == "episodes S04E13, S10E04"
+    written = svc.sonarr.puts[0][1]
+    assert written["monitored"]
+    assert [r["monitored"] for r in written["seasons"]] == [False, False]
+    assert svc.sonarr.puts[1] == (
+        "episode/monitor",
+        {"episodeIds": [413, 1004], "monitored": True},
+    )
+    assert svc.sonarr.posts == [
+        ("command", {"name": "EpisodeSearch", "episodeIds": [413, 1004]})
+    ]
+    operation = {
+        "kind": "series_acquisition",
+        "external_ref": "42",
+        "metadata": {"episodes": [[4, 13], [10, 4]], "episode_ids": [413, 1004]},
+    }
+    observation = svc.observe(operation)
+    assert observation["progress"]["total_episodes"] == 2
+    assert not observation["complete"]
+    with pytest.raises(media_clients.MediaError, match="S04E99"):
+        svc.request_series(75805, episodes=[{"season": 4, "episode": 99}])
+    with pytest.raises(media_clients.MediaError, match="not both"):
+        svc.request_series(75805, seasons=[4], episodes=[{"season": 4, "episode": 13}])
+
+
+def test_request_episodes_on_a_new_series_resolves_ids_when_sonarr_is_ready(svc):
+    """A series Sonarr is still adding has no episode rows to name, so the
+    request waits, and the pending dispatch resolves the ids, monitors the
+    episodes and searches them once the rows and the add pass are there."""
+    svc.sonarr.set(
+        lookup=[
+            {
+                "tvdbId": 75805,
+                "title": "It's Always Sunny in Philadelphia",
+                "seasons": [{"seasonNumber": 4, "monitored": False}],
+            }
+        ]
+    )
+    svc.sonarr.set(
+        created={
+            "id": 43,
+            "tvdbId": 75805,
+            "title": "It's Always Sunny in Philadelphia",
+            "qualityProfileId": 20,
+            "addOptions": {"monitor": "none"},
+            "seasons": svc.sonarr.lookup[0]["seasons"],
+        }
+    )
+    submission = svc.request_series(75805, episodes=[{"season": 4, "episode": 13}])
+    assert svc.sonarr.posts[0][1]["addOptions"]["monitor"] == "none"
+    assert submission["search_pending"] and "episode_ids" not in submission
+    assert submission["episodes"] == [[4, 13]]
+    svc.sonarr.set(library=[dict(svc.sonarr.created)])
+    pending = {
+        "kind": "series_acquisition",
+        "external_ref": "43",
+        "metadata": {"episodes": [[4, 13]], "search_pending": True},
+    }
+    # No rows yet: not ready, and not cancelled either.
+    assert not svc.dispatch_pending_series_search(pending)
+    assert not svc.observe(pending)["metadata_ready"]
+    svc.sonarr.set(
+        episodes=[
+            {
+                "id": 413,
+                "seasonNumber": 4,
+                "episodeNumber": 13,
+                "monitored": False,
+                "hasFile": False,
+                "airDateUtc": "2008-11-20T00:00:00Z",
+            }
+        ]
+    )
+    # Rows, but Sonarr's add pass is still running.
+    assert not svc.dispatch_pending_series_search(pending)
+    assert not svc.observe(pending).get("canceled")
+    svc.sonarr.library[0]["addOptions"] = None
+    assert svc.dispatch_pending_series_search(pending) == {
+        "command_ids": [1],
+        "episode_ids": [413],
+    }
+    assert svc.sonarr.puts[0][1]["monitored"]
+    assert svc.sonarr.puts[-1] == (
+        "episode/monitor",
+        {"episodeIds": [413], "monitored": True},
+    )
+    assert svc.sonarr.posts[-1] == (
+        "command",
+        {"name": "EpisodeSearch", "episodeIds": [413]},
+    )
+
+
 # --- positive completion evidence ---------------------------------------------
 
 

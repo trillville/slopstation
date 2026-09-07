@@ -177,8 +177,8 @@ class FakeMedia:
             "already_available": False,
         }
 
-    def request_series(self, tvdb_id, preset, seasons):
-        self.requests.append(("series", tvdb_id, preset, seasons))
+    def request_series(self, tvdb_id, preset, seasons, episodes=None):
+        self.requests.append(("series", tvdb_id, preset, seasons, episodes))
         return {
             "ok": True,
             "kind": "series_acquisition",
@@ -472,7 +472,7 @@ def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operat
     series_requested = live_media["request_series"]({"tvdb_id": 81189, "seasons": [2]})
     assert series_requested["operation_id"] == "op-media"
     assert series_requested["all_seasons"] is False
-    assert fake_media.requests[-1] == ("series", 81189, "default", [2])
+    assert fake_media.requests[-1] == ("series", 81189, "default", [2], None)
     assert series_requested["acknowledgment"] == (
         "Requested Breaking Bad, season 2, using the default quality profile. "
         "Sonarr is searching in the background."
@@ -492,7 +492,7 @@ def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operat
         {"tvdb_id": 81189, "seasons": [], "all_seasons": True}
     )
     assert empty_scope["all_seasons"] is True
-    assert fake_media.requests[-1] == ("series", 81189, "default", None)
+    assert fake_media.requests[-1] == ("series", 81189, "default", None, None)
     all_requested = live_media["request_series"](
         {"tvdb_id": 81189, "preset": "2160p", "all_seasons": True}
     )
@@ -501,12 +501,48 @@ def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operat
         "Sonarr is searching in the background."
     )
     assert all_requested["all_seasons"] is True
-    assert fake_media.requests[-1] == ("series", 81189, "2160p", None)
+    assert fake_media.requests[-1] == ("series", 81189, "2160p", None, None)
     assert fake_operations.tracked[-1][6]["all_seasons"] is True
     series_schema = next(
         tool for tool in assistant.anthropic_tools() if tool["name"] == "request_series"
     )
     assert "all_seasons" in series_schema["input_schema"]["properties"]
+
+
+def test_request_series_takes_individual_episodes(live_media, fake_media):
+    """A list of episodes is requested as those episodes, never widened to
+    their seasons, and is one scope like the other two."""
+    requested = live_media["request_series"](
+        {
+            "tvdb_id": 75805,
+            "episodes": [
+                {"season": 10, "episode": 4},
+                {"season": 4, "episode": 13},
+                {"season": 4, "episode": 13},
+            ],
+        }
+    )
+    assert requested["ok"]
+    assert fake_media.requests[-1] == (
+        "series",
+        75805,
+        "default",
+        None,
+        [(4, 13), (10, 4)],
+    )
+    assert requested["acknowledgment"] == (
+        "Requested Breaking Bad, season 4 episode 13 and season 10 episode 4, "
+        "using the default quality profile. Sonarr is searching in the background."
+    )
+    before = list(fake_media.requests)
+    mixed = live_media["request_series"](
+        {"tvdb_id": 75805, "seasons": [4], "episodes": [{"season": 4, "episode": 13}]}
+    )
+    assert not mixed["ok"] and fake_media.requests == before
+    for bad in ([{"season": 4}], [{"season": 0, "episode": 1}], [[4, 13]], ["S04E13"]):
+        result = live_media["request_series"]({"tvdb_id": 75805, "episodes": bad})
+        assert not result["ok"] and "episodes must be" in result["error"], bad
+    assert fake_media.requests == before
 
 
 def test_delete_media_validates_its_scope(live_media):

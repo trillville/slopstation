@@ -313,8 +313,58 @@ class MediaService:
             raise MediaError("season numbers must be positive; specials are explicit")
         return seasons
 
+    @staticmethod
+    def _episodes(value):
+        """Explicit episodes as sorted (season, episode) pairs, from the
+        `{"season", "episode"}` objects the tool takes or the `[season,
+        episode]` lists the operation store keeps."""
+        if value is None:
+            return None
+        if not isinstance(value, list) or not value:
+            raise MediaError("episodes must be a non-empty list or omitted")
+        pairs = set()
+        for item in value:
+            if isinstance(item, dict):
+                item = (item.get("season"), item.get("episode"))
+            try:
+                season, episode = (int(n) for n in item)
+            except (TypeError, ValueError) as e:
+                raise MediaError(
+                    "each episode needs a season and episode number"
+                ) from e
+            if season <= 0 or episode <= 0:
+                raise MediaError("season and episode numbers must be positive")
+            pairs.add((season, episode))
+        return sorted(pairs)
+
+    @staticmethod
+    def _episode_ids_for(rows, episodes):
+        """Sonarr's ids for (season, episode) pairs, and the pairs it has no
+        row for yet."""
+        if not isinstance(rows, list):
+            raise MediaError("Sonarr returned invalid episodes")
+        by_number = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                key = (int(row.get("seasonNumber", -1) or 0), int(row["episodeNumber"]))
+                by_number[key] = int(row["id"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise MediaError("Sonarr episode has no id") from e
+        ids = sorted(by_number[pair] for pair in episodes if pair in by_number)
+        missing = [pair for pair in episodes if pair not in by_number]
+        return ids, missing
+
+    @staticmethod
+    def _episode_label(episodes):
+        return "episodes " + ", ".join(f"S{s:02d}E{e:02d}" for s, e in episodes)
+
     def _set_series_seasons(self, series, selected, exclusive=False):
-        """`exclusive` clears the seasons outside `selected`, and is only for
+        """`selected` None monitors every normal season; an empty list leaves
+        the seasons as they are, for a request scoped to episodes.
+
+        `exclusive` clears the seasons outside `selected`, and is only for
         a series Slopstation just created. On one that was already in the
         library the monitored seasons are somebody else's desired state -
         clearing them is what would stop a part-aired season from filling in
@@ -758,6 +808,10 @@ class MediaService:
         self._monitor_episodes(episode_ids, True)
 
     def dispatch_pending_series_search(self, operation):
+        """Start the search a request left pending because Sonarr was still
+        adding the series. The metadata to record with it (the command ids,
+        and the episode ids an episode-scoped request could only resolve
+        now), or False while Sonarr is not ready."""
         metadata = operation.get("metadata") or {}
         if operation.get("kind") != "series_acquisition" or not metadata.get(
             "search_pending"
@@ -765,15 +819,32 @@ class MediaService:
             return False
         series_id = int(operation["external_ref"])
         seasons = self._seasons(metadata.get("seasons"))
+        episodes = self._episodes(metadata.get("episodes"))
         rows = self.sonarr.get("episode", {"seriesId": series_id})
+        if episodes is not None:
+            episode_ids, missing = self._episode_ids_for(rows, episodes)
+            if missing:
+                return False
+            if not self._apply_series_monitoring(series_id, []):
+                return False
+            self._monitor_episodes(episode_ids, True)
+            return {
+                "command_ids": self._search(
+                    "series", series_id, episode_ids=episode_ids
+                ),
+                "episode_ids": episode_ids,
+            }
         if not self._episode_metadata_ready(rows, seasons):
             return False
         if not self._apply_series_monitoring(series_id, seasons):
             return False
         self._monitor_series_episodes(rows, seasons)
-        return self._search_series(series_id, seasons)
+        return {"command_ids": self._search_series(series_id, seasons)}
 
-    def request_series(self, tvdb_id, preset="default", seasons=None):
+    def request_series(self, tvdb_id, preset="default", seasons=None, episodes=None):
+        """Request seasons of a series, or exactly the given (season, episode)
+        pairs. An episode scope monitors those episodes alone and searches
+        for them one by one, so the seasons around them are never touched."""
         try:
             tvdb_id = int(tvdb_id)
         except (TypeError, ValueError) as e:
@@ -781,10 +852,15 @@ class MediaService:
         if tvdb_id <= 0:
             raise MediaError("tvdb_id must be positive")
         seasons = self._seasons(seasons)
+        episodes = self._episodes(episodes)
+        if seasons is not None and episodes is not None:
+            raise MediaError("request seasons or episodes, not both")
         profile_id, profile_name = self._profile("series", preset)
         existing = self._library_row("series", tvdb_id)
         search_pending = False
         command_ids = []
+        episode_ids = None
+        scope_label = None if episodes is None else self._episode_label(episodes)
 
         if existing is not None:
             series = dict(existing)
@@ -795,9 +871,20 @@ class MediaService:
             except (TypeError, ValueError):
                 profile_changed = True
             baseline_episode_files = None
-            if profile_changed:
+            rows = None
+            if episodes is not None:
                 rows = self.sonarr.get("episode", {"seriesId": series_id})
-                targets = self._target_episodes(rows, seasons, monitored_only=False)
+                episode_ids, missing = self._episode_ids_for(rows, episodes)
+                if missing:
+                    raise MediaError(
+                        f"Sonarr has no {self._episode_label(missing)} for {title}"
+                    )
+            if profile_changed:
+                if rows is None:
+                    rows = self.sonarr.get("episode", {"seriesId": series_id})
+                targets = self._target_episodes(
+                    rows, seasons, monitored_only=False, episode_ids=episode_ids
+                )
                 baseline_episode_files = {}
                 for episode in targets:
                     if not episode.get("hasFile"):
@@ -809,10 +896,17 @@ class MediaService:
                         raise MediaError("Sonarr episode file has no id") from e
                     baseline_episode_files[str(episode_id)] = file_id
             series["qualityProfileId"] = profile_id
-            series = self._set_series_seasons(series, seasons)
+            series = self._set_series_seasons(
+                series, [] if episodes is not None else seasons
+            )
             self.sonarr.put(f"series/{series_id}", series)
+            if episode_ids:
+                self._monitor_episodes(episode_ids, True)
             observation = self.observe_series(
-                series_id, seasons, baseline_episode_files=baseline_episode_files
+                series_id,
+                seasons,
+                baseline_episode_files=baseline_episode_files,
+                episode_ids=episode_ids,
             )
             if observation["complete"]:
                 return self._submission(
@@ -824,8 +918,13 @@ class MediaService:
                     profile_name,
                     True,
                     seasons,
+                    episode_ids=episode_ids,
+                    episodes=episodes,
+                    scope_label=scope_label,
                 )
-            if observation["metadata_ready"]:
+            if episode_ids:
+                command_ids = self._search("series", series_id, episode_ids=episode_ids)
+            elif observation["metadata_ready"]:
                 command_ids = self._search_series(series_id, seasons)
             else:
                 search_pending = True
@@ -842,7 +941,9 @@ class MediaService:
                 seasonFolder=True,
                 monitored=True,
                 addOptions={
-                    "monitor": "all" if seasons is None else "none",
+                    "monitor": "all"
+                    if seasons is None and episodes is None
+                    else "none",
                     "searchForMissingEpisodes": False,
                     "searchForCutoffUnmetEpisodes": False,
                 },
@@ -869,6 +970,9 @@ class MediaService:
             baseline_episode_files=baseline_episode_files,
             search_pending=search_pending,
             command_ids=command_ids,
+            episode_ids=episode_ids,
+            episodes=episodes,
+            scope_label=scope_label,
         )
 
     @staticmethod
@@ -891,12 +995,14 @@ class MediaService:
         promise="acquire",
         work_id=None,
         scope_label=None,
+        episodes=None,
     ):
         """What one accepted piece of work looks like to the operation store.
-        A request carries its preset and profile and a season scope; work on
-        a held title (a grab, a search, an import) carries the phase it
-        starts in and, for a series, the exact episodes it covers. `promise`
-        is what done means: media on disk for the scope, or a search run."""
+        A request carries its preset and profile and a season scope, or the
+        (season, episode) pairs it asked for; work on a held title (a grab, a
+        search, an import) carries the phase it starts in and, for a series,
+        the exact episodes it covers. `promise` is what done means: media on
+        disk for the scope, or a search run."""
         out = {
             "ok": True,
             "kind": f"{kind}_acquisition",
@@ -912,10 +1018,12 @@ class MediaService:
             out["profile"] = profile
         if detail is not None:
             out["detail"] = detail
-        if kind == "series" and episode_ids is None:
+        if kind == "series" and episode_ids is None and episodes is None:
             out["seasons"] = seasons
         if episode_ids is not None:
             out["episode_ids"] = list(episode_ids)
+        if episodes is not None:
+            out["episodes"] = [list(pair) for pair in episodes]
         if kind == "series":
             out["scope_label"] = scope_label or (
                 f"{len(episode_ids)} selected episodes"
@@ -1180,11 +1288,30 @@ class MediaService:
         previous_phase=None,
         episode_ids=None,
         promise="acquire",
+        episodes=None,
     ):
         rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
         # Explicit episodes exist by construction; a season scope has to wait
         # for Sonarr to populate them. Unmonitoring cancels a season request;
         # an explicit episode was chosen unmonitored or not.
+        if episodes is not None and not episode_ids:
+            # An episode request on a series Sonarr is still adding: its ids
+            # are resolved when the pending search is dispatched. Until every
+            # asked-for episode has a row the scope is not readable, and the
+            # rows that exist are unmonitored by design, not cancelled.
+            episode_ids, missing = self._episode_ids_for(rows, self._episodes(episodes))
+            if missing:
+                return {
+                    "complete": False,
+                    "progress": {
+                        "episodes": 0,
+                        "total_episodes": 0,
+                        "percent": 0,
+                        "phase": "searching",
+                    },
+                    "detail": "Sonarr is still populating episode metadata",
+                    "metadata_ready": False,
+                }
         metadata_ready = bool(episode_ids) or self._episode_metadata_ready(
             rows, seasons
         )
@@ -1325,6 +1452,7 @@ class MediaService:
             previous_phase=phase,
             episode_ids=metadata.get("episode_ids"),
             promise=promise,
+            episodes=metadata.get("episodes"),
         )
 
     QUEUE_DELETE_PARAMS = {

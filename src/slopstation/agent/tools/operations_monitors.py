@@ -298,12 +298,12 @@ class MediaMonitor(Monitor):
         active = [r for r in self.store.active() if r.get("kind") in self.KINDS]
         for operation in active:
             try:
-                command_ids = self.media.dispatch_pending_series_search(operation)
-                if command_ids:
+                dispatched = self.media.dispatch_pending_series_search(operation)
+                if dispatched:
                     operation = (
                         self.store.update_metadata(
                             operation["id"],
-                            {"command_ids": command_ids},
+                            dispatched,
                             remove=("search_pending",),
                         )
                         or operation
