@@ -452,10 +452,12 @@ def test_a_wake_nobody_said_ends_the_session(hear):
     assert not glog.find("gate_miss"), "the TV reached the assistant"
 
 
-def test_a_pause_style_wake_is_still_a_wake(hear):
-    ended, glog, _ = hear(["Hey Alfred.", "What time is it?"])
-    assert not ended
-    assert [r["text"] for r in glog.find("gate_miss")] == ["What time is it?"]
+@pytest.mark.parametrize("wake", ["Hey Alfred.", "What I mean. Hey Alfred."])
+def test_a_pause_style_wake_is_still_a_wake(hear, wake):
+    # The pre-roll can hold a sentence in progress before the wake phrase.
+    ended, glog, _ = hear([wake, "What time is it?"])
+    assert not ended, glog.records
+    assert "What time is it?" in [r["text"] for r in glog.find("gate_miss")]
 
 
 def test_a_follow_up_open_needs_no_wake_word(hear):

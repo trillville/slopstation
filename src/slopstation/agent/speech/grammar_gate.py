@@ -497,19 +497,19 @@ class GrammarGate(FrameProcessor):
             if text and loud and not addressed and self.wake_word:
                 # A bare "the alfred go away" in a loud room is still us.
                 addressed = mentions_anchor(original, self.wake_word)
-            if addressed:
+            if text and self.wake_word and not self._addressed:
+                if not (addressed or mentions_anchor(original, self.wake_word)):
+                    self.log(
+                        "turn_dropped",
+                        text=text,
+                        reason="false_wake",
+                        confidence=conf,
+                        level_db=room["level_db"],
+                        quiet_ms=room["quiet_ms"],
+                    )
+                    await self.push_frame(EndWorkerFrame(reason="false wake"))
+                    return
                 self._addressed = True
-            elif text and self.wake_word and not self._addressed:
-                self.log(
-                    "turn_dropped",
-                    text=text,
-                    reason="false_wake",
-                    confidence=conf,
-                    level_db=room["level_db"],
-                    quiet_ms=room["quiet_ms"],
-                )
-                await self.push_frame(EndWorkerFrame(reason="false wake"))
-                return
             if text and not addressed and loud:
                 # Loud room: speech that did not address us is the TV.
                 self.log(

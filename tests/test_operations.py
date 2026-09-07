@@ -601,6 +601,17 @@ def test_a_follow_up_hands_the_ducked_room_to_the_session(log, monkeypatch):
     ann.stop()
 
 
+def test_a_wake_during_the_restore_decision_keeps_the_room_down(log, monkeypatch):
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=False)
+    with ann.handoff:  # the announcer reaches its decision and blocks here
+        announce_an_install(store)
+        assert wait_for(lambda: order == ["duck", "speak"]), order
+        ann.session_active.set()  # a wake opened a session meanwhile
+    assert not wait_for(lambda: "unduck" in order, timeout=0.3), order
+    ann.stop()
+
+
 def test_a_follow_up_that_opens_no_session_gives_the_room_back(log, monkeypatch):
     monkeypatch.setattr(announce, "HANDOFF_S", 0.1)
     order: list[str] = []

@@ -27,6 +27,7 @@ class TvDucker:
         self.log = log
         self.dry_run = dry_run
         self.out = 0  # verified steps down, not yet restored
+        self.landed = True  # whether the duck behind `out` reached its target
         self.expect: int | None = None  # the readback our last op left behind
 
     def duck(self):
@@ -50,7 +51,7 @@ class TvDucker:
             self.log(
                 "tv_duck_skipped", state="on", reason="already_ducked", debt=self.out
             )
-            return True
+            return self.landed
         v0 = self.tv.volume()
         if v0 is None:
             self.log("tv_duck_skipped", state="on", reason="no_readback", debt=self.out)
@@ -65,21 +66,23 @@ class TvDucker:
             self.log("dry_run_would", action=f"duck vol {v0}->{target}")
             self.out += v0 - target
             self.expect = target
+            self.landed = True
             return True
         change = self.tv.set_volume(target, before=v0)
         final = change.after
         landed = max(0, v0 - final)
         self.out += landed
         self.expect = final
+        self.landed = final == target
         self.log(
             "tv_ducked",
             steps=landed,
             asked=asked,
             vol=final,
-            ok=final == target,
+            ok=self.landed,
             writes=change.writes,
         )
-        return final == target
+        return self.landed
 
     def unduck(self):
         with self.tv.volume_transaction():

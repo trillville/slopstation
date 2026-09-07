@@ -42,6 +42,7 @@ class Announcer:
         self.session_active = threading.Event()
         self.abort = threading.Event()
         self.follow_up = threading.Event()
+        self.handoff = threading.Lock()  # a wake and a restore never interleave
         self.follow_up_enabled = voice_cfg["followUpAfterAnnounce"]
         self._q: queue.Queue = queue.Queue()
         threading.Thread(target=self._run, daemon=True, name="announcer").start()
@@ -60,7 +61,8 @@ class Announcer:
         return self._play(earcons.pcm("announce") + pcm)
 
     def abort_current(self):
-        self.abort.set()
+        with self.handoff:
+            self.abort.set()
 
     # -- internals ------------------------------------------------------------
 
@@ -158,13 +160,15 @@ class Announcer:
         room down and its own close pays the ledger back. If that session
         never opens (a wedged mic, a follow-up nobody consumed), take the duck
         back rather than leave the room quiet."""
-        if self.duck is None or self.session_active.is_set():
+        if self.duck is None:
             return
-        expected = self.abort.is_set() or self.follow_up.is_set()
-        if expected and self.session_active.wait(HANDOFF_S):
-            return
-        self.follow_up.clear()
-        self.duck(restore=True)
+        if self.abort.is_set() or self.follow_up.is_set():
+            self.session_active.wait(HANDOFF_S)
+        with self.handoff:
+            if self.abort.is_set() or self.session_active.is_set():
+                return
+            self.follow_up.clear()
+            self.duck(restore=True)
 
     def _deliver(self, kind, operation_id, key, item):
         """Speak one bulletin and record what the couch actually heard."""
