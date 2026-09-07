@@ -6,6 +6,7 @@ import time
 
 import pytest
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     EndWorkerFrame,
     ErrorFrame,
@@ -340,6 +341,32 @@ def test_is_busy_defers_idle_until_the_assistant_turn_expires(matcher, monkeypat
         g, "_assistant_pending", time.time() - (GrammarGate.ASSISTANT_WAIT_S + 1)
     )
     assert not g.is_busy(), "expired assistant turn must not pin the session"
+
+
+async def test_busy_phrase_does_not_read_as_the_answer(matcher, monkeypatch):
+    """The busy phrase speaks before the answer, so the frame it raises must
+    not clear the in-flight turn - that is what closed a session mid-answer."""
+    g = GrammarGate(matcher, None, lambda s: None)
+
+    async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
+        pass
+
+    monkeypatch.setattr(g, "push_frame", fake_push)
+    monkeypatch.setattr(g, "_assistant_pending", time.time())
+    g.expect_filler()
+    await g.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    assert g.is_busy(), "the phrase is not the answer; the turn is still in flight"
+    await g.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    assert not g.is_busy(), "the answer must hand the session back to the idle clock"
+
+    # Talk-over drops the phrase before it speaks, so the mark must not
+    # survive into the next turn and swallow that turn's answer.
+    g.expect_filler()
+    await g.process_frame(UserStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    monkeypatch.setattr(g, "_assistant_pending", time.time())
+    monkeypatch.setattr(g, "_speaking", 0.0)
+    await g.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    assert not g.is_busy(), "a dropped phrase must not pin the next turn open"
 
 
 # stop_listening runs off-thread; the gate ends the session on the next
