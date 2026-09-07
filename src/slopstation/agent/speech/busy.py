@@ -40,13 +40,19 @@ class BusyTone(FrameProcessor):
     or None; then `phrase`, the configured fallback; then the busy earcon."""
 
     def __init__(
-        self, log, after_s: float = AFTER_S, phrase: str = "", phrases=None
+        self,
+        log,
+        after_s: float = AFTER_S,
+        phrase: str = "",
+        phrases=None,
+        on_phrase=None,
     ) -> None:
         super().__init__()
         self.log = log
         self.after_s = float(after_s)
         self.phrase = phrase.strip()
         self.phrases = phrases
+        self.on_phrase = on_phrase  # told before speaking; the gate needs it
         self._timers: dict[str, asyncio.Task] = {}
         self._spoke = False  # this turn
 
@@ -112,6 +118,8 @@ class BusyTone(FrameProcessor):
             text=words or None,
         )
         if words:
+            if self.on_phrase is not None:
+                self.on_phrase()
             await self.push_frame(TTSSpeakFrame(words))
         else:
             await self.push_frame(

@@ -284,6 +284,11 @@ class GrammarGate(FrameProcessor):
         self._assistant_pending = 0.0  # ts of a transcript handed to the LLM
         self._stop_pending = False  # stop_listening asked; ends on the next frame
         self._ended = False
+        self._filler = False  # next bot speech is a busy phrase, not the answer
+
+    def expect_filler(self) -> None:
+        """The next bot speech is a busy phrase; the answer is still coming."""
+        self._filler = True
 
     def request_stop(self) -> None:
         """End the session now. Called off-thread by stop_listening; the end
@@ -425,7 +430,10 @@ class GrammarGate(FrameProcessor):
             self._speaking = 0.0
             await self._ack_wake()  # you stopped - chime now
         elif isinstance(frame, BotStartedSpeakingFrame):
-            self._assistant_pending = 0.0  # answer arrived; idle clock owns it now
+            if self._filler:
+                self._filler = False
+            else:
+                self._assistant_pending = 0.0  # answer arrived; idle clock owns it
         elif isinstance(frame, ErrorFrame):
             # Copy Pipecat service errors into couch.log.
             self.log.error("pipeline_error", err=str(frame.error))

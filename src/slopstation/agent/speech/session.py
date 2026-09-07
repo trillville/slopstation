@@ -26,7 +26,7 @@ def _trim_carry(messages):
     return msgs
 
 
-def busy_stage(voice, log, toolkit):
+def busy_stage(voice, log, toolkit, gate=None):
     """The busy tone, between the model and the speech, or None when the
     config turns it off. A tool call still out after busyAfterMs gets one
     acknowledgment per turn: the tool's own phrase from its spec, else
@@ -44,6 +44,7 @@ def busy_stage(voice, log, toolkit):
         after_s=after_ms / 1000,
         phrase=str(voice.get("busyPhrase", "") or ""),
         phrases=toolkit.busy_phrase if toolkit is not None else None,
+        on_phrase=gate.expect_filler if gate is not None else None,
     )
 
 
@@ -470,7 +471,7 @@ class Session:
                     "be invisible again",
                 )
         stages = [user_agg, llm]
-        busy = busy_stage(voice, log, self.toolkit)
+        busy = busy_stage(voice, log, self.toolkit, gate)
         if busy is not None:
             stages.append(busy)
         return stages + [_make_tts(voice, secrets), transport.output(), asst_agg]
