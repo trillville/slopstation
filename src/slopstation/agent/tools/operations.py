@@ -414,6 +414,7 @@ def track(store, submission, turn=None):
             "search_pending",
             "command_ids",
             "episode_ids",
+            "episodes",
             "promise",
             "scope_label",
         )

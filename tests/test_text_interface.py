@@ -70,7 +70,7 @@ class FakeOperations:
 
 
 class FakeMedia:
-    def request_series(self, tvdb_id, preset, seasons):
+    def request_series(self, tvdb_id, preset, seasons, episodes=None):
         return {
             "ok": True,
             "kind": "series_acquisition",

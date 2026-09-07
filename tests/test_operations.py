@@ -69,8 +69,8 @@ class FakeMedia:
         if self.search_ready and bool(
             (operation.get("metadata") or {}).get("search_pending")
         ):
-            return [77]
-        return []
+            return {"command_ids": [77]}
+        return False
 
     def observe(self, operation):
         if self.error:

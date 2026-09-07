@@ -30,14 +30,18 @@ it unless the user gives one. This can start a large download, so call it
 only for an explicit request and never with a guessed id."""
 
 _REQUEST_SERIES = """\
-Request one series by a tvdb_id returned by find_media. Pass explicit positive
-season numbers, or set all_seasons=true only when the user explicitly requests
-the whole series or every season. Never omit both scopes: a bare series
-request is ambiguous, so ask which season, or whether they want all seasons,
-and call nothing until they answer. preset is default, 1080p, or 2160p, and
-applies only to that request. This can start many large downloads, so call
-it only for an explicit request and never with a guessed id. After success,
-use the returned acknowledgment as the entire reply without paraphrasing it."""
+Request one series by a tvdb_id returned by find_media, in exactly one scope:
+explicit positive season numbers; individual episodes as a list of
+{season, episode} pairs (any number of them, across any seasons, in one
+call); or all_seasons=true only when the user explicitly requests the whole
+series or every season. Episodes named one by one get only those episodes -
+never widen a list of episodes into their seasons. Never omit every scope: a
+bare series request is ambiguous, so ask which season, or whether they want
+all seasons, and call nothing until they answer. preset is default, 1080p, or
+2160p, and applies only to that request. This can start many large
+downloads, so call it only for an explicit request and never with a guessed
+id. After success, use the returned acknowledgment as the entire reply
+without paraphrasing it."""
 
 _DELETE_MEDIA = """\
 Cleanly cancel or delete media through Radarr or Sonarr: this erases imported
@@ -111,6 +115,19 @@ SPECS = [
                 "items": {"type": "integer"},
                 "description": "positive season numbers explicitly requested",
             },
+            "episodes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "season": {"type": "integer"},
+                        "episode": {"type": "integer"},
+                    },
+                    "required": ["season", "episode"],
+                },
+                "description": "individual episodes explicitly requested, "
+                "as season and episode numbers",
+            },
             "all_seasons": {
                 "type": "boolean",
                 "description": "true only for an explicit whole-series request",
@@ -125,6 +142,8 @@ SPECS = [
             "request series",
             "sonarr",
             "episodes",
+            "specific episode",
+            "download episode",
         ),
         needs=("media",),
         busy="asking Sonarr",
@@ -163,6 +182,17 @@ def _season_scope(seasons):
     if len(seasons) == 1:
         return f"season {seasons[0]}"
     return "seasons " + ", ".join(str(n) for n in seasons[:-1]) + f" and {seasons[-1]}"
+
+
+def _episode_scope(episodes):
+    """Spoken scope for (season, episode) pairs: the pairs themselves while
+    they fit in a sentence, a count once they do not."""
+    if len(episodes) > 4:
+        return f"{len(episodes)} episodes"
+    named = [f"season {s} episode {e}" for s, e in episodes]
+    if len(named) == 1:
+        return named[0]
+    return ", ".join(named[:-1]) + f" and {named[-1]}"
 
 
 def impls(ctx: ToolContext):
@@ -213,23 +243,42 @@ def impls(ctx: ToolContext):
             preset = args.get("preset", "default")
             if tvdb_id <= 0:
                 return {"ok": False, "error": "tvdb_id must be positive"}
-            # An empty list is no season scope, not a conflicting one.
+            # An empty list is no scope, not a conflicting one.
             seasons = args.get("seasons") or None
+            episodes = args.get("episodes") or None
             all_seasons = args.get("all_seasons", False)
             if not isinstance(all_seasons, bool):
                 return {"ok": False, "error": "all_seasons must be boolean"}
-            if seasons is not None and all_seasons:
+            if (seasons is not None) + (episodes is not None) + all_seasons > 1:
                 return {
                     "ok": False,
-                    "error": "choose explicit seasons or all_seasons, not both",
+                    "error": "choose explicit seasons, explicit episodes or "
+                    "all_seasons, not more than one",
                 }
-            if seasons is None and not all_seasons:
+            if seasons is None and episodes is None and not all_seasons:
                 return {
                     "ok": False,
                     "error": "series request needs explicit scope",
                     "clarification": "Which season would you like, or "
                     "should I download all seasons?",
                 }
+            if episodes is not None:
+                if not isinstance(episodes, list) or not all(
+                    isinstance(item, dict)
+                    and all(
+                        not isinstance(item.get(key), bool)
+                        and isinstance(item.get(key), int)
+                        and item[key] > 0
+                        for key in ("season", "episode")
+                    )
+                    for item in episodes
+                ):
+                    return {
+                        "ok": False,
+                        "error": "episodes must be objects with positive "
+                        "season and episode numbers",
+                    }
+                episodes = sorted({(e["season"], e["episode"]) for e in episodes})
             if seasons is not None:
                 if not isinstance(seasons, list) or not seasons:
                     return {"ok": False, "error": "seasons must be a non-empty list"}
@@ -242,12 +291,20 @@ def impls(ctx: ToolContext):
                         "error": "season numbers must be positive integers",
                     }
                 seasons = sorted(set(seasons))
-            scope = "all normal seasons" if all_seasons else _season_scope(seasons)
+            scope = (
+                "all normal seasons"
+                if all_seasons
+                else _episode_scope(episodes)
+                if episodes is not None
+                else _season_scope(seasons)
+            )
             if dry := ctx.preview(
                 f"request TVDB {tvdb_id}, {scope}, with preset {preset}"
             ):
                 return dry
-            submission = media.request_series(tvdb_id, preset, seasons)
+            submission = media.request_series(
+                tvdb_id, preset, seasons, episodes=episodes
+            )
             submission["all_seasons"] = all_seasons
             result = _track_media(submission)
             quality = (
