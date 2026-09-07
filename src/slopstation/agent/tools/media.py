@@ -971,21 +971,11 @@ class MediaService:
                         f"Sonarr has no {self._episode_label(missing)} for {title}"
                     )
             if profile_changed:
-                if rows is None:
-                    rows = self.sonarr.get("episode", {"seriesId": series_id})
-                targets = self._target_episodes(
-                    rows, seasons, monitored_only=False, episode_ids=episode_ids
-                )
-                baseline_episode_files = {}
-                for episode in targets:
-                    if not episode.get("hasFile"):
-                        continue
-                    try:
-                        episode_id = int(episode["id"])
-                        file_id = int(episode["episodeFileId"])
-                    except (KeyError, TypeError, ValueError) as e:
-                        raise MediaError("Sonarr episode file has no id") from e
-                    baseline_episode_files[str(episode_id)] = file_id
+                # `rows` when the episode scope already fetched them, so this
+                # costs a read only when it is the first to need one.
+                baseline_episode_files = self._baselines(
+                    "series", series, seasons, episode_ids=episode_ids, rows=rows
+                )["baseline_episode_files"]
             series["qualityProfileId"] = profile_id
             series = self._set_series_seasons(
                 series, [] if episodes is not None else seasons
