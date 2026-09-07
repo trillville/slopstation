@@ -692,6 +692,30 @@ class MediaService:
         }
         return bool(available - {0}) if not wanted else wanted <= available
 
+    def _apply_series_monitoring(self, series_id, seasons):
+        """Write the monitored state Slopstation asked for, once Sonarr has
+        finished adding the series.
+
+        Sonarr acts on the `monitor` add option in a pass of its own that runs
+        after the create call has returned, and that pass rewrites both the
+        series flag and the season flags. Writing during it is silently lost,
+        and a series Sonarr believes is unmonitored is one its own searches
+        refuse with "Series is not monitored" - the request then waits out its
+        day having never been searchable. Sonarr clears `addOptions` when that
+        pass is done, so that is the signal to write; until then, wait.
+        """
+        series = self._one(self.sonarr.get(f"series/{series_id}"), "Sonarr", "series")
+        if series.get("addOptions"):
+            return False
+        # Not `exclusive`: the add option left every season unmonitored, so
+        # turning the asked-for ones on is already the exclusive result, and
+        # on a series that was in the library the other seasons are somebody
+        # else's desired state.
+        self.sonarr.put(
+            f"series/{series_id}", self._set_series_seasons(series, seasons)
+        )
+        return True
+
     def _monitor_series_episodes(self, rows, seasons):
         wanted = set(seasons or [])
         episode_ids = []
@@ -722,6 +746,8 @@ class MediaService:
         seasons = self._seasons(metadata.get("seasons"))
         rows = self.sonarr.get("episode", {"seriesId": series_id})
         if not self._episode_metadata_ready(rows, seasons):
+            return False
+        if not self._apply_series_monitoring(series_id, seasons):
             return False
         self._monitor_series_episodes(rows, seasons)
         return self._search_series(series_id, seasons)
@@ -806,10 +832,9 @@ class MediaService:
             series_id = int(series["id"])
             title = _clean_text(series.get("title")) or f"TVDB {tvdb_id}"
             baseline_episode_files = None
-            if seasons is not None:
-                series["qualityProfileId"] = profile_id
-                series = self._set_series_seasons(series, seasons, exclusive=True)
-                self.sonarr.put(f"series/{series_id}", series)
+            # The season scope is written by `_apply_series_monitoring` once
+            # Sonarr has finished adding the series; writing it here would
+            # land inside Sonarr's own post-add pass and be thrown away.
             search_pending = True
         return self._submission(
             "series",
