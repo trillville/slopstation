@@ -15,6 +15,7 @@ Audio handling lives in audio.py and session execution in session.py.
 
 import argparse
 import asyncio
+import queue
 import sys
 import threading
 import time
@@ -134,10 +135,13 @@ def warn_config(voice):
 
 
 class RoomState:
-    """Filled in off-thread: `loud` once a duck was tried and did not land."""
+    """Filled in off-thread: `loud` once a duck was tried and did not land.
+    `settled` is set when the attempt is over, for a caller that must not
+    start until the room is down."""
 
     def __init__(self):
         self.loud = False
+        self.settled = threading.Event()
 
 
 def make_ducker(cfg, dry_run):
@@ -164,21 +168,16 @@ def make_ducker(cfg, dry_run):
             reason="ducking is configured but tvIp is not - it stays off "
             "(power and volume requests need the TV's address)",
         )
-    ducker = (
-        TvDucker(
-            duck_steps, Tv(cfg, log), log, dry_run=dry_run, to_pct=duck_to_pct or None
-        )
-        if (duck_steps or duck_to_pct) and tv_ip
-        else None
+    if not ((duck_steps or duck_to_pct) and tv_ip):
+        return lambda restore: None  # ducking off: every caller gets the no-op
+    ducker = TvDucker(
+        duck_steps, Tv(cfg, log), log, dry_run=dry_run, to_pct=duck_to_pct or None
     )
+    work: queue.Queue = queue.Queue()
 
-    def duck(restore):
-        """Off-thread so the session never waits on the TV."""
-        if ducker is None:
-            return None
-        state = RoomState()
-
-        def run():
+    def run():
+        while True:
+            restore, state = work.get()
             try:
                 if restore:
                     ducker.unduck()
@@ -186,10 +185,19 @@ def make_ducker(cfg, dry_run):
                     state.loud = ducker.duck() is False
             except Exception as e:
                 log.warn("tv_duck_failed", restore=restore, err=str(e))
+            finally:
+                state.settled.set()
 
-        threading.Thread(target=run, daemon=True).start()
+    def duck(restore):
+        """Off-thread so the caller never waits on the TV. One worker, in
+        submission order: a session's close and an announcement's duck reach
+        the set in the order they were asked for, not the order two threads
+        happen to win the volume lock in."""
+        state = RoomState()
+        work.put((restore, state))
         return state
 
+    threading.Thread(target=run, daemon=True, name="ducker").start()
     return duck
 
 
@@ -276,11 +284,16 @@ def main():
     from slopstation.agent.tools import operations as operations_mod
     from slopstation.agent.tools import operations_monitors
 
+    # Built here, not at the wake loop: the announcer ducks with it too, and a
+    # bulletin can arrive before the first wake.
+    duck = make_ducker(cfg, args.dry_run)
+
     operation_store = operations_mod.OperationStore(log)
     announcer = None
     if stt_live and not args.dry_run:
         announcer = announce.Announcer(voice, secrets, log)
         announcer.store = operation_store
+        announcer.duck = duck
         operation_store.on_terminal = announcer.submit
         operation_store.on_notification = announcer.submit_notification
         for operation in operation_store.pending_announcements():
@@ -417,8 +430,6 @@ def main():
         # listener's stays green. No-ops without a sentryDsn.
         checkin.start("voice", cfg)
 
-    duck = make_ducker(cfg, args.dry_run)
-
     session_ctx = None
     while True:
         if session_ctx is not None:
@@ -455,8 +466,6 @@ def main():
         if score is None:
             # A bulletin just finished: the mic opens for a follow-up with no
             # wake word, and no chime - the announcement was the cue.
-            if announcer:
-                announcer.follow_up.clear()
             ack.claim()
             log("wake", trigger="follow_up")
         else:
@@ -476,7 +485,10 @@ def main():
             continue
         log("session_open")
         if announcer:
+            # Active first, then the follow-up consumed: the announcer never
+            # sees a gap where neither is set and restores under this session.
             announcer.session_active.set()
+            announcer.follow_up.clear()
         ending = "close"
         try:
             # One trace id for the whole session, in the spans and in every
@@ -514,9 +526,11 @@ def main():
         finally:
             if capture:  # None on a follow-up open
                 capture.stop()  # idempotent; frees the mic if the build crashed
+            duck(restore=True)  # a crash must not leave the room quiet
+            # After the restore is queued: the next bulletin's duck is behind
+            # it, never over it.
             if announcer:
                 announcer.session_active.clear()
-            duck(restore=True)  # a crash must not leave the room quiet
         refresh_library_bg()  # pick up installs between sessions
         # Sleep chime after teardown: it marks the mic actually going dormant.
         play_pcm(pa, earcons.pcm(ending), output_idx)

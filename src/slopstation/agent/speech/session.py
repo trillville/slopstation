@@ -276,6 +276,7 @@ class Session:
             # The duck runs off-thread; read it per turn, not at build.
             loud=loud,
             level=level,
+            addressed=self.capture is None,  # a follow-up open: no wake word
         )
 
         feeder = PrerollFeeder(log)

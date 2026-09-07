@@ -543,6 +543,102 @@ def test_unmonitored_request_is_canceled(log):
     assert store.get(canceled_op["id"])["state"] == operations.CANCELED
 
 
+class DuckedRoom:
+    """What make_ducker hands back once the attempt is over."""
+
+    def __init__(self):
+        self.loud = False
+        self.settled = threading.Event()
+        self.settled.set()
+
+
+def announcer_with_a_ducker(log, monkeypatch, order, follow_up):
+    """An announcer whose duck and playback record the order they ran in."""
+    voice = dict(helpers.CONFIG["voice"])
+    voice["followUpAfterAnnounce"] = follow_up
+    ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    store = operations.OperationStore(log, on_terminal=ann.submit)
+    monkeypatch.setattr(ann, "store", store)
+    monkeypatch.setattr(announce, "synth", lambda *a, **kw: b"speech")
+
+    def duck(restore):
+        order.append("unduck" if restore else "duck")
+        return DuckedRoom()
+
+    def play(pcm):
+        if ann.abort.is_set():
+            return False
+        order.append("speak")
+        return True
+
+    monkeypatch.setattr(ann, "duck", duck)
+    monkeypatch.setattr(ann, "_play", play)
+    return ann, store
+
+
+def announce_an_install(store):
+    op = store.track_steam_install(20, "Team Fortress Classic", verified=True)
+    store.observe(op["id"], operations.SUCCEEDED, {"percent": 100}, "fully installed")
+    return op
+
+
+def test_the_room_is_ducked_before_the_bulletin_not_after_it(log, monkeypatch):
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=False)
+    announce_an_install(store)
+    assert wait_for(lambda: order[-1:] == ["unduck"]), order
+    assert order == ["duck", "speak", "unduck"]
+    ann.stop()
+
+
+def test_a_follow_up_hands_the_ducked_room_to_the_session(log, monkeypatch):
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=True)
+    announce_an_install(store)
+    assert wait_for(lambda: ann.follow_up.is_set())
+    ann.session_active.set()  # the session that follow-up opens
+    # It opens with the duck already in place; its own close pays it back.
+    assert not wait_for(lambda: "unduck" in order, timeout=0.3), order
+    assert order == ["duck", "speak"]
+    assert not ann.follow_up.is_set(), "the session taking over consumed it"
+    ann.stop()
+
+
+def test_a_wake_during_the_wait_for_a_session_is_not_this_bulletins(log, monkeypatch):
+    monkeypatch.setattr(announce, "HANDOFF_S", 0.1)
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=False)
+    ann.session_active.set()  # session A is open when the bulletin arrives
+    announce_an_install(store)
+    ann.abort_current()  # session B's wake, while the bulletin still waits
+    ann.session_active.clear()  # B has closed
+    # A stale abort must neither cut the bulletin nor keep the room down.
+    assert wait_for(lambda: order == ["duck", "speak", "unduck"]), order
+    ann.stop()
+
+
+def test_a_wake_during_the_restore_decision_keeps_the_room_down(log, monkeypatch):
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=False)
+    with ann.handoff:  # the announcer reaches its decision and blocks here
+        announce_an_install(store)
+        assert wait_for(lambda: order == ["duck", "speak"]), order
+        ann.session_active.set()  # a wake opened a session meanwhile
+    assert not wait_for(lambda: "unduck" in order, timeout=0.3), order
+    ann.stop()
+
+
+def test_a_follow_up_that_opens_no_session_gives_the_room_back(log, monkeypatch):
+    monkeypatch.setattr(announce, "HANDOFF_S", 0.1)
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=True)
+    announce_an_install(store)
+    # A wedged mic never consumes the follow-up: the room must not stay quiet.
+    assert wait_for(lambda: order == ["duck", "speak", "unduck"]), order
+    assert not ann.follow_up.is_set(), "a stale follow-up would stall the next one"
+    ann.stop()
+
+
 def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
     voice = dict(helpers.CONFIG["voice"])
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)

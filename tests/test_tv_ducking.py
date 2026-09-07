@@ -171,6 +171,15 @@ def test_a_write_that_moved_but_stopped_short_is_left_alone(monkeypatch):
     assert room.vol == 14 and dk.out == 0
 
 
+def test_a_duck_that_stopped_short_stays_short_for_the_next_duck(monkeypatch):
+    # An announcement's duck lands short; the session that takes the room
+    # over must still hear that it is loud, not a clean "already ducked".
+    dk, room, log = ducker(monkeypatch, steps=10, room=FakeRoom(drop=3))
+    assert dk.duck() is False
+    assert dk.duck() is False, "the debt hides a duck that never landed"
+    assert log.find("tv_duck_skipped")[0]["reason"] == "already_ducked"
+
+
 def test_a_hand_on_the_remote_during_the_verify_is_not_overwritten(monkeypatch):
     # Restore 4->14 ignored; a hand turns it to 8 meanwhile. No 14 over their 8.
     dk, room, log = ducker(monkeypatch, steps=10)

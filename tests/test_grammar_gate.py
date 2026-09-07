@@ -394,9 +394,16 @@ def hear(matcher, monkeypatch):
     """Feed transcripts to a gate with an "alfred" wake word; returns
     (EndWorkerFrames pushed, log, gate)."""
 
-    def _hear(texts, loud=None, stop_first=False):
+    def _hear(texts, loud=None, stop_first=False, addressed=False):
         glog = CapturingLog("voice")
-        gate = GrammarGate(matcher, FakeDispatch(), glog, wake_word="alfred", loud=loud)
+        gate = GrammarGate(
+            matcher,
+            FakeDispatch(),
+            glog,
+            wake_word="alfred",
+            loud=loud,
+            addressed=addressed,
+        )
         pushed = []
 
         async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
@@ -426,7 +433,7 @@ def test_a_transcript_after_a_stop_is_dropped(hear):
 
 
 def test_a_closer_with_company_ends_the_session(hear):
-    ended, glog, _ = hear(["Alright. Thanks."])
+    ended, glog, _ = hear(["Hey Alfred. Alright. Thanks."])
     assert len(ended) == 1, "a trailing closer must end the session"
     hit = glog.find("gate_match")[0]
     assert hit["intent"] == "ExitSession" and hit["closer"] == "thanks", hit
@@ -457,7 +464,32 @@ def test_a_loud_room_closes_on_go_away_however_the_tv_finished_it(hear, text):
 
 
 def test_a_quiet_room_hears_every_turn(hear):
-    _, glog, _ = hear(["What time is it?"], loud=lambda: False)
+    ended, glog, _ = hear(
+        ["Hey Alfred, what time is it?", "and tomorrow?"], loud=lambda: False
+    )
+    assert not ended
+    heard = [r["text"] for r in glog.find("gate_miss")]
+    assert heard == ["what time is it?", "and tomorrow?"], heard
+
+
+def test_a_wake_nobody_said_ends_the_session(hear):
+    ended, glog, _ = hear(["enough to blow up the whole planet."])
+    assert len(ended) == 1, "the TV woke it: nobody is talking to it"
+    assert glog.find("turn_dropped")[0]["reason"] == "false_wake"
+    assert not glog.find("gate_miss"), "the TV reached the assistant"
+
+
+@pytest.mark.parametrize("wake", ["Hey Alfred.", "What I mean. Hey Alfred."])
+def test_a_pause_style_wake_is_still_a_wake(hear, wake):
+    # The pre-roll can hold a sentence in progress before the wake phrase.
+    ended, glog, _ = hear([wake, "What time is it?"])
+    assert not ended, glog.records
+    assert "What time is it?" in [r["text"] for r in glog.find("gate_miss")]
+
+
+def test_a_follow_up_open_needs_no_wake_word(hear):
+    ended, glog, _ = hear(["What time is it?"], addressed=True)
+    assert not ended
     assert [r["text"] for r in glog.find("gate_miss")] == ["What time is it?"]
 
 

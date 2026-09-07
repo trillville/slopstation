@@ -227,6 +227,7 @@ PYTHON = {
     "tv_duck_deficit": {"steps"},
     "tv_duck_failed": {"err", "restore", "stage"},
     "tv_duck_skipped": {"debt", "reason", "state"},
+    "tv_duck_slow": {"waited"},
     "tv_ducked": {"asked", "ok", "steps", "vol", "writes"},
     "tv_on": {"dur_ms"},
     "tv_state_unknown": {"dur_ms"},
