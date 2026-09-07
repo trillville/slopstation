@@ -244,7 +244,7 @@ PYTHON = {
     "wake_verifier": {"model", "verifier"},
     "wake_verifier_missing": {"looked_in", "verifier"},
     "web_search": {"kind", "query", "status"},
-    "wol_sent": set(),
+    "wol_sent": {"addrs"},
 }
 
 POWERSHELL = {

@@ -88,15 +88,31 @@ def finish_session(restore: bool, exit_reason: str | None = None) -> bool:
     return sessionlock.release(teardown)
 
 
+def broadcast_sources() -> list[str]:
+    """Every local IPv4 address. Empty means bind to whatever the OS picks,
+    which is all a single-homed machine can do anyway."""
+    try:
+        return sorted(set(socket.gethostbyname_ex(socket.gethostname())[2]))
+    except OSError:
+        return []
+
+
 def wol() -> None:
     mac = bytes.fromhex(
         config.current()["gamingPcMac"].replace(":", "").replace("-", "")
     )
     pkt = b"\xff" * 6 + mac * 16
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        s.sendto(pkt, ("255.255.255.255", 9))
-    log("wol_sent")
+    sent = 0
+    for addr in broadcast_sources() or [""]:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.bind((addr, 0))
+                s.sendto(pkt, ("255.255.255.255", 9))
+            sent += 1
+        except OSError:
+            continue  # an interface can vanish between listing it and binding
+    log("wol_sent", addrs=sent)
 
 
 def wait_port(timeout: float = PORT_WAIT_S) -> bool:
