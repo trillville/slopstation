@@ -363,10 +363,10 @@ def test_a_duck_that_did_not_land_marks_the_room_loud(run, monkeypatch):
     cfg["voice"]["duckSteps"] = 4
     monkeypatch.setattr(FakeDucker, "lands", False)
     rc, log, calls = run(["--once"], cfg, wakes=one_wake())
-    assert calls[0]["room"].loud is True
+    assert calls[0]["room"].settled.wait(2) and calls[0]["room"].loud is True
     monkeypatch.setattr(FakeDucker, "lands", None)  # TV off, or no readback
     rc, log, calls = run(["--once"], cfg, wakes=one_wake())
-    assert calls[0]["room"].loud is False
+    assert calls[0]["room"].settled.wait(2) and calls[0]["room"].loud is False
     rc, log, calls = run(["--once"], make_config(), wakes=one_wake())
     assert calls[0]["room"] is None, "no ducking configured: never strict"
 

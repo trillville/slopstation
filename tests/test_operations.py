@@ -589,14 +589,25 @@ def test_the_room_is_ducked_before_the_bulletin_not_after_it(log, monkeypatch):
     ann.stop()
 
 
-def test_a_follow_up_keeps_the_room_down_for_the_session(log, monkeypatch):
+def test_a_follow_up_hands_the_ducked_room_to_the_session(log, monkeypatch):
     order: list[str] = []
     ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=True)
     announce_an_install(store)
     assert wait_for(lambda: ann.follow_up.is_set())
-    # The session opens with the duck already in place; its close pays it back.
+    ann.session_active.set()  # the session that follow-up opens
+    # It opens with the duck already in place; its own close pays it back.
     assert not wait_for(lambda: "unduck" in order, timeout=0.3), order
     assert order == ["duck", "speak"]
+    ann.stop()
+
+
+def test_a_follow_up_that_opens_no_session_gives_the_room_back(log, monkeypatch):
+    monkeypatch.setattr(announce, "HANDOFF_S", 0.1)
+    order: list[str] = []
+    ann, store = announcer_with_a_ducker(log, monkeypatch, order, follow_up=True)
+    announce_an_install(store)
+    # A wedged mic never consumes the follow-up: the room must not stay quiet.
+    assert wait_for(lambda: order == ["duck", "speak", "unduck"]), order
     ann.stop()
 
 

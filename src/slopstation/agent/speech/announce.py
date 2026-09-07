@@ -11,6 +11,7 @@ from slopstation.agent.speech import audio, earcons
 
 CHUNK = 3200  # 100 ms per write; abort latency bound
 DUCK_WAIT_S = 2.5  # how long a bulletin waits for the room to come down
+HANDOFF_S = 5.0  # how long a ducked room waits for the session taking it over
 
 
 def synth(text, api_key, voice_model):
@@ -152,14 +153,15 @@ class Announcer:
             self.log.warn("tv_duck_slow", waited=DUCK_WAIT_S)
 
     def _restore_room(self):
-        """Leave the room down when a session is taking over: it opens with
-        the duck already in place and its own close pays the ledger back.
-        `abort` covers the wake that has not opened its session yet."""
-        if self.duck is None:
+        """Hand the duck to the session taking over - one already open, a
+        follow-up, or a wake that interrupted the bulletin: it opens with the
+        room down and its own close pays the ledger back. If that session
+        never opens (a wedged mic, a follow-up nobody consumed), take the duck
+        back rather than leave the room quiet."""
+        if self.duck is None or self.session_active.is_set():
             return
-        if self.abort.is_set() or self.session_active.is_set():
-            return
-        if self.follow_up.is_set():
+        expected = self.abort.is_set() or self.follow_up.is_set()
+        if expected and self.session_active.wait(HANDOFF_S):
             return
         self.duck(restore=True)
 
