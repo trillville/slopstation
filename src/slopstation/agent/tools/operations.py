@@ -474,8 +474,7 @@ def covered_by_delete(
 
 def record_canceled(store, operation, detail):
     """Close one operation the user asked to stop. Delivered on the spot:
-    they are in the conversation that cancelled it, so announcing it later
-    would tell them what they already know."""
+    they are in the conversation that cancelled it."""
     if store is None:
         return None
     row = store.observe(

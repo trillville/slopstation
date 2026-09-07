@@ -432,9 +432,7 @@ class MediaService:
         return enabled and not blocked
 
     def _missing_scope(self, operation):
-        """The part of an operation's scope that has no file yet, and how
-        much of it already does: the episode rows for a series, the movie
-        row for a movie."""
+        """The scope's rows with no file yet, and how many already have one."""
         if self._operation_kind(operation) == "movie":
             movie = self._one(
                 self.radarr.get(f"movie/{int(operation['external_ref'])}"),
@@ -447,17 +445,14 @@ class MediaService:
         rows = self.sonarr.get("episode", {"seriesId": int(operation["external_ref"])})
         episode_ids = metadata.get("episode_ids")
         if episode_ids is None and metadata.get("episodes"):
-            # A request still waiting for Sonarr to name its episodes has an
-            # episode scope all the same. Resolving it against the rows that
-            # exist keeps the work on its own episodes; read as no scope at
-            # all it would take every monitored episode of the series.
+            # Still pending: the pairs are the scope. Read as no scope at
+            # all this would take every monitored episode of the series.
             episode_ids, _ = self._episode_ids_for(
                 rows, self._episodes(metadata["episodes"])
             )
         if episode_ids is not None and not episode_ids:
-            # An explicit scope Sonarr cannot name yet covers nothing. Never
-            # everything: the fallback below is for a request with no episode
-            # scope, not for one whose episodes are still unknown.
+            # An explicit scope that resolves to nothing covers nothing.
+            # The fallback below is for a request with no episode scope.
             return [], 0
         targets = self._target_episodes(
             rows,
@@ -502,9 +497,8 @@ class MediaService:
         }
 
     def _scope_queue(self, operation, episode_ids=None):
-        """The queue rows the app is holding for an operation's scope. A
-        series is filtered to the episodes still wanted, so a cancel never
-        touches a download somebody else's request owns."""
+        """The queue rows for an operation's scope, filtered to the episodes
+        it owns so a cancel leaves another request's download alone."""
         kind = self._operation_kind(operation)
         client = self._client(kind)
         row_id = int(operation["external_ref"])
@@ -521,9 +515,8 @@ class MediaService:
         ]
 
     def cancel_targets(self, operation):
-        """What cancelling this operation would act on, read before the
-        question is put to the user. `cancel_request` resolves it again when
-        they answer, so a download that finishes in between is not missed."""
+        """What a cancel would act on, for the question put to the user.
+        `cancel_request` resolves it again when they answer."""
         missing, have = self._missing_scope(operation)
         episode_ids = (
             None
@@ -538,15 +531,14 @@ class MediaService:
         }
 
     def cancel_request(self, operation):
-        """Stop an acquisition without touching what it has already imported:
-        unmonitor what is still missing, cancel the searches that have not
-        started, and remove the downloads in flight for that scope.
+        """Stop an acquisition, keeping what it already imported: unmonitor
+        what is missing, recall the searches that have not started, drop that
+        scope's downloads.
 
-        Unmonitoring comes first on purpose. A search the app has already
-        started cannot be recalled, but it asks whether each item is still
-        wanted before it grabs, so an unmonitored scope is what makes the
-        running search harmless. Removing the queue rows first would leave
-        that search free to grab them again."""
+        That order matters. A started search cannot be recalled, but it
+        rechecks `monitored` before it grabs, so unmonitoring first is what
+        makes it harmless; dropping the queue rows first would let it grab
+        them again."""
         kind = self._operation_kind(operation)
         client = self._client(kind)
         abandoned = self.abandon_missing(operation)
@@ -1563,14 +1555,11 @@ class MediaService:
 
     @staticmethod
     def _cancel_commands(client, command_ids):
-        """Cancel the searches that have not started yet, and count the ones
-        already running.
+        """Recall the searches still queued; count the started ones.
 
-        A started command cannot be recalled - the app answers 409 - and one
-        that has finished is nothing to cancel. Neither is an error: what
-        stops a running search from grabbing anything is the unmonitoring
-        that happens alongside it, since the app asks whether each item is
-        still wanted before it grabs."""
+        The app answers 409 to cancelling a started command, and a finished
+        one is nothing to cancel. Neither is an error: unmonitoring is what
+        stops a running search."""
         canceled = 0
         running = 0
         for command_id in sorted({int(value) for value in command_ids or []}):
@@ -1593,8 +1582,7 @@ class MediaService:
 
     @staticmethod
     def _download_key(row):
-        """What counts as one download: several episodes of a season pack
-        share a queue row per episode but one download."""
+        """One download: a season pack has a queue row per episode."""
         return str(row.get("downloadId") or f"queue-{row.get('id')}")
 
     def _remove_queue(self, client, records):

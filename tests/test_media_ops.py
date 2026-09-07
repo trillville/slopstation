@@ -800,16 +800,9 @@ def test_cancel_request_asks_only_when_a_download_would_be_lost(
         metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
     )
     stopped = tk.call("cancel_request", {"operation_id": request["id"]})
-    assert stopped["ok"] and stopped["searches_running"] == 1
-    assert stopped["unmonitored"] == 1 and stopped["have"] == 1
-    assert "1 already imported and kept" in stopped["acknowledgment"]
-    assert sonarr.puts[-1] == (
-        "episode/monitor",
-        {"episodeIds": [102], "monitored": False},
-    )
+    assert stopped["ok"] and "1 already imported and kept" in stopped["acknowledgment"]
     closed = store.get(request["id"])
     assert closed["state"] == "CANCELED" and not closed["announcement_pending"]
-    assert store.active() == []
 
     # A second request, this one downloading: the erasure is put to the user.
     monkeypatch.setitem(

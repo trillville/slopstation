@@ -70,16 +70,13 @@ tracked: it ends when the search has run and anything it took has imported,
 or with nothing better found. Check back with list_operations."""
 
 CANCEL_REQUEST = """\
-Stop a media request that is still running, named by the operation id from
-list_operations. The app stops looking for whatever the request has not
-found, the searches that have not started are cancelled, and the downloads
-in flight for it are removed. Anything it already imported is KEPT, so this
-is the tool for "stop that, I asked for the wrong thing" and for a request
-that is never going to find anything; delete_media is the one that erases
-files. A search the app has already started cannot be recalled, but it
-grabs nothing once the scope is unmonitored. When downloads would be
-thrown away the first call answers with the question to put to the user
-and acts only when called again unchanged after they say yes."""
+Stop a running media request by its operation id from list_operations: the
+app stops looking for what it has not found, the searches that have not
+started are cancelled, and its downloads in flight are removed. What it
+already imported is KEPT - this is the tool for "stop that, I asked for the
+wrong thing", and delete_media is the one that erases files. When downloads
+would be thrown away the first call answers with the question to put to the
+user, and acts only when called again unchanged after they say yes."""
 
 SET_MONITORED = """\
 Monitor or unmonitor a movie, a whole series, or named seasons. Unmonitored
@@ -1150,8 +1147,7 @@ def impls(ctx: ToolContext):
 
         preview = f"cancel operation {operation_id} for {title}"
         if not targets["downloads"]:
-            # Nothing in flight to throw away: unmonitoring what was never
-            # found is not a loss, so there is no question to ask.
+            # Nothing in flight to lose, so nothing to ask.
             return ctx.preview(preview) or act()
         downloads = targets["downloads"]
         noun = "download" if downloads == 1 else "downloads"
