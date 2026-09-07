@@ -722,3 +722,77 @@ def test_an_invalid_config_is_refused_before_the_lock_and_the_tv(wire, monkeypat
         not sessionlock.lock_file().exists()
         and "gamingPcMac" in sessionlock.last_error_file().read_text()
     )
+
+
+# --- the wake packet leaves on every interface --------------------------------
+
+
+def test_wol_sends_one_packet_from_each_local_address(rig, monkeypatch):
+    """A broadcast the OS routes for us can leave down the VPN or a WSL
+    adapter and never reach the gaming PC's wire, so bind each address in
+    turn. Measured 2026-09-06: the K15 holds four, only one of them the LAN."""
+    monkeypatch.setattr(
+        couch, "broadcast_sources", lambda: ["10.2.0.2", "192.168.68.75"]
+    )
+    bound, sent = [], []
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def setsockopt(self, *a):
+            pass
+
+        def bind(self, addr):
+            bound.append(addr)
+
+        def sendto(self, pkt, dest):
+            sent.append((pkt, dest))
+
+    monkeypatch.setattr(couch.socket, "socket", lambda *a: FakeSocket())
+    log = CapturingLog()
+    monkeypatch.setattr(couch, "log", log)
+
+    couch.wol()
+
+    assert bound == [("10.2.0.2", 0), ("192.168.68.75", 0)]
+    assert [d for _, d in sent] == [("255.255.255.255", 9)] * 2
+    assert sent[0][0] == b"\xff" * 6 + bytes(6) * 16  # CFG's all-zero MAC
+    assert log.find("wol_sent")[0]["addrs"] == 2
+
+
+def test_wol_skips_an_address_that_cannot_be_bound(rig, monkeypatch):
+    """One unusable interface must not cost the wake."""
+    monkeypatch.setattr(
+        couch, "broadcast_sources", lambda: ["10.2.0.2", "192.168.68.75"]
+    )
+    sent = []
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def setsockopt(self, *a):
+            pass
+
+        def bind(self, addr):
+            if addr[0] == "10.2.0.2":
+                raise OSError("cannot assign requested address")
+
+        def sendto(self, pkt, dest):
+            sent.append(dest)
+
+    monkeypatch.setattr(couch.socket, "socket", lambda *a: FakeSocket())
+    log = CapturingLog()
+    monkeypatch.setattr(couch, "log", log)
+
+    couch.wol()
+
+    assert sent == [("255.255.255.255", 9)]
+    assert log.find("wol_sent")[0]["addrs"] == 1

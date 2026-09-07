@@ -338,6 +338,48 @@ VH_SERVICE = "VirtualHere USB Server"
 VH_PORT = "7575"
 
 
+def check_wol(cfg):
+    if not cfg:
+        return
+    from slopstation import couch
+
+    ip = cfg.get("gamingPcIp")
+    if not ip:
+        report(
+            FAIL,
+            "wake-on-lan",
+            "config.json has no gamingPcIp",
+            "config broken? see above",
+        )
+        return
+    sources = couch.broadcast_sources()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((ip, 9))
+            route = s.getsockname()[0]
+    except OSError as e:
+        report(
+            WARN,
+            "wake-on-lan",
+            f"no route to {ip} ({e})",
+            "PC unplugged, or gamingPcIp wrong?",
+        )
+        return
+    others = [a for a in sources if a != route]
+    if route not in sources:
+        report(
+            FAIL,
+            "wake-on-lan",
+            f"{route} reaches the PC but is not among {sources or 'no local addresses'}",
+            "the wake packet never leaves on the PC's network",
+        )
+        return
+    detail = f"sends from {len(sources)} address(es); {route} reaches the PC"
+    if others:
+        detail += f", alongside {', '.join(others)}"
+    report(PASS, "wake-on-lan", detail)
+
+
 def _vh_sockets():
     """(listening, connected clients) on the hub port."""
     out = subprocess.run(
@@ -1115,6 +1157,7 @@ def main():
     if puck_ok and not listener_running:
         check_haptics()
     check_ssh()
+    check_wol(cfg)
     check_virtualhere()
     check_session_state()
     check_telemetry()

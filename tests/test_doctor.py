@@ -195,6 +195,59 @@ def test_deploy_skew_warns_on_a_dirty_build(rows, cfg, monkeypatch):
 
 
 # --- session state ---------------------------------------------------------
+class _RouteSocket:
+    """A UDP socket whose getsockname names the interface reaching the PC."""
+
+    def __init__(self, addr):
+        self.addr = addr
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def connect(self, dest):
+        pass
+
+    def getsockname(self):
+        return (self.addr, 0)
+
+
+def test_wake_on_lan_passes_when_the_pc_network_is_among_the_senders(
+    rows, cfg, monkeypatch
+):
+    from slopstation import couch
+
+    monkeypatch.setattr(
+        couch, "broadcast_sources", lambda: ["10.2.0.2", "192.168.68.75"]
+    )
+    monkeypatch.setattr(
+        doctor.socket, "socket", lambda *a: _RouteSocket("192.168.68.75")
+    )
+    doctor.check_wol(cfg)
+    assert rows.levels()["wake-on-lan"] == "PASS", rows.levels()
+
+
+def test_wake_on_lan_fails_without_a_gaming_pc_ip(rows, cfg):
+    """A config missing the key must not crash the rows that follow."""
+    cfg.pop("gamingPcIp")
+    doctor.check_wol(cfg)
+    assert rows.levels()["wake-on-lan"] == "FAIL", rows.levels()
+
+
+def test_wake_on_lan_fails_when_no_sender_sits_on_the_pc_network(
+    rows, cfg, monkeypatch
+):
+    """The 2026-09-06 outage: every send left down a VPN or WSL adapter."""
+    from slopstation import couch
+
+    monkeypatch.setattr(couch, "broadcast_sources", lambda: ["10.2.0.2"])
+    monkeypatch.setattr(
+        doctor.socket, "socket", lambda *a: _RouteSocket("192.168.68.75")
+    )
+    doctor.check_wol(cfg)
+    assert rows.levels()["wake-on-lan"] == "FAIL", rows.levels()
 
 
 def test_session_state_idle(rows):
