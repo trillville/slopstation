@@ -445,10 +445,24 @@ class MediaService:
             return [] if has_file else [movie], int(has_file)
         metadata = operation.get("metadata") or {}
         rows = self.sonarr.get("episode", {"seriesId": int(operation["external_ref"])})
+        episode_ids = metadata.get("episode_ids")
+        if episode_ids is None and metadata.get("episodes"):
+            # A request still waiting for Sonarr to name its episodes has an
+            # episode scope all the same. Resolving it against the rows that
+            # exist keeps the work on its own episodes; read as no scope at
+            # all it would take every monitored episode of the series.
+            episode_ids, _ = self._episode_ids_for(
+                rows, self._episodes(metadata["episodes"])
+            )
+        if episode_ids is not None and not episode_ids:
+            # An explicit scope Sonarr cannot name yet covers nothing. Never
+            # everything: the fallback below is for a request with no episode
+            # scope, not for one whose episodes are still unknown.
+            return [], 0
         targets = self._target_episodes(
             rows,
             self._seasons(metadata.get("seasons")),
-            episode_ids=metadata.get("episode_ids"),
+            episode_ids=episode_ids,
         )
         missing = [row for row in targets if not row.get("hasFile")]
         return missing, len(targets) - len(missing)

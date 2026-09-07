@@ -868,6 +868,77 @@ def test_cancel_stops_the_search_and_keeps_what_imported(svc, monkeypatch):
     assert svc.sonarr.episodes[0]["monitored"] and svc.sonarr.episodes[0]["hasFile"]
 
 
+def test_cancel_of_a_pending_episode_request_leaves_the_series_alone(svc):
+    """A request whose episode ids Sonarr has not named yet carries its scope
+    as the requested pairs alone. Read as no scope at all, a cancel would
+    take the whole series: every monitored episode and every download."""
+    svc.sonarr.set(
+        library=[
+            {
+                "id": 5,
+                "tvdbId": 81189,
+                "title": "Breaking Bad",
+                "monitored": True,
+                "seasons": [{"seasonNumber": 2, "monitored": True}],
+            }
+        ],
+        episodes=[
+            # Somebody else's work, downloading right now.
+            {
+                "id": 201,
+                "seasonNumber": 2,
+                "episodeNumber": 1,
+                "monitored": True,
+                "hasFile": False,
+                "airDateUtc": "2009-03-08T00:00:00Z",
+            }
+        ],
+        queue={
+            "records": [
+                {"id": 730, "seriesId": 5, "episodeId": 201, "downloadId": "d9"}
+            ]
+        },
+    )
+    pending = {
+        "kind": "series_acquisition",
+        "external_ref": "5",
+        "metadata": {
+            "catalog_id": 81189,
+            "episodes": [[4, 13]],
+            "search_pending": True,
+        },
+    }
+    # Sonarr has no row for S04E13 yet, so the scope resolves to nothing.
+    assert svc.cancel_targets(pending) == {"have": 0, "missing": 0, "downloads": 0}
+    assert svc.cancel_request(pending)["unmonitored"] == 0
+    assert svc.cancel_request(pending)["downloads_canceled"] == 0
+    assert svc.sonarr.puts == [] and svc.sonarr.deletes == []
+    assert svc.sonarr.episodes[0]["monitored"]
+
+    # Once Sonarr names the episode, the cancel acts on that one and no other.
+    svc.sonarr.episodes.append(
+        {
+            "id": 413,
+            "seasonNumber": 4,
+            "episodeNumber": 13,
+            "monitored": True,
+            "hasFile": False,
+            "airDateUtc": "2008-11-20T00:00:00Z",
+        }
+    )
+    svc.sonarr.queue["records"].append(
+        {"id": 731, "seriesId": 5, "episodeId": 413, "downloadId": "d10"}
+    )
+    assert svc.cancel_targets(pending) == {"have": 0, "missing": 1, "downloads": 1}
+    result = svc.cancel_request(pending)
+    assert result["unmonitored"] == 1 and result["downloads_canceled"] == 1
+    assert svc.sonarr.puts == [
+        ("episode/monitor", {"episodeIds": [413], "monitored": False})
+    ]
+    assert [endpoint for endpoint, _ in svc.sonarr.deletes] == ["queue/731"]
+    assert svc.sonarr.episodes[0]["monitored"]
+
+
 def test_cancel_survives_a_search_that_starts_before_the_recall_lands(svc, monkeypatch):
     """The app answers 409 for a command that started between the read and
     the delete. That is the same outcome as reading it started: counted,
