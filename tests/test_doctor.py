@@ -229,6 +229,13 @@ def test_wake_on_lan_passes_when_the_pc_network_is_among_the_senders(
     assert rows.levels()["wake-on-lan"] == "PASS", rows.levels()
 
 
+def test_wake_on_lan_fails_without_a_gaming_pc_ip(rows, cfg):
+    """A config missing the key must not crash the rows that follow."""
+    cfg.pop("gamingPcIp")
+    doctor.check_wol(cfg)
+    assert rows.levels()["wake-on-lan"] == "FAIL", rows.levels()
+
+
 def test_wake_on_lan_fails_when_no_sender_sits_on_the_pc_network(
     rows, cfg, monkeypatch
 ):

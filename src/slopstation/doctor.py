@@ -344,6 +344,14 @@ def check_wol(cfg):
     from slopstation import couch
 
     ip = cfg.get("gamingPcIp")
+    if not ip:
+        report(
+            FAIL,
+            "wake-on-lan",
+            "config.json has no gamingPcIp",
+            "config broken? see above",
+        )
+        return
     sources = couch.broadcast_sources()
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
