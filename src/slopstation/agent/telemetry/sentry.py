@@ -32,6 +32,14 @@ def otlp_target(dsn):
     )
 
 
+def _before_send(event, hint):
+    """One closed output stream logs per audio frame - 50 issues for one bad
+    session. The session's own pipeline_error carries it instead."""
+    if event.get("logger") == "pipecat.transports.base_output":
+        return None
+    return event
+
+
 def _init(dsn, log):
     """Initialize Sentry error reporting and trace linking."""
     try:
@@ -44,6 +52,7 @@ def _init(dsn, log):
             integrations=[OTLPIntegration(setup_otlp_traces_exporter=False)],
             send_default_pii=True,
             enable_logs=False,
+            before_send=_before_send,
         )
         sentry_sdk.set_user({"id": events.HOST})
         log("lane_up", what="sentry", kind="errors")
