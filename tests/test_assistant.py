@@ -488,6 +488,11 @@ def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operat
         {"tvdb_id": 81189, "seasons": [1], "all_seasons": True}
     )
     assert not mixed["ok"] and fake_media.requests == before
+    empty_scope = live_media["request_series"](
+        {"tvdb_id": 81189, "seasons": [], "all_seasons": True}
+    )
+    assert empty_scope["all_seasons"] is True
+    assert fake_media.requests[-1] == ("series", 81189, "default", None)
     all_requested = live_media["request_series"](
         {"tvdb_id": 81189, "preset": "2160p", "all_seasons": True}
     )

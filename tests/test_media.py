@@ -63,7 +63,7 @@ class FakeArr:
         if endpoint in ("movie/lookup", "series/lookup"):
             return list(self.lookup)
         if endpoint == "movie/lookup/tmdb":
-            return dict(self.lookup_by_id)
+            return dict(self.lookup_by_id) if self.lookup_by_id else {}
         if endpoint in ("movie", "series"):
             return [dict(row) for row in self.library]
         if endpoint.startswith(("movie/", "series/")):
@@ -645,11 +645,23 @@ def test_find_trims_and_caps_results(svc):
 # --- library ------------------------------------------------------------------
 
 
+def test_library_names_an_id_it_does_not_hold(svc):
+    """A wrong id is caught here rather than after a request has added it."""
+    svc.sonarr.set(lookup=[{"tvdbId": 403180, "title": "Bloomin' Marvellous"}])
+    assert svc.library("series", 403180) == {
+        "kind": "series",
+        "catalog_id": 403180,
+        "in_library": False,
+        "title": "Bloomin' Marvellous",
+    }
+
+
 def test_library_reports_holdings_per_season(svc):
     assert svc.library("movie", 438631) == {
         "kind": "movie",
         "catalog_id": 438631,
         "in_library": False,
+        "title": None,
     }
     svc.radarr.set(
         library=[{"id": 32, "tmdbId": 438631, "title": "Dune", "hasFile": True}]

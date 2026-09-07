@@ -5,7 +5,9 @@ from slopstation.agent.tools import operations as operations_mod
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five
-canonical candidates with year and a TMDB movie id or TVDB series id. Use the
+canonical candidates with year and a TMDB movie id or TVDB series id. query is
+the title alone: a studio, genre or year in it matches other titles instead.
+Use the
 returned id in a request tool only when the intended candidate is clear; ask a
 short clarifying question otherwise. Never guess an id: every id a request or
 deletion uses comes from this tool."""
@@ -14,7 +16,9 @@ _MEDIA_LIBRARY = """\
 Read what the library already holds for one movie or series - the answer to
 'what seasons do I have', 'is <movie> downloaded', and the check before any
 deletion. Pass the id returned by find_media. A movie reports available or
-not; a series reports have vs aired episode counts per season. Ownership
+not; a series reports have vs aired episode counts per season. Media that is
+not held reports the title the id names, so check it before requesting an id
+the user supplied. Ownership
 never comes from conversation memory or the catalog - always call this. A
 request tool skips what is already present, so never re-request media just
 because the user says they lack it."""
@@ -209,7 +213,8 @@ def impls(ctx: ToolContext):
             preset = args.get("preset", "default")
             if tvdb_id <= 0:
                 return {"ok": False, "error": "tvdb_id must be positive"}
-            seasons = args.get("seasons")
+            # An empty list is no season scope, not a conflicting one.
+            seasons = args.get("seasons") or None
             all_seasons = args.get("all_seasons", False)
             if not isinstance(all_seasons, bool):
                 return {"ok": False, "error": "all_seasons must be boolean"}

@@ -68,6 +68,21 @@ class MediaService:
             client.name,
         )
 
+    def _catalog_title(self, kind, catalog_id):
+        """The catalogue's own title for an id, or None if it names nothing."""
+        spec = _kind(kind)
+        client = self._client(kind)
+        try:
+            if kind == "movie":
+                row = client.get("movie/lookup/tmdb", {"tmdbId": catalog_id})
+                rows = [row] if isinstance(row, dict) else []
+            else:
+                rows = client.get("series/lookup", {"term": f"tvdb:{catalog_id}"})
+            match = self._existing(rows, spec["id_key"], catalog_id, client.name)
+        except MediaError:
+            return None
+        return None if match is None else _clean_text(match.get("title"))
+
     def find(self, kind, query):
         query = _clean_text(query)
         if not query:
@@ -112,7 +127,13 @@ class MediaService:
             raise MediaError("catalog id must be positive")
         row = self._library_row(kind, catalog_id)
         if row is None:
-            return {"kind": kind, "catalog_id": catalog_id, "in_library": False}
+            return {
+                "kind": kind,
+                "catalog_id": catalog_id,
+                "in_library": False,
+                # Names a wrong id before a request acts on it.
+                "title": self._catalog_title(kind, catalog_id),
+            }
         if kind == "movie":
             return {
                 "kind": kind,
