@@ -113,7 +113,7 @@ class _PipecatErrors:
             self._sink = loguru_log.add(
                 self._record,
                 level="ERROR",
-                filter=lambda r: r["name"].startswith("pipecat."),
+                filter=lambda r: (r["name"] or "").startswith("pipecat."),
             )
         except Exception as e:
             log.warn("pipeline_watch_failed", err=str(e))
