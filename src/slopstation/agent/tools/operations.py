@@ -496,12 +496,32 @@ def record_deleted(store, rows, result=None):
     # removes only those targets; the remainder keeps its own completion rule.
     if store is not None and result and result.get("episode_ids"):
         deleted = set(result["episode_ids"])
+        seasons = {int(n) for n in result.get("seasons") or []}
         for operation in store.active("series_acquisition"):
             metadata = operation.get("metadata") or {}
             if metadata.get("catalog_id") != result.get("catalog_id"):
                 continue
             ids = metadata.get("episode_ids")
-            if ids and deleted.intersection(ids):
+            pairs = metadata.get("episodes")
+            if pairs and seasons.intersection(int(pair[0]) for pair in pairs):
+                # A request whose ids Sonarr has not named yet is scoped by
+                # the seasons its pairs are in: drop the ones this delete
+                # took, or its pending search asks Sonarr for them again.
+                remaining = [pair for pair in pairs if int(pair[0]) not in seasons]
+                if remaining:
+                    store.update_metadata(
+                        operation["id"],
+                        {
+                            "episodes": remaining,
+                            "scope_label": "episodes "
+                            + ", ".join(
+                                f"S{int(s):02d}E{int(e):02d}" for s, e in remaining
+                            ),
+                        },
+                    )
+                else:
+                    record_deleted(store, [operation])
+            elif ids and deleted.intersection(ids):
                 remaining = sorted(set(ids) - deleted)
                 if remaining:
                     store.update_metadata(
