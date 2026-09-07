@@ -359,6 +359,15 @@ async def test_busy_phrase_does_not_read_as_the_answer(matcher, monkeypatch):
     await g.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
     assert not g.is_busy(), "the answer must hand the session back to the idle clock"
 
+    # Talk-over drops the phrase before it speaks, so the mark must not
+    # survive into the next turn and swallow that turn's answer.
+    g.expect_filler()
+    await g.process_frame(UserStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    monkeypatch.setattr(g, "_assistant_pending", time.time())
+    monkeypatch.setattr(g, "_speaking", 0.0)
+    await g.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    assert not g.is_busy(), "a dropped phrase must not pin the next turn open"
+
 
 # stop_listening runs off-thread; the gate ends the session on the next
 # frame through it, and nothing said after the ask gets through.

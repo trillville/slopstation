@@ -426,6 +426,7 @@ class GrammarGate(FrameProcessor):
         # The turn resolver emits these speaking frames.
         if isinstance(frame, UserStartedSpeakingFrame):
             self._speaking = time.time()
+            self._filler = False  # talk-over drops the phrase before it speaks
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._speaking = 0.0
             await self._ack_wake()  # you stopped - chime now
