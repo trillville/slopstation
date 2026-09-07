@@ -431,42 +431,127 @@ class MediaService:
         )
         return enabled and not blocked
 
-    def abandon_missing(self, operation):
-        """Unmonitor the still-missing scope so the authority stops watching."""
+    def _missing_scope(self, operation):
+        """The part of an operation's scope that has no file yet, and how
+        much of it already does: the episode rows for a series, the movie
+        row for a movie."""
         if self._operation_kind(operation) == "movie":
-            movie_id = int(operation["external_ref"])
-            movie = self._one(self.radarr.get(f"movie/{movie_id}"), "Radarr", "movie")
-            if movie.get("hasFile"):
-                return {"have": 1, "missing": []}
-            unmonitored = dict(movie)
-            unmonitored["monitored"] = False
-            self.radarr.put(f"movie/{movie_id}", unmonitored)
-            return {"have": 0, "missing": []}
+            movie = self._one(
+                self.radarr.get(f"movie/{int(operation['external_ref'])}"),
+                "Radarr",
+                "movie",
+            )
+            has_file = bool(movie.get("hasFile"))
+            return [] if has_file else [movie], int(has_file)
         metadata = operation.get("metadata") or {}
-        seasons = self._seasons(metadata.get("seasons"))
-        series_id = int(operation["external_ref"])
-        rows = self.sonarr.get("episode", {"seriesId": series_id})
+        rows = self.sonarr.get("episode", {"seriesId": int(operation["external_ref"])})
         targets = self._target_episodes(
-            rows, seasons, episode_ids=metadata.get("episode_ids")
+            rows,
+            self._seasons(metadata.get("seasons")),
+            episode_ids=metadata.get("episode_ids"),
         )
         missing = [row for row in targets if not row.get("hasFile")]
-        episode_ids = []
-        for row in missing:
+        return missing, len(targets) - len(missing)
+
+    @staticmethod
+    def _episode_ids(rows):
+        ids = []
+        for row in rows:
             try:
-                episode_ids.append(int(row["id"]))
+                ids.append(int(row["id"]))
             except (KeyError, TypeError, ValueError) as e:
                 raise MediaError("Sonarr episode has no id") from e
-        self._monitor_episodes(sorted(episode_ids), False)
+        return sorted(ids)
+
+    def abandon_missing(self, operation):
+        """Unmonitor the still-missing scope so the authority stops watching."""
+        missing, have = self._missing_scope(operation)
+        if self._operation_kind(operation) == "movie":
+            for movie in missing:
+                unmonitored = dict(movie)
+                unmonitored["monitored"] = False
+                self.radarr.put(f"movie/{int(movie['id'])}", unmonitored)
+            return {"have": have, "missing": [], "episode_ids": []}
+        episode_ids = self._episode_ids(missing)
+        self._monitor_episodes(episode_ids, False)
         by_season: dict = {}
         for row in missing:
             number = int(row.get("seasonNumber", 0) or 0)
             by_season[number] = by_season.get(number, 0) + 1
         return {
-            "have": len(targets) - len(missing),
+            "have": have,
             "missing": [
                 {"season": number, "episodes": by_season[number]}
                 for number in sorted(by_season)
             ],
+            "episode_ids": episode_ids,
+        }
+
+    def _scope_queue(self, operation, episode_ids=None):
+        """The queue rows the app is holding for an operation's scope. A
+        series is filtered to the episodes still wanted, so a cancel never
+        touches a download somebody else's request owns."""
+        kind = self._operation_kind(operation)
+        client = self._client(kind)
+        row_id = int(operation["external_ref"])
+        if kind == "movie":
+            return self._queue_records(client, "movieId", row_id)
+        if episode_ids is None:
+            missing, _ = self._missing_scope(operation)
+            episode_ids = self._episode_ids(missing)
+        wanted = set(episode_ids)
+        return [
+            row
+            for row in self._queue_records(client, "seriesId", row_id)
+            if int(row.get("episodeId", 0) or 0) in wanted
+        ]
+
+    def cancel_targets(self, operation):
+        """What cancelling this operation would act on, read before the
+        question is put to the user. `cancel_request` resolves it again when
+        they answer, so a download that finishes in between is not missed."""
+        missing, have = self._missing_scope(operation)
+        episode_ids = (
+            None
+            if self._operation_kind(operation) == "movie"
+            else self._episode_ids(missing)
+        )
+        queue = self._scope_queue(operation, episode_ids)
+        return {
+            "have": have,
+            "missing": len(missing),
+            "downloads": len({self._download_key(row) for row in queue}),
+        }
+
+    def cancel_request(self, operation):
+        """Stop an acquisition without touching what it has already imported:
+        unmonitor what is still missing, cancel the searches that have not
+        started, and remove the downloads in flight for that scope.
+
+        Unmonitoring comes first on purpose. A search the app has already
+        started cannot be recalled, but it asks whether each item is still
+        wanted before it grabs, so an unmonitored scope is what makes the
+        running search harmless. Removing the queue rows first would leave
+        that search free to grab them again."""
+        kind = self._operation_kind(operation)
+        client = self._client(kind)
+        abandoned = self.abandon_missing(operation)
+        searches = self._cancel_commands(
+            client, (operation.get("metadata") or {}).get("command_ids")
+        )
+        queue = self._scope_queue(operation, abandoned["episode_ids"])
+        downloads = self._remove_queue(client, queue)
+        unmonitored = (
+            len(abandoned["episode_ids"]) if kind == "series" else 1 - abandoned["have"]
+        )
+        return {
+            "ok": True,
+            "kind": kind,
+            "have": abandoned["have"],
+            "unmonitored": unmonitored,
+            "downloads_canceled": downloads,
+            "searches_canceled": searches["canceled"],
+            "searches_running": searches["running"],
         }
 
     def _search(self, kind, row_id, seasons=None, episode_ids=None):
@@ -1464,19 +1549,45 @@ class MediaService:
 
     @staticmethod
     def _cancel_commands(client, command_ids):
+        """Cancel the searches that have not started yet, and count the ones
+        already running.
+
+        A started command cannot be recalled - the app answers 409 - and one
+        that has finished is nothing to cancel. Neither is an error: what
+        stops a running search from grabbing anything is the unmonitoring
+        that happens alongside it, since the app asks whether each item is
+        still wanted before it grabs."""
+        canceled = 0
+        running = 0
         for command_id in sorted({int(value) for value in command_ids or []}):
-            row = _command(client, command_id)
-            if row is not None and str(row.get("status", "")).lower() in (
-                "queued",
-                "started",
-            ):
+            status = str((_command(client, command_id) or {}).get("status", "")).lower()
+            if status == "started":
+                running += 1
+                continue
+            if status != "queued":
+                continue
+            try:
                 client.delete(f"command/{command_id}")
+            except MediaError as e:
+                # It started between the read and the delete.
+                if "HTTP 409" not in str(e):
+                    raise
+                running += 1
+                continue
+            canceled += 1
+        return {"canceled": canceled, "running": running}
+
+    @staticmethod
+    def _download_key(row):
+        """What counts as one download: several episodes of a season pack
+        share a queue row per episode but one download."""
+        return str(row.get("downloadId") or f"queue-{row.get('id')}")
 
     def _remove_queue(self, client, records):
         seen = set()
         removed = 0
         for row in records:
-            key = str(row.get("downloadId") or f"queue-{row.get('id')}")
+            key = self._download_key(row)
             if key in seen:
                 continue
             seen.add(key)

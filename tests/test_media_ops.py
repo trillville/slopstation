@@ -747,7 +747,15 @@ def tracked(stack, log):
         dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
     )
     toolkit = assistant.Toolkit(dispatch, log, media=svc, operations=store)
-    toolkit.load(["grab_release", "retry_search", "manual_import", "delete_media"])
+    toolkit.load(
+        [
+            "grab_release",
+            "retry_search",
+            "manual_import",
+            "delete_media",
+            "cancel_request",
+        ]
+    )
     return toolkit, store, dispatch
 
 
@@ -773,6 +781,65 @@ def test_work_receipts_are_distinct_and_repeated_receipts_deduplicate(stack, tra
     rows, total = store.for_assistant("active", limit=2)
     assert total == 3 and [r["title"] for r in rows] == ["Dune", "Dune"]
     assert store.for_assistant("active", limit=2, offset=2)[0][0]["title"] == "Alien"
+
+
+def test_cancel_request_asks_only_when_a_download_would_be_lost(
+    stack, tracked, monkeypatch
+):
+    """Cancelling a request that has only been searching costs nothing, so it
+    acts at once; one with a download in flight asks first. Either way the
+    operation closes and what is already imported stays."""
+    _, _, sonarr, _ = stack
+    tk, store, dispatch = tracked
+    monkeypatch.setitem(sonarr.answers, "command/1", {"id": 1, "status": "started"})
+    request = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
+    )
+    stopped = tk.call("cancel_request", {"operation_id": request["id"]})
+    assert stopped["ok"] and stopped["searches_running"] == 1
+    assert stopped["unmonitored"] == 1 and stopped["have"] == 1
+    assert "1 already imported and kept" in stopped["acknowledgment"]
+    assert sonarr.puts[-1] == (
+        "episode/monitor",
+        {"episodeIds": [102], "monitored": False},
+    )
+    closed = store.get(request["id"])
+    assert closed["state"] == "CANCELED" and not closed["announcement_pending"]
+    assert store.active() == []
+
+    # A second request, this one downloading: the erasure is put to the user.
+    monkeypatch.setitem(
+        sonarr.answers,
+        "queue",
+        lambda p: {
+            "records": [{"id": 7, "seriesId": 5, "episodeId": 102, "downloadId": "d1"}]
+        },
+    )
+    downloading = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
+    )
+    asked = tk.call("cancel_request", {"operation_id": downloading["id"]})
+    assert (
+        not asked["ok"] and "erases 1 download in progress" in asked["acknowledgment"]
+    )
+    assert sonarr.deletes == []
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    done = tk.call("cancel_request", {"operation_id": downloading["id"]})
+    assert done["ok"] and done["downloads_canceled"] == 1
+    assert sonarr.deletes[-1][0] == "queue/7"
+    assert store.get(downloading["id"])["state"] == "CANCELED"
+    # A request that has already closed, and an id nobody knows, are refused.
+    assert not tk.call("cancel_request", {"operation_id": downloading["id"]})["ok"]
+    unknown = tk.call("cancel_request", {"operation_id": "op-nope"})
+    assert not unknown["ok"] and "list_operations" in unknown["error"]
 
 
 def test_new_episode_work_cannot_complete_an_existing_season_request(
@@ -879,8 +946,12 @@ def test_delete_season_cancels_only_covered_work_and_retains_other_episodes(
     monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
     rows = []
     for command_id, ids in ((1, [101]), (2, [201]), (3, [102, 201])):
+        # Only a search that has not started can be recalled at all, so the
+        # covered one is queued; the other two would be refused anyway.
         monkeypatch.setitem(
-            sonarr.answers, f"command/{command_id}", {"status": "started"}
+            sonarr.answers,
+            f"command/{command_id}",
+            {"status": "queued" if command_id == 1 else "started"},
         )
         rows.append(
             store.track_external(

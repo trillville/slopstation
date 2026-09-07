@@ -472,6 +472,19 @@ def covered_by_delete(
     return rows, command_ids
 
 
+def record_canceled(store, operation, detail):
+    """Close one operation the user asked to stop. Delivered on the spot:
+    they are in the conversation that cancelled it, so announcing it later
+    would tell them what they already know."""
+    if store is None:
+        return None
+    row = store.observe(
+        operation["id"], CANCELED, operation.get("progress", {}), detail
+    )
+    store.mark_delivered(operation["id"])
+    return row
+
+
 def record_deleted(store, rows, result=None):
     """Close the operations a completed delete covered, so the ledger stops
     announcing work whose files are gone. Called after the delete returns:

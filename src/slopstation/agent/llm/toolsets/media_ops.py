@@ -69,6 +69,18 @@ season, or one episode. The app searches in the background and the search is
 tracked: it ends when the search has run and anything it took has imported,
 or with nothing better found. Check back with list_operations."""
 
+CANCEL_REQUEST = """\
+Stop a media request that is still running, named by the operation id from
+list_operations. The app stops looking for whatever the request has not
+found, the searches that have not started are cancelled, and the downloads
+in flight for it are removed. Anything it already imported is KEPT, so this
+is the tool for "stop that, I asked for the wrong thing" and for a request
+that is never going to find anything; delete_media is the one that erases
+files. A search the app has already started cannot be recalled, but it
+grabs nothing once the scope is unmonitored. When downloads would be
+thrown away the first call answers with the question to put to the user
+and acts only when called again unchanged after they say yes."""
+
 SET_MONITORED = """\
 Monitor or unmonitor a movie, a whole series, or named seasons. Unmonitored
 items are kept but never searched for or upgraded; monitored items are."""
@@ -281,6 +293,28 @@ SPECS = [
             "nothing found",
         ),
         busy="starting the search",
+    ),
+    _spec(
+        "cancel_request",
+        CANCEL_REQUEST,
+        {
+            "operation_id": {
+                "type": "string",
+                "description": "the id of an active request, from list_operations",
+            }
+        },
+        ("operation_id",),
+        "destructive",
+        (
+            "cancel the request",
+            "stop the download",
+            "stop searching for",
+            "call off",
+            "i did not mean to ask for that",
+            "never mind that download",
+        ),
+        needs=("media", "operations"),
+        busy="stopping it",
     ),
     _spec(
         "set_monitored",
@@ -1070,6 +1104,64 @@ def impls(ctx: ToolContext):
         if dry := ctx.preview(f"search again for {kind} {catalog_id}, {scope}"):
             return dry
         return _track(media.search_again(kind, catalog_id, season, episode))
+
+    @bind.destructive
+    def cancel_request(args):
+        operation_id = str(args.get("operation_id") or "").strip()
+        if not operation_id:
+            return {"ok": False, "error": "operation_id is required"}
+        operation = operations.get(operation_id)
+        if operation is None:
+            return {
+                "ok": False,
+                "error": f"no operation with id {operation_id} - "
+                "list_operations names the current ones",
+            }
+        if operation.get("kind") not in ("movie_acquisition", "series_acquisition"):
+            return {
+                "ok": False,
+                "error": "only a movie or series request is cancelled here",
+            }
+        if operation.get("state") in operations_mod.TERMINAL:
+            return {
+                "ok": False,
+                "error": f"that request already finished: "
+                f"{str(operation['state']).lower()}",
+            }
+        title = operation.get("title") or "that request"
+        targets = media.cancel_targets(operation)
+
+        def act():
+            result = media.cancel_request(operation)
+            kept = (
+                f"; {result['have']} already imported and kept"
+                if result["have"]
+                else ""
+            )
+            operations_mod.record_canceled(
+                operations, operation, f"the request was canceled{kept}"
+            )
+            return {
+                **result,
+                "title": title,
+                "operation_id": operation_id,
+                "acknowledgment": f"Stopped the {title} request{kept}.",
+            }
+
+        preview = f"cancel operation {operation_id} for {title}"
+        if not targets["downloads"]:
+            # Nothing in flight to throw away: unmonitoring what was never
+            # found is not a loss, so there is no question to ask.
+            return ctx.preview(preview) or act()
+        downloads = targets["downloads"]
+        noun = "download" if downloads == 1 else "downloads"
+        return Plan(
+            ("cancel", operation_id),
+            f"Stop the {title} request? That erases {downloads} {noun} in "
+            f"progress. Anything already imported is kept.",
+            act,
+            preview,
+        )
 
     @bind
     def set_monitored(args):
