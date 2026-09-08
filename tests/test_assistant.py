@@ -203,17 +203,9 @@ class FakeMedia:
         self.requests.append(("episodes_in_scope", tvdb_id, episodes))
         return [413]
 
-    def delete_series(
-        self,
-        tvdb_id,
-        seasons,
-        all_seasons,
-        command_ids,
-        episode_ids=None,
-        episodes=None,
-    ):
+    def delete_series(self, tvdb_id, seasons, all_seasons, command_ids, **_):
         self.requests.append(
-            ("delete_series", tvdb_id, seasons, all_seasons, command_ids, episode_ids)
+            ("delete_series", tvdb_id, seasons, all_seasons, command_ids)
         )
         return {"ok": True, "title": "Breaking Bad", "removed": True}
 
@@ -584,7 +576,7 @@ def test_delete_media_validates_its_scope(live_media):
             "episodes": [{"season": 1, "episode": 2}],
         }
     )
-    assert "not both" in both["error"]
+    assert "not more than one" in both["error"]
     assert (
         "only a series"
         in live_media["delete_media"](
@@ -628,7 +620,7 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
     live_media["delete_media"](dict(ask))
     live_dispatch.begin_utterance("fa1102", "later")
     assert not live_media["delete_media"](dict(ask))["ok"]
-    assert ("delete_series", 81189, [2], False, [77], None) in fake_media.requests
+    assert ("delete_series", 81189, [2], False, [77]) in fake_media.requests
     assert deleted["operations_canceled"] == ["op-andor"]
     assert fake_operations.observed[-1][1] == "CANCELED"
     assert fake_operations.delivered == ["op-andor"]

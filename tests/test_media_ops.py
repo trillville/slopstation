@@ -963,39 +963,40 @@ def test_delete_season_cancels_a_request_still_waiting_for_its_episode_ids(
     assert store.get(other_season["id"])["state"] == operations.RUNNING
 
 
-def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig):
+def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig, monkeypatch):
     tk, _, _ = rig
     _, _, sonarr, _ = stack
-    sonarr.answers["episode"] = lambda p: [
+    rows = [
         {
             "id": 101,
             "seasonNumber": 1,
             "episodeNumber": 1,
             "title": "Pilot",
             "hasFile": True,
-            "episodeFileId": 1001,
-            "monitored": True,
-            "airDateUtc": iso(-400),
+            "episodeFile": {
+                "id": 1001,
+                "size": 2 * 1024**3,
+                "dateAdded": "2026-08-30T20:44:01Z",
+                "quality": {"quality": {"name": "Bluray-1080p"}},
+            },
         },
+        {"id": 102, "seasonNumber": 1, "episodeNumber": 2, "hasFile": False},
         {
-            "id": 102,
-            "seasonNumber": 1,
-            "episodeNumber": 2,
-            "title": "Cat's in the Bag...",
-            "hasFile": False,
-            "monitored": True,
-            "airDateUtc": iso(-390),
+            "id": 201,
+            "seasonNumber": 2,
+            "episodeNumber": 1,
+            "hasFile": True,
+            "episodeFile": {"id": 2001},
         },
     ]
-    sonarr.answers["episodefile"] = lambda p: [
-        {
-            "id": 1001,
-            "size": 2 * 1024**3,
-            "dateAdded": "2026-08-30T20:44:01Z",
-            "quality": {"quality": {"name": "Bluray-1080p"}},
-        }
-    ]
-    out = tk.call("episode_files", {"catalog_id": 81189})
+    monkeypatch.setitem(
+        sonarr.answers,
+        "episode",
+        lambda p: [
+            r for r in rows if p.get("seasonNumber") in (None, r["seasonNumber"])
+        ],
+    )
+    out = tk.call("episode_files", {"catalog_id": 81189, "season": 1})
     assert out["ok"] and out["title"] == "Breaking Bad"
     assert out["count"] == 1
     assert out["episodes"] == [
@@ -1008,8 +1009,8 @@ def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig):
             "added": "2026-08-30T20:44:01",
         }
     ]
-    # A season holding nothing is not the whole series.
-    assert tk.call("episode_files", {"catalog_id": 81189, "season": 2})["count"] == 0
+    assert sonarr.gets[-1][1]["includeEpisodeFile"] == "true"
+    assert tk.call("episode_files", {"catalog_id": 81189})["count"] == 2
 
 
 def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
@@ -1031,6 +1032,19 @@ def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
         "5",
         "Breaking Bad",
         metadata={"catalog_id": 81189, "episodes": [[1, 1]]},
+    )
+    # A request on a held series carries Sonarr's ids beside its pairs.
+    partial = store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        work_id="command:partial",
+        metadata={
+            "catalog_id": 81189,
+            "episodes": [[1, 1], [1, 2]],
+            "episode_ids": [101, 102],
+        },
     )
     ask = {
         "kind": "series",
@@ -1055,6 +1069,27 @@ def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
     still = store.get(kept["id"])
     assert still["state"] == operations.RUNNING
     assert still["metadata"]["episodes"] == [[1, 2], [2, 1]]
+    trimmed = store.get(partial["id"])["metadata"]
+    assert trimmed["episodes"] == [[1, 2]] and trimmed["episode_ids"] == [102]
+    assert trimmed["scope_label"] == "episodes S01E02"
+
+
+def test_delete_media_of_an_episode_sonarr_lacks_erases_nothing(
+    stack, tracked, monkeypatch
+):
+    _, _, sonarr, _ = stack
+    tk, _, dispatch = tracked
+    ask = {
+        "kind": "series",
+        "catalog_id": 81189,
+        "episodes": [{"season": 9, "episode": 9}],
+    }
+    assert not tk.call("delete_media", ask)["ok"]
+    monkeypatch.setattr(dispatch.utterance, "turn", "aa0006")
+    out = tk.call("delete_media", ask)
+    assert out["ok"] and not out["removed"]
+    assert "none of those episodes" in out["detail"]
+    assert not sonarr.deletes and not sonarr.puts
 
 
 def test_delete_season_trims_it_from_a_pending_request_spanning_seasons(

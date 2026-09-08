@@ -1651,10 +1651,7 @@ class MediaService:
         command_ids=None,
         *,
         episode_ids=None,
-        episodes=None,
     ):
-        """`episodes` rides into the result so the ledger can drop those pairs
-        from a request whose own ids Sonarr has not named yet."""
         tvdb_id = int(tvdb_id)
         selected = self._seasons(seasons)
         if selected is None and not all_seasons and episode_ids is None:
@@ -1702,6 +1699,18 @@ class MediaService:
                 else int(row.get("seasonNumber", 0) or 0) in selected
             )
         ]
+        if not wanted:
+            # Sonarr has no row for any of it: nothing to erase.
+            return {
+                "ok": True,
+                "kind": "series",
+                "catalog_id": tvdb_id,
+                "title": title,
+                "removed": False,
+                "seasons": selected,
+                "episode_ids": [],
+                "detail": f"Sonarr holds none of those episodes of {title}",
+            }
         episode_ids = sorted({int(row["id"]) for row in wanted if row.get("id")})
         self._monitor_episodes(episode_ids, False)
         updated = dict(series)
@@ -1744,7 +1753,6 @@ class MediaService:
             "downloads_canceled": downloads,
             "files_deleted": len(file_ids),
             "episode_ids": episode_ids,
-            "episodes": None if episodes is None else [list(p) for p in episodes],
             "detail": f"deleted {scope} of {title} and stopped monitoring it",
         }
 

@@ -362,17 +362,14 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": f"unknown media kind {kind}"}
         if catalog_id <= 0:
             return {"ok": False, "error": "catalog_id must be positive"}
-        if episodes is not None:
-            if kind != "series":
-                return {"ok": False, "error": "only a series has episodes"}
-            if seasons is not None or all_seasons:
-                return {
-                    "ok": False,
-                    "error": "delete seasons or episodes, not both",
-                }
-            episodes, invalid = _episode_pairs(episodes)
-            if invalid:
-                return invalid
+        if episodes is not None and kind != "series":
+            return {"ok": False, "error": "only a series has episodes"}
+        if (seasons is not None) + (episodes is not None) + all_seasons > 1:
+            return {
+                "ok": False,
+                "error": "delete explicit seasons, explicit episodes or "
+                "all_seasons, not more than one",
+            }
         if (
             kind == "series"
             and seasons is None
@@ -383,6 +380,10 @@ def impls(ctx: ToolContext):
                 "ok": False,
                 "error": "name seasons or episodes, or explicitly request all seasons",
             }
+        if episodes is not None:
+            episodes, invalid = _episode_pairs(episodes)
+            if invalid:
+                return invalid
         if seasons is not None:
             if (
                 not isinstance(seasons, list)
@@ -417,7 +418,7 @@ def impls(ctx: ToolContext):
             try:
                 if kind != "series" or all_seasons:
                     episode_ids = []
-                elif episodes is not None:
+                elif episodes:
                     episode_ids = media.episodes_in_scope(catalog_id, episodes)
                 else:
                     episode_ids = media.episodes_in_seasons(catalog_id, seasons)
@@ -438,10 +439,11 @@ def impls(ctx: ToolContext):
                         seasons=seasons,
                         all_seasons=all_seasons,
                         command_ids=command_ids,
-                        episode_ids=episode_ids if episodes is not None else None,
-                        episodes=episodes,
+                        episode_ids=episode_ids if episodes else None,
                     )
-                return operations_mod.record_deleted(operations, covered, result)
+                return operations_mod.record_deleted(
+                    operations, covered, result, episodes=episodes
+                )
             except Exception as e:
                 log.error("tool_error", tool="delete_media", err=str(e))
                 return {"ok": False, "error": str(e)}

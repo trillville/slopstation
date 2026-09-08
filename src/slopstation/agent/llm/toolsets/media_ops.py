@@ -519,6 +519,10 @@ def _gb(value):
     return round(int(value or 0) / GB, 2)
 
 
+def _quality_name(row):
+    return ((row.get("quality") or {}).get("quality") or {}).get("name")
+
+
 def _kinds(args):
     kind = str(args.get("kind") or "both")
     if kind == "both":
@@ -651,9 +655,7 @@ def impls(ctx: ToolContext):
                 {
                     "path": f.get("relativePath"),
                     "size_gb": _gb(f.get("size")),
-                    "quality": ((f.get("quality") or {}).get("quality") or {}).get(
-                        "name"
-                    ),
+                    "quality": _quality_name(f),
                 }
                 for f in files
                 if isinstance(f, dict)
@@ -696,26 +698,21 @@ def impls(ctx: ToolContext):
             season = None if args.get("season") is None else int(args["season"])
         except (TypeError, ValueError):
             return {"ok": False, "error": "season must be an integer"}
-        client = _client("series")
-        episodes = client.get("episode", {"seriesId": row["id"]}) or []
-        files = client.get("episodefile", {"seriesId": row["id"]}) or []
-        by_id = {int(f["id"]): f for f in files if isinstance(f, dict) and f.get("id")}
+        params = {"seriesId": row["id"], "includeEpisodeFile": "true"}
+        if season is not None:
+            params["seasonNumber"] = season
+        episodes = _client("series").get("episode", params) or []
         held = []
         for e in episodes:
             if not isinstance(e, dict) or not e.get("hasFile"):
                 continue
-            number = int(e.get("seasonNumber", 0) or 0)
-            if season is not None and number != season:
-                continue
-            f = by_id.get(int(e.get("episodeFileId", 0) or 0)) or {}
+            f = e.get("episodeFile") or {}
             held.append(
                 {
-                    "season": number,
+                    "season": int(e.get("seasonNumber", 0) or 0),
                     "episode": int(e.get("episodeNumber", 0) or 0),
                     "title": e.get("title"),
-                    "quality": ((f.get("quality") or {}).get("quality") or {}).get(
-                        "name"
-                    ),
+                    "quality": _quality_name(f),
                     "size_gb": _gb(f.get("size")),
                     "added": str(f.get("dateAdded") or "")[:19],
                 }
@@ -886,9 +883,7 @@ def impls(ctx: ToolContext):
                     "name": r.get("title"),
                     "size_gb": _gb(r.get("size")),
                     "seeders": r.get("seeders"),
-                    "quality": ((r.get("quality") or {}).get("quality") or {}).get(
-                        "name"
-                    ),
+                    "quality": _quality_name(r),
                     "age_hours": round(float(r.get("ageHours", 0) or 0)),
                     "approved": bool(r.get("approved")),
                     "rejections": (r.get("rejections") or [])[:3],
@@ -988,9 +983,7 @@ def impls(ctx: ToolContext):
                         "event": r.get("eventType"),
                         "title": parent.get("title"),
                         "release": r.get("sourceTitle"),
-                        "quality": ((r.get("quality") or {}).get("quality") or {}).get(
-                            "name"
-                        ),
+                        "quality": _quality_name(r),
                     }
                 )
         rows.sort(key=lambda r: r["when"], reverse=True)
