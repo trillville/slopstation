@@ -37,6 +37,13 @@ One movie or series in full, by the catalog id from find_media: files with
 their quality and size, path, monitored state, the quality profile, and for
 a series each season's held, missing and upcoming episode counts."""
 
+EPISODE_FILES = """\
+Which episodes of one series are actually held, by the catalog id from
+find_media: season and episode number, title, quality, size, and WHEN the
+file arrived. Optionally one season. This is what says which episodes a
+particular request brought in, and the only place the file's date is
+readable - media_library and media_details count per season instead."""
+
 MISSING_MEDIA = """\
 What is monitored but missing, and what is held below its quality cutoff,
 for movies or series. Returns the counts and up to `limit` rows each; a
@@ -199,6 +206,27 @@ SPECS = [
             "file size",
         ),
         busy="checking the library",
+    ),
+    _spec(
+        "episode_files",
+        EPISODE_FILES,
+        {
+            "catalog_id": CATALOG_ID,
+            "season": {
+                "type": "integer",
+                "description": "one season number; omit for the whole series",
+            },
+            **paging.properties(what="episodes"),
+        },
+        ("catalog_id",),
+        "read",
+        (
+            "which episodes do i have",
+            "episode files",
+            "when was it downloaded",
+            "what did that request bring in",
+        ),
+        paged=True,
     ),
     _spec(
         "missing_media",
@@ -659,6 +687,46 @@ def impls(ctx: ToolContext):
             s["monitored"] = s["monitored"] or bool(e.get("monitored"))
         out["seasons"] = [seasons[k] for k in sorted(seasons)]
         return out
+
+    @bind
+    def episode_files(args):
+        row, err = _row("series", args.get("catalog_id"))
+        if err:
+            return err
+        try:
+            season = None if args.get("season") is None else int(args["season"])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "season must be an integer"}
+        client = _client("series")
+        episodes = client.get("episode", {"seriesId": row["id"]}) or []
+        files = client.get("episodefile", {"seriesId": row["id"]}) or []
+        by_id = {int(f["id"]): f for f in files if isinstance(f, dict) and f.get("id")}
+        held = []
+        for e in episodes:
+            if not isinstance(e, dict) or not e.get("hasFile"):
+                continue
+            number = int(e.get("seasonNumber", 0) or 0)
+            if season is not None and number != season:
+                continue
+            f = by_id.get(int(e.get("episodeFileId", 0) or 0)) or {}
+            held.append(
+                {
+                    "season": number,
+                    "episode": int(e.get("episodeNumber", 0) or 0),
+                    "title": e.get("title"),
+                    "quality": ((f.get("quality") or {}).get("quality") or {}).get(
+                        "name"
+                    ),
+                    "size_gb": _gb(f.get("size")),
+                    # When the file arrived, which is how a mistaken request's
+                    # imports are told apart from what was already held.
+                    "added": str(f.get("dateAdded") or "")[:19],
+                }
+            )
+        held.sort(key=lambda r: (r["season"], r["episode"]))
+        return paging.page(
+            held, args, "episodes", title=row.get("title"), season=season
+        )
 
     @bind
     def missing_media(args):

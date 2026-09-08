@@ -1651,7 +1651,12 @@ class MediaService:
         command_ids=None,
         *,
         episode_ids=None,
+        episodes=None,
     ):
+        """`episodes` names the (season, episode) pairs an episode-scoped
+        deletion asked for. It travels into the result so the operation
+        ledger can drop those pairs from a request whose own episode ids
+        Sonarr has not resolved yet."""
         tvdb_id = int(tvdb_id)
         selected = self._seasons(seasons)
         if selected is None and not all_seasons and episode_ids is None:
@@ -1686,12 +1691,12 @@ class MediaService:
                 "detail": f"removed all seasons of {title} from Sonarr and deleted their files",
             }
 
-        episodes = self.sonarr.get("episode", {"seriesId": series_id})
-        if not isinstance(episodes, list):
+        rows = self.sonarr.get("episode", {"seriesId": series_id})
+        if not isinstance(rows, list):
             raise MediaError("Sonarr returned invalid episodes")
         wanted = [
             row
-            for row in episodes
+            for row in rows
             if isinstance(row, dict)
             and (
                 int(row.get("id", 0) or 0) in episode_ids
@@ -1741,6 +1746,7 @@ class MediaService:
             "downloads_canceled": downloads,
             "files_deleted": len(file_ids),
             "episode_ids": episode_ids,
+            "episodes": None if episodes is None else [list(p) for p in episodes],
             "detail": f"deleted {scope} of {title} and stopped monitoring it",
         }
 

@@ -199,9 +199,21 @@ class FakeMedia:
     def episodes_in_seasons(self, tvdb_id, seasons):
         return [201]
 
-    def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
+    def episodes_in_scope(self, tvdb_id, episodes):
+        self.requests.append(("episodes_in_scope", tvdb_id, episodes))
+        return [413]
+
+    def delete_series(
+        self,
+        tvdb_id,
+        seasons,
+        all_seasons,
+        command_ids,
+        episode_ids=None,
+        episodes=None,
+    ):
         self.requests.append(
-            ("delete_series", tvdb_id, seasons, all_seasons, command_ids)
+            ("delete_series", tvdb_id, seasons, all_seasons, command_ids, episode_ids)
         )
         return {"ok": True, "title": "Breaking Bad", "removed": True}
 
@@ -557,6 +569,36 @@ def test_delete_media_validates_its_scope(live_media):
         "integer"
         in live_media["delete_media"]({"kind": "movie", "catalog_id": "dune"})["error"]
     )
+    for bad in ([{"season": 1}], [{"season": 0, "episode": 1}], [[1, 2]], ["S01E02"]):
+        assert (
+            "episodes must be"
+            in live_media["delete_media"](
+                {"kind": "series", "catalog_id": 81189, "episodes": bad}
+            )["error"]
+        ), bad
+    both = live_media["delete_media"](
+        {
+            "kind": "series",
+            "catalog_id": 81189,
+            "seasons": [1],
+            "episodes": [{"season": 1, "episode": 2}],
+        }
+    )
+    assert "not both" in both["error"]
+    assert (
+        "only a series"
+        in live_media["delete_media"](
+            {
+                "kind": "movie",
+                "catalog_id": 949,
+                "episodes": [{"season": 1, "episode": 2}],
+            }
+        )["error"]
+    )
+    assert (
+        "episodes"
+        in live_media["delete_media"]({"kind": "series", "catalog_id": 81189})["error"]
+    )
 
 
 def test_delete_media_needs_a_confirmation_from_a_later_turn(
@@ -586,7 +628,7 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
     live_media["delete_media"](dict(ask))
     live_dispatch.begin_utterance("fa1102", "later")
     assert not live_media["delete_media"](dict(ask))["ok"]
-    assert ("delete_series", 81189, [2], False, [77]) in fake_media.requests
+    assert ("delete_series", 81189, [2], False, [77], None) in fake_media.requests
     assert deleted["operations_canceled"] == ["op-andor"]
     assert fake_operations.observed[-1][1] == "CANCELED"
     assert fake_operations.delivered == ["op-andor"]

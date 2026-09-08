@@ -41,6 +41,7 @@ ASKS = {
     "browse_media": "browse the movies i have by genre, recently added",
     "media_details": "what quality is that movie and which episodes are missing",
     "missing_media": "what episodes are missing or not downloaded yet",
+    "episode_files": "which episodes of that show do i have and when did they arrive",
     "calendar": "what airs this week, upcoming episodes",
     "search_releases": "do a manual search for releases of that movie",
     "grab_release": "grab that release and download that one",
