@@ -70,6 +70,8 @@ def system_instruction(cfg, interface="voice", offered=None):
     )
     if voice["assistantWebSearch"]:
         tail.append(prompts.WEB_SEARCH_RULE)
+        if interface != "text":
+            tail.append(prompts.WEB_SEARCH_VOICE_RULE)
     tools = tools_map(offered)
     if tools:
         tail.append(tools)

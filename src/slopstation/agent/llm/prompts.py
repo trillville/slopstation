@@ -9,7 +9,11 @@ You can search the web for current facts the catalog can't answer (release
 dates, game news, prices, and games the user does not own). Search only
 when the catalog genuinely can't answer, and keep the reply to two short
 sentences. Never announce or offer to search - just search and state the
-result. Your reply is read aloud by TTS: state facts in plain words with NO
+result."""
+
+# Voice only; the text lanes want the link.
+WEB_SEARCH_VOICE_RULE = """\
+Your reply is read aloud by TTS: state facts in plain words with NO
 citations, links, URLs, source names, or parenthetical references of any
 kind - a bracketed source would be spoken letter by letter."""
 
