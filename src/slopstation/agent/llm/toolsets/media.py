@@ -353,7 +353,8 @@ def impls(ctx: ToolContext):
         try:
             kind = str(args.get("kind", ""))
             catalog_id = int(args.get("catalog_id", 0) or 0)
-            seasons = args.get("seasons")
+            # An empty list is no scope, not a conflicting one.
+            seasons = args.get("seasons") or None
             episodes = args.get("episodes") or None
             all_seasons = bool(args.get("all_seasons", False))
         except (TypeError, ValueError, OverflowError):
