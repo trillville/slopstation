@@ -1653,10 +1653,8 @@ class MediaService:
         episode_ids=None,
         episodes=None,
     ):
-        """`episodes` names the (season, episode) pairs an episode-scoped
-        deletion asked for. It travels into the result so the operation
-        ledger can drop those pairs from a request whose own episode ids
-        Sonarr has not resolved yet."""
+        """`episodes` rides into the result so the ledger can drop those pairs
+        from a request whose own ids Sonarr has not named yet."""
         tvdb_id = int(tvdb_id)
         selected = self._seasons(seasons)
         if selected is None and not all_seasons and episode_ids is None:

@@ -49,9 +49,9 @@ files and active downloads in that scope and cannot be undone. Resolve the title
 with find_media first and pass its catalog id. For a series, give exactly one
 scope: explicit positive season numbers; individual episodes as a list of
 {season, episode} pairs; or all_seasons=true only when the user explicitly
-asks to delete the entire series. Everything outside the scope is preserved. The first
-call on a scope deletes nothing and answers with the title the authority itself
-holds; put that question to the user verbatim and call again unchanged only
+asks to delete the entire series. Everything outside the scope is kept. The
+first call on a scope deletes nothing and answers with the title the authority
+itself holds; put that question to the user verbatim and call again unchanged only
 once they have answered yes. A repeat inside the same turn is always refused,
 and so is an ask older than ten minutes, but nothing else checks their answer
 - a no is yours to honour."""
@@ -193,8 +193,7 @@ SPECS = [
 
 
 def _episode_pairs(value):
-    """Validated (season, episode) pairs from the tool's episode objects, or
-    (None, the error payload)."""
+    """Sorted (season, episode) pairs, or (None, error)."""
     if not isinstance(value, list) or not all(
         isinstance(item, dict)
         and all(

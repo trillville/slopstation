@@ -443,8 +443,8 @@ def _pending_pairs(pending):
 
 
 def _pending_covered(pending, seasons, deleted_pairs):
-    """A request still waiting for its episode ids is covered when the
-    deletion took every season its pairs are in, or every pair itself."""
+    """Covered when the delete took every season its pairs are in, or every
+    pair itself."""
     pairs = _pending_pairs(pending)
     if {season for season, _ in pairs} <= set(seasons or []):
         return True
@@ -467,9 +467,9 @@ def covered_by_delete(
     request tracking the seasons it still owns. `episode_ids` names the
     episodes the service resolved for this deletion before changing state.
     A request whose episode ids Sonarr could not name yet is covered by the
-    seasons its episodes belong to, or by `episodes` when the deletion named
-    its pairs directly: leaving it active is what would let the pending
-    search start the download again once Sonarr catches up."""
+    seasons its episodes belong to, or by the pairs in `episodes`: leaving it
+    active is what would let the pending search start the download again once
+    Sonarr catches up."""
     rows: list[dict] = []
     command_ids: list = []
     deleted_pairs = {(int(s), int(e)) for s, e in episodes or ()}
@@ -537,9 +537,8 @@ def record_deleted(store, rows, result=None):
                 continue
             ids = metadata.get("episode_ids")
             pairs = metadata.get("episodes")
-            # A request whose ids Sonarr has not named yet is scoped by its
-            # pairs: drop the ones this delete took, by season or by pair, or
-            # its pending search asks Sonarr for them again.
+            # Drop the pairs this delete took, or the pending search asks
+            # Sonarr for them again.
             remaining = [
                 pair
                 for pair in pairs or ()

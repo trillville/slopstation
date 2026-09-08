@@ -38,11 +38,10 @@ their quality and size, path, monitored state, the quality profile, and for
 a series each season's held, missing and upcoming episode counts."""
 
 EPISODE_FILES = """\
-Which episodes of one series are actually held, by the catalog id from
-find_media: season and episode number, title, quality, size, and WHEN the
-file arrived. Optionally one season. This is what says which episodes a
-particular request brought in, and the only place the file's date is
-readable - media_library and media_details count per season instead."""
+Which episodes of one series hold a file, by the catalog id from find_media:
+season and episode number, title, quality, size, and the date the file
+arrived. Optionally one season. The only tool that names the episodes and
+their dates; media_library and media_details count per season instead."""
 
 MISSING_MEDIA = """\
 What is monitored but missing, and what is held below its quality cutoff,
@@ -718,8 +717,6 @@ def impls(ctx: ToolContext):
                         "name"
                     ),
                     "size_gb": _gb(f.get("size")),
-                    # When the file arrived, which is how a mistaken request's
-                    # imports are told apart from what was already held.
                     "added": str(f.get("dateAdded") or "")[:19],
                 }
             )

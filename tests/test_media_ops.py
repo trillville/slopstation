@@ -964,8 +964,6 @@ def test_delete_season_cancels_a_request_still_waiting_for_its_episode_ids(
 
 
 def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig):
-    """The read that tells a mistaken request's imports from what was already
-    held: per episode, its quality, size and the date the file arrived."""
     tk, _, _ = rig
     _, _, sonarr, _ = stack
     sonarr.answers["episode"] = lambda p: [
@@ -1010,13 +1008,12 @@ def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig):
             "added": "2026-08-30T20:44:01",
         }
     ]
-    # A season that holds nothing reports nothing rather than the whole series.
+    # A season holding nothing is not the whole series.
     assert tk.call("episode_files", {"catalog_id": 81189, "season": 2})["count"] == 0
 
 
 def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
-    """An episode-scoped delete removes exactly those episode files and
-    cancels a request that asked for exactly them, leaving the season alone."""
+    """Only those files, and only a request asking for exactly them."""
     _, _, sonarr, _ = stack
     tk, store, dispatch = tracked
     monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
@@ -1045,7 +1042,7 @@ def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
     monkeypatch.setattr(dispatch.utterance, "turn", "aa0005")
     deleted = tk.call("delete_media", ask)
     assert deleted["ok"], deleted
-    # Only S01E01's file, and no season flag touched.
+    # S01E01's file alone, and no season flag moved.
     assert ("episodefile/1001", None) in sonarr.deletes
     assert sonarr.puts[0][1]["episodeIds"] == [101]
     assert [r["monitored"] for r in sonarr.puts[-1][1]["seasons"]] == [
@@ -1055,7 +1052,6 @@ def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
     ]
     assert deleted["operations_canceled"] == [covered["id"]]
     assert store.get(covered["id"])["state"] == operations.CANCELED
-    # The request that wanted more keeps what the delete did not take.
     still = store.get(kept["id"])
     assert still["state"] == operations.RUNNING
     assert still["metadata"]["episodes"] == [[1, 2], [2, 1]]
