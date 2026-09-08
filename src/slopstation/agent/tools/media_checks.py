@@ -346,10 +346,19 @@ def _check_qbittorrent(report, client, media_cfg):
         version = client.version()
         preferences = client.preferences()
         categories = client.categories()
+        dht_nodes = int(client.transfer_info().get("dht_nodes", 0) or 0)
     except MediaError as e:
         report.add("FAIL", "qBittorrent API", str(e))
         return None
     report.add("PASS", "qBittorrent API", f"reachable, version {version}")
+    dead = bool(preferences.get("dht", True)) and dht_nodes == 0
+    report.add(
+        "FAIL" if dead else "PASS",
+        "qBittorrent DHT",
+        "0 nodes - the peer sockets are dead; restart qBittorrent"
+        if dead
+        else f"{dht_nodes} nodes",
+    )
     expected_interface = str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN"))
     interfaces = [
         str(preferences.get(key, ""))

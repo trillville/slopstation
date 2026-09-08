@@ -25,6 +25,8 @@
     "qbittorrentUrl": "http://127.0.0.1:8080",
     "qbittorrentUsername": "admin",
     "qbittorrentNetworkInterface": "ProtonVPN",
+    "qbittorrentExe": "C:\\Program Files\\qBittorrent\\qbittorrent.exe",
+    "_qbittorrentExe": "Lets the Proton port sync restart qBittorrent when its peer sockets die. Optional: without it the sync can only rebind.",
     "protonPortSync": false,
     "_protonPortSync": "Keep qBittorrent's listening port in sync with the active Proton VPN port.",
     "movieRoot": "/data/Movies",

@@ -415,6 +415,43 @@ class QbittorrentClient:
             "changed": previous != confirmed,
         }
 
+    def network_interfaces(self):
+        value = self._json("app/networkInterfaceList")
+        if not isinstance(value, list):
+            raise MediaError("qBittorrent returned an invalid interface list")
+        return value
+
+    def rebind_interface(self, name):
+        """Bind the peer sockets to the adapter called `name` as it exists
+        now. A recreated adapter keeps its name and changes its id, so the
+        stored id can point at nothing while the name still matches. The
+        same id written twice is no change, so an unchanged one is cleared
+        first to make libtorrent reopen the sockets."""
+        wanted = str(name).casefold()
+        row = next(
+            (
+                r
+                for r in self.network_interfaces()
+                if isinstance(r, dict) and str(r.get("name", "")).casefold() == wanted
+            ),
+            None,
+        )
+        if row is None:
+            raise MediaError(f"qBittorrent has no network interface named {name}")
+        value = str(row.get("value", ""))
+        previous = str(self.preferences().get("current_network_interface", ""))
+        if previous == value:
+            self.set_preferences({"current_network_interface": ""})
+        self.set_preferences({"current_network_interface": value})
+        return {
+            "interface": str(name),
+            "previous": previous,
+            "drifted": previous != value,
+        }
+
+    def shutdown(self):
+        self._call("POST", "app/shutdown")
+
 
 def _qbit_from_config(media_cfg, secrets):
     return QbittorrentClient(

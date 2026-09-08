@@ -1797,6 +1797,8 @@ def proton_port_monitor_from_config(cfg, secrets, log):
             _qbit_from_config(media_cfg, secrets),
             log,
             poll_s=_positive(media_cfg, "pollS", 30),
+            interface=str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN")),
+            exe=media_cfg.get("qbittorrentExe") or None,
         )
     except MediaConfigurationError as e:
         log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
