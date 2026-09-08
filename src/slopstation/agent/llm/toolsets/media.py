@@ -277,7 +277,6 @@ def impls(ctx: ToolContext):
             preset = args.get("preset", "default")
             if tvdb_id <= 0:
                 return {"ok": False, "error": "tvdb_id must be positive"}
-            # An empty list is no scope, not a conflicting one.
             seasons = args.get("seasons") or None
             episodes = args.get("episodes") or None
             all_seasons = args.get("all_seasons", False)
