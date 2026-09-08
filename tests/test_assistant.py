@@ -550,13 +550,31 @@ def test_request_series_takes_individual_episodes(live_media, fake_media):
 
 
 def test_delete_media_validates_its_scope(live_media):
-    for bad in ([], [0], [-1], [True], "2", 2, [2, "3"], (2,)):
+    for bad in ([0], [-1], [True], "2", 2, [2, "3"], (2,)):
         assert (
             "positive integers"
             in live_media["delete_media"](
                 {"kind": "series", "catalog_id": 81189, "seasons": bad}
             )["error"]
         ), bad
+    # The model sends every schema field, so an episode delete arrives with
+    # seasons: [] beside it; an empty list is no scope, not a second one.
+    asked = live_media["delete_media"](
+        {
+            "kind": "series",
+            "catalog_id": 81189,
+            "seasons": [],
+            "episodes": [{"season": 1, "episode": 2}],
+            "all_seasons": False,
+        }
+    )
+    assert "acknowledgment" in asked, asked
+    assert (
+        "episodes"
+        in live_media["delete_media"](
+            {"kind": "series", "catalog_id": 81189, "seasons": []}
+        )["error"]
+    )
     assert (
         "integer"
         in live_media["delete_media"]({"kind": "movie", "catalog_id": "dune"})["error"]
