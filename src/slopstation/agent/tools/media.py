@@ -1810,13 +1810,18 @@ def media_health_monitor_from_config(cfg, secrets, log, operations=None):
     if media_cfg is None:
         return None
     try:
+        # 0 turns the reaping off; the watch still reports stalls.
+        grace = media_cfg.get("stalledGraceMinutes", 30)
+        if isinstance(grace, bool) or not isinstance(grace, (int, float)) or grace < 0:
+            raise MediaConfigurationError(
+                "media.stalledGraceMinutes must be a number of minutes, 0 or more"
+            )
         return MediaHealthMonitor(
             _arr_clients(media_cfg, secrets),
             log,
             poll_s=_positive(media_cfg, "healthPollS", HEALTH_POLL_S),
             operations=operations,
-            # 0 turns the reaping off; the watch still reports stalls.
-            stall_grace_s=60 * int(media_cfg.get("stalledGraceMinutes", 30) or 0),
+            stall_grace_s=60 * grace,
         )
     except (MediaConfigurationError, KeyError) as e:
         log.warn("lane_disabled", what="media_health_sync", reason=str(e))

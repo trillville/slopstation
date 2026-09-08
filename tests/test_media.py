@@ -626,6 +626,7 @@ def test_health_watch_reaps_a_grab_that_never_starts():
         "downloadId": "DEAD",
         "episodeId": 7,
         "title": "Show.S01E01.1080p",
+        "status": "warning",
         "size": 100.0,
         "sizeleft": 100.0,
         "trackedDownloadStatus": "warning",
@@ -636,14 +637,29 @@ def test_health_watch_reaps_a_grab_that_never_starts():
         "downloadId": "META",
         "episodeId": 8,
         "title": "Show.S01E02.720p",
+        "status": "queued",
         "size": 0.0,
         "sizeleft": 0.0,
         "trackedDownloadStatus": "ok",
         "statusMessages": [{"messages": ["qBittorrent is downloading metadata"]}],
     }
-    moving = {"id": 3, "downloadId": "MOVING", "size": 100.0, "sizeleft": 40.0}
-    done = {"id": 4, "downloadId": "DONE", "size": 100.0, "sizeleft": 0.0}
-    reap_sonarr = FakeArr("Sonarr", queue={"records": [dead, magnet, moving, done]})
+    moving = {"id": 3, "downloadId": "MOVING", "status": "downloading"}
+    moving.update(size=100.0, sizeleft=40.0)
+    done = {"id": 4, "downloadId": "DONE", "status": "completed"}
+    done.update(size=100.0, sizeleft=0.0)
+    # Idle for a reason that is not the release: not dead.
+    paused = {**dead, "id": 5, "downloadId": "PAUSED", "status": "paused"}
+    held = {**dead, "id": 6, "downloadId": "", "status": "delay", "size": 0.0}
+    away = {
+        **dead,
+        "id": 7,
+        "downloadId": "AWAY",
+        "status": "downloadClientUnavailable",
+    }
+    reap_sonarr = FakeArr(
+        "Sonarr",
+        queue={"records": [dead, magnet, moving, done, paused, held, away]},
+    )
     reap_log = CapturingLog("voice")
     watch = media_health.MediaHealthMonitor(
         (reap_sonarr,), reap_log, stall_grace_s=1800, now=lambda: clock[0]
@@ -838,6 +854,15 @@ def test_disk_watch_reports_crossings(monkeypatch):
 def test_a_watch_is_off_when_config_says_so(factory, flag):
     cfg = {"media": {"enabled": True, flag: False}}
     assert factory(cfg, CapturingLog("voice")) is None
+
+
+def test_health_watch_refuses_a_bad_stall_grace_without_falling_over():
+    """A bad value disables the watch with a warning the doctor shows, the
+    way every other media key does, rather than taking the lane down."""
+    cfg = {"media": {"enabled": True, "stalledGraceMinutes": "soon"}}
+    log = CapturingLog("voice")
+    assert media.media_health_monitor_from_config(cfg, {}, log) is None
+    assert "stalledGraceMinutes" in log.find("lane_disabled")[-1]["reason"]
 
 
 def test_disk_watch_needs_a_host_root():

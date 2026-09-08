@@ -17,6 +17,7 @@ HEALTH_POLL_S = 300
 STALL_GRACE_S = 30 * 60
 # Dead grabs replaced per target before giving up on it.
 REAP_LIMIT = 3
+REAPABLE = frozenset(("queued", "downloading", "warning"))
 
 
 def _history_id(row):
@@ -282,6 +283,10 @@ class MediaHealthMonitor:
         live = set()
         for row in records:
             if not isinstance(row, dict):
+                continue
+            # Only a grab the client holds and should be moving. Paused, held
+            # by a delay profile, or the client being away is not dead.
+            if _clean_text(row.get("status"), 30).lower() not in REAPABLE:
                 continue
             key = _clean_text(row.get("downloadId") or row.get("id"), 60)
             size = float(row.get("size", 0) or 0)
