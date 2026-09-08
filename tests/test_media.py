@@ -615,6 +615,94 @@ def test_health_watch_reports_transitions_once():
     assert watch_log.find("media_queue_stalled")[0]["status"] == "error"
 
 
+def test_health_watch_reaps_a_grab_that_never_starts():
+    """Nothing received for the grace period gets blocklisted so the app
+    takes its next candidate; a download that is moving, or complete and
+    waiting to import, is left alone; a target is given up on after
+    REAP_LIMIT replacements."""
+    clock = [1000.0]
+    dead = {
+        "id": 1,
+        "downloadId": "DEAD",
+        "episodeId": 7,
+        "title": "Show.S01E01.1080p",
+        "status": "warning",
+        "size": 100.0,
+        "sizeleft": 100.0,
+        "trackedDownloadStatus": "warning",
+        "statusMessages": [{"messages": ["stalled with no connections"]}],
+    }
+    magnet = {
+        "id": 2,
+        "downloadId": "META",
+        "episodeId": 8,
+        "title": "Show.S01E02.720p",
+        "status": "queued",
+        "size": 0.0,
+        "sizeleft": 0.0,
+        "trackedDownloadStatus": "ok",
+        "statusMessages": [{"messages": ["qBittorrent is downloading metadata"]}],
+    }
+    moving = {"id": 3, "downloadId": "MOVING", "status": "downloading"}
+    moving.update(size=100.0, sizeleft=40.0)
+    done = {"id": 4, "downloadId": "DONE", "status": "completed"}
+    done.update(size=100.0, sizeleft=0.0)
+    # Idle for a reason that is not the release: not dead.
+    paused = {**dead, "id": 5, "downloadId": "PAUSED", "status": "paused"}
+    held = {**dead, "id": 6, "downloadId": "", "status": "delay", "size": 0.0}
+    away = {
+        **dead,
+        "id": 7,
+        "downloadId": "AWAY",
+        "status": "downloadClientUnavailable",
+    }
+    reap_sonarr = FakeArr(
+        "Sonarr",
+        queue={"records": [dead, magnet, moving, done, paused, held, away]},
+    )
+    reap_log = CapturingLog("voice")
+    watch = media_health.MediaHealthMonitor(
+        (reap_sonarr,), reap_log, stall_grace_s=1800, now=lambda: clock[0]
+    )
+    watch.reconcile_once()
+    clock[0] += 1799
+    watch.reconcile_once()
+    assert not reap_sonarr.deletes
+    clock[0] += 1
+    watch.reconcile_once()
+    blocklist = {"removeFromClient": "true", "blocklist": "true"}
+    assert reap_sonarr.deletes == [("queue/1", blocklist), ("queue/2", blocklist)]
+    reaped = reap_log.find("media_queue_reaped")
+    assert [(r["download"], r["idle_s"], r["attempt"]) for r in reaped] == [
+        ("DEAD", 1800, 1),
+        ("META", 1800, 1),
+    ]
+    # The app grabs the next copy for the same episode: a fresh clock, and
+    # the target's count carries on until the limit.
+    for n, hash_ in enumerate(("DEAD2", "DEAD3", "DEAD4"), start=2):
+        reap_sonarr.queue["records"] = [{**dead, "id": 10 + n, "downloadId": hash_}]
+        watch.reconcile_once()
+        clock[0] += 1800
+        watch.reconcile_once()
+    assert [r["attempt"] for r in reap_log.find("media_queue_reaped")][2:] == [2, 3]
+    assert len(reap_sonarr.deletes) == 4, "the fourth copy is left where it is"
+    failed = reap_log.find("media_queue_reap_failed")
+    assert len(failed) == 1 and "3 dead grabs" in failed[0]["err"]
+    clock[0] += 1800
+    watch.reconcile_once()
+    assert len(reap_log.find("media_queue_reap_failed")) == 1, "said once"
+    # Off means off; the stall is still reported.
+    off_sonarr = FakeArr("Sonarr", queue={"records": [dict(dead)]})
+    off_log = CapturingLog("voice")
+    off = media_health.MediaHealthMonitor(
+        (off_sonarr,), off_log, stall_grace_s=0, now=lambda: clock[0]
+    )
+    off.reconcile_once()
+    clock[0] += 10**6
+    off.reconcile_once()
+    assert not off_sonarr.deletes and off_log.find("media_queue_stalled")
+
+
 def test_health_watch_reports_a_dead_app_once():
     class DeadArr:
         name = "Sonarr"
@@ -766,6 +854,15 @@ def test_disk_watch_reports_crossings(monkeypatch):
 def test_a_watch_is_off_when_config_says_so(factory, flag):
     cfg = {"media": {"enabled": True, flag: False}}
     assert factory(cfg, CapturingLog("voice")) is None
+
+
+def test_health_watch_refuses_a_bad_stall_grace_without_falling_over():
+    """A bad value disables the watch with a warning the doctor shows, the
+    way every other media key does, rather than taking the lane down."""
+    cfg = {"media": {"enabled": True, "stalledGraceMinutes": "soon"}}
+    log = CapturingLog("voice")
+    assert media.media_health_monitor_from_config(cfg, {}, log) is None
+    assert "stalledGraceMinutes" in log.find("lane_disabled")[-1]["reason"]
 
 
 def test_disk_watch_needs_a_host_root():

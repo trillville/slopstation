@@ -38,6 +38,8 @@
     "healthSync": true,
     "_healthSync": "Poll Radarr and Sonarr for health issues, failed imports, and stalled downloads.",
     "healthPollS": 300,
+    "stalledGraceMinutes": 30,
+    "_stalledGraceMinutes": "A grab that has received nothing for this long is marked failed so the app takes its next candidate. 0 turns that off.",
     "diskWatch": true,
     "_diskWatch": "Monitor free space for the media root and checkout. SMART monitoring is configured separately.",
     "diskPollS": 300,

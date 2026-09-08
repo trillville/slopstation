@@ -1,5 +1,7 @@
 """Radarr/Sonarr acquisitions that failed or stalled, found by polling."""
 
+import time
+
 from slopstation import events
 from slopstation.agent.tools.media_clients import MediaError, _clean_text
 
@@ -9,6 +11,13 @@ GRAB_EVENT = "grabbed"
 # The history field naming the library row a grab belongs to, per app.
 GRAB_REF = {"Sonarr": "seriesId", "Radarr": "movieId"}
 HEALTH_POLL_S = 300
+# A grab with nothing received after this long is dead: a torrent nobody
+# seeds, or a magnet whose metadata never came. The app calls both a warning
+# and keeps them forever.
+STALL_GRACE_S = 30 * 60
+# Dead grabs replaced per target before giving up on it.
+REAP_LIMIT = 3
+REAPABLE = frozenset(("queued", "downloading", "warning"))
 
 
 def _history_id(row):
@@ -54,17 +63,29 @@ class MediaHealthMonitor:
 
     PAGE_SIZE = 50
 
-    def __init__(self, clients, log, poll_s=HEALTH_POLL_S, operations=None):
+    def __init__(
+        self,
+        clients,
+        log,
+        poll_s=HEALTH_POLL_S,
+        operations=None,
+        stall_grace_s=STALL_GRACE_S,
+        now=time.time,
+    ):
         self.clients = tuple(clients)
         self.log = log
         self.poll_s = poll_s
         # Without the ledger a grab cannot be attributed, so that row stays
         # silent rather than calling everything unattributed.
         self.operations = operations
+        self.stall_grace_s = stall_grace_s
+        self.now = now
         self._issues = {}
         self._history_id = {}
         self._stalled = {}
         self._last_failure = {}
+        self._idle_since = {}
+        self._reaped = {}
 
     def start(self):
         events.Ticker("media-health-monitor", self.poll_s, self.reconcile_once).start()
@@ -248,3 +269,71 @@ class MediaHealthMonitor:
                 err=detail,
             )
         self._stalled[client.name] = {key: value[0] for key, value in current.items()}
+        if self.stall_grace_s > 0:
+            self._reap(client, records)
+
+    def _reap(self, client, records):
+        """Mark a grab that has received nothing for the grace period as
+        failed, so the app blocklists it and takes its next candidate. Keyed
+        on the download, so a season pack is one removal; capped per target,
+        so a title with only dead copies stops costing searches."""
+        now = self.now()
+        idle = self._idle_since.setdefault(client.name, {})
+        reaped = self._reaped.setdefault(client.name, {})
+        live = set()
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            # Only a grab the client holds and should be moving. Paused, held
+            # by a delay profile, or the client being away is not dead.
+            if _clean_text(row.get("status"), 30).lower() not in REAPABLE:
+                continue
+            key = _clean_text(row.get("downloadId") or row.get("id"), 60)
+            size = float(row.get("size", 0) or 0)
+            left = float(row.get("sizeleft", 0) or 0)
+            # Bytes have arrived (or it is complete and waiting to import).
+            if not key or (size and left < size):
+                continue
+            live.add(key)
+            first = idle.setdefault(key, now)
+            if now - first < self.stall_grace_s:
+                continue
+            target = str(row.get("episodeId") or row.get("movieId") or key)
+            title = _clean_text(row.get("title"), 120)
+            count = reaped.get(target, 0)
+            if count >= REAP_LIMIT:
+                if count == REAP_LIMIT:
+                    reaped[target] = count + 1
+                    self.log.error(
+                        "media_queue_reap_failed",
+                        app=client.name,
+                        download=key,
+                        err=f"{REAP_LIMIT} dead grabs replaced for this target",
+                    )
+                continue
+            try:
+                client.delete(
+                    f"queue/{int(row['id'])}",
+                    {"removeFromClient": "true", "blocklist": "true"},
+                )
+            except (MediaError, KeyError, TypeError, ValueError) as e:
+                self.log.error(
+                    "media_queue_reap_failed",
+                    app=client.name,
+                    download=key,
+                    err=_clean_text(e),
+                )
+                continue
+            reaped[target] = count + 1
+            idle.pop(key, None)
+            live.discard(key)
+            self.log(
+                "media_queue_reaped",
+                app=client.name,
+                download=key,
+                title=title,
+                idle_s=round(now - first),
+                attempt=count + 1,
+            )
+        for key in [k for k in idle if k not in live]:
+            idle.pop(key)
