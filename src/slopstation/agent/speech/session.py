@@ -51,10 +51,13 @@ def busy_stage(voice, log, toolkit, gate=None):
 def _make_tts(voice, secrets):
     from pipecat.services.deepgram.tts import DeepgramTTSService
 
+    from slopstation.agent.speech.spoken import SpokenText
+
     return DeepgramTTSService(
         api_key=secrets["deepgramApiKey"],
         sample_rate=16000,
         settings=DeepgramTTSService.Settings(voice=voice["ttsVoice"]),
+        text_filters=[SpokenText()],
     )
 
 
