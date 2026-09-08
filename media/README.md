@@ -224,6 +224,7 @@ docker compose --project-directory media --env-file media\.env ps
 | `media_health_issue` / `media_health_cleared` | Radarr or Sonarr health changed |
 | `media_import_failed` | An import failed |
 | `media_queue_stalled` | A queued download reported a warning or error |
+| `media_queue_reaped` / `media_queue_reap_failed` | A grab that received nothing for `media.stalledGraceMinutes` was marked failed so the app takes its next candidate; or could not be, or the target has used up its replacements |
 | `qbit_peers_lost` / `qbit_peers_recovered` | DHT emptied with downloads waiting, and came back (`after` names the step that worked) |
 | `qbit_rebound` / `qbit_restarted` | A heal step ran; `reason` is `proton_reconnect` or `peers_lost` |
 | `qbit_heal_failed` | A heal step could not run, or DHT stayed empty after the restart |
@@ -233,7 +234,10 @@ docker compose --project-directory media --env-file media\.env ps
 | `smart_warning` | smartd reported a drive problem |
 
 Configure media health checks with `media.healthSync` and
-`media.healthPollS`. Configure disk checks with `media.diskWatch`,
+`media.healthPollS`; `media.stalledGraceMinutes` is how long a grab may sit
+with nothing received before it is marked failed (0 turns that off). The app
+treats a dead torrent as a warning and keeps it forever otherwise. Configure
+disk checks with `media.diskWatch`,
 `media.diskPollS`, and `media.diskFreeWarnGb`.
 
 ### SMART monitoring

@@ -118,6 +118,8 @@ PYTHON = {
     "media_health_cleared": {"app", "source"},
     "media_health_issue": {"app", "detail", "kind", "source"},
     "media_import_failed": {"app", "err", "kind", "records", "title"},
+    "media_queue_reap_failed": {"app", "download", "err"},
+    "media_queue_reaped": {"app", "attempt", "download", "idle_s", "title"},
     "media_queue_stalled": {"app", "download", "err", "status", "title"},
     "media_watch_failed": {"app", "err"},
     "meta_failed": {"appid", "err"},
