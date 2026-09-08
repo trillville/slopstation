@@ -174,6 +174,13 @@ def test_arr_client_sends_the_key_and_encodes_the_body():
         "term": ["Dune 2021"]
     }
     assert json.loads(calls[1][3]) == {"name": "MoviesSearch", "movieIds": [7]}
+    # Every call takes the LAN timeout except the indexer fan-out.
+    client.get("release", {"episodeId": 9}, timeout=media_clients.SEARCH_TIMEOUT_S)
+    assert [c[4] for c in calls] == [
+        media_clients.HTTP_TIMEOUT_S,
+        media_clients.HTTP_TIMEOUT_S,
+        media_clients.SEARCH_TIMEOUT_S,
+    ]
 
 
 @dataclasses.dataclass

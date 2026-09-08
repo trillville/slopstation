@@ -15,7 +15,12 @@ from typing import Any
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import operations as operations_mod
-from slopstation.agent.tools.media_clients import KINDS, MediaError, _parse_time
+from slopstation.agent.tools.media_clients import (
+    KINDS,
+    SEARCH_TIMEOUT_S,
+    MediaError,
+    _parse_time,
+)
 
 GB = 1024**3
 KIND = {"type": "string", "enum": ["movie", "series"]}
@@ -34,8 +39,11 @@ title use media_library instead."""
 
 MEDIA_DETAILS = """\
 One movie or series in full, by the catalog id from find_media: files with
-their quality and size, path, monitored state, the quality profile, and for
-a series each season's held, missing and upcoming episode counts."""
+their quality and size, path, monitored state, the quality profile with the
+qualities it actually allows (most preferred first) and the upgrade-until
+cutoff, and for a series each season's held, missing and upcoming episode
+counts. This is the read for 'why was that release rejected' - a raw
+profile read lists every quality, wanted or not."""
 
 EPISODE_FILES = """\
 Which episodes of one series hold a file, by the catalog id from find_media:
@@ -523,6 +531,30 @@ def _quality_name(row):
     return ((row.get("quality") or {}).get("quality") or {}).get("name")
 
 
+def _profile_qualities(profile):
+    """The qualities a profile allows, most preferred first, and the name of
+    its upgrade-until cutoff. The app lists items least preferred first, a
+    group carrying its members under one allowed flag."""
+    allowed: list[Any] = []
+    cutoff = None
+    for item in profile.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        members = item.get("items") or [item]
+        own = item.get("quality") or {}
+        ident = item.get("id") if item.get("items") else own.get("id")
+        if ident is not None and ident == profile.get("cutoff"):
+            cutoff = item.get("name") or own.get("name")
+        if item.get("allowed"):
+            allowed.extend(
+                (m.get("quality") or {}).get("name")
+                for m in members
+                if isinstance(m, dict)
+            )
+    allowed.reverse()
+    return allowed, cutoff
+
+
 def _kinds(args):
     kind = str(args.get("kind") or "both")
     if kind == "both":
@@ -638,16 +670,20 @@ def impls(ctx: ToolContext):
             return err
         client = _client(kind)
         profiles = {
-            int(p["id"]): p.get("name")
+            int(p["id"]): p
             for p in (client.get("qualityprofile") or [])
             if isinstance(p, dict) and "id" in p
         }
+        profile = profiles.get(int(row.get("qualityProfileId", 0) or 0)) or {}
+        allowed, cutoff = _profile_qualities(profile)
         out: dict[str, Any] = {
             "ok": True,
             "kind": kind,
             **(_movie_row(row) if kind == "movie" else _series_row(row)),
             "path": row.get("path"),
-            "quality_profile": profiles.get(int(row.get("qualityProfileId", 0) or 0)),
+            "quality_profile": profile.get("name"),
+            "allowed_qualities": allowed,
+            "upgrade_until": cutoff,
         }
         if kind == "movie":
             files = client.get("moviefile", {"movieId": row["id"]}) or []
@@ -870,7 +906,7 @@ def impls(ctx: ToolContext):
                 if not match:
                     return {"ok": False, "error": "no such episode in that season"}
                 params = {"episodeId": match[0]["id"]}
-        releases = client.get("release", params) or []
+        releases = client.get("release", params, timeout=SEARCH_TIMEOUT_S) or []
         rows = []
         for r in releases:
             if not isinstance(r, dict):

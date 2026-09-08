@@ -9,6 +9,9 @@ import urllib.request
 
 # Every local sidecar is on the LAN; a slow answer is a broken one.
 HTTP_TIMEOUT_S = 10
+# Except the interactive release search, which fans out to every indexer
+# over the internet and answers when the slowest one does.
+SEARCH_TIMEOUT_S = 90
 
 
 class MediaError(RuntimeError):
@@ -102,7 +105,7 @@ class ArrClient:
         self.api_key = api_key
         self.transport = transport or _http_transport
 
-    def request(self, method, endpoint, params=None, payload=None):
+    def request(self, method, endpoint, params=None, payload=None, timeout=None):
         endpoint = endpoint.lstrip("/")
         url = f"{self.base_url}/api/{self.api_version}/{endpoint}"
         if params:
@@ -111,10 +114,10 @@ class ArrClient:
         headers = {"Accept": "application/json", "X-Api-Key": self.api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
-        return self.transport(method, url, headers, body, HTTP_TIMEOUT_S)
+        return self.transport(method, url, headers, body, timeout or HTTP_TIMEOUT_S)
 
-    def get(self, endpoint, params=None):
-        return self.request("GET", endpoint, params=params)
+    def get(self, endpoint, params=None, timeout=None):
+        return self.request("GET", endpoint, params=params, timeout=timeout)
 
     def post(self, endpoint, payload):
         return self.request("POST", endpoint, payload=payload)
