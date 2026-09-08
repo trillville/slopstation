@@ -194,7 +194,16 @@ Check and apply the port once:
 ```
 
 Confirm that Proton and qBittorrent show the same port. Then set
-`media.protonPortSync` to `true` and restart Slopstation. For manual recovery:
+`media.protonPortSync` to `true` and restart Slopstation.
+
+The same sync keeps qBittorrent's peer sockets alive. A Proton reconnect
+recreates the adapter under the same name, and a socket bound before it
+keeps a name that still matches while pointing at nothing: every check
+passes and DHT sits at zero nodes. The sync rebinds on each reconnect, and
+whenever DHT stays empty with downloads waiting it rebinds, then restarts
+qBittorrent through its API (`media.qbittorrentExe` names the executable),
+then reports once and waits. Restarting by hand still works. For manual
+recovery of the port:
 
 ```powershell
 .venv\Scripts\python -m slopstation.agent.tools.media set-qbit-port <active-port> --execute
@@ -215,6 +224,9 @@ docker compose --project-directory media --env-file media\.env ps
 | `media_health_issue` / `media_health_cleared` | Radarr or Sonarr health changed |
 | `media_import_failed` | An import failed |
 | `media_queue_stalled` | A queued download reported a warning or error |
+| `qbit_peers_lost` / `qbit_peers_recovered` | DHT emptied with downloads waiting, and came back (`after` names the step that worked) |
+| `qbit_rebound` / `qbit_restarted` | A heal step ran; `reason` is `proton_reconnect` or `peers_lost` |
+| `qbit_heal_failed` | A heal step could not run, or DHT stayed empty after the restart |
 | `media_watch_failed` | A service could not be reached |
 | `disk_space_low` / `disk_space_cleared` | A watched volume crossed the configured limit |
 | `disk_watch_failed` | A watched volume could not be read |

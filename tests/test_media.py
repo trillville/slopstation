@@ -183,25 +183,44 @@ class FakeQbitWeb:
 
     calls: list = dataclasses.field(default_factory=list)
     preferences: dict = dataclasses.field(default_factory=lambda: {"listen_port": 6881})
+    interfaces: list = dataclasses.field(
+        default_factory=lambda: [{"name": "ProTUN", "value": "iftype53_2"}]
+    )
+    torrents: list = dataclasses.field(
+        default_factory=lambda: [{"hash": "a" * 40, "name": "x"}]
+    )
+    dht_nodes: int = 200
+    alive: bool = True
 
     def transport(self, method, url, headers, body, timeout):
         self.calls.append((method, url, headers, body, timeout))
         path = urllib.parse.urlsplit(url).path
+        if not self.alive:
+            raise media_clients.MediaError("qBittorrent is unreachable")
         if path.endswith("/auth/login"):
             return {"Set-Cookie": "QBT_SID_8080=session-1; HttpOnly; path=/"}, b""
         if headers.get("Cookie") == "QBT_SID_8080=expired":
             raise media_clients.QbittorrentAuthError("expired session")
         assert headers["Cookie"] == "QBT_SID_8080=session-1"
+        if path.endswith("/app/version"):
+            return {}, b"v5.2.3"
         if path.endswith("/app/preferences"):
             return {}, json.dumps(self.preferences).encode()
         if path.endswith("/app/setPreferences"):
             changes = json.loads(urllib.parse.parse_qs(body.decode())["json"][0])
             self.preferences.update(changes)
             return {}, b""
+        if path.endswith("/app/networkInterfaceList"):
+            return {}, json.dumps(self.interfaces).encode()
+        if path.endswith("/app/shutdown"):
+            self.alive = False
+            return {}, b""
         if path.endswith("/torrents/info"):
-            return {}, json.dumps([{"hash": "a" * 40, "name": "x"}]).encode()
+            return {}, json.dumps(self.torrents).encode()
         if path.endswith("/torrents/stop"):
             return {}, b""
+        if path.endswith("/transfer/info"):
+            return {}, json.dumps({"dht_nodes": self.dht_nodes}).encode()
         if path.endswith("/transfer/speedLimitsMode"):
             return {}, b"1"
         raise AssertionError((method, path))
@@ -266,6 +285,29 @@ def test_qbittorrent_client_logs_in_once_and_sets_the_port(qbit, qbit_web, monke
     monkeypatch.setattr(qbit, "sid", "expired")
     assert qbit.preferences()["listen_port"] == 33125
     assert qbit_web.count("/auth/login") == 2
+
+
+def test_qbittorrent_rebind_resolves_the_adapter_by_name(qbit, qbit_web):
+    """The adapter's current id is what gets written; an id that already
+    matches is cleared first so libtorrent reopens the sockets anyway."""
+    qbit_web.preferences["current_network_interface"] = "iftype53_1"
+    drifted = qbit.rebind_interface("protun")
+    assert drifted == {"interface": "protun", "previous": "iftype53_1", "drifted": True}
+    assert qbit_web.preferences["current_network_interface"] == "iftype53_2"
+    assert qbit_web.count("/app/setPreferences") == 1
+    same = qbit.rebind_interface("ProTUN")
+    assert not same["drifted"]
+    writes = [
+        json.loads(urllib.parse.parse_qs(body.decode())["json"][0])
+        for _, url, _, body, _ in qbit_web.calls
+        if url.endswith("/app/setPreferences")
+    ]
+    assert writes[1:] == [
+        {"current_network_interface": ""},
+        {"current_network_interface": "iftype53_2"},
+    ]
+    with pytest.raises(media_clients.MediaError, match="no network interface"):
+        qbit.rebind_interface("Ethernet")
 
 
 # --- Proton port forwarding ---------------------------------------------------
@@ -359,6 +401,115 @@ def test_proton_monitor_syncs_a_fresh_mapping(proton_log, qbit, qbit_web, monkey
         proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 12, 2, tzinfo=UTC)
     )
     assert proton_monitor.reconcile_once()["state"] == "transitional"
+
+
+def test_proton_reconnect_rebinds_even_when_the_port_is_unchanged(
+    proton_log, qbit, qbit_web, monkeypatch
+):
+    log = CapturingLog("voice")
+    proton_monitor = media_proton.ProtonPortMonitor(
+        qbit, log, path=proton_log, now=PROTON_NOW, interface="ProTUN"
+    )
+    proton_monitor.reconcile_once()
+    assert not log.find("qbit_rebound"), "a first poll is not a reconnect"
+    proton_log.write_text(
+        proton_log.read_text(encoding="utf-8")
+        + proton_event("2026-08-30T04:10:41.000Z", "Stopped"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 10, 42, tzinfo=UTC)
+    )
+    assert proton_monitor.reconcile_once()["state"] == "inactive"
+    proton_log.write_text(
+        proton_log.read_text(encoding="utf-8")
+        + proton_event("2026-08-30T04:10:50.000Z", "SleepingUntilRefresh", 39733),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 10, 51, tzinfo=UTC)
+    )
+    back = proton_monitor.reconcile_once()
+    assert back["state"] == "active" and not back["changed"]
+    assert log.find("qbit_rebound")[-1]["reason"] == "proton_reconnect"
+
+
+def test_dead_peers_rebind_then_restart_then_report(
+    proton_log, qbit, qbit_web, monkeypatch
+):
+    """The self-healing loop: zero DHT nodes with downloads waiting gets a
+    rebind after PEERS_DEAD_S, a restart after another, one error after a
+    third, then silence until the nodes come back."""
+    monkeypatch.setattr(media_proton, "PROTON_LOG_MAX_AGE_S", 10**6)
+    log = CapturingLog("voice")
+    launched = []
+
+    class Process:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    def launch(exe):
+        launched.append(exe)
+        qbit_web.alive = True
+        return Process()
+
+    qbit_web.dht_nodes = 0
+    proton_monitor = media_proton.ProtonPortMonitor(
+        qbit,
+        log,
+        path=proton_log,
+        now=PROTON_NOW,
+        interface="ProTUN",
+        exe="C:/qb/qbittorrent.exe",
+        launch=launch,
+        sleep=lambda s: None,
+    )
+
+    def at(seconds):
+        monkeypatch.setattr(
+            proton_monitor, "now", PROTON_NOW + datetime.timedelta(seconds=seconds)
+        )
+        return proton_monitor.reconcile_once()
+
+    assert at(0)["dht_nodes"] == 0
+    at(299)
+    assert not log.find("qbit_peers_lost")
+    at(300)
+    assert log.find("qbit_peers_lost")[-1]["dead_s"] == 300
+    assert log.find("qbit_rebound")[-1]["reason"] == "peers_lost"
+    at(599)
+    assert not launched
+    at(600)
+    assert launched == ["C:/qb/qbittorrent.exe"]
+    assert qbit_web.count("/app/shutdown") == 1
+    assert log.find("qbit_restarted")[-1]["pid"] == 4242
+    at(900)
+    assert log.find("qbit_heal_failed")[-1]["step"] == "restart"
+    at(1500)
+    assert len(log.find("qbit_heal_failed")) == 1, "one report, then wait"
+    qbit_web.dht_nodes = 50
+    assert at(1800)["dht_nodes"] == 50
+    recovered = log.find("qbit_peers_recovered")[-1]
+    assert (recovered["after"], recovered["nodes"]) == ("restart", 50)
+    # Recovery resets the loop: a later loss starts from the first step.
+    qbit_web.dht_nodes = 0
+    at(2100)
+    at(2400)
+    assert len(log.find("qbit_peers_lost")) == 2
+    # Nothing waiting on peers is nothing to heal.
+    log2 = CapturingLog("voice")
+    qbit_web.torrents = []
+    idle = media_proton.ProtonPortMonitor(
+        qbit, log2, path=proton_log, now=PROTON_NOW, interface="ProTUN"
+    )
+    for seconds in (0, 300, 600, 900):
+        monkeypatch.setattr(
+            idle, "now", PROTON_NOW + datetime.timedelta(seconds=seconds)
+        )
+        idle.reconcile_once()
+    assert not log2.find("qbit_peers_lost")
 
 
 # --- media health watch -------------------------------------------------------
@@ -1632,9 +1783,9 @@ HEALTHY_QBIT_PREFERENCES = {
 }
 
 
-def _doctor(monkeypatch, tmp_path, qbit_preferences):
-    """media_doctor over a stack whose only variable is what qBittorrent
-    reports for its preferences."""
+def _doctor(monkeypatch, tmp_path, qbit_preferences, dht_nodes=120):
+    """media_doctor over a stack whose only variables are what qBittorrent
+    reports for its preferences and its DHT."""
     doctor_cfg = json.loads(json.dumps(helpers.CONFIG))
     doctor_cfg["media"]["enabled"] = True
     doctor_cfg["media"]["protonPortSync"] = True
@@ -1696,6 +1847,8 @@ def _doctor(monkeypatch, tmp_path, qbit_preferences):
             return {}, json.dumps(qbit_preferences).encode()
         if path.endswith("/torrents/categories"):
             return {}, json.dumps({"radarr": {}, "sonarr": {}}).encode()
+        if path.endswith("/transfer/info"):
+            return {}, json.dumps({"dht_nodes": dht_nodes}).encode()
         raise AssertionError((method, url))
 
     compose_rows = [
@@ -1751,10 +1904,14 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
         share_limits_mode="MatchAll",
         listen_port=1234,
     )
-    broken = _doctor(monkeypatch, tmp_path, broken_preferences)
+    broken = _doctor(monkeypatch, tmp_path, broken_preferences, dht_nodes=0)
     assert not broken["ok"]
     assert any(
         row["name"] == "qBittorrent UPnP/NAT-PMP" and row["level"] == "FAIL"
+        for row in broken["checks"]
+    )
+    assert any(
+        row["name"] == "qBittorrent DHT" and row["level"] == "FAIL"
         for row in broken["checks"]
     )
     assert any(
