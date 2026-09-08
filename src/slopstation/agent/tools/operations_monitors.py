@@ -456,7 +456,9 @@ def main(argv=None):
                     command_ids=command_ids,
                     episode_ids=episode_ids,
                 )
-            record_deleted(store, [operation], result)
+            record_deleted(
+                store, [operation], result, episodes=metadata.get("episodes")
+            )
         except Exception as e:
             print(f"abandon failed; operation left active: {e}")
             return 1

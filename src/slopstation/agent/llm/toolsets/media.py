@@ -46,11 +46,12 @@ without paraphrasing it."""
 _DELETE_MEDIA = """\
 Cleanly cancel or delete media through Radarr or Sonarr: this erases imported
 files and active downloads in that scope and cannot be undone. Resolve the title
-with find_media first and pass its catalog id. For a series, pass explicit
-positive season numbers, or set all_seasons=true only when the user explicitly
-asks to delete the entire series; every other season is preserved. The first
-call on a scope deletes nothing and answers with the title the authority itself
-holds; put that question to the user verbatim and call again unchanged only
+with find_media first and pass its catalog id. For a series, give exactly one
+scope: explicit positive season numbers; individual episodes as a list of
+{season, episode} pairs; or all_seasons=true only when the user explicitly
+asks to delete the entire series. Everything outside the scope is kept. The
+first call on a scope deletes nothing and answers with the title the authority
+itself holds; put that question to the user verbatim and call again unchanged only
 once they have answered yes. A repeat inside the same turn is always refused,
 and so is an ask older than ten minutes, but nothing else checks their answer
 - a no is yours to honour."""
@@ -162,6 +163,19 @@ SPECS = [
                 "items": {"type": "integer"},
                 "description": "series seasons to delete; preserve every other season",
             },
+            "episodes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "season": {"type": "integer"},
+                        "episode": {"type": "integer"},
+                    },
+                    "required": ["season", "episode"],
+                },
+                "description": "individual episodes to delete; preserve every "
+                "other episode",
+            },
             "all_seasons": {
                 "type": "boolean",
                 "description": "true only for an explicit whole-series deletion",
@@ -176,6 +190,26 @@ SPECS = [
         busy="deleting",
     ),
 ]
+
+
+def _episode_pairs(value):
+    """Sorted (season, episode) pairs, or (None, error)."""
+    if not isinstance(value, list) or not all(
+        isinstance(item, dict)
+        and all(
+            not isinstance(item.get(key), bool)
+            and isinstance(item.get(key), int)
+            and item[key] > 0
+            for key in ("season", "episode")
+        )
+        for item in value
+    ):
+        return None, {
+            "ok": False,
+            "error": "episodes must be objects with positive season and "
+            "episode numbers",
+        }
+    return sorted({(item["season"], item["episode"]) for item in value}), None
 
 
 def _season_scope(seasons):
@@ -263,22 +297,9 @@ def impls(ctx: ToolContext):
                     "should I download all seasons?",
                 }
             if episodes is not None:
-                if not isinstance(episodes, list) or not all(
-                    isinstance(item, dict)
-                    and all(
-                        not isinstance(item.get(key), bool)
-                        and isinstance(item.get(key), int)
-                        and item[key] > 0
-                        for key in ("season", "episode")
-                    )
-                    for item in episodes
-                ):
-                    return {
-                        "ok": False,
-                        "error": "episodes must be objects with positive "
-                        "season and episode numbers",
-                    }
-                episodes = sorted({(e["season"], e["episode"]) for e in episodes})
+                episodes, invalid = _episode_pairs(episodes)
+                if invalid:
+                    return invalid
             if seasons is not None:
                 if not isinstance(seasons, list) or not seasons:
                     return {"ok": False, "error": "seasons must be a non-empty list"}
@@ -333,6 +354,7 @@ def impls(ctx: ToolContext):
             kind = str(args.get("kind", ""))
             catalog_id = int(args.get("catalog_id", 0) or 0)
             seasons = args.get("seasons")
+            episodes = args.get("episodes") or None
             all_seasons = bool(args.get("all_seasons", False))
         except (TypeError, ValueError, OverflowError):
             return {"ok": False, "error": "catalog_id must be an integer"}
@@ -340,11 +362,28 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": f"unknown media kind {kind}"}
         if catalog_id <= 0:
             return {"ok": False, "error": "catalog_id must be positive"}
-        if kind == "series" and seasons is None and not all_seasons:
+        if episodes is not None and kind != "series":
+            return {"ok": False, "error": "only a series has episodes"}
+        if (seasons is not None) + (episodes is not None) + all_seasons > 1:
             return {
                 "ok": False,
-                "error": "name seasons or explicitly request all seasons",
+                "error": "delete explicit seasons, explicit episodes or "
+                "all_seasons, not more than one",
             }
+        if (
+            kind == "series"
+            and seasons is None
+            and episodes is None
+            and not all_seasons
+        ):
+            return {
+                "ok": False,
+                "error": "name seasons or episodes, or explicitly request all seasons",
+            }
+        if episodes is not None:
+            episodes, invalid = _episode_pairs(episodes)
+            if invalid:
+                return invalid
         if seasons is not None:
             if (
                 not isinstance(seasons, list)
@@ -370,18 +409,27 @@ def impls(ctx: ToolContext):
         )
         if all_seasons:
             named += ", every season"
+        elif episodes:
+            named += ", " + _episode_scope(episodes)
         elif seasons:
             named += ", " + _season_scope(seasons)
 
         def act():
             try:
-                episode_ids = (
-                    media.episodes_in_seasons(catalog_id, seasons)
-                    if kind == "series" and not all_seasons
-                    else []
-                )
+                if kind != "series" or all_seasons:
+                    episode_ids = []
+                elif episodes:
+                    episode_ids = media.episodes_in_scope(catalog_id, episodes)
+                else:
+                    episode_ids = media.episodes_in_seasons(catalog_id, seasons)
                 covered, command_ids = operations_mod.covered_by_delete(
-                    operations, kind, catalog_id, seasons, all_seasons, episode_ids
+                    operations,
+                    kind,
+                    catalog_id,
+                    seasons,
+                    all_seasons,
+                    episode_ids,
+                    episodes=episodes,
                 )
                 if kind == "movie":
                     result = media.delete_movie(catalog_id, command_ids)
@@ -391,8 +439,11 @@ def impls(ctx: ToolContext):
                         seasons=seasons,
                         all_seasons=all_seasons,
                         command_ids=command_ids,
+                        episode_ids=episode_ids if episodes else None,
                     )
-                return operations_mod.record_deleted(operations, covered, result)
+                return operations_mod.record_deleted(
+                    operations, covered, result, episodes=episodes
+                )
             except Exception as e:
                 log.error("tool_error", tool="delete_media", err=str(e))
                 return {"ok": False, "error": str(e)}
@@ -401,7 +452,7 @@ def impls(ctx: ToolContext):
             # Nothing on disk to lose: the app never held it, or let go.
             return act()
         return Plan(
-            (kind, catalog_id, tuple(seasons or ()), all_seasons),
+            (kind, catalog_id, tuple(seasons or episodes or ()), all_seasons),
             f"Delete {named}? That erases the files.",
             act,
             f"delete {named}",

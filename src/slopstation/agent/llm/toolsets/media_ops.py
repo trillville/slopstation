@@ -37,6 +37,12 @@ One movie or series in full, by the catalog id from find_media: files with
 their quality and size, path, monitored state, the quality profile, and for
 a series each season's held, missing and upcoming episode counts."""
 
+EPISODE_FILES = """\
+Which episodes of one series hold a file, by the catalog id from find_media:
+season and episode number, title, quality, size, and the date the file
+arrived. Optionally one season. The only tool that names the episodes and
+their dates; media_library and media_details count per season instead."""
+
 MISSING_MEDIA = """\
 What is monitored but missing, and what is held below its quality cutoff,
 for movies or series. Returns the counts and up to `limit` rows each; a
@@ -199,6 +205,27 @@ SPECS = [
             "file size",
         ),
         busy="checking the library",
+    ),
+    _spec(
+        "episode_files",
+        EPISODE_FILES,
+        {
+            "catalog_id": CATALOG_ID,
+            "season": {
+                "type": "integer",
+                "description": "one season number; omit for the whole series",
+            },
+            **paging.properties(what="episodes"),
+        },
+        ("catalog_id",),
+        "read",
+        (
+            "which episodes do i have",
+            "episode files",
+            "when was it downloaded",
+            "what did that request bring in",
+        ),
+        paged=True,
     ),
     _spec(
         "missing_media",
@@ -492,6 +519,10 @@ def _gb(value):
     return round(int(value or 0) / GB, 2)
 
 
+def _quality_name(row):
+    return ((row.get("quality") or {}).get("quality") or {}).get("name")
+
+
 def _kinds(args):
     kind = str(args.get("kind") or "both")
     if kind == "both":
@@ -624,9 +655,7 @@ def impls(ctx: ToolContext):
                 {
                     "path": f.get("relativePath"),
                     "size_gb": _gb(f.get("size")),
-                    "quality": ((f.get("quality") or {}).get("quality") or {}).get(
-                        "name"
-                    ),
+                    "quality": _quality_name(f),
                 }
                 for f in files
                 if isinstance(f, dict)
@@ -659,6 +688,39 @@ def impls(ctx: ToolContext):
             s["monitored"] = s["monitored"] or bool(e.get("monitored"))
         out["seasons"] = [seasons[k] for k in sorted(seasons)]
         return out
+
+    @bind
+    def episode_files(args):
+        row, err = _row("series", args.get("catalog_id"))
+        if err:
+            return err
+        try:
+            season = None if args.get("season") is None else int(args["season"])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "season must be an integer"}
+        params = {"seriesId": row["id"], "includeEpisodeFile": "true"}
+        if season is not None:
+            params["seasonNumber"] = season
+        episodes = _client("series").get("episode", params) or []
+        held = []
+        for e in episodes:
+            if not isinstance(e, dict) or not e.get("hasFile"):
+                continue
+            f = e.get("episodeFile") or {}
+            held.append(
+                {
+                    "season": int(e.get("seasonNumber", 0) or 0),
+                    "episode": int(e.get("episodeNumber", 0) or 0),
+                    "title": e.get("title"),
+                    "quality": _quality_name(f),
+                    "size_gb": _gb(f.get("size")),
+                    "added": str(f.get("dateAdded") or "")[:19],
+                }
+            )
+        held.sort(key=lambda r: (r["season"], r["episode"]))
+        return paging.page(
+            held, args, "episodes", title=row.get("title"), season=season
+        )
 
     @bind
     def missing_media(args):
@@ -821,9 +883,7 @@ def impls(ctx: ToolContext):
                     "name": r.get("title"),
                     "size_gb": _gb(r.get("size")),
                     "seeders": r.get("seeders"),
-                    "quality": ((r.get("quality") or {}).get("quality") or {}).get(
-                        "name"
-                    ),
+                    "quality": _quality_name(r),
                     "age_hours": round(float(r.get("ageHours", 0) or 0)),
                     "approved": bool(r.get("approved")),
                     "rejections": (r.get("rejections") or [])[:3],
@@ -923,9 +983,7 @@ def impls(ctx: ToolContext):
                         "event": r.get("eventType"),
                         "title": parent.get("title"),
                         "release": r.get("sourceTitle"),
-                        "quality": ((r.get("quality") or {}).get("quality") or {}).get(
-                            "name"
-                        ),
+                        "quality": _quality_name(r),
                     }
                 )
         rows.sort(key=lambda r: r["when"], reverse=True)

@@ -1686,12 +1686,12 @@ class MediaService:
                 "detail": f"removed all seasons of {title} from Sonarr and deleted their files",
             }
 
-        episodes = self.sonarr.get("episode", {"seriesId": series_id})
-        if not isinstance(episodes, list):
+        rows = self.sonarr.get("episode", {"seriesId": series_id})
+        if not isinstance(rows, list):
             raise MediaError("Sonarr returned invalid episodes")
         wanted = [
             row
-            for row in episodes
+            for row in rows
             if isinstance(row, dict)
             and (
                 int(row.get("id", 0) or 0) in episode_ids
@@ -1699,6 +1699,18 @@ class MediaService:
                 else int(row.get("seasonNumber", 0) or 0) in selected
             )
         ]
+        if not wanted:
+            # Sonarr has no row for any of it: nothing to erase.
+            return {
+                "ok": True,
+                "kind": "series",
+                "catalog_id": tvdb_id,
+                "title": title,
+                "removed": False,
+                "seasons": selected,
+                "episode_ids": [],
+                "detail": f"Sonarr holds none of those episodes of {title}",
+            }
         episode_ids = sorted({int(row["id"]) for row in wanted if row.get("id")})
         self._monitor_episodes(episode_ids, False)
         updated = dict(series)

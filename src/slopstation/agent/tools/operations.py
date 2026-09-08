@@ -438,8 +438,29 @@ def track(store, submission, turn=None):
         return {**submission, "tracking": "failed"}
 
 
+def _pairs(value):
+    return {(int(s), int(e)) for s, e in value or ()}
+
+
+def _pairs_left(pairs, seasons, deleted_pairs):
+    """The (season, episode) pairs a delete of `seasons` and `deleted_pairs`
+    leaves behind: the one rule for both covering and trimming a request."""
+    return [
+        pair
+        for pair in pairs
+        if int(pair[0]) not in seasons
+        and (int(pair[0]), int(pair[1])) not in deleted_pairs
+    ]
+
+
 def covered_by_delete(
-    store, kind, catalog_id, seasons=None, all_seasons=False, episode_ids=()
+    store,
+    kind,
+    catalog_id,
+    seasons=None,
+    all_seasons=False,
+    episode_ids=(),
+    episodes=None,
 ):
     """The active acquisitions a delete of this scope would cover, with the
     search commands to cancel alongside them. `kind` is "movie" or "series".
@@ -448,10 +469,13 @@ def covered_by_delete(
     request tracking the seasons it still owns. `episode_ids` names the
     episodes the service resolved for this deletion before changing state.
     A request whose episode ids Sonarr could not name yet is covered by the
-    seasons its episodes belong to: leaving it active is what would let the
-    pending search start the download again once Sonarr catches up."""
+    seasons its episodes belong to, or by the pairs in `episodes`: leaving it
+    active is what would let the pending search start the download again once
+    Sonarr catches up."""
     rows: list[dict] = []
     command_ids: list = []
+    deleted_seasons = set(seasons or [])
+    deleted_pairs = _pairs(episodes)
     for operation in (
         store.active(kind=f"{kind}_acquisition") if store is not None else []
     ):
@@ -467,9 +491,9 @@ def covered_by_delete(
             or (
                 set(explicit) <= set(episode_ids)
                 if explicit is not None
-                else {int(pair[0]) for pair in pending} <= set(seasons or [])
+                else not _pairs_left(pending, deleted_seasons, deleted_pairs)
                 if pending
-                else requested is not None and set(requested) <= set(seasons or [])
+                else requested is not None and set(requested) <= deleted_seasons
             )
         ):
             continue
@@ -490,10 +514,12 @@ def record_canceled(store, operation, detail):
     return row
 
 
-def record_deleted(store, rows, result=None):
+def record_deleted(store, rows, result=None, episodes=None):
     """Close the operations a completed delete covered, so the ledger stops
     announcing work whose files are gone. Called after the delete returns:
-    the mutation already happened, and these rows describe it."""
+    the mutation already happened, and these rows describe it. `episodes`
+    is the delete's own (season, episode) scope, for a request whose ids
+    Sonarr has not named yet."""
     for operation in rows:
         store.observe(
             operation["id"],
@@ -504,47 +530,37 @@ def record_deleted(store, rows, result=None):
         store.mark_delivered(operation["id"])
     if rows and result is not None:
         result["operations_canceled"] = [row["id"] for row in rows]
-    # An import can cover episodes in more than one season. A partial delete
-    # removes only those targets; the remainder keeps its own completion rule.
-    if store is not None and result and result.get("episode_ids"):
+    # A partial delete trims what it took from the requests it did not cover;
+    # what is left keeps its own completion rule.
+    if store is not None and result and "episode_ids" in result:
         deleted = set(result["episode_ids"])
         seasons = {int(n) for n in result.get("seasons") or []}
+        deleted_pairs = _pairs(episodes)
         for operation in store.active("series_acquisition"):
             metadata = operation.get("metadata") or {}
             if metadata.get("catalog_id") != result.get("catalog_id"):
                 continue
-            ids = metadata.get("episode_ids")
-            pairs = metadata.get("episodes")
-            if pairs and seasons.intersection(int(pair[0]) for pair in pairs):
-                # A request whose ids Sonarr has not named yet is scoped by
-                # the seasons its pairs are in: drop the ones this delete
-                # took, or its pending search asks Sonarr for them again.
-                remaining = [pair for pair in pairs if int(pair[0]) not in seasons]
-                if remaining:
-                    store.update_metadata(
-                        operation["id"],
-                        {
-                            "episodes": remaining,
-                            "scope_label": "episodes "
-                            + ", ".join(
-                                f"S{int(s):02d}E{int(e):02d}" for s, e in remaining
-                            ),
-                        },
-                    )
-                else:
-                    record_deleted(store, [operation])
-            elif ids and deleted.intersection(ids):
-                remaining = sorted(set(ids) - deleted)
-                if remaining:
-                    store.update_metadata(
-                        operation["id"],
-                        {
-                            "episode_ids": remaining,
-                            "scope_label": f"{len(remaining)} selected episodes",
-                        },
-                    )
-                else:
-                    record_deleted(store, [operation])
+            ids = metadata.get("episode_ids") or []
+            pairs = metadata.get("episodes") or []
+            ids_left = sorted(set(ids) - deleted)
+            pairs_left = _pairs_left(pairs, seasons, deleted_pairs)
+            if len(ids_left) == len(ids) and len(pairs_left) == len(pairs):
+                continue
+            # The ids are the scope once Sonarr has named them, the pairs
+            # until then; a request holding both is trimmed on both.
+            if not (ids_left if ids else pairs_left):
+                record_deleted(store, [operation])
+                continue
+            update: dict[str, Any] = {}
+            if ids:
+                update["episode_ids"] = ids_left
+                update["scope_label"] = f"{len(ids_left)} selected episodes"
+            if pairs:
+                update["episodes"] = pairs_left
+                update["scope_label"] = "episodes " + ", ".join(
+                    f"S{int(s):02d}E{int(e):02d}" for s, e in pairs_left
+                )
+            store.update_metadata(operation["id"], update)
     return result
 
 

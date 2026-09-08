@@ -199,7 +199,11 @@ class FakeMedia:
     def episodes_in_seasons(self, tvdb_id, seasons):
         return [201]
 
-    def delete_series(self, tvdb_id, seasons, all_seasons, command_ids):
+    def episodes_in_scope(self, tvdb_id, episodes):
+        self.requests.append(("episodes_in_scope", tvdb_id, episodes))
+        return [413]
+
+    def delete_series(self, tvdb_id, seasons, all_seasons, command_ids, **_):
         self.requests.append(
             ("delete_series", tvdb_id, seasons, all_seasons, command_ids)
         )
@@ -556,6 +560,36 @@ def test_delete_media_validates_its_scope(live_media):
     assert (
         "integer"
         in live_media["delete_media"]({"kind": "movie", "catalog_id": "dune"})["error"]
+    )
+    for bad in ([{"season": 1}], [{"season": 0, "episode": 1}], [[1, 2]], ["S01E02"]):
+        assert (
+            "episodes must be"
+            in live_media["delete_media"](
+                {"kind": "series", "catalog_id": 81189, "episodes": bad}
+            )["error"]
+        ), bad
+    both = live_media["delete_media"](
+        {
+            "kind": "series",
+            "catalog_id": 81189,
+            "seasons": [1],
+            "episodes": [{"season": 1, "episode": 2}],
+        }
+    )
+    assert "not more than one" in both["error"]
+    assert (
+        "only a series"
+        in live_media["delete_media"](
+            {
+                "kind": "movie",
+                "catalog_id": 949,
+                "episodes": [{"season": 1, "episode": 2}],
+            }
+        )["error"]
+    )
+    assert (
+        "episodes"
+        in live_media["delete_media"]({"kind": "series", "catalog_id": 81189})["error"]
     )
 
 
