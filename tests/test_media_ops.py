@@ -26,7 +26,7 @@ class Arr:
         self.answers = answers
         self.gets, self.posts, self.puts, self.deletes = [], [], [], []
 
-    def get(self, endpoint, params=None):
+    def get(self, endpoint, params=None, timeout=None):
         self.gets.append((endpoint, params))
         value = self.answers.get(endpoint)
         if value is None:
@@ -225,7 +225,47 @@ def stack():
             },
         ],
         qualityprofile=[
-            {"id": 20, "name": "Series HD"},
+            {
+                "id": 20,
+                "name": "Series HD",
+                # Least preferred first, as the app lists them.
+                "cutoff": 1002,
+                "items": [
+                    {"quality": {"id": 1, "name": "SDTV"}, "allowed": False},
+                    {
+                        "id": 1001,
+                        "name": "WEB 720p",
+                        "allowed": True,
+                        "items": [
+                            {
+                                "quality": {"id": 14, "name": "WEBRip-720p"},
+                                "allowed": True,
+                            },
+                            {
+                                "quality": {"id": 5, "name": "WEBDL-720p"},
+                                "allowed": True,
+                            },
+                        ],
+                    },
+                    {"quality": {"id": 9, "name": "HDTV-1080p"}, "allowed": True},
+                    {
+                        "id": 1002,
+                        "name": "WEB 1080p",
+                        "allowed": True,
+                        "items": [
+                            {
+                                "quality": {"id": 15, "name": "WEBRip-1080p"},
+                                "allowed": True,
+                            },
+                            {
+                                "quality": {"id": 3, "name": "WEBDL-1080p"},
+                                "allowed": True,
+                            },
+                        ],
+                    },
+                    {"quality": {"id": 7, "name": "Bluray-1080p"}, "allowed": False},
+                ],
+            },
             {"id": 21, "name": "Series UHD"},
         ],
         episode=lambda p: [
@@ -387,6 +427,15 @@ def test_browse_details_missing_and_calendar(rig):
         and dune["files"][0]["quality"] == "Remux-2160p"
     )
     bb = tk.call("media_details", {"kind": "series", "catalog_id": 81189})
+    # Allowed only, most preferred first; the cutoff by its group's name.
+    assert bb["allowed_qualities"] == [
+        "WEBDL-1080p",
+        "WEBRip-1080p",
+        "HDTV-1080p",
+        "WEBDL-720p",
+        "WEBRip-720p",
+    ]
+    assert bb["upgrade_until"] == "WEB 1080p"
     assert bb["seasons"] == [
         {"season": 1, "held": 1, "missing": 1, "upcoming": 0, "monitored": True},
         {"season": 2, "held": 0, "missing": 0, "upcoming": 1, "monitored": True},
