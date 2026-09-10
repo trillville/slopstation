@@ -56,12 +56,12 @@ mute use UPnP over HTTP. Another make means adapting `tv.py`.
    interface and do not require pairing. List the manual controls with:
 
    ```powershell
-   .venv\Scripts\python -m slopstation.tv --help
+   .venv\Scripts\slopstation-tv --help
    ```
 
-   `vol` reads volume, `vol 14` sets it, and `input hdmi1` selects an input.
-   `mute status` reads mute state; `mute on` and `mute off` set it explicitly.
-   The separate `slopstation.exlink` command is a raw serial diagnostic.
+   `status` reads power, volume and mute. `vol` reads volume, `vol 14` sets
+   it, and `input hdmi1` selects an input. `mute status` reads mute state;
+   `mute on` and `mute off` set it explicitly.
 
 9. Run the doctor until it ends with `0 fail`:
 

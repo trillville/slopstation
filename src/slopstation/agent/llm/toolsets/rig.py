@@ -630,18 +630,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def tv_status(args):
-        out: dict = {"ok": True}
-        for key, read in (
-            ("power", dispatch.tv.power_state),
-            ("volume", dispatch.tv.volume),
-            ("muted", dispatch.tv.muted),
-        ):
-            try:
-                out[key] = read()
-            except Exception as e:
-                out[key] = None
-                out.setdefault("errors", []).append(f"{key}: {e}")
-        return out
+        return {"ok": True, **dispatch.tv.status()}
 
     @bind
     def pc_status(args):

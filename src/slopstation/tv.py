@@ -48,7 +48,7 @@ class Tv:
         return self._serial("power_off", **fields)
 
     def select_input(self, name: str, **fields) -> str:
-        if name not in ("hdmi1", "hdmi2", "hdmi3", "hdmi4"):
+        if name not in INPUTS:
             self.log.error(
                 "exlink_nak", cmd=name, err=f"unknown TV input: {name}", **fields
             )
@@ -171,9 +171,17 @@ class Tv:
                 raise RuntimeError("couldn't read mute state - nothing changed")
             return self.set_mute(not before)
 
+    def status(self) -> dict:
+        """Everything the set will say about itself; None is unknown."""
+        return {
+            "power": self.power_state(),
+            "volume": self.volume(),
+            "muted": self.muted(),
+        }
+
 
 def main(argv=None):
-    """The normal manual controls; exlink.py remains the serial diagnostic."""
+    """The manual controls: slopstation-tv <command> [value]."""
     import argparse
 
     from slopstation import config, events, logbook
@@ -181,7 +189,16 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Control the household TV")
     ap.add_argument(
         "command",
-        choices=("power_on", "power_off", "input", "vol", "up", "down", "mute"),
+        choices=(
+            "status",
+            "power_on",
+            "power_off",
+            "input",
+            "vol",
+            "up",
+            "down",
+            "mute",
+        ),
     )
     ap.add_argument("value", nargs="?")
     args = ap.parse_args(argv)
@@ -189,7 +206,9 @@ def main(argv=None):
     command = args.command
     n = None
     try:
-        if command in ("power_on", "power_off", "input"):
+        if command == "status":
+            print(json.dumps(device.status()))
+        elif command in ("power_on", "power_off", "input"):
             if command == "input":
                 ack = device.select_input(args.value)
             else:
@@ -242,18 +261,27 @@ def main(argv=None):
         return 1
 
 
-# Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum, 9600 baud 8N1.
+def exlink_frame(c1: int, c2: int, c3: int, value: int) -> str:
+    """One 7-byte Ex-Link frame (hex) with its checksum."""
+    body = bytes([0x08, 0x22, c1, c2, c3, value])
+    return (body + bytes([(0x100 - sum(body)) & 0xFF])).hex()
+
+
+# Samsung Ex-Link, 9600 baud 8N1: 08 22 c1 c2 c3 value + checksum. The rows
+# are the official worksheet's. Audio is not here on purpose: serial cannot
+# read back, so volume and mute go over HTTP and verify.
 EXLINK_FRAMES = {
-    "power_on": "082200000002d4",
-    "power_off": "082200000001d5",
-    "hdmi1": "08220a000500c7",
-    "hdmi2": "08220a000501c6",
-    "hdmi3": "08220a000502c5",
-    "hdmi4": "08220a000503c4",
-    "vol_up": "082201000100d4",
-    "vol_down": "082201000200d3",
-    "mute_toggle": "082202000000d4",
+    name: exlink_frame(*spec)
+    for name, spec in {
+        "power_on": (0x00, 0x00, 0x00, 0x02),
+        "power_off": (0x00, 0x00, 0x00, 0x01),
+        "hdmi1": (0x0A, 0x00, 0x05, 0x00),
+        "hdmi2": (0x0A, 0x00, 0x05, 0x01),
+        "hdmi3": (0x0A, 0x00, 0x05, 0x02),
+        "hdmi4": (0x0A, 0x00, 0x05, 0x03),
+    }.items()
 }
+INPUTS = tuple(name for name in EXLINK_FRAMES if name.startswith("hdmi"))
 
 # Every frame the S90C accepts acks with exactly these three bytes.
 EXLINK_ACK = "030cf1"
@@ -262,18 +290,6 @@ EXLINK_ACK = "030cf1"
 class ExlinkNak(RuntimeError):
     """Not EXLINK_ACK (or no answer at all): the command did not land.
     Callers abort fast; no blind retries."""
-
-
-def exlink_frame(c1: int, c2: int, c3: int, value: int) -> str:
-    """Build one 7-byte Ex-Link frame (hex string) with computed checksum."""
-    body = bytes([0x08, 0x22, c1, c2, c3, value])
-    return (body + bytes([(0x100 - sum(body)) & 0xFF])).hex()
-
-
-def vol_set_frame(level: int) -> str:
-    """Volume Direct 0-100. Clamps to the protocol range only; the
-    room-protecting volumeMax clamp lives in voice dispatch."""
-    return exlink_frame(0x01, 0x00, 0x00, max(0, min(100, int(level))))
 
 
 def _exlink_txn(frame_hex: str, port: str) -> str:

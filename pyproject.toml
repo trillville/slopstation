@@ -42,6 +42,7 @@ slopstation-lane = "slopstation.supervise:lane_main"
 slopstation-start = "slopstation.supervise:start"
 slopstation-doctor = "slopstation.doctor:main"
 slopstation-text = "slopstation.text_client:main"
+slopstation-tv = "slopstation.tv:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

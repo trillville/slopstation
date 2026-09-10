@@ -10,7 +10,16 @@ import pytest
 import serial
 
 import helpers
-from slopstation import config, doctor, gamepc, paths, sessionlock, statefile, supervise
+from slopstation import (
+    config,
+    doctor,
+    gamepc,
+    paths,
+    sessionlock,
+    statefile,
+    supervise,
+    tv,
+)
 from slopstation.agent.tools import media_clients
 
 
@@ -139,6 +148,15 @@ def test_ex_link_port_opens_or_fails(rows):
     doctor.check_com({"tvComPort": "COMNONE"})
     com = [level for level, n, _ in rows if n == "ex-link port"]
     assert com == ["PASS", "FAIL"], com
+
+
+def test_tv_http_answers_warns_or_is_not_configured(rows, cfg, monkeypatch):
+    monkeypatch.setattr(tv, "tv_power_state", lambda ip, **kw: "standby")
+    doctor.check_tv(cfg)
+    monkeypatch.setattr(tv, "tv_power_state", lambda ip, **kw: None)
+    doctor.check_tv(cfg)
+    doctor.check_tv({**cfg, "tvIp": None})  # optional: no row at all
+    assert [level for level, n, _ in rows if n == "tv http"] == ["PASS", "WARN"]
 
 
 def test_puck_enumerates_or_fails(rows, monkeypatch):

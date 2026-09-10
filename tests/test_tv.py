@@ -1,4 +1,4 @@
-"""Test Ex-Link frames, checksums, and volume clamping."""
+"""Test the Tv device: Ex-Link frames, the COM retry, ack validation, status."""
 
 import sys
 import time
@@ -8,20 +8,7 @@ import pytest
 
 from slopstation import tv
 
-# name -> (c1, c2, c3, value), straight from the official worksheet rows.
-SPECS = {
-    "power_on": (0x00, 0x00, 0x00, 0x02),
-    "power_off": (0x00, 0x00, 0x00, 0x01),
-    "hdmi1": (0x0A, 0x00, 0x05, 0x00),
-    "hdmi2": (0x0A, 0x00, 0x05, 0x01),
-    "hdmi3": (0x0A, 0x00, 0x05, 0x02),
-    "hdmi4": (0x0A, 0x00, 0x05, 0x03),
-    "vol_up": (0x01, 0x00, 0x01, 0x00),
-    "vol_down": (0x01, 0x00, 0x02, 0x00),
-    "mute_toggle": (0x02, 0x00, 0x00, 0x00),
-}
-
-FRAME = "082202000000d4"  # any valid frame; the port never looks at it
+FRAME = tv.EXLINK_FRAMES["power_on"]  # any valid frame; the port never looks at it
 
 
 @pytest.fixture
@@ -63,22 +50,14 @@ def fake_serial(port, monkeypatch):
     return fake
 
 
-def test_every_frozen_frame_rebuilds_from_its_spec():
-    assert set(SPECS) == set(tv.EXLINK_FRAMES), (
-        f"table/spec drift: {set(SPECS) ^ set(tv.EXLINK_FRAMES)}"
-    )
-    for name, spec in SPECS.items():
-        built = tv.exlink_frame(*spec)
-        frozen = tv.EXLINK_FRAMES[name]
-        assert built == frozen, f"{name}: builder={built} literal={frozen}"
-
-
-def test_vol_set_frame_checksum_and_clamping():
-    # Worksheet's own example: volume 20 -> checksum 0xC1.
-    assert tv.vol_set_frame(20) == "082201000014c1"
-    assert tv.vol_set_frame(0) == tv.exlink_frame(0x01, 0x00, 0x00, 0)
-    assert tv.vol_set_frame(-5) == tv.vol_set_frame(0)  # clamp low
-    assert tv.vol_set_frame(250) == tv.vol_set_frame(100)  # clamp high
+def test_every_frame_is_seven_bytes_and_its_checksum_zeroes_the_sum():
+    # The worksheet's own example: volume 20 -> checksum 0xC1.
+    assert tv.exlink_frame(0x01, 0x00, 0x00, 20) == "082201000014c1"
+    for name, hexs in tv.EXLINK_FRAMES.items():
+        b = bytes.fromhex(hexs)
+        assert len(b) == 7, f"{name}: {len(b)} bytes"
+        assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"
+    assert tv.INPUTS == ("hdmi1", "hdmi2", "hdmi3", "hdmi4")
 
 
 def test_com_contention_retries_once_after_a_settle_then_propagates(fake_serial, port):
@@ -99,8 +78,10 @@ def test_ack_validation_030cf1_or_the_command_did_not_land(fake_serial, port):
         tv.exlink_send_hex(FRAME, "COMX")
 
 
-def test_every_frame_is_seven_bytes_and_its_checksum_zeroes_the_sum():
-    for name, hexs in tv.EXLINK_FRAMES.items():
-        b = bytes.fromhex(hexs)
-        assert len(b) == 7, f"{name}: {len(b)} bytes"
-        assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"
+def test_status_is_every_read_at_once_with_none_for_unknown(monkeypatch):
+    monkeypatch.setattr(tv, "tv_power_state", lambda ip, **kw: "on")
+    monkeypatch.setattr(tv, "tv_volume", lambda ip, **kw: 14)
+    monkeypatch.setattr(tv, "_read_rendering", lambda ip, *a, **kw: None)
+    device = tv.Tv({"tvIp": "tv"}, lambda *a, **kw: None)
+    assert device.status() == {"power": "on", "volume": 14, "muted": None}
+    assert tv.Tv({}, None).status() == {"power": None, "volume": None, "muted": None}

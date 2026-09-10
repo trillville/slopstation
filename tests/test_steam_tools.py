@@ -124,7 +124,7 @@ def rig(catalog, log, monkeypatch):
             ok=True, detail=str(playing["appid"])
         ),
         tv=types.SimpleNamespace(
-            power_state=lambda: "on", volume=lambda: 14, muted=lambda: False
+            status=lambda: {"power": "on", "volume": 14, "muted": False}
         ),
         display=lambda target: types.SimpleNamespace(
             ok=target in ("tv", "monitor"), detail=f"display {target}"
@@ -388,9 +388,6 @@ def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
     tk, dispatch, steam, _ = rig
     tv = tk.call("tv_status", {})
     assert tv == {"ok": True, "power": "on", "volume": 14, "muted": False}
-    dispatch.tv.volume = lambda: (_ for _ in ()).throw(TimeoutError("no answer"))
-    tv = tk.call("tv_status", {})
-    assert tv["ok"] and tv["volume"] is None and "volume" in tv["errors"][0]
     answers = {
         "status": "9f2c1a",
         "playing": str(INSTALLED),

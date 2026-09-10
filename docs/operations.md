@@ -85,11 +85,11 @@ Voice and media warnings do not make its exit code nonzero; `0 fail` verifies
 the controller launch chain, not every optional feature.
 
 - Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, imports, the
-  Ex-Link port, the controller, both lanes, SSH to the gaming PC and the
-  dispatcher's answer, deploy skew between the two machines (`ssh <sshHost>
-  version` against the checkout), VirtualHere and its firewall rule, session
-  state, the voice library and keys, the Steam session, and media when
-  enabled.
+  Ex-Link port and the TV's HTTP interface, the controller, both lanes, SSH to
+  the gaming PC and the dispatcher's answer, deploy skew between the two
+  machines (`ssh <sshHost> version` against the checkout), VirtualHere and its
+  firewall rule, session state, the voice library and keys, the Steam session,
+  and media when enabled.
 - Gaming PC: `C:\CouchGaming\Doctor.ps1`. The loaded config, the deployed
   files, each scheduled task against its definition, sshd and the mini-PC-only
   firewall rule, the key file's ACL, the NIC's wake settings, VirtualHere and

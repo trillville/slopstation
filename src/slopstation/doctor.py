@@ -15,7 +15,16 @@ import time
 import urllib.parse
 import urllib.request
 
-from slopstation import config, haptics, paths, sessionlock, statefile, supervise
+from slopstation import (
+    config,
+    haptics,
+    logbook,
+    paths,
+    sessionlock,
+    statefile,
+    supervise,
+    tv,
+)
 from slopstation.agent.tools import operations
 from slopstation.agent.tools.media_clients import ArrClient
 
@@ -89,6 +98,23 @@ def check_com(cfg):
             f"{cfg.get('tvComPort')}: {e}",
             "Device Manager > Ports; SH-U35B unplugged or COM number changed?",
         )
+
+
+def check_tv(cfg):
+    """WARN-only: tvIp is optional, and without an answer volume, mute and
+    the launch's power evidence are off, but the chord chain still works."""
+    if not cfg or not cfg.get("tvIp"):
+        return
+    state = tv.Tv(cfg, logbook.logger("manual")).power_state(raw=True)
+    if state is None:
+        report(
+            WARN,
+            "tv http",
+            f"{cfg['tvIp']} does not answer",
+            "TV unplugged, or tvIp drifted? a DHCP reservation keeps it",
+        )
+    else:
+        report(PASS, "tv http", f"{cfg['tvIp']} answers (PowerState {state!r})")
 
 
 def check_puck():
@@ -1152,6 +1178,7 @@ def main():
     cfg = check_config()
     check_imports()
     check_com(cfg)
+    check_tv(cfg)
     puck_ok = check_puck()
     listener_running = check_listener()
     if puck_ok and not listener_running:

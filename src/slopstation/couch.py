@@ -53,9 +53,13 @@ def raise_if_cancelled() -> None:
     raise Cancelled(by)
 
 
+def _tv() -> tv.Tv:
+    return tv.Tv(config.current(), log)
+
+
 def tv_command(name: str, **fields) -> None:
     try:
-        device = tv.Tv(config.current(), log)
+        device = _tv()
         if name == "power_on":
             device.power_on(**fields)
         elif name == "power_off":
@@ -149,7 +153,7 @@ class TvEvidence:
         """Poll the TV, retry power when off, and stop after repeated errors."""
         if self.ip is None or not self.undecided():
             return
-        self.last = tv.Tv({"tvIp": self.ip}, log).power_state(timeout=0.5, raw=True)
+        self.last = _tv().power_state(timeout=0.5, raw=True)
         if self.last == "on":
             self.confirmed = True
             log("tv_on", dur_ms=self._ms())
@@ -292,7 +296,7 @@ def start(
     try:
         tv_ip = config.current().get("tvIp")
         # Use an explicit value to distinguish an unreachable TV from no tvIp.
-        tv0 = tv.Tv(config.current(), log).power_state(timeout=0.5, raw=True)
+        tv0 = _tv().power_state(timeout=0.5, raw=True)
         log(
             "launch_start",
             appid=appid,
