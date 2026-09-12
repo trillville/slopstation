@@ -703,6 +703,49 @@ def test_health_watch_reaps_a_grab_that_never_starts():
     assert not off_sonarr.deletes and off_log.find("media_queue_stalled")
 
 
+def test_health_watch_reaps_a_download_the_app_refused_as_executable():
+    """A finished download the app will not import because it holds a
+    program is a fake release: blocklisted on sight, no grace, so the app
+    takes its next candidate and the bait leaves the disk. Any other
+    finished download waiting to import is left alone."""
+    fake = {
+        "id": 1,
+        "downloadId": "FAKE",
+        "episodeId": 7,
+        "title": "Show.S01E01.1080p.WEB",
+        "status": "completed",
+        "size": 100.0,
+        "sizeleft": 0.0,
+        "trackedDownloadStatus": "warning",
+        "trackedDownloadState": "importPending",
+        "statusMessages": [
+            {
+                "title": "Show.S01E01.1080p.WEB.exe",
+                "messages": ["Caution: Found executable file"],
+            }
+        ],
+    }
+    pending = {
+        **fake,
+        "id": 2,
+        "downloadId": "PENDING",
+        "statusMessages": [{"messages": ["No files found are eligible for import"]}],
+    }
+    sonarr = FakeArr("Sonarr", queue={"records": [fake, pending]})
+    log = CapturingLog("voice")
+    watch = media_health.MediaHealthMonitor(
+        (sonarr,), log, stall_grace_s=1800, now=lambda: 1000.0
+    )
+    watch.reconcile_once()
+    assert sonarr.deletes == [
+        ("queue/1", {"removeFromClient": "true", "blocklist": "true"})
+    ]
+    reaped = log.find("media_queue_reaped")
+    assert [(r["download"], r["reason"], r["idle_s"]) for r in reaped] == [
+        ("FAKE", "executable", 0)
+    ]
+
+
 def test_health_watch_reports_a_dead_app_once():
     class DeadArr:
         name = "Sonarr"
