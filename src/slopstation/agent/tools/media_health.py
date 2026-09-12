@@ -43,12 +43,15 @@ def _collapse(entries, row, row_id, entry):
         entries[key] = {**entry, "records": 1}
 
 
-def _queue_detail(row):
-    messages = []
+def _queue_messages(row):
     for entry in row.get("statusMessages") or ():
         if isinstance(entry, dict):
             for message in entry.get("messages") or ():
-                messages.append(_clean_text(message, 80))
+                yield _clean_text(message, 80)
+
+
+def _queue_detail(row):
+    messages = list(_queue_messages(row))
     if not messages:
         messages.append(_clean_text(row.get("errorMessage"), 80))
     return _clean_text("; ".join(message for message in messages if message))
@@ -288,7 +291,7 @@ class MediaHealthMonitor:
             key = _clean_text(row.get("downloadId") or row.get("id"), 60)
             if not key:
                 continue
-            if EXECUTABLE_BLOCK in _queue_detail(row).casefold():
+            if any(EXECUTABLE_BLOCK in m.casefold() for m in _queue_messages(row)):
                 reason, first = "executable", now
             else:
                 # Only a grab the client holds and should be moving. Paused,
