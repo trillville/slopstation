@@ -18,6 +18,7 @@ STALL_GRACE_S = 30 * 60
 # Dead grabs replaced per target before giving up on it.
 REAP_LIMIT = 3
 REAPABLE = frozenset(("queued", "downloading", "warning"))
+EXECUTABLE_BLOCK = "found executable file"
 
 
 def _history_id(row):
@@ -42,12 +43,15 @@ def _collapse(entries, row, row_id, entry):
         entries[key] = {**entry, "records": 1}
 
 
-def _queue_detail(row):
-    messages = []
+def _queue_messages(row):
     for entry in row.get("statusMessages") or ():
         if isinstance(entry, dict):
             for message in entry.get("messages") or ():
-                messages.append(_clean_text(message, 80))
+                yield _clean_text(message, 80)
+
+
+def _queue_detail(row):
+    messages = list(_queue_messages(row))
     if not messages:
         messages.append(_clean_text(row.get("errorMessage"), 80))
     return _clean_text("; ".join(message for message in messages if message))
@@ -284,20 +288,27 @@ class MediaHealthMonitor:
         for row in records:
             if not isinstance(row, dict):
                 continue
-            # Only a grab the client holds and should be moving. Paused, held
-            # by a delay profile, or the client being away is not dead.
-            if _clean_text(row.get("status"), 30).lower() not in REAPABLE:
-                continue
             key = _clean_text(row.get("downloadId") or row.get("id"), 60)
-            size = float(row.get("size", 0) or 0)
-            left = float(row.get("sizeleft", 0) or 0)
-            # Bytes have arrived (or it is complete and waiting to import).
-            if not key or (size and left < size):
+            if not key:
                 continue
-            live.add(key)
-            first = idle.setdefault(key, now)
-            if now - first < self.stall_grace_s:
-                continue
+            if any(EXECUTABLE_BLOCK in m.casefold() for m in _queue_messages(row)):
+                reason, first = "executable", now
+            else:
+                # Only a grab the client holds and should be moving. Paused,
+                # held by a delay profile, or the client being away is not
+                # dead.
+                if _clean_text(row.get("status"), 30).lower() not in REAPABLE:
+                    continue
+                size = float(row.get("size", 0) or 0)
+                left = float(row.get("sizeleft", 0) or 0)
+                # Bytes have arrived (or it is complete and waiting to import).
+                if size and left < size:
+                    continue
+                live.add(key)
+                first = idle.setdefault(key, now)
+                if now - first < self.stall_grace_s:
+                    continue
+                reason = "idle"
             target = str(row.get("episodeId") or row.get("movieId") or key)
             title = _clean_text(row.get("title"), 120)
             count = reaped.get(target, 0)
@@ -334,6 +345,7 @@ class MediaHealthMonitor:
                 title=title,
                 idle_s=round(now - first),
                 attempt=count + 1,
+                reason=reason,
             )
         for key in [k for k in idle if k not in live]:
             idle.pop(key)
