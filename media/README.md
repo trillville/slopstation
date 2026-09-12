@@ -224,7 +224,7 @@ docker compose --project-directory media --env-file media\.env ps
 | `media_health_issue` / `media_health_cleared` | Radarr or Sonarr health changed |
 | `media_import_failed` | An import failed |
 | `media_queue_stalled` | A queued download reported a warning or error |
-| `media_queue_reaped` / `media_queue_reap_failed` | A grab that received nothing for `media.stalledGraceMinutes` (`reason=idle`), or one the app refused to import because it holds an executable (`reason=executable`), was marked failed so the app takes its next candidate; or could not be, or the target has used up its replacements |
+| `media_queue_reaped` / `media_queue_reap_failed` | A grab that received nothing for `media.stalledGraceMinutes` was marked failed so the app takes its next candidate; or could not be, or the target has used up its replacements |
 | `qbit_peers_lost` / `qbit_peers_recovered` | DHT emptied with downloads waiting, and came back (`after` names the step that worked) |
 | `qbit_rebound` / `qbit_restarted` | A heal step ran; `reason` is `proton_reconnect` or `peers_lost` |
 | `qbit_heal_failed` | A heal step could not run, or DHT stayed empty after the restart |

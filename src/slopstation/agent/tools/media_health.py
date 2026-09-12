@@ -18,9 +18,6 @@ STALL_GRACE_S = 30 * 60
 # Dead grabs replaced per target before giving up on it.
 REAP_LIMIT = 3
 REAPABLE = frozenset(("queued", "downloading", "warning"))
-# The app's own words when it refuses to import a finished download because
-# it holds a program instead of a video: a fake release. Its verdict is final
-# and the file is bait, so there is nothing to wait for.
 EXECUTABLE_BLOCK = "found executable file"
 
 
@@ -277,8 +274,7 @@ class MediaHealthMonitor:
             self._reap(client, records)
 
     def _reap(self, client, records):
-        """Mark a grab that has received nothing for the grace period, or
-        one the app refused to import because it holds an executable, as
+        """Mark a grab that has received nothing for the grace period as
         failed, so the app blocklists it and takes its next candidate. Keyed
         on the download, so a season pack is one removal; capped per target,
         so a title with only dead copies stops costing searches."""
