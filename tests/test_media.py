@@ -448,6 +448,7 @@ def test_dead_peers_rebind_then_restart_then_report(
     rebind after PEERS_DEAD_S, a restart after another, one error after a
     third, then silence until the nodes come back."""
     monkeypatch.setattr(media_proton, "PROTON_LOG_MAX_AGE_S", 10**6)
+    monkeypatch.setattr(media_proton, "reserved_port_range", lambda port: None)
     log = CapturingLog("voice")
     launched = []
 
@@ -517,6 +518,65 @@ def test_dead_peers_rebind_then_restart_then_report(
         )
         idle.reconcile_once()
     assert not log2.find("qbit_peers_lost")
+
+
+EXCLUDED_UDP = """
+Protocol udp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+     50000       50059     *
+     64670       64769
+
+* - Administered port exclusions.
+"""
+
+
+def test_reserved_port_range_skips_administered_exclusions(monkeypatch):
+    """What netsh prints on the K15. A reserved block refuses a bind; an
+    administered exclusion does not, so only the first counts."""
+    monkeypatch.setattr(
+        media_proton,
+        "_netsh",
+        lambda *args: EXCLUDED_UDP if "protocol=udp" in args else "",
+    )
+    assert media_proton.reserved_port_range(64671) == "UDP 64670-64769"
+    assert media_proton.reserved_port_range(50010) is None
+    assert media_proton.reserved_port_range(41007) is None
+
+
+def test_a_windows_reserved_port_names_the_cause_instead_of_restarting(
+    proton_log, qbit, qbit_web, monkeypatch
+):
+    monkeypatch.setattr(media_proton, "PROTON_LOG_MAX_AGE_S", 10**6)
+    monkeypatch.setattr(
+        media_proton,
+        "reserved_port_range",
+        lambda port: "UDP 39700-39799" if port == 39733 else None,
+    )
+    log = CapturingLog("voice")
+    launched = []
+    qbit_web.dht_nodes = 0
+    proton_monitor = media_proton.ProtonPortMonitor(
+        qbit,
+        log,
+        path=proton_log,
+        now=PROTON_NOW,
+        interface="ProTUN",
+        exe="C:/qb/qbittorrent.exe",
+        launch=launched.append,
+        sleep=lambda s: None,
+    )
+    for seconds in (0, 300, 600, 900):
+        monkeypatch.setattr(
+            proton_monitor, "now", PROTON_NOW + datetime.timedelta(seconds=seconds)
+        )
+        proton_monitor._tick()
+    failures = log.find("proton_port_sync_failed")
+    assert len(failures) == 1, "one report while it lasts"
+    assert "UDP 39700-39799" in failures[0]["err"] and "39733" in failures[0]["err"]
+    assert not log.find("qbit_rebound") and not launched
+    assert qbit_web.count("/app/shutdown") == 0
 
 
 # --- media health watch -------------------------------------------------------
