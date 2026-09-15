@@ -1052,29 +1052,46 @@ def check_voice_agent():
     )
 
 
-def _tail_records(path, bytes_back=400_000):
-    """The last stretch of a daily JSONL as parsed records. A partial first
-    line from the seek is dropped, and an unparseable one is skipped: this is
-    a diagnosis, not a parser test."""
-    start, raw = 0, []
-    try:
-        with path.open("rb") as f:
-            f.seek(0, 2)
-            start = max(0, f.tell() - bytes_back)
-            f.seek(start)
-            raw = f.read().decode("utf-8", "replace").splitlines()
-    except OSError:
-        return []
-    out = []
-    for line in raw[1:] if start else raw:
+def _latest_checkins():
+    """Each lane's most recent check-in result, lane -> event name.
+
+    A lane logs its first check-in and then only changes, so one that started
+    days ago and is still checking in has nothing in today's file. Read back
+    through every retained event file, newest first; an unparseable line is
+    skipped, since this is a diagnosis, not a parser test."""
+    from slopstation import events
+
+    pattern = events._path("*").name
+    files = sorted(
+        [
+            *paths.logs().glob(pattern),
+            *(paths.logs() / events.ARCHIVE_NAME).glob(pattern),
+        ],
+        key=lambda f: f.name,
+        reverse=True,
+    )
+    latest: dict = {}
+    for f in files:
+        in_file = {}
         try:
-            out.append(json.loads(line))
-        except ValueError:
-            pass
-    return out
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if '"checkin' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("event") in ("checkin", "checkin_failed"):
+                in_file[rec.get("lane")] = rec.get("event")
+        for lane, event in in_file.items():
+            latest.setdefault(lane, event)
+    return latest
 
 
-def check_sentry(today):
+def check_sentry():
     """The DSN, and whether each lane's cron check-in is landing.
 
     A rejected check-in is the failure worth naming: every Sentry plan
@@ -1100,10 +1117,7 @@ def check_sentry(today):
 
     # From the event stream, so this costs no network and cannot create a
     # false check-in for a lane that is actually down.
-    seen = {}
-    for rec in _tail_records(today):
-        if rec.get("event") in ("checkin", "checkin_failed"):
-            seen[rec.get("lane")] = rec.get("event")
+    seen = _latest_checkins()
     failing = sorted(lane for lane, e in seen.items() if e == "checkin_failed")
     if failing:
         report(
@@ -1118,7 +1132,7 @@ def check_sentry(today):
         report(
             WARN,
             "cron check-in",
-            "no lane has checked in today",
+            "no lane has checked in",
             "expected within a minute of a lane starting; reload with Start-Slopstation.bat",
         )
 
@@ -1171,7 +1185,7 @@ def check_telemetry():
         "Start-Service otelcol-contrib - nothing reaches Sentry meanwhile",
         "events are local-only; see otelcol/config.yaml.example",
     )
-    check_sentry(today)
+    check_sentry()
     # SMART needs Administrator for raw device access, so it is a service and
     # not part of any lane; a rebuilt K15 lacks it until someone registers it.
     _service_row(
