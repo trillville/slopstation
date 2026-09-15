@@ -280,6 +280,34 @@ def test_telemetry(rows):
     assert rows.levels()["log shipper"] == "PASS"
 
 
+def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
+    """A lane logs its first check-in and then only changes, so lanes that
+    started days ago leave nothing in today's file and still count."""
+    from slopstation import events
+
+    monkeypatch.setattr(
+        config, "load", lambda: {"sentryDsn": "https://key@o1.ingest.sentry.io/42"}
+    )
+
+    def write(path, *records):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+        )
+
+    archived = paths.logs() / events.ARCHIVE_NAME / events._path("20260901").name
+    write(
+        archived,
+        {"lane": "listener", "event": "checkin"},
+        {"lane": "voice", "event": "checkin_failed"},
+    )
+    write(events._path("20260913"), {"lane": "voice", "event": "checkin"})
+    write(events._path(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"})
+    doctor.check_sentry()
+    assert rows.levels()["cron check-in"] == "PASS"
+    assert rows.detail("cron check-in") == "accepted for listener, voice"
+
+
 # --- voice (filesystem + process checks only) ----------------------------------
 
 
