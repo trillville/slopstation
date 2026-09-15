@@ -69,6 +69,23 @@ mute use UPnP over HTTP. Another make means adapting `tv.py`.
    .venv\Scripts\slopstation-doctor
    ```
 
+### Optional: Remote Desktop into the mini PC
+
+A Remote Desktop connection takes over the Windows session the voice agent
+runs in. If the client plays the sound on its own device, Windows hides the
+mini PC's speaker from that session, and it stays hidden after the client
+disconnects, until another client reconnects. The assistant is deaf and
+silent the whole time. Keep the sound on the mini PC for every client, from an
+elevated PowerShell:
+
+```powershell
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fDisableCam /t REG_DWORD /d 1 /f
+```
+
+This is the "Allow audio and video playback redirection" policy set to
+Disabled. Each connect and disconnect still interrupts the wake word for about
+five seconds while the agent reopens its microphone.
+
 ### Optional: text access from the LAN
 
 Set `textInterfaceToken` in `secrets.json`, enable `textInterface` in
