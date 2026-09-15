@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 from slopstation import config, haptics, paths, sessionlock, statefile, supervise
-from slopstation.agent.tools import operations
+from slopstation.agent.tools import media_proton, operations
 from slopstation.agent.tools.media_clients import ArrClient
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -816,6 +816,41 @@ def check_media(cfg):
         + (f" | unconfigured: {', '.join(unconfigured)}" if unconfigured else ""),
         "start media\\Start-Media.ps1 and native qBittorrent",
     )
+    if media.get("protonPortSync"):
+        check_port_reservations()
+
+
+def check_port_reservations():
+    """Windows reserves blocks of its dynamic port range for Hyper-V and WSL,
+    and nothing can bind inside one. While that range reaches Proton's
+    forwarded ports, any boot can take qBittorrent's port. WARN-only."""
+    ranges = media_proton.dynamic_port_ranges()
+    reaching = [
+        f"{protocol.upper()} {first}-{last}"
+        for protocol, (first, last) in sorted(ranges.items())
+        if last >= media_proton.PROTON_PORT_FLOOR
+    ]
+    hint = "move it below 40000: see 'Proton forwarded port' in media\\README.md"
+    if len(ranges) < 2:
+        report(
+            WARN,
+            "port reservations",
+            "netsh did not report the dynamic port ranges",
+            hint,
+        )
+    elif reaching:
+        report(
+            WARN,
+            "port reservations",
+            f"dynamic range {', '.join(reaching)} reaches Proton's forwarded ports",
+            hint,
+        )
+    else:
+        report(
+            PASS,
+            "port reservations",
+            "dynamic ranges end below Proton's forwarded ports",
+        )
 
 
 def _owned_seasons():

@@ -68,6 +68,8 @@ Run qBittorrent as a native Windows application.
 - Create the `radarr` and `sonarr` categories.
 - Set `media.qbittorrentNetworkInterface` in `config.json` to qBittorrent's
   exact interface name.
+- Move Windows' dynamic port range below Proton's forwarded ports, as
+  described under [Proton forwarded port](#proton-forwarded-port).
 
 ### 3. Configure Prowlarr
 
@@ -208,6 +210,25 @@ recovery of the port:
 ```powershell
 .venv\Scripts\python -m slopstation.agent.tools.media set-qbit-port <active-port> --execute
 ```
+
+Windows reserves blocks of ports for Hyper-V and WSL networking (Docker
+Desktop uses both), and it takes them only from its dynamic port range. No
+process can bind a reserved port. Proton hands out forwarded ports from 40000
+up, so when the dynamic range reaches that high, a boot can reserve the
+forwarded port. qBittorrent then logs `Failed to listen on IP` with "access
+permissions", DHT stays at zero, and no rebind or restart helps. Move the
+range below 40000 once, from an elevated PowerShell, then restart Windows:
+
+```powershell
+netsh int ipv4 set dynamicport tcp start=21000 num=11000
+netsh int ipv4 set dynamicport udp start=21000 num=11000
+netsh int ipv6 set dynamicport tcp start=21000 num=11000
+netsh int ipv6 set dynamicport udp start=21000 num=11000
+```
+
+Keep fixed listening ports out of 21000-31999. The mini PC doctor's `port
+reservations` row warns if the range drifts back, which a Windows update can
+do. `netsh int ipv4 show excludedportrange protocol=udp` lists the reservations.
 
 ## Monitoring
 

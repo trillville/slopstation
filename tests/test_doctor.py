@@ -11,7 +11,7 @@ import serial
 
 import helpers
 from slopstation import config, doctor, gamepc, paths, sessionlock, statefile, supervise
-from slopstation.agent.tools import media_clients
+from slopstation.agent.tools import media_clients, media_proton
 
 
 class _Serial:
@@ -333,6 +333,32 @@ def test_media_names_the_unconfigured_service(rows, media_cfg, media_up):
     assert lv["media config"] == "WARN"
     assert lv["media services"] == "WARN"
     assert "unconfigured: Prowlarr" in rows.detail("media services")
+
+
+def test_port_reservations_warn_while_the_dynamic_range_reaches_proton(
+    rows, media_cfg, media_up, monkeypatch
+):
+    """Windows reserves ports only inside its dynamic range, so the row
+    passes once that range ends below Proton's forwarded ports."""
+    media_cfg["media"]["protonPortSync"] = True
+    start = {"value": 58000, "count": 7536}
+
+    def netsh(*args):
+        return (
+            f"Protocol {args[-1]} Dynamic Port Range\n"
+            "---------------------------------\n"
+            f"Start Port      : {start['value']}\n"
+            f"Number of Ports : {start['count']}\n"
+        )
+
+    monkeypatch.setattr(media_proton, "_netsh", netsh)
+    doctor.check_media(media_cfg)
+    assert rows.levels()["port reservations"] == "WARN"
+    assert "UDP 58000-65535" in rows.detail("port reservations")
+    rows.clear()
+    start.update(value=21000, count=11000)
+    doctor.check_media(media_cfg)
+    assert rows.levels()["port reservations"] == "PASS"
 
 
 # --- monitored-and-missing outside active work ---------------------------

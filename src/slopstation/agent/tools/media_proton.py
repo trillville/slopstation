@@ -29,6 +29,10 @@ PROTON_PORT_RE = re.compile(r"Port pair\s+\d+->(?P<port>\d+)")
 # Zero DHT nodes this long, with downloads waiting, before each heal step.
 PEERS_DEAD_S = 300
 QBIT_RESTART_WAIT_S = 60
+# The lowest forwarded port Proton hands out. Observed, not documented:
+# 41007, 41457, 52416 and 64671 on the K15, and 40000-65535 in other tools.
+PROTON_PORT_FLOOR = 40000
+EXCLUDED_RANGE_RE = re.compile(r"(?m)^[ \t]*(\d+)[ \t]+(\d+)[ \t]*(\*?)")
 
 
 def _launch_detached(exe):
@@ -38,6 +42,48 @@ def _launch_detached(exe):
     return subprocess.Popen(
         [str(exe)], cwd=str(Path(exe).parent), creationflags=flags, close_fds=True
     )
+
+
+def _netsh(*args):
+    """What `netsh interface ipv4 show <args>` prints, or "" off Windows."""
+    try:
+        return subprocess.run(
+            ["netsh", "interface", "ipv4", "show", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def reserved_port_range(port):
+    """The Windows reservation holding `port`, as "UDP 64670-64769", or None.
+
+    Windows reserves blocks of its dynamic port range for Hyper-V and WSL
+    networking, and a bind inside one fails with access denied, whoever
+    asks. Administered exclusions (marked *) still allow a bind."""
+    for protocol in ("udp", "tcp"):
+        text = _netsh("excludedportrange", f"protocol={protocol}")
+        for start, end, administered in EXCLUDED_RANGE_RE.findall(text):
+            if not administered and int(start) <= port <= int(end):
+                return f"{protocol.upper()} {start}-{end}"
+    return None
+
+
+def dynamic_port_ranges():
+    """{"udp": (first, last), "tcp": (first, last)} for IPv4. A protocol
+    netsh did not report is left out."""
+    ranges = {}
+    for protocol in ("udp", "tcp"):
+        text = _netsh("dynamicport", protocol)
+        start = re.search(r"Start Port\s*:\s*(\d+)", text)
+        count = re.search(r"Number of Ports\s*:\s*(\d+)", text)
+        if start and count:
+            first = int(start.group(1))
+            ranges[protocol] = (first, first + int(count.group(1)) - 1)
+    return ranges
 
 
 def default_proton_log_path():
@@ -184,12 +230,22 @@ class ProtonPortMonitor:
         whatever caused it. Each PEERS_DEAD_S it persists: rebind, then
         restart, then say so once and wait."""
         nodes = int(self.client.transfer_info().get("dht_nodes", 0) or 0)
-        if nodes or not self.client.preferences().get("dht", True):
+        preferences = {} if nodes else self.client.preferences()
+        if nodes or not preferences.get("dht", True):
             self._recovered(nodes)
             return nodes
         if not self.client.torrents(filter="downloading"):
             self._recovered(nodes)
             return nodes
+        port = int(preferences.get("listen_port", 0) or 0)
+        reserved = reserved_port_range(port) if port else None
+        if reserved:
+            # No rebind or restart can open a port Windows holds, so skip
+            # the heal steps and name the cause.
+            raise MediaError(
+                f"Windows reserved {reserved}, which holds qBittorrent's port "
+                f"{port}; see 'Proton forwarded port' in media/README.md"
+            )
         now = self._now()
         if self._dead_since is None:
             self._dead_since = now
