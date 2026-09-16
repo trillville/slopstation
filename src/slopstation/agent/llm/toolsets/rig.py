@@ -11,17 +11,13 @@ from slopstation.agent.tools import library
 STORE_SEARCH = "https://store.steampowered.com/search/?term="
 
 LAUNCH_GAME = """\
-Launch a game from the catalog by appid. Starts a session automatically if
-none is running - never call start_session first."""
+Launch a game from the catalog by appid. Never call start_session first."""
 
 SESSION = """\
 Control the session: end_session, start_session, switch_input (with input
 name; the valid names are in the system prompt). Ending the session and
 switching input both interrupt what is on the TV, so never take either as a
-guess. switch_input only changes which input the TV shows; putting the PC's
-DESKTOP on the TV, or back on the monitor, is the display tool, not this.
-nav and launch_game start a session themselves when none is live, so
-start_session is for 'start a session' said plainly. start_session returns
+guess. start_session is for 'start a session' said plainly, and returns
 while the session is still coming up - don't call nav in the same turn; say
 it's starting and let the user ask again."""
 
@@ -58,8 +54,8 @@ up. It also clears the way when a different game is blocking a launch."""
 
 NAV = """\
 Navigate the Big Picture UI on the TV. With no session live this starts one
-and opens the page once Big Picture is up, about fifteen seconds later: say
-the page is coming, and never call start_session first. Pages that need
+and opens the page once Big Picture is up; never call start_session first.
+Pages that need
 nothing else: 'downloads', 'library', 'store', 'friends', 'settings',
 'screenshots', 'wishlist', 'news'. Pages for one game, by appid: 'game_page'
 (an OWNED game's library page with its Play button - 'show me <game>'),
@@ -93,14 +89,12 @@ running, or someone is signed in at the desk, so it cannot end what is on
 the TV or under someone's hands."""
 
 DISPLAY = """\
-Put the PC's DESKTOP on the TV, or back on the desk monitor, with NO
-session: 'tv' switches the TV to the PC and moves the desktop there, for
-using the PC on the TV without Steam Big Picture or to fix a display stuck
-the wrong way; 'monitor' puts it back on the desk. Mouse and keyboard only -
-the controller is not part of this - and nothing moves it back on its own:
-say so. This is what 'desktop' or 'monitor' means when no session is live.
-Refused while a session is live: then 'back to the monitor' and 'back to
-the office' mean end_session, which restores the monitor itself."""
+Move the PC's desktop with no session: 'tv' switches the TV to the PC and
+moves the desktop there, for using the PC on the TV without Steam Big
+Picture or to fix a display stuck the wrong way; 'monitor' puts it back on
+the desk. Nothing moves it back on its own: say so. Refused while a session
+is live: then 'back to the monitor' and 'back to the office' mean
+end_session, which restores the monitor itself."""
 
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this

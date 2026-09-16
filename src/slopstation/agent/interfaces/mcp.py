@@ -10,6 +10,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from slopstation import config
+from slopstation.agent.llm.registry import AREAS
 
 MAX_BODY = 64 * 1024
 # claude.ai gives a tool call 300 s and progress notifications do not extend
@@ -28,17 +29,13 @@ DRAIN_MAX = 1024 * 1024
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
 TOOL_NAME = "ask_slopstation"
+# What it covers is the registry's own area table, so a new area reaches the
+# connector's description without a second list.
 TOOL_DESCRIPTION = (
     "Talk to Slopstation, the assistant that runs the user's living-room "
-    "system. Use it for anything about that system: downloading or queueing "
-    "movies and TV shows, checking download or import status, torrents and "
-    "qBittorrent (what is downloading or seeding, pausing, cleaning up), disk "
-    "space and files under the media root, the Steam game library and store, "
-    "Steam downloads and installs, launching or quitting a game, the TV and "
-    "the PC's power and display, and Slopstation's own tracked operations. "
-    "When no purpose-built tool "
-    "fits, it can call Radarr, Sonarr, Prowlarr, qBittorrent and Steam's APIs "
-    "directly. It reaches real hardware and real download services.\n\n"
+    "system. Use it for anything about that system: "
+    + "; ".join(AREAS.values())
+    + ". It reaches real hardware and real download services.\n\n"
     "Send a SELF-CONTAINED request. Slopstation cannot see this conversation, "
     "so resolve references before sending: \"for the It's Always Sunny "
     'request just made, only season 3", never "just season 3".\n\n'
