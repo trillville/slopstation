@@ -358,6 +358,31 @@ def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
     assert r["ok"] and stops == [1], (r, stops)
 
 
+def test_a_room_refusal_is_an_error_and_says_busy(monkeypatch, dispatch, impls):
+    """Every toolset spells a failure `error`; the rig tools add `busy` when
+    the refusal was a live session, which the model reports as "already
+    running" rather than as a failure. A success keeps its receipt."""
+    from slopstation.agent.dispatch import Result
+
+    monkeypatch.setattr(
+        dispatch, "play_game", lambda appid: Result(False, "busy", "a session is live")
+    )
+    r = impls["launch_game"]({"appid": INSTALLED})
+    assert r == {"ok": False, "error": "a session is live", "busy": True}
+    monkeypatch.setattr(
+        dispatch, "play_game", lambda appid: Result(False, "fail", "the PC is asleep")
+    )
+    r = impls["launch_game"]({"appid": INSTALLED})
+    assert r == {"ok": False, "error": "the PC is asleep"} and "detail" not in r
+    monkeypatch.setattr(
+        dispatch, "play_game", lambda appid: Result(True, "ok", "launched")
+    )
+    assert impls["launch_game"]({"appid": INSTALLED}) == {
+        "ok": True,
+        "detail": "launched",
+    }
+
+
 def test_now_playing_reports_whether_the_rig_is_busy(impls):
     # now_playing answers both halves: what the PC runs, and whether the rig is
     # busy. Mid-launch the PC says 0, and only session_active stops that

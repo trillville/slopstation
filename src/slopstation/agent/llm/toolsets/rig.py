@@ -369,6 +369,19 @@ def known_appids():
     return ids
 
 
+def _outcome(r):
+    """A dispatch Result as a tool result: a receipt on success; on a refusal
+    the reason under `error` like every other toolset, and `busy` when the
+    room refused because something was already running, so the model can
+    say that rather than that it failed."""
+    if r.ok:
+        return {"ok": True, "detail": r.detail}
+    out = {"ok": False, "error": r.detail}
+    if r.earcon == "busy":
+        out["busy"] = True
+    return out
+
+
 def impls(ctx: ToolContext):
     bind = Bindings(ctx, SPECS)
     dispatch, log = ctx.dispatch, ctx.log
@@ -393,7 +406,7 @@ def impls(ctx: ToolContext):
                 "installed - installing needs the controller",
             }
         r = dispatch.play_game(appid)
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def quit_game(args):
@@ -401,7 +414,7 @@ def impls(ctx: ToolContext):
         if refused := _unknown("quit_game", appid):
             return refused
         r = dispatch.quit_game(appid)
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def install_game(args):
@@ -447,7 +460,7 @@ def impls(ctx: ToolContext):
         starting = not sessionlock.active()
         r = dispatch.nav("details", appid)
         if not r.ok:
-            return {"ok": False, "error": r.detail}
+            return _outcome(r)
         if starting:
             return {
                 "ok": True,
@@ -551,7 +564,7 @@ def impls(ctx: ToolContext):
             r = dispatch.nav(target)
         else:
             return {"ok": False, "error": f"unknown nav target {target}"}
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def session(args):
@@ -564,7 +577,7 @@ def impls(ctx: ToolContext):
             r = dispatch.start_session()
         else:
             return {"ok": False, "error": f"unknown action {action}"}
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def volume(args):
@@ -581,7 +594,7 @@ def impls(ctx: ToolContext):
             r = dispatch.mute_toggle()
         else:
             return {"ok": False, "error": f"unknown action {action}"}
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def stop_listening(args):
@@ -710,7 +723,7 @@ def impls(ctx: ToolContext):
     @bind
     def display(args):
         r = dispatch.display(str(args.get("target") or ""))
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def pc_power(args):
