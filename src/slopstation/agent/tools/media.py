@@ -1788,28 +1788,38 @@ def _arr_clients(media_cfg, secrets):
     )
 
 
-def proton_port_monitor_from_config(cfg, secrets, log):
-    media_cfg = _media_cfg(cfg, "protonPortSync", default=False)
+def _optional_monitor(cfg, log, flag, what, build, default=True):
+    """A monitor from the media section, or None: off by config, or refused
+    with a lane_disabled line naming why. A refusal never stops the lane."""
+    media_cfg = _media_cfg(cfg, flag, default)
     if media_cfg is None:
         return None
     try:
-        return ProtonPortMonitor(
+        return build(media_cfg)
+    except (MediaConfigurationError, KeyError) as e:
+        log.warn("lane_disabled", what=what, reason=str(e))
+        return None
+
+
+def proton_port_monitor_from_config(cfg, secrets, log):
+    return _optional_monitor(
+        cfg,
+        log,
+        "protonPortSync",
+        "proton_port_sync",
+        lambda media_cfg: ProtonPortMonitor(
             _qbit_from_config(media_cfg, secrets),
             log,
             poll_s=_positive(media_cfg, "pollS", 30),
             interface=str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN")),
             exe=media_cfg.get("qbittorrentExe") or None,
-        )
-    except MediaConfigurationError as e:
-        log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
-        return None
+        ),
+        default=False,
+    )
 
 
 def media_health_monitor_from_config(cfg, secrets, log, operations=None):
-    media_cfg = _media_cfg(cfg, "healthSync")
-    if media_cfg is None:
-        return None
-    try:
+    def build(media_cfg):
         # 0 turns the reaping off; the watch still reports stalls.
         grace = media_cfg.get("stalledGraceMinutes", 30)
         if isinstance(grace, bool) or not isinstance(grace, (int, float)) or grace < 0:
@@ -1823,9 +1833,8 @@ def media_health_monitor_from_config(cfg, secrets, log, operations=None):
             operations=operations,
             stall_grace_s=60 * grace,
         )
-    except (MediaConfigurationError, KeyError) as e:
-        log.warn("lane_disabled", what="media_health_sync", reason=str(e))
-        return None
+
+    return _optional_monitor(cfg, log, "healthSync", "media_health_sync", build)
 
 
 def _media_root(env_path):
@@ -1843,10 +1852,7 @@ def _media_root(env_path):
 
 
 def disk_health_monitor_from_config(cfg, log):
-    media_cfg = _media_cfg(cfg, "diskWatch")
-    if media_cfg is None:
-        return None
-    try:
+    def build(media_cfg):
         poll_s = _positive(media_cfg, "diskPollS", DISK_POLL_S)
         warn_gb = _positive(media_cfg, "diskFreeWarnGb", FREE_WARN_BYTES // 1024**3)
         env_path = paths.HOME / "media" / ".env"
@@ -1855,18 +1861,17 @@ def disk_health_monitor_from_config(cfg, log):
             raise MediaConfigurationError(
                 f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
             )
-    except MediaConfigurationError as e:
-        log.warn("lane_disabled", what="disk_watch", reason=str(e))
-        return None
-    # Both volumes matter and are normally different: the library fills
-    # from downloads, the checkout drive holds the config databases and
-    # the event log. Anchors, so one volume named twice is watched once.
-    mounts = sorted(
-        {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
-    )
-    return DiskHealthMonitor(
-        mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
-    )
+        # Both volumes matter and are normally different: the library fills
+        # from downloads, the checkout drive holds the config databases and
+        # the event log. Anchors, so one volume named twice is watched once.
+        mounts = sorted(
+            {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
+        )
+        return DiskHealthMonitor(
+            mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
+        )
+
+    return _optional_monitor(cfg, log, "diskWatch", "disk_watch", build)
 
 
 def from_config(cfg, secrets, log):

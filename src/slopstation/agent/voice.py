@@ -262,8 +262,6 @@ def main():
 
     # Grammar built once: a YAML typo fails here, not per-wake.
     matcher = GrammarMatcher(voice)
-    # Refresh periodically without blocking wake detection.
-    events.Ticker("library-sync", library.SYNC_S, library.periodic_sync()).start()
     prewarm_imports_bg(voice["assistantProvider"])
     if provider_live:
         from slopstation.agent.llm.assistant import default_model
@@ -279,126 +277,15 @@ def main():
             websearch=voice["assistantWebSearch"] or None,
         )
 
-    # Durable external operations and their out-of-session delivery.
-    from slopstation.agent.speech import announce
-    from slopstation.agent.tools import operations as operations_mod
-    from slopstation.agent.tools import operations_monitors
+    from slopstation.agent.services import Services
 
     # Built here, not at the wake loop: the announcer ducks with it too, and a
     # bulletin can arrive before the first wake.
     duck = make_ducker(cfg, args.dry_run)
-
-    operation_store = operations_mod.OperationStore(log)
-    announcer = None
-    if stt_live and not args.dry_run:
-        announcer = announce.Announcer(voice, secrets, log)
-        announcer.store = operation_store
-        announcer.duck = duck
-        operation_store.on_terminal = announcer.submit
-        operation_store.on_notification = announcer.submit_notification
-        for operation in operation_store.pending_announcements():
-            announcer.submit(operation)
-        for notification in operation_store.pending_notifications():
-            announcer.submit_notification(notification)
-
-    # Remote install + download status over ClientComm. Without a refresh token,
-    # install_game keeps its controller-driven fallback. Never fatal.
-    from slopstation.agent.tools import steam_session
-
-    account = steam_session.SteamSession(
-        secrets, log, machine_name=cfg.get("steamMachineName")
-    )
-    steam: steam_session.SteamSession | None = None
-    if account.available():
-        steam = account
-        exp = account.token_expiry()
-        log(
-            "lane_up",
-            what="steam_session",
-            steamid=account.steamid,
-            token_expires=(
-                time.strftime("%Y-%m-%d", time.localtime(exp)) if exp else None
-            ),
-        )
-    else:
-        log(
-            "lane_disabled",
-            what="steam_session",
-            reason="no refresh token - run steam_session enroll",
-        )
-
-    if steam is not None and not args.dry_run:
-        monitor = operations_monitors.SteamMonitor(operation_store, steam, log)
-        monitor.start()
-        log(
-            "lane_up",
-            what="operation_monitor",
-            active=len(operation_store.active(kind="steam_install")),
-            poll_s=monitor.poll_s,
-        )
-
-    from slopstation.agent.tools import media as media_mod
-
-    media_service = media_mod.from_config(cfg, secrets, log)
-    # Its reconcile dispatches deferred Sonarr searches and indexer-recovery
-    # retries, both of which POST to the authority.
-    if media_service is not None and not args.dry_run:
-        poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
-        media_monitor = operations_monitors.MediaMonitor(
-            operation_store, media_service, log, poll_s=poll_s
-        )
-        media_monitor.start()
-        active_media = sum(
-            len(operation_store.active(kind=kind)) for kind in media_monitor.KINDS
-        )
-        log(
-            "lane_up",
-            what="media_operation_monitor",
-            active=active_media,
-            poll_s=media_monitor.poll_s,
-        )
-
-    proton_port_monitor = media_mod.proton_port_monitor_from_config(cfg, secrets, log)
-    # It writes the listening port into a live qBittorrent, so a dry run must
-    # not start it.
-    if proton_port_monitor is not None and not args.dry_run:
-        proton_port_monitor.start()
-        log("lane_up", what="proton_port_sync", poll_s=proton_port_monitor.poll_s)
-
-    media_health_monitor = media_mod.media_health_monitor_from_config(
-        cfg, secrets, log, operations=operation_store
-    )
-    if media_health_monitor is not None:
-        media_health_monitor.start()
-        log("lane_up", what="media_health_sync", poll_s=media_health_monitor.poll_s)
-
-    disk_health_monitor = media_mod.disk_health_monitor_from_config(cfg, log)
-    if disk_health_monitor is not None:
-        disk_health_monitor.start()
-        log(
-            "lane_up",
-            what="disk_watch",
-            poll_s=disk_health_monitor.poll_s,
-            mounts=" ".join(disk_health_monitor.mounts),
-        )
-
-    from slopstation.agent.interfaces import text
-
-    text.start(
-        cfg,
-        secrets,
-        log,
-        operations=operation_store,
-        steam=steam,
-        media=media_service,
-        dry_run=args.dry_run,
-    )
-
-    # Forwards to the text interface over localhost, so it takes no tools and
-    # no dry_run of its own - both ride along inside that hop.
-    from slopstation.agent.interfaces import mcp
-
-    mcp.start(cfg, secrets, log)
+    services = Services(cfg, secrets, log, args.dry_run)
+    services.start(stt_live, duck)
+    announcer, operation_store = services.announcer, services.operations
+    steam, media_service = services.steam, services.media
 
     # Configure tracing before the first session.
     sentry.setup(cfg, log)
