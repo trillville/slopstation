@@ -86,8 +86,8 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
         "body": {"name": "MoviesSearch", "movieIds": [12]},
     }
     first = tk.call("radarr_api", dict(ask))
-    assert not first["ok"] and first["confirm"].startswith("POST /command")
-    assert '"MoviesSearch"' in first["confirm"] and media.radarr.calls == []
+    assert not first["ok"] and first["acknowledgment"].startswith("Send POST /command")
+    assert media.radarr.calls == []
     # Same turn again: still refused - the model cannot answer itself.
     assert not tk.call("radarr_api", dict(ask))["ok"]
     assert log.find("tool_refused")[-1]["reason"] == "unconfirmed"
@@ -103,6 +103,31 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
     monkeypatch.setattr(confirm, "ASK_TTL_S", -1)
     dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
     assert not tk.call("radarr_api", other)["ok"]
+
+
+def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
+    """Nobody curated a passthrough write, so the ledger is the only record
+    it happened: one row per write, terminal at once, never announced, and
+    a read leaves no row."""
+    from slopstation.agent.tools import operations
+
+    _, dispatch, media = live
+    store = operations.OperationStore(log)
+    tk = assistant.Toolkit(dispatch, log, media=media, operations=store)
+    tk.load(assistant.REGISTRY.names())
+    tk.call("radarr_api", {"method": "GET", "path": "system/status"})
+    assert store.all() == []
+    ask = {"method": "POST", "path": "command", "body": {"name": "RssSync"}}
+    tk.call("radarr_api", dict(ask))
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    assert tk.call("radarr_api", dict(ask))["ok"]
+    (row,) = store.all()
+    assert row["kind"] == "api_write" and row["authority"] == "radarr"
+    assert (
+        row["state"] == operations.SUCCEEDED and row["title"] == "radarr POST /command"
+    )
+    assert row["summary"] == "radarr POST /command ran."
+    assert row["announcement_pending"] is False and store.pending_announcements() == []
 
 
 def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
@@ -152,7 +177,9 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
         "body": [{"path": "/x", "movieId": 2}],
     }
     first = tk.call("radarr_api", dict(ask))
-    assert not first["ok"] and first["confirm"].startswith("POST /manualimport")
+    assert not first["ok"] and first["acknowledgment"].startswith(
+        "Send POST /manualimport"
+    )
     assert not tk.call(
         "qbittorrent_api", {"method": "POST", "path": "torrents/add", "body": [1]}
     )["ok"]
@@ -394,11 +421,11 @@ def test_a_steam_post_is_confirmed_with_its_credential_in_scope(live, log):
     tk, dispatch, _ = live
     ask = {"method": "POST", "path": "IPlayerService/X/v1", "body": {"a": 1}}
     first = tk.call("steam_api", {**ask, "auth": "none"})
-    assert not first["ok"] and "(auth: none)" in first["confirm"]
+    assert not first["ok"] and "(auth: none)" in first["acknowledgment"]
     dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
     # A different credential is a different request: asked again, not run.
     again = tk.call("steam_api", {**ask, "auth": "account"})
-    assert not again["ok"] and "(auth: account)" in again["confirm"]
+    assert not again["ok"] and "(auth: account)" in again["acknowledgment"]
 
 
 # --- describe_api -------------------------------------------------------------

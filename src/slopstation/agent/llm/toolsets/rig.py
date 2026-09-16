@@ -49,13 +49,12 @@ idle."""
 
 QUIT_GAME = """\
 Quit the game that is currently running. This ENDS the game and can lose
-unsaved progress, so treat it as destructive: call it only when the user
-clearly tells you to quit or close the game now, and if there is ANY doubt,
-confirm first ('Quit Elden Ring?') and act only on a yes - never on a
-guess. The appid must be the running game (get_now_playing tells you
-which). This is NOT end_session and NOT the TV - only the game closes; Big
-Picture stays up. It also clears the way when a different game is blocking
-a launch."""
+unsaved progress, so the tool asks first: the first call answers with the
+question to put to the user, and the same call on a later turn, after a
+yes, quits. Call it only when the user tells you to quit or close the game.
+The appid must be the running game (get_now_playing tells you which). This
+is NOT end_session and NOT the TV - only the game closes; Big Picture stays
+up. It also clears the way when a different game is blocking a launch."""
 
 NAV = """\
 Navigate the Big Picture UI on the TV. With no session live this starts one
@@ -87,9 +86,11 @@ seconds to time out."""
 
 PC_POWER = """\
 Wake the gaming PC (a magic packet; it takes a minute to come up, and
-start_session does this itself) or put it to sleep. Sleep is refused while a
-session is live, a game is running, or someone is signed in at the desk, so
-it cannot end what is on the TV or under someone's hands."""
+start_session does this itself) or put it to sleep. Sleep asks first: the
+first call answers with the question, and the same call on a later turn,
+after a yes, sleeps. It is refused while a session is live, a game is
+running, or someone is signed in at the desk, so it cannot end what is on
+the TV or under someone's hands."""
 
 DISPLAY = """\
 Put the PC's DESKTOP on the TV, or back on the desk monitor, with NO
@@ -413,8 +414,15 @@ def impls(ctx: ToolContext):
         appid = int(args.get("appid", 0))
         if refused := _unknown("quit_game", appid):
             return refused
-        r = dispatch.quit_game(appid)
-        return _outcome(r)
+        # Unsaved progress is on the line, so the same gate every other write
+        # asks through: the ask, then the act on a later turn's yes.
+        title = library.installed_name(appid) or "the game"
+        return ctx.confirm(
+            "quit_game",
+            ("quit_game", appid),
+            {"acknowledgment": f"Quit {title}?"},
+            lambda: _outcome(dispatch.quit_game(appid)),
+        )
 
     @bind
     def install_game(args):
@@ -737,19 +745,34 @@ def impls(ctx: ToolContext):
             }
         if dry := ctx.preview(f"{action} the PC"):
             return dry
-        try:
-            if action == "wake":
-                from slopstation import couch
+        if action == "wake":
+            from slopstation import couch
 
+            try:
                 couch.wol()
-                return {"ok": True, "detail": "wake packet sent - give it a minute"}
-            out = gamepc.sleep(ctx.turn())
-        except Exception as e:
-            return {"ok": False, "error": f"couldn't reach the PC ({e})"}
-        if out == "OK":
-            return {"ok": True, "detail": "the PC is going to sleep"}
-        if out.startswith("BUSY"):
-            return {"ok": False, "error": "the PC refused: a session or a game is live"}
-        return {"ok": False, "error": f"the PC answered {out}"}
+            except Exception as e:
+                return {"ok": False, "error": f"couldn't reach the PC ({e})"}
+            return {"ok": True, "detail": "wake packet sent - give it a minute"}
+
+        def sleep():
+            try:
+                out = gamepc.sleep(ctx.turn())
+            except Exception as e:
+                return {"ok": False, "error": f"couldn't reach the PC ({e})"}
+            if out == "OK":
+                return {"ok": True, "detail": "the PC is going to sleep"}
+            if out.startswith("BUSY"):
+                return {
+                    "ok": False,
+                    "error": "the PC refused: a session or a game is live",
+                }
+            return {"ok": False, "error": f"the PC answered {out}"}
+
+        return ctx.confirm(
+            "pc_power",
+            ("pc_power", "sleep"),
+            {"acknowledgment": "Put the PC to sleep?"},
+            sleep,
+        )
 
     return bind.impls()

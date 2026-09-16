@@ -34,6 +34,11 @@ def test_every_spec_is_well_formed():
         "delete_path",
         "resolve_queue_item",
         "uninstall_game",
+        "radarr_api",
+        "sonarr_api",
+        "prowlarr_api",
+        "qbittorrent_api",
+        "steam_api",
     }
     # Destructive tools are never in the default set: the search step is a
     # natural pause before them.

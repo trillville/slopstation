@@ -359,6 +359,28 @@ def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
     assert r["ok"] and stops == [1], (r, stops)
 
 
+def test_quit_game_asks_first_and_acts_on_a_later_yes(monkeypatch, live_dispatch, log):
+    """Unsaved progress is on the line, so quit_game goes through the same
+    ask-then-act gate as every other write: a question on the first call,
+    the act on a later turn, nothing on the same turn."""
+    from slopstation.agent.dispatch import Result
+
+    quit = []
+    monkeypatch.setattr(
+        live_dispatch,
+        "quit_game",
+        lambda appid: quit.append(appid) or Result(True, "ok", "quit"),
+    )
+    impls = toolkit_impls(live_dispatch, log)
+    live_dispatch.begin_utterance("aa0001", "quit valheim")
+    asked = impls["quit_game"]({"appid": INSTALLED})
+    assert not asked["ok"] and asked["acknowledgment"] == "Quit Valheim?" and quit == []
+    assert not impls["quit_game"]({"appid": INSTALLED})["ok"] and quit == []
+    live_dispatch.begin_utterance("aa0002", "yes")
+    assert impls["quit_game"]({"appid": INSTALLED}) == {"ok": True, "detail": "quit"}
+    assert quit == [INSTALLED]
+
+
 def test_a_room_refusal_is_an_error_and_says_busy(monkeypatch, dispatch, impls):
     """Every toolset spells a failure `error`; the rig tools add `busy` when
     the refusal was a live session, which the model reports as "already

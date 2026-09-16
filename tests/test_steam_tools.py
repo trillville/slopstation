@@ -463,10 +463,18 @@ def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
     monkeypatch.setattr(sessionlock, "active", lambda *a: False)
     sent = []
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: sent.append(cmd) or "OK")
+    # Sleep asks first, and the same call on a later turn's yes acts.
+    asked = tk.call("pc_power", {"action": "sleep"})
+    assert not asked["ok"] and asked["acknowledgment"] == "Put the PC to sleep?"
+    assert sent == []
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
     assert tk.call("pc_power", {"action": "sleep"})["ok"] and sent == [
-        "sleep --turn aa0001"
+        "sleep --turn aa0002"
     ]
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: "BUSY:12345")
+    dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="sleep it")
+    assert not tk.call("pc_power", {"action": "sleep"})["ok"]  # asked again
+    dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
     assert "refused" in tk.call("pc_power", {"action": "sleep"})["error"]
     assert not tk.call("pc_power", {"action": "reboot"})["ok"]
     dispatch.dry_run = True
