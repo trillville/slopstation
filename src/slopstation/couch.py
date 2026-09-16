@@ -299,7 +299,7 @@ def start(
             **({"tv": tv0 if tv0 is not None else "unreachable"} if tv_ip else {}),
         )
         tv_command("power_on")
-        # With power, not after READY: the set wakes on HDMI 4 (measured 2026-09-03).
+        # With power, not after READY: the set wakes on HDMI 4 (docs/constraints.md).
         tv_command(config.current()["tvGamingCmd"])
         # Only restore power on failure if this launch woke the TV.
         tv_woken = tv0 != "on"

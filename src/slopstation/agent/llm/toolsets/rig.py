@@ -333,7 +333,7 @@ SPECS += [
             "without big picture",
         ),
         # Default: with only `session` loaded, "put the desktop on the TV"
-        # became an input switch that started a session (2026-09-06 logs).
+        # became an input switch that started a session (docs/constraints.md).
         busy="moving the desktop",
     ),
     ToolSpec(
