@@ -871,3 +871,12 @@ def test_a_corrupt_ledger_is_refused_and_left_alone(log):
     # Absent is not corrupt: a fresh box starts with an empty ledger.
     target.unlink()
     assert operations.OperationStore(log).all() == []
+
+
+def test_every_submission_key_is_either_metadata_or_a_row_column():
+    """track() copies METADATA_KEYS out of a Submission into the row. A key
+    added to Submission has to be classified here, or a later observation
+    would silently never see it."""
+    keys = set(operations.Submission.__annotations__)
+    assert set(operations.METADATA_KEYS) | operations.SUBMISSION_ROW_KEYS == keys
+    assert not set(operations.METADATA_KEYS) & operations.SUBMISSION_ROW_KEYS

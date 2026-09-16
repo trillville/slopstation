@@ -28,7 +28,13 @@ from slopstation.agent.tools.media_proton import (
     ProtonPortMonitor,
     read_proton_port_state,
 )
-from slopstation.agent.tools.operations import CANCELED, FAILED, RUNNING, SUCCEEDED
+from slopstation.agent.tools.operations import (
+    CANCELED,
+    FAILED,
+    RUNNING,
+    SUCCEEDED,
+    Submission,
+)
 
 PRESETS = ("default", "1080p", "2160p")
 
@@ -1126,14 +1132,14 @@ class MediaService:
         work_id=None,
         scope_label=None,
         episodes=None,
-    ):
+    ) -> Submission:
         """What one accepted piece of work looks like to the operation store.
         A request carries its preset and profile and a season scope, or the
         (season, episode) pairs it asked for; work on a held title (a grab, a
         search, an import) carries the phase it starts in and, for a series,
         the exact episodes it covers. `promise` is what done means: media on
         disk for the scope, or a search run."""
-        out = {
+        out: Submission = {
             "ok": True,
             "kind": f"{kind}_acquisition",
             "authority": _kind(kind)["authority"],
