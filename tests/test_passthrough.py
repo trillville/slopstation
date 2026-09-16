@@ -115,6 +115,7 @@ def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
     assert tk.call("radarr_api", dict(ask))["ok"]
     (row,) = store.all()
     assert row["kind"] == "api_write" and row["authority"] == "radarr"
+    assert row["turn"] == "aa0002"  # the turn that said yes, pinned for the act
     assert (
         row["state"] == operations.SUCCEEDED and row["title"] == "radarr POST /command"
     )

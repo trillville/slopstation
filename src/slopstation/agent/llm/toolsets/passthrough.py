@@ -446,7 +446,11 @@ def impls(ctx: ToolContext):
             return
         try:
             row = operations.track_external(
-                "api_write", service, literal, f"{service} {method} /{path}"
+                "api_write",
+                service,
+                literal,
+                f"{service} {method} /{path}",
+                turn=ctx.turn(),
             )
             operations.observe(
                 row["id"],
