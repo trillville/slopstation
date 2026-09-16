@@ -11,6 +11,8 @@ destructive tool cannot skip the gate."""
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -109,6 +111,28 @@ class Plan:
     preview: str
 
 
+# The utterance a running tool was called under, pinned by Tools.call. The
+# grammar gate replaces dispatch.utterance with each final transcript, and a
+# tool runs on a worker thread, so a live read mid-call could name the wrong
+# turn. Unset outside a call, where the live read is right (REPL, tests).
+_UTTERANCE: contextvars.ContextVar[tuple[str | None, str] | None] = (
+    contextvars.ContextVar("utterance", default=None)
+)
+
+
+@contextlib.contextmanager
+def utterance_snapshot(dispatch):
+    """Pin dispatch.utterance's turn and words for the tool about to run."""
+    live = getattr(dispatch, "utterance", None)
+    token = _UTTERANCE.set(
+        (getattr(live, "turn", None), getattr(live, "asked", None) or "")
+    )
+    try:
+        yield
+    finally:
+        _UTTERANCE.reset(token)
+
+
 @dataclass
 class ToolContext:
     """The services a toolset's implementations close over."""
@@ -126,9 +150,19 @@ class ToolContext:
     toolkit: Any = None
 
     def turn(self) -> str | None:
-        """The utterance's turn id, or None when there is no utterance: the
-        gate then fails closed."""
+        """The turn id of the utterance this tool was called under, or None
+        when there is no utterance: the gate then fails closed."""
+        pinned = _UTTERANCE.get()
+        if pinned is not None:
+            return pinned[0]
         return getattr(getattr(self.dispatch, "utterance", None), "turn", None)
+
+    def asked(self) -> str:
+        """The words of the utterance this tool was called under, or ""."""
+        pinned = _UTTERANCE.get()
+        if pinned is not None:
+            return pinned[1]
+        return getattr(getattr(self.dispatch, "utterance", None), "asked", None) or ""
 
     def preview(self, action: str) -> dict | None:
         """On a dry run, the answer a mutation gives instead of acting; None

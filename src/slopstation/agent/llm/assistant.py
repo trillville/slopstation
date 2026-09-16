@@ -6,7 +6,12 @@ from typing import Any
 
 from slopstation.agent.llm import prompts, toolsets
 from slopstation.agent.llm.confirm import ConfirmGate
-from slopstation.agent.llm.registry import AREAS, Registry, ToolContext
+from slopstation.agent.llm.registry import (
+    AREAS,
+    Registry,
+    ToolContext,
+    utterance_snapshot,
+)
 
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry
@@ -92,6 +97,7 @@ class Tools:
 
     registry = REGISTRY
     log: Any = None
+    dispatch: Any = None  # whose utterance a call is pinned to; None reads live
     impls: dict
     loaded: list
 
@@ -116,7 +122,8 @@ class Tools:
                 "error": f"{name} is not loaded - call find_tools for it first",
             }
         try:
-            out = fn(args)
+            with utterance_snapshot(self.dispatch):
+                out = fn(args)
         except MediaError as e:
             # The media services' errors are written for the user: "that
             # series is not in the library", "Radarr returned HTTP 503".
@@ -161,6 +168,7 @@ class Toolkit(Tools):
         on_load=None,
         gate=None,
     ):
+        self.dispatch = dispatch
         self.log = log
         self.on_load = on_load
         self.ctx = ToolContext(

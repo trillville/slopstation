@@ -440,7 +440,7 @@ def impls(ctx: ToolContext):
                             operation = operations.track_steam_install(
                                 appid,
                                 title,
-                                turn=dispatch.utterance.turn,
+                                turn=ctx.turn(),
                                 verified=bool(r.get("verified")),
                             )
                             return {**r, "operation_id": operation["id"]}
@@ -743,7 +743,7 @@ def impls(ctx: ToolContext):
 
                 couch.wol()
                 return {"ok": True, "detail": "wake packet sent - give it a minute"}
-            out = gamepc.sleep(dispatch.utterance.turn)
+            out = gamepc.sleep(ctx.turn())
         except Exception as e:
             return {"ok": False, "error": f"couldn't reach the PC ({e})"}
         if out == "OK":

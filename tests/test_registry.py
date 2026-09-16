@@ -168,3 +168,24 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
     # No utterance at all fails closed.
     ctx.dispatch = types.SimpleNamespace(dry_run=False, utterance=None)
     assert not impls["delete_path"]({})["ok"] and acted == [1]
+
+
+def test_a_tool_reads_the_utterance_it_was_called_under():
+    """The gate overwrites dispatch.utterance with each final transcript
+    while a tool is still on its worker thread. Tools.call pins the one the
+    call started under; outside a call the context reads live."""
+    first = types.SimpleNamespace(turn="aa1111", asked="delete dune")
+    dispatch = types.SimpleNamespace(dry_run=False, utterance=first)
+    toolkit = assistant.Toolkit(dispatch, CapturingLog("voice"))
+    seen = {}
+
+    def probe(args):
+        dispatch.utterance = types.SimpleNamespace(turn="bb2222", asked="never mind")
+        seen["turn"], seen["asked"] = toolkit.ctx.turn(), toolkit.ctx.asked()
+        return {"ok": True}
+
+    toolkit.impls["probe"] = probe
+    toolkit.loaded.append("probe")
+    assert toolkit.call("probe", {})["ok"]
+    assert seen == {"turn": "aa1111", "asked": "delete dune"}
+    assert toolkit.ctx.turn() == "bb2222" and toolkit.ctx.asked() == "never mind"

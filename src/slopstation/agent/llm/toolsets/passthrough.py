@@ -335,7 +335,7 @@ def _qbit_mutates(method, path):
 
 def impls(ctx: ToolContext):
     bind = Bindings(ctx, SPECS)
-    dispatch, log, media, steam = ctx.dispatch, ctx.log, ctx.media, ctx.steam
+    log, media, steam = ctx.log, ctx.media, ctx.steam
 
     def _run(service, args, send, tag=""):
         """`tag` names anything beyond method, path and body that the user is
@@ -380,7 +380,7 @@ def impls(ctx: ToolContext):
             json.dumps(params, sort_keys=True),
             json.dumps(body, sort_keys=True),
         )
-        asked = getattr(dispatch.utterance, "asked", None) or ""
+        asked = ctx.asked()
 
         def run():
             """Send, and answer with one receipt: ok is whether the service
