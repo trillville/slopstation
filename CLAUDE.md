@@ -80,13 +80,16 @@ The suite's shared pieces live in `tests/helpers.py`: `CapturingLog` is the
 logger double (assert on `.events()` and `.find(name)`, never on prose);
 `wants("steam")` / `wants("audio")` skip a test the machine cannot run;
 `seed_lock(age)` plants a session lock; `toolkit_impls(dispatch, log, ...)`
-builds the assistant's tools for the given services; `FakeMedia`, `FakeArr`,
-`FakeSteam`, `FakeOperations` and `scripted_ssh` are the one fake per
-boundary. `test_couch.py`'s `wire` scripts the gaming PC's ssh replies in
-order; `test_doctor.py`'s `rows` collects the doctor's report calls. Fake a
-dependency at its real boundary (an HTTP client, ssh, a file) and assert the
-outcome; a test that patches the function under test and checks the patch
-was called proves nothing.
+builds the assistant's tools for the given services; `fake_dispatch(turn,
+asked, dry_run)` is the two attributes of Dispatch a tool reads;
+`sonarr_episode(...)` is one episode row with only the keys given. A fake
+of a service (a Radarr client, a Steam session, the media service) lives in
+the file that uses it, shaped for what that file tests; the same name in two
+files is two fakes on purpose. `test_couch.py`'s `wire` scripts the gaming
+PC's ssh replies in order; `test_doctor.py`'s `rows` collects the doctor's
+report calls. Fake a dependency at its real boundary (an HTTP client, ssh, a
+file) and assert the outcome; a test that patches the function under test
+and checks the patch was called proves nothing.
 
 Several rules here are tests: `test_event_names` (the frozen vocabulary - a new
 event is added there, a rename is a deliberate edit there; a name built at

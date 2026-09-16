@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog, toolkit_impls
+from helpers import CapturingLog, fake_dispatch, toolkit_impls
 from slopstation.agent.llm import assistant, registry, toolsets
 
 
@@ -63,7 +63,7 @@ def test_every_offered_spec_has_an_implementation():
     # With every service present, each spec's name is callable, and nothing
     # is callable that has no spec. A tool added to one side only fails here.
     log = CapturingLog()
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
+    dispatch = fake_dispatch(None, dry_run=True)
     full = toolkit_impls(
         dispatch,
         log,
@@ -171,7 +171,7 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
     assert dry == {"ok": True, "dry_run": True, "detail": "would delete x"}
     assert acted == [1] and not ctx.gate.pending(("path", "x"))
     # No utterance at all fails closed.
-    ctx.dispatch = types.SimpleNamespace(dry_run=False, utterance=None)
+    ctx.dispatch = fake_dispatch(None)
     assert not impls["delete_path"]({})["ok"] and acted == [1]
 
 

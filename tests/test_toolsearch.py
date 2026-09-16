@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import fake_dispatch
 from slopstation.agent.llm import assistant, backends, toolsearch
 from slopstation.agent.speech import tool_schemas
 
@@ -73,15 +73,8 @@ ASKS = {
 
 
 @pytest.fixture
-def log():
-    return CapturingLog("voice")
-
-
-@pytest.fixture
 def toolkit(log):
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     return assistant.Toolkit(
         dispatch, log, operations=object(), media=object(), steam=object()
     )
@@ -147,9 +140,7 @@ def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):
 def test_find_tools_offers_only_what_this_toolkit_can_run(log):
     # No qBittorrent: the torrent tools are not offered, so a torrent ask must
     # not report them loaded, and the toolkit must not run them either way.
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     tk = assistant.Toolkit(
         dispatch, log, media=types.SimpleNamespace(qbit=None, prowlarr=None)
     )
@@ -186,7 +177,7 @@ def test_common_name_words_do_not_load_unrelated_tools(toolkit):
 
 def test_on_load_fires_once_per_change_with_the_new_schemas(log):
     pushed = []
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
+    dispatch = fake_dispatch(None, dry_run=True)
     tk = assistant.Toolkit(
         dispatch, log, media=object(), on_load=lambda: pushed.append(1)
     )
@@ -199,9 +190,7 @@ def test_on_load_fires_once_per_change_with_the_new_schemas(log):
 def test_the_backends_render_the_loaded_set_on_every_request(monkeypatch, log):
     """A tool found mid-turn is offered on the very next request of that turn,
     on both providers."""
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     tk = assistant.Toolkit(dispatch, log, media=object())
     calls = []
 

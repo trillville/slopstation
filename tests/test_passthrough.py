@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import fake_dispatch
 from slopstation import paths
 from slopstation.agent.llm import assistant, confirm
 from slopstation.agent.llm.toolsets import passthrough
@@ -24,17 +24,9 @@ class FakeClient:
 
 
 @pytest.fixture
-def log():
-    return CapturingLog("voice")
-
-
-@pytest.fixture
 def live(log):
     """A live (not dry-run) Toolkit over fake clients, inside one utterance."""
-    dispatch = types.SimpleNamespace(
-        dry_run=False,
-        utterance=types.SimpleNamespace(turn="aa0001", asked="pause the dune torrent"),
-    )
+    dispatch = fake_dispatch("aa0001", "pause the dune torrent", dry_run=False)
     media = types.SimpleNamespace(
         cfg={"radarrUrl": "http://r:7878"},
         radarr=FakeClient({"apiKey": "SECRET", "rows": [{"title": "Dune"}]}),
@@ -189,9 +181,7 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
 
 
 def test_dry_run_reports_a_mutation_without_sending_it(log):
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     media = types.SimpleNamespace(
         cfg={}, radarr=FakeClient(), sonarr=None, prowlarr=None, qbit=FakeClient()
     )
@@ -226,7 +216,7 @@ def test_dry_run_reports_a_mutation_without_sending_it(log):
 
 
 def test_offered_only_with_the_matching_service(log):
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
+    dispatch = fake_dispatch(None, dry_run=True)
     bare = assistant.Toolkit(dispatch, log)
     assert "steam_api" in bare.offered and "radarr_api" not in bare.offered
     without_qbit = types.SimpleNamespace(

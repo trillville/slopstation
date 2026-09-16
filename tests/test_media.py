@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 import helpers
-from helpers import CapturingLog
+from helpers import CapturingLog, sonarr_episode
 from slopstation.agent.tools import (
     disk_health,
     media,
@@ -987,41 +987,21 @@ def test_library_reports_holdings_per_season(svc):
     svc.sonarr.set(
         library=[{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}],
         episodes=[
-            {
-                "id": 1,
-                "seasonNumber": 1,
-                "hasFile": True,
-                "monitored": False,
-                "airDateUtc": "2008-01-20T00:00:00Z",
-            },
-            {
-                "id": 2,
-                "seasonNumber": 1,
-                "hasFile": False,
-                "monitored": False,
-                "airDateUtc": "2008-01-27T00:00:00Z",
-            },
-            {
-                "id": 3,
-                "seasonNumber": 2,
-                "hasFile": True,
-                "monitored": True,
-                "airDateUtc": "2009-03-08T00:00:00Z",
-            },
-            {
-                "id": 4,
-                "seasonNumber": 2,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": "2999-01-01T00:00:00Z",
-            },
-            {
-                "id": 5,
-                "seasonNumber": 0,
-                "hasFile": True,
-                "monitored": True,
-                "airDateUtc": "2009-01-01T00:00:00Z",
-            },
+            sonarr_episode(
+                1, 1, has_file=True, monitored=False, aired="2008-01-20T00:00:00Z"
+            ),
+            sonarr_episode(
+                2, 1, has_file=False, monitored=False, aired="2008-01-27T00:00:00Z"
+            ),
+            sonarr_episode(
+                3, 2, has_file=True, monitored=True, aired="2009-03-08T00:00:00Z"
+            ),
+            sonarr_episode(
+                4, 2, has_file=False, monitored=True, aired="2999-01-01T00:00:00Z"
+            ),
+            sonarr_episode(
+                5, 0, has_file=True, monitored=True, aired="2009-01-01T00:00:00Z"
+            ),
         ],
     )
     owned = svc.library("series", 81189)
@@ -1041,27 +1021,15 @@ def test_abandon_missing_unmonitors_the_gap(svc):
     svc.sonarr.set(
         library=[{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}],
         episodes=[
-            {
-                "id": 1,
-                "seasonNumber": 1,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": "2008-01-20T00:00:00Z",
-            },
-            {
-                "id": 2,
-                "seasonNumber": 1,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": "2008-01-27T00:00:00Z",
-            },
-            {
-                "id": 3,
-                "seasonNumber": 2,
-                "hasFile": True,
-                "monitored": True,
-                "airDateUtc": "2009-03-08T00:00:00Z",
-            },
+            sonarr_episode(
+                1, 1, has_file=False, monitored=True, aired="2008-01-20T00:00:00Z"
+            ),
+            sonarr_episode(
+                2, 1, has_file=False, monitored=True, aired="2008-01-27T00:00:00Z"
+            ),
+            sonarr_episode(
+                3, 2, has_file=True, monitored=True, aired="2009-03-08T00:00:00Z"
+            ),
         ],
     )
     result = svc.abandon_missing(
@@ -1187,14 +1155,14 @@ def test_cancel_of_a_pending_episode_request_leaves_the_series_alone(svc):
         library=[{"id": 5, "tvdbId": 81189, "title": "Breaking Bad"}],
         # Somebody else's work, downloading right now.
         episodes=[
-            {
-                "id": 201,
-                "seasonNumber": 2,
-                "episodeNumber": 1,
-                "monitored": True,
-                "hasFile": False,
-                "airDateUtc": "2009-03-08T00:00:00Z",
-            }
+            sonarr_episode(
+                201,
+                2,
+                number=1,
+                monitored=True,
+                has_file=False,
+                aired="2009-03-08T00:00:00Z",
+            )
         ],
         queue={
             "records": [
@@ -1213,14 +1181,14 @@ def test_cancel_of_a_pending_episode_request_leaves_the_series_alone(svc):
 
     # Once Sonarr names the episode, the cancel acts on that one and no other.
     svc.sonarr.episodes.append(
-        {
-            "id": 413,
-            "seasonNumber": 4,
-            "episodeNumber": 13,
-            "monitored": True,
-            "hasFile": False,
-            "airDateUtc": "2008-11-20T00:00:00Z",
-        }
+        sonarr_episode(
+            413,
+            4,
+            number=13,
+            monitored=True,
+            has_file=False,
+            aired="2008-11-20T00:00:00Z",
+        )
     )
     svc.sonarr.queue["records"].append(
         {"id": 731, "seriesId": 5, "episodeId": 413, "downloadId": "d10"}
@@ -1346,27 +1314,15 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
     assert not svc.dispatch_pending_series_search(pending)
     svc.sonarr.set(
         episodes=[
-            {
-                "id": 101,
-                "seasonNumber": 0,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2019-01-01T00:00:00Z",
-            },
-            {
-                "id": 102,
-                "seasonNumber": 2,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2020-01-01T00:00:00Z",
-            },
-            {
-                "id": 103,
-                "seasonNumber": 2,
-                "monitored": True,
-                "hasFile": False,
-                "airDateUtc": "2020-01-08T00:00:00Z",
-            },
+            sonarr_episode(
+                101, 0, monitored=False, has_file=False, aired="2019-01-01T00:00:00Z"
+            ),
+            sonarr_episode(
+                102, 2, monitored=False, has_file=False, aired="2020-01-01T00:00:00Z"
+            ),
+            sonarr_episode(
+                103, 2, monitored=True, has_file=False, aired="2020-01-08T00:00:00Z"
+            ),
         ]
     )
     assert svc.dispatch_pending_series_search(pending)
@@ -1421,13 +1377,9 @@ def test_series_monitoring_waits_for_sonarr_to_finish_adding(svc):
             }
         ],
         episodes=[
-            {
-                "id": 102,
-                "seasonNumber": 1,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2020-01-01T00:00:00Z",
-            }
+            sonarr_episode(
+                102, 1, monitored=False, has_file=False, aired="2020-01-01T00:00:00Z"
+            )
         ],
     )
     pending = {
@@ -1480,22 +1432,22 @@ def test_series_upgrade_completes_on_new_episode_files(svc):
             }
         ],
         episodes=[
-            {
-                "id": 101,
-                "episodeFileId": 201,
-                "seasonNumber": 1,
-                "monitored": True,
-                "hasFile": True,
-                "airDateUtc": "2020-01-01T00:00:00Z",
-            },
-            {
-                "id": 102,
-                "episodeFileId": 0,
-                "seasonNumber": 1,
-                "monitored": True,
-                "hasFile": False,
-                "airDateUtc": "2020-01-08T00:00:00Z",
-            },
+            sonarr_episode(
+                101,
+                1,
+                file_id=201,
+                monitored=True,
+                has_file=True,
+                aired="2020-01-01T00:00:00Z",
+            ),
+            sonarr_episode(
+                102,
+                1,
+                file_id=0,
+                monitored=True,
+                has_file=False,
+                aired="2020-01-08T00:00:00Z",
+            ),
         ],
     )
     series_upgrade = svc.request_series(81189, "2160p", [1])
@@ -1534,30 +1486,30 @@ def test_request_episodes_touches_only_those_episodes(svc):
             }
         ],
         episodes=[
-            {
-                "id": 413,
-                "seasonNumber": 4,
-                "episodeNumber": 13,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2008-11-20T00:00:00Z",
-            },
-            {
-                "id": 412,
-                "seasonNumber": 4,
-                "episodeNumber": 12,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2008-11-13T00:00:00Z",
-            },
-            {
-                "id": 1004,
-                "seasonNumber": 10,
-                "episodeNumber": 4,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2015-02-04T00:00:00Z",
-            },
+            sonarr_episode(
+                413,
+                4,
+                number=13,
+                monitored=False,
+                has_file=False,
+                aired="2008-11-20T00:00:00Z",
+            ),
+            sonarr_episode(
+                412,
+                4,
+                number=12,
+                monitored=False,
+                has_file=False,
+                aired="2008-11-13T00:00:00Z",
+            ),
+            sonarr_episode(
+                1004,
+                10,
+                number=4,
+                monitored=False,
+                has_file=False,
+                aired="2015-02-04T00:00:00Z",
+            ),
         ],
     )
     submission = svc.request_series(
@@ -1629,14 +1581,14 @@ def test_request_episodes_on_a_new_series_resolves_ids_when_sonarr_is_ready(svc)
     assert not svc.observe(pending).metadata_ready
     svc.sonarr.set(
         episodes=[
-            {
-                "id": 413,
-                "seasonNumber": 4,
-                "episodeNumber": 13,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2008-11-20T00:00:00Z",
-            }
+            sonarr_episode(
+                413,
+                4,
+                number=13,
+                monitored=False,
+                has_file=False,
+                aired="2008-11-20T00:00:00Z",
+            )
         ]
     )
     # Rows, but Sonarr's add pass is still running.

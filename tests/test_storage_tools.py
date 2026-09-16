@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import CapturingLog, fake_dispatch
 from slopstation import paths
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import storage
@@ -77,9 +77,7 @@ def rig(root):
     from slopstation.agent.tools import media as media_mod
 
     log = CapturingLog("voice")
-    dispatch = types.SimpleNamespace(
-        dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch("aa0001")
     media = media_mod.MediaService(
         {},
         log,
@@ -232,7 +230,7 @@ def test_drive_health_reads_the_last_smart_warning(rig):
 def test_no_media_root_is_a_plain_error(monkeypatch):
     monkeypatch.setattr(storage, "media_root", lambda: None)
     log = CapturingLog("voice")
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
+    dispatch = fake_dispatch(None, dry_run=True)
     media = types.SimpleNamespace(
         cfg={}, radarr=None, sonarr=None, qbit=None, prowlarr=None
     )

@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import fake_dispatch
 from slopstation import config, gamepc, sessionlock, statefile
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import library, steamstore
@@ -56,11 +56,6 @@ META = {
 def catalog():
     statefile.write(library.library_file(), INDEX)
     statefile.write(library.meta_cache_file(), META)
-
-
-@pytest.fixture
-def log():
-    return CapturingLog("voice")
 
 
 class FakeSteam:
@@ -369,7 +364,7 @@ def test_steam_client_tools_report_what_steam_holds(rig, log):
 
 
 def test_steam_client_tools_need_the_account_session(catalog, log):
-    dispatch = types.SimpleNamespace(dry_run=False, utterance=None)
+    dispatch = fake_dispatch(None)
     tk = assistant.Toolkit(dispatch, log)
     assert "download_status" not in tk.offered and "uninstall_game" not in tk.offered
     unenrolled = assistant.Toolkit(dispatch, log, steam=FakeSteam(enrolled=False))
