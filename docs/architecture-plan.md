@@ -5,8 +5,8 @@
 Executed on `tillman/architecture-lifecycle`, one commit per step, all 21
 steps. Every step passed ruff, mypy against the Windows target, and the
 suite on macOS under a stand-in for `msvcrt` (nine tests are Windows-only
-and fail there on `main` too); Windows CI has not run because the branch
-could not be pushed through Graphite from this session. Deviations from the
+and fail there on `main` too), and Windows CI on the PR (#148) passed
+lint, tests and types. Deviations from the
 text below: the Submission is a TypedDict beside its metadata key list, not
 a dataclass, because the value is the JSON the model reads; `quit_game`
 keeps `risk="act"` and asks through `ctx.confirm`, because the registry rule
