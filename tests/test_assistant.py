@@ -11,6 +11,7 @@ from helpers import CapturingLog, seed_lock, toolkit_impls
 from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.llm import assistant, backends, confirm
+from slopstation.agent.speech import tool_schemas
 from slopstation.agent.tools import library, steamstore
 
 CFG_MIN = {
@@ -696,7 +697,7 @@ def test_a_dead_token_falls_through_to_the_tv_path(
 
 def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
     results = []
-    schema = assistant.function_schemas(
+    schema = tool_schemas.function_schemas(
         {"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log
     )[0]
 
@@ -716,7 +717,7 @@ def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
 def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
     spoken = []
     receipt_result = []
-    receipt_schema = assistant.function_schemas(
+    receipt_schema = tool_schemas.function_schemas(
         {
             "request_series": lambda _: {
                 "ok": True,
@@ -760,7 +761,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
         calls["n"] += 1
 
     monkeypatch.setattr(assistant.sentry, "tool_span", spy)
-    schemas = assistant.function_schemas(
+    schemas = tool_schemas.function_schemas(
         {
             "get_now_playing": lambda a: {"ok": True, "game": "Hades"},
             "launch_game": boom,

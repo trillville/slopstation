@@ -140,10 +140,6 @@ class Tools:
         record_tool_call(name, args, out, self.log)
         return out
 
-    def function_schemas(self, log=None):
-        """Pipecat schemas for the loaded tools, in loaded order."""
-        return _pipecat_schemas(self, log or self.log)
-
 
 class Toolkit(Tools):
     """One conversation's tools: what is offered, what is loaded, how to call.
@@ -259,64 +255,6 @@ def record_tool_call(name, args, out, log=None):
     if log:
         ok = out.get("ok") if isinstance(out, dict) else None
         log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
-
-
-def function_schemas(impls, log):
-    """Pipecat schemas for a bare impls dict (tests, the REPL); a Toolkit
-    renders its own through `function_schemas()`."""
-    return _pipecat_schemas(as_tools(impls, log), log)
-
-
-def _pipecat_schemas(tools, log):
-    """Pipecat schemas whose handlers run `tools.call` in a worker thread and
-    turn the result into speech: an acknowledgment is spoken as-is with no
-    second model turn, and end_turn closes the turn to a closing mic."""
-    import asyncio
-
-    from pipecat.adapters.schemas.function_schema import FunctionSchema
-    from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
-
-    def wrap(name):
-        async def handler(params):
-            # `call` never raises and records the call itself. The await does
-            # not lose the OTel context (contextvars are per-task), so the
-            # span still parents onto Pipecat's llm span.
-            out = await asyncio.to_thread(tools.call, name, dict(params.arguments))
-            acknowledgment = (
-                out.get("acknowledgment") if isinstance(out, dict) else None
-            )
-            end_turn = isinstance(out, dict) and bool(out.get("end_turn"))
-            if end_turn:
-                # The session ends on this call: no goodbye to a closing mic.
-                await params.result_callback(
-                    out, properties=FunctionCallResultProperties(run_llm=False)
-                )
-            elif acknowledgment:
-
-                async def speak():
-                    await params.pipeline_worker.queue_frame(
-                        TTSSpeakFrame(str(acknowledgment))
-                    )
-
-                properties = FunctionCallResultProperties(
-                    run_llm=False, on_context_updated=speak
-                )
-                await params.result_callback(out, properties=properties)
-            else:
-                await params.result_callback(out)
-
-        return handler
-
-    return [
-        FunctionSchema(
-            name=spec.name,
-            description=spec.description,
-            properties=spec.properties,
-            required=list(spec.required),
-            handler=wrap(spec.name),
-        )
-        for spec in REGISTRY.select(list(tools.loaded))
-    ]
 
 
 def _user_location(voice):

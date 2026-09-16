@@ -6,6 +6,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation.agent.llm import assistant, backends, toolsearch
+from slopstation.agent.speech import tool_schemas
 
 # One realistic ask per searchable tool that exists today. Every new
 # searchable tool gets a line here, so a keyword list that stops retrieving
@@ -126,7 +127,9 @@ def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):
     assert toolkit.loaded[:n] == toolkit.defaults
     assert toolkit.loaded[n:] == [r["tool"] for r in out["loaded"]]
     assert [t["name"] for t in toolkit.render("openai")] == toolkit.loaded
-    assert [s.name for s in toolkit.function_schemas()] == toolkit.loaded
+    assert [
+        s.name for s in tool_schemas.pipecat_schemas(toolkit, toolkit.log)
+    ] == toolkit.loaded
     found = log.find("tools_found")
     assert found and "delete_media" in found[-1]["found"]
     # Asking again names the tool as already loaded, never a weaker second
@@ -190,7 +193,7 @@ def test_on_load_fires_once_per_change_with_the_new_schemas(log):
     assert tk.load(["delete_media"]) == ["delete_media"] and pushed == [1]
     assert tk.load(["delete_media"]) == [] and pushed == [1], "no change, no push"
     assert tk.load(["not_a_tool"]) == [] and pushed == [1]
-    assert [s.name for s in tk.function_schemas(log)][-1] == "delete_media"
+    assert [s.name for s in tool_schemas.pipecat_schemas(tk, log)][-1] == "delete_media"
 
 
 def test_the_backends_render_the_loaded_set_on_every_request(monkeypatch, log):

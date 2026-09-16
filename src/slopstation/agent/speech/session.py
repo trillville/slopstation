@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from slopstation import config, logbook
-from slopstation.agent.speech import keyterms
+from slopstation.agent.speech import keyterms, tool_schemas
 from slopstation.agent.telemetry import sentry, traces
 from slopstation.agent.tools import library, titles
 
@@ -412,7 +412,7 @@ class Session:
             assert self.toolkit is not None
             return ToolsSchema(
                 # -> one tool_call event per call
-                standard_tools=self.toolkit.function_schemas(log),
+                standard_tools=tool_schemas.pipecat_schemas(self.toolkit, log),
                 custom_tools={AdapterType.OPENAI: native} if native else None,
             )
 
