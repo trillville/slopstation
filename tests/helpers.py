@@ -88,3 +88,11 @@ class CapturingLog(logbook.Logger):
 
     def find(self, event):
         return [r for r in self.records if r["event"] == event]
+
+
+def toolkit_impls(dispatch, log, **services):
+    """Every callable tool for the given services, keyed by name: the
+    Toolkit's impls without the conversation-shaped rest of it."""
+    from slopstation.agent.llm.assistant import Toolkit
+
+    return Toolkit(dispatch, log, **services).impls

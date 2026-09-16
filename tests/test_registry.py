@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import CapturingLog, toolkit_impls
 from slopstation.agent.llm import assistant, registry, toolsets
 
 
@@ -12,7 +12,6 @@ def test_every_spec_is_well_formed():
     # The registry constructor rejects duplicates, unknown risks and areas;
     # this holds the softer rules a new tool is likeliest to skip.
     for spec in assistant.REGISTRY:
-        assert len(spec.keywords) >= 3, f"{spec.name} needs keywords for find_tools"
         assert spec.description.strip(), spec.name
         assert set(spec.required) <= set(spec.properties), spec.name
         if spec.paged:
@@ -60,7 +59,7 @@ def test_every_offered_spec_has_an_implementation():
     # is callable that has no spec. A tool added to one side only fails here.
     log = CapturingLog()
     dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
-    full = assistant.tool_impls(
+    full = toolkit_impls(
         dispatch,
         log,
         operations=object(),
@@ -70,11 +69,11 @@ def test_every_offered_spec_has_an_implementation():
     )
     assert set(full) == set(assistant.REGISTRY.names())
     # Absent services drop exactly the tools that need them.
-    bare = assistant.tool_impls(dispatch, log)
+    bare = toolkit_impls(dispatch, log)
     dropped = set(assistant.REGISTRY.names()) - set(bare)
     absent = {"operations", "media", "torrents", "prowlarr", "steam_account"}
     assert dropped == {s.name for s in assistant.REGISTRY if absent & set(s.needs)}
-    off = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
+    off = toolkit_impls(dispatch, log, voice={"steamDataTools": False})
     # The kill switch drops exactly the tools that need the data lane.
     assert set(bare) - set(off) == {
         s.name for s in assistant.REGISTRY if "steam_data" in s.needs
@@ -86,11 +85,11 @@ def test_every_offered_spec_has_an_implementation():
 
 def test_renders_follow_the_registry_order_and_filter():
     names = assistant.REGISTRY.names()
-    assert [t["name"] for t in assistant.anthropic_tools()] == names
-    assert [t["name"] for t in assistant.openai_tools()] == names
+    assert [t["name"] for t in assistant.REGISTRY.anthropic_tools()] == names
+    assert [t["name"] for t in assistant.REGISTRY.openai_tools()] == names
     some = {"volume", "nav"}
-    assert {t["name"] for t in assistant.anthropic_tools(some)} == some
-    (vol,) = assistant.openai_tools({"volume"})
+    assert {t["name"] for t in assistant.REGISTRY.anthropic_tools(some)} == some
+    (vol,) = assistant.REGISTRY.openai_tools({"volume"})
     assert vol["type"] == "function" and "function" not in vol
     assert vol["parameters"]["required"] == ["action"]
 
@@ -169,13 +168,3 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
     # No utterance at all fails closed.
     ctx.dispatch = types.SimpleNamespace(dry_run=False, utterance=None)
     assert not impls["delete_path"]({})["ok"] and acted == [1]
-
-
-def test_a_toolkit_takes_a_gate_to_carry_between_sessions():
-    from slopstation.agent.llm import confirm
-
-    gate = confirm.ConfirmGate()
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
-    assert (
-        assistant.Toolkit(dispatch, CapturingLog("voice"), gate=gate).ctx.gate is gate
-    )

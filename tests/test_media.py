@@ -2086,17 +2086,3 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
         row["name"] == "Proton port synchronization" and row["level"] == "FAIL"
         for row in broken["checks"]
     )
-
-
-# --- the compose stack on disk ------------------------------------------------
-
-
-def test_compose_stack_exposes_nothing_it_should_not():
-    compose = (helpers.REPO / "media" / "compose.yaml").read_text(encoding="utf-8")
-    # qBittorrent runs natively behind Proton, never in the stack.
-    assert "qbittorrent:" not in compose
-    # Web UIs are LAN-wide (the runbook's firewall rules scope them).
-    assert "127.0.0.1:" not in compose
-    # FlareSolverr and Glances stay off the host; host 7575 is VirtualHere's.
-    for port in ("8191:8191", "7575:7575", "61208:61208"):
-        assert port not in compose

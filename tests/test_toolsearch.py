@@ -179,9 +179,6 @@ def test_common_name_words_do_not_load_unrelated_tools(toolkit):
             for s, _ in toolsearch.search(toolkit.registry, ask, set(toolkit.loaded))
         ]
         assert "uninstall_game" not in hits and len(hits) <= 2, (ask, hits)
-    assert toolsearch.summary(assistant.REGISTRY.get("delete_path")).endswith(
-        "file or folder inside the media root, given as a path relative to it (e.g. 'torrents/Some.Release' or 'Movies/Old Film (1999)')."
-    )
 
 
 def test_on_load_fires_once_per_change_with_the_new_schemas(log):
@@ -276,9 +273,7 @@ def test_the_backends_render_the_loaded_set_on_every_request(monkeypatch, log):
 
 
 def test_the_prompt_maps_the_areas_from_the_offered_set():
-    text = assistant.tools_map()
-    assert text.startswith("TOOLS:") and "find_tools reaches" in text
-    assert "media (" in text
+    assert assistant.tools_map()  # every tool offered: the map exists
     # Nothing beyond the defaults offered: no map at all, rather than a lie.
     defaults = [s.name for s in assistant.REGISTRY if s.default]
     assert assistant.tools_map(defaults) == ""

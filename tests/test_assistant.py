@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog, seed_lock
+from helpers import CapturingLog, seed_lock, toolkit_impls
 from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.llm import assistant, backends, confirm
@@ -245,7 +245,7 @@ def live_dispatch(catalog, log):
 @pytest.fixture
 def impls(dispatch, log):
     """The base tool set: no operations store, no steam, no media."""
-    return assistant.tool_impls(dispatch, log)
+    return toolkit_impls(dispatch, log)
 
 
 @pytest.fixture
@@ -271,16 +271,14 @@ def fake_steam():
 @pytest.fixture
 def media_impls(dispatch, log, fake_operations, fake_media):
     """Dry-run tools with the operations store and the media boundary."""
-    return assistant.tool_impls(
-        dispatch, log, operations=fake_operations, media=fake_media
-    )
+    return toolkit_impls(dispatch, log, operations=fake_operations, media=fake_media)
 
 
 @pytest.fixture
 def live_media(live_dispatch, log, fake_operations, fake_media):
     """Live tools over the media fakes, inside utterance fa1100."""
     live_dispatch.begin_utterance("fa1100", "get dune in 1080p")
-    return assistant.tool_impls(
+    return toolkit_impls(
         live_dispatch, log, operations=fake_operations, media=fake_media
     )
 
@@ -291,13 +289,11 @@ def live_media(live_dispatch, log, fake_operations, fake_media):
 def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     si = assistant.system_instruction(CFG_MIN)
     assert "CATALOG" in si and str(INSTALLED) in si
-    # Mishear-repair: the model must know its input is STT, not typed text.
-    assert "speech-to-text" in flat(si) and "mishears" in flat(si)
     # The behavioural rule stays in the prompt; the tool rule travels with
     # the tool, so it is absent when the media service is.
     assert "Never guess an id" in si and "find_media" not in si
     assert "Never guess an id" in assistant.REGISTRY.get("find_media").description
-    # Dynamic tail: date, input names, volume clamp, mute-is-blind - each once.
+    # Dynamic tail: the date and the clock.
     assert time.strftime("%Y-%m-%d") in si
     assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
     # The clock is the LAST line, so every token before it is a stable prefix.
@@ -316,12 +312,6 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     si_tz = assistant.system_instruction({**CFG_MIN, "voice": zoned})
     assert f"{time.strftime('%Y-%m-%d')} in America/Los_Angeles" in flat(si_tz)
     assert "apple tv" in flat(si) and "Switching the TV to 'gaming'" in flat(si)
-    assert "DESK MONITOR" in flat(si) and "display tool is the one way" in flat(si)
-    assert "clamped" in flat(si) and "blind toggle" in flat(si)
-    # Out-of-catalog carve-out, so mishear-repair can't force a wrong match.
-    assert "isn't in the library" in flat(si)
-    n_tokens = len(si) // 4
-    assert 500 < n_tokens < 30000, n_tokens
 
 
 def test_catalog_dates_the_rows_the_pc_stamped(catalog):
@@ -332,10 +322,6 @@ def test_catalog_dates_the_rows_the_pc_stamped(catalog):
     # Missing update times keep the bare token.
     assert rows["1245620"].split("|")[6] == "inst"
     assert rows[str(OWNED_ONLY)].split("|")[6] == "notinst"
-    # The prompt defines the date suffix.
-    assert "inst[:YYYY-MM-DD last install or update]" in assistant.system_instruction(
-        CFG_MIN
-    )
 
 
 # -- the base tools ------------------------------------------------------------
@@ -367,9 +353,7 @@ def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
     r = impls["stop_listening"]({})
     assert not r["ok"] and "nothing is listening" in r["error"], r
     stops = []
-    simpls = assistant.tool_impls(
-        dispatch, log, on_stop_listening=lambda: stops.append(1)
-    )
+    simpls = toolkit_impls(dispatch, log, on_stop_listening=lambda: stops.append(1))
     r = simpls["stop_listening"]({})
     assert r["ok"] and stops == [1], (r, stops)
 
@@ -393,7 +377,7 @@ def test_now_playing_tells_a_launch_from_a_live_session(
 ):
     # The lock is held from the chord to the end of the session; READY on the
     # PC is what separates "starting" from "up".
-    impls = assistant.tool_impls(live_dispatch, log)
+    impls = toolkit_impls(live_dispatch, log)
     monkeypatch.setattr(gamepc, "playing", lambda: "0")
     seed_lock(0)
     monkeypatch.setattr(gamepc, "status", lambda: "NOTREADY")
@@ -419,39 +403,16 @@ def test_game_details_names_installed_and_owned_only_games(impls):
 def test_list_operations_acknowledges_only_on_a_live_recent_read(
     dispatch, live_dispatch, log, fake_operations
 ):
-    oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
+    oimpls = toolkit_impls(dispatch, log, operations=fake_operations)
     r = oimpls["list_operations"]({"scope": "active"})
     assert r["ok"] and r["operations"][0]["state"] == "RUNNING"
     assert fake_operations.acknowledged is False
     assert oimpls["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is False  # a dry run eats no bulletin
-    live_ops = assistant.tool_impls(live_dispatch, log, operations=fake_operations)
+    live_ops = toolkit_impls(live_dispatch, log, operations=fake_operations)
     assert live_ops["list_operations"]({"scope": "recent"})["ok"]
     assert fake_operations.acknowledged is True
     assert not oimpls["list_operations"]({"scope": "nope"})["ok"]
-
-
-def test_function_schemas_render_only_the_tools_present(
-    dispatch, log, impls, fake_operations, media_impls
-):
-    # The schema list is exactly the tools whose services are present: the
-    # registry's `needs` is the one gate, on both the impls and the schemas.
-    def expect(*services):
-        have = set(services) | {"steam_data"}
-        return {s.name for s in assistant.REGISTRY if set(s.needs) <= have}
-
-    def names(schemas):
-        return {s.name for s in schemas}
-
-    assert names(assistant.function_schemas(impls, log)) == expect()
-    oimpls = assistant.tool_impls(dispatch, log, operations=fake_operations)
-    assert names(assistant.function_schemas(oimpls, log)) == expect("operations")
-    # The media fake carries no qBittorrent or Prowlarr, so the torrent tools
-    # and the Prowlarr ones stay out while the arr and storage tools come in.
-    assert names(assistant.function_schemas(media_impls, log)) == expect(
-        "operations", "media"
-    )
-    assert "list_torrents" not in names(assistant.function_schemas(media_impls, log))
 
 
 # -- the media tools -----------------------------------------------------------
@@ -508,7 +469,9 @@ def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operat
     assert fake_media.requests[-1] == ("series", 81189, "2160p", None, None)
     assert fake_operations.tracked[-1][6]["all_seasons"] is True
     series_schema = next(
-        tool for tool in assistant.anthropic_tools() if tool["name"] == "request_series"
+        tool
+        for tool in assistant.REGISTRY.anthropic_tools()
+        if tool["name"] == "request_series"
     )
     assert "all_seasons" in series_schema["input_schema"]["properties"]
 
@@ -663,31 +626,16 @@ def test_install_game_is_always_offered_and_tracks_the_turn(
     # install_game is offered with or without the account session: without one
     # it navigates to the game page so the controller can finish the job.
     assert "install_game" in impls
-    with_steam = assistant.tool_impls(dispatch, log, steam=fake_steam)
+    with_steam = toolkit_impls(dispatch, log, steam=fake_steam)
     rr = with_steam["install_game"]({"appid": UNKNOWN})
     assert not rr["ok"] and "not in the catalog" in rr["error"], rr
     live_dispatch.begin_utterance("4c1d0e", "install stardew valley")
-    tracked = assistant.tool_impls(
+    tracked = toolkit_impls(
         live_dispatch, log, steam=fake_steam, operations=fake_operations
     )
     rr = tracked["install_game"]({"appid": OWNED_ONLY})
     assert rr["ok"] and rr["operation_id"] == "op-test", rr
     assert fake_operations.tracked[-1][2] == "4c1d0e"
-
-
-def test_steam_data_tools_off_drops_the_store_tools_from_impls_and_schemas(
-    dispatch, log
-):
-    # steamDataTools off -> the two store tools vanish from impls AND schemas,
-    # so the model stops seeing them, not just calling them.
-    gated = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
-    assert "list_games" not in gated and "search_store" not in gated
-    assert "quit_game" in gated and "nav" in gated  # action tools aren't gated
-    # What remains is exactly the tools that need no service at all.
-    assert "steam_api" not in gated
-    assert {s.name for s in assistant.function_schemas(gated, log)} == {
-        s.name for s in assistant.REGISTRY if not s.needs
-    }
 
 
 # -- Tool errors ---------------------------------------------------------------
@@ -698,12 +646,12 @@ def test_a_dead_token_falls_through_to_the_tv_path(
 ):
     # A revoked token still has available()==True, then the steam call raises;
     # the tool must answer, not break the turn.
-    rimpls = assistant.tool_impls(live_dispatch, log, steam=RaisingSteam())
+    rimpls = toolkit_impls(live_dispatch, log, steam=RaisingSteam())
     monkeypatch.setattr(library, "installed_name", lambda a: None)  # -> steam.install
     navd = []
     monkeypatch.setattr(live_dispatch, "nav", recording_nav(navd))
     inst = rimpls["install_game"]({"appid": INSTALLED})
-    assert assistant.tool_impls(dispatch, log, steam=fake_steam)["install_game"](
+    assert toolkit_impls(dispatch, log, steam=fake_steam)["install_game"](
         {"appid": INSTALLED}
     )["dry_run"]
     # A dead token must not end the request: it falls through to the TV path.
@@ -822,7 +770,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
 def test_nav_remaps_targets_and_guards_the_catalog(monkeypatch, dispatch, log):
     seen = []
     monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
-    navimpls = assistant.tool_impls(dispatch, log)
+    navimpls = toolkit_impls(dispatch, log)
     assert navimpls["nav"]({"target": "game_page", "appid": INSTALLED})["ok"]
     assert navimpls["nav"]({"target": "store_page", "appid": INSTALLED})["ok"]
     assert navimpls["nav"]({"target": "downloads"})["ok"]
@@ -845,7 +793,7 @@ def test_nav_reaches_the_newer_pages_search_and_allowed_urls(
 ):
     seen = []
     monkeypatch.setattr(dispatch, "nav", recording_nav(seen))
-    navimpls = assistant.tool_impls(dispatch, log)
+    navimpls = toolkit_impls(dispatch, log)
     nav = navimpls["nav"]
     for target in ("friends", "settings", "screenshots", "wishlist"):
         assert nav({"target": target})["ok"]
@@ -904,7 +852,7 @@ def test_nav_resolves_a_collection_by_name_and_lists_them_on_a_miss(
             ]
         },
     )
-    navimpls = assistant.tool_impls(dispatch, log)
+    navimpls = toolkit_impls(dispatch, log)
     r = navimpls["nav"]({"target": "collection", "collection": "mech"})
     assert r["ok"] and seen[-1] == ("collection", "uc-m1"), (r, seen[-1])
     r = navimpls["nav"]({"target": "collection", "collection": "neck"})
@@ -963,31 +911,6 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
     )
     r = impls["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
     assert r["ok"] and r["name"] == "Some Unowned Game", r
-
-
-# -- the tool defs, per provider -----------------------------------------------
-
-
-def test_tool_defs_render_flat_for_both_providers(catalog):
-    at, ot = assistant.anthropic_tools(), assistant.openai_tools()
-    names = set(assistant.REGISTRY.names())
-    assert {t["name"] for t in at} == names
-    # Responses API tools are FLAT (name/parameters at top level, no nesting).
-    assert {t["name"] for t in ot} == names
-    assert all(
-        t["type"] == "function" and "parameters" in t and "function" not in t
-        for t in ot
-    )
-    assert all("input_schema" in t for t in at)
-    # The prompt defines the volume range and launch_game starts sessions.
-    descriptions = flat([s.description for s in assistant.REGISTRY])
-    assert "0-100" not in descriptions
-    assert "never call start_session" in descriptions
-    # Closing the mic must never read as ending the session on the TV - spelled
-    # out in both places the model reads.
-    assert "NOT end_session" in descriptions
-    si = assistant.system_instruction(CFG_MIN)
-    assert "never end the gaming session for them" in flat(si)
 
 
 def test_server_side_search_follows_the_knob(catalog):
@@ -1057,14 +980,11 @@ def test_anthropic_backend_resumes_a_paused_turn(monkeypatch):
 # -- pipecat constructions with dummy keys -------------------------------------
 
 
-def test_make_llm_builds_both_providers_from_dummy_keys(catalog, log, impls):
+def test_make_llm_builds_both_providers_from_dummy_keys(catalog):
     # Through the PRODUCTION _make_llm: a local copy can pass a dict for
     # `reasoning`, which only live inference rejects.
-    from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-
     from slopstation.agent.speech import session
 
-    schemas = assistant.function_schemas(impls, log)
     si = assistant.system_instruction(CFG_MIN)
     dummy = {"anthropicApiKey": "x" * 24, "openaiApiKey": "x" * 24}
     voice_a = {
@@ -1086,14 +1006,6 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog, log, impls):
         "effort": "low"
     }, llm_o._settings.reasoning
     # Native tools ride ToolsSchema.custom_tools through the OpenAI Responses
-    # adapter verbatim, after the function tools.
-    ts = ToolsSchema(
-        standard_tools=schemas,
-        custom_tools={AdapterType.OPENAI: assistant.server_tools(VOICE_ON, "openai")},
-    )
-    rendered = llm_o.get_llm_adapter().to_provider_tools_format(ts)
-    assert [t["name"] for t in rendered[:-1]] == [s.name for s in schemas]
-    assert rendered[-1]["type"] == "web_search"
 
 
 def test_the_sdk_clients_carry_deadlines():

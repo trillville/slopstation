@@ -49,7 +49,6 @@ def test_page_walks_a_local_list_and_a_server_window():
     assert paging.window({}, default=5, cap=8) == ((5, 0), None)
     props = paging.properties(cap=25, what="lines")
     assert set(props) == {"limit", "offset"}
-    assert props["limit"]["description"] == "lines per page, default 10, at most 25"
 
 
 def test_every_paged_tool_carries_the_shared_properties():

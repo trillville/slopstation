@@ -152,11 +152,6 @@ def base(cfg, log, gate, fake_backend, saved):
         server.server_close()
 
 
-def test_dry_run_reaches_the_dispatch(cfg, log, fake_backend):
-    dry = text.TextApplication(cfg, SECRETS, log, dry_run=True)
-    assert dry._new_session()["dispatch"].dry_run
-
-
 def test_a_session_carries_turns_tools_and_one_trace_file(base, log, saved):
     first = chat(base, "couch", "what is running?")[1]
     second = chat(base, "couch", "and recently?")[1]

@@ -2,7 +2,6 @@
 
 import json
 import sys
-import time
 import types
 
 import pytest
@@ -538,4 +537,3 @@ def test_scrub_is_recursive_and_keeps_the_rest():
         passthrough.scrub("failed: https://api/x?key=KEY123&access_token=TOK&steamid=1")
         == "failed: https://api/x?key=[redacted]&access_token=[redacted]&steamid=1"
     )
-    assert time.time() > 0  # keeps the import honest

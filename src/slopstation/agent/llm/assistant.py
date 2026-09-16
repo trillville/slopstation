@@ -229,28 +229,6 @@ def as_tools(tools, log=None):
     return StaticTools(tools, log) if isinstance(tools, dict) else tools
 
 
-def tool_impls(
-    dispatch,
-    log,
-    operations=None,
-    on_stop_listening=None,
-    voice=None,
-    steam=None,
-    media=None,
-):
-    """Every callable implementation for the supplied services, as a dict.
-    The Toolkit is the conversation-shaped view of the same thing."""
-    return Toolkit(
-        dispatch,
-        log,
-        operations=operations,
-        on_stop_listening=on_stop_listening,
-        voice=voice,
-        steam=steam,
-        media=media,
-    ).impls
-
-
 def game_title(appid):
     """The title behind an appid for a spoken phrase: installed name, owned
     name, or "that game" when the catalog has neither. Never an id aloud."""
@@ -331,16 +309,6 @@ def _pipecat_schemas(tools, log):
         )
         for spec in REGISTRY.select(list(tools.loaded))
     ]
-
-
-# `names` filters to the tools present in a given impls set, so a renderer
-# can't offer a tool that isn't callable; None renders every spec.
-def anthropic_tools(names=None):
-    return REGISTRY.anthropic_tools(names)
-
-
-def openai_tools(names=None):
-    return REGISTRY.openai_tools(names)
 
 
 def _user_location(voice):

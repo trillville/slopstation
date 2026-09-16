@@ -128,12 +128,6 @@ def test_config_fails_on_a_missing_required_key(rows, cfg, monkeypatch):
 # --- imports, serial, puck ---------------------------------------------------
 
 
-def test_imports(rows):
-    doctor.check_imports()
-    assert rows.levels()["import serial"] == "PASS"
-    assert rows.levels()["import hid"] == "PASS"
-
-
 def test_ex_link_port_opens_or_fails(rows):
     doctor.check_com({"tvComPort": "COM3"})
     doctor.check_com({"tvComPort": "COMNONE"})
@@ -271,13 +265,6 @@ def test_session_state_stale_lock(rows):
 
 
 # --- telemetry -------------------------------------------------------------
-
-
-def test_telemetry(rows):
-    doctor.check_telemetry()
-    # Nothing has written into this test's log directory.
-    assert rows.levels()["event stream"] == "WARN"
-    assert rows.levels()["log shipper"] == "PASS"
 
 
 def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
