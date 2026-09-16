@@ -113,28 +113,6 @@ def refresh_collections() -> int:
     return 0
 
 
-def show() -> int:
-    index = load()
-    rows = sorted(
-        index.get("installed", []), key=lambda r: r.get("lastPlayed", 0), reverse=True
-    )
-    if not rows:
-        print("no index - run: python -m slopstation.agent.tools.library refresh")
-        return 1
-    print(f"refreshed {index.get('refreshed', '?')} - {len(rows)} installed")
-    for r in rows:
-        last = (
-            time.strftime("%Y-%m-%d", time.localtime(r["lastPlayed"]))
-            if r.get("lastPlayed")
-            else "never"
-        )
-        print(f"  {r['appid']:>8}  {last}  {r['name']}")
-    return 0
-
-
-# --- Steam account and metadata -----------------------------------------------
-
-
 def meta_cache_file():
     return paths.state("metadata-cache.json")
 
@@ -395,18 +373,10 @@ def catalog_lines() -> list[str]:
     return [line for _, _, line in lines]
 
 
-def catalog() -> int:
-    lines = catalog_lines()
-    text = "\n".join(lines)
-    print(text)
-    print(f"\n# {len(lines)} games, ~{len(text) // 4} tokens", file=sys.stderr)
-    return 0
-
-
 def usage() -> int:
     print(
         "usage: python -m slopstation.agent.tools.library sync | refresh [--owned] "
-        "[--meta [N]] | show | catalog"
+        "[--meta [N]]"
     )
     return 2
 
@@ -425,9 +395,5 @@ if __name__ == "__main__":
             n = int(args[i + 1]) if len(args) > i + 1 and args[i + 1].isdigit() else 200
             refresh_meta([r["appid"] for r in load().get("installed", [])], n)
         sys.exit(rc)
-    elif args[:1] == ["show"]:
-        sys.exit(show())
-    elif args[:1] == ["catalog"]:
-        sys.exit(catalog())
     else:
         sys.exit(usage())

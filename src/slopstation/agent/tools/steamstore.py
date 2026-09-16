@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import time
 
 from slopstation import config, logbook, paths, statefile
@@ -592,40 +591,3 @@ def refresh_deals() -> int:
     statefile.write(deals_file(), deals, indent=1)
     log("deals_synced", specials=len(specials), wishlist=len(wishlist))
     return 0
-
-
-def probe(args: list[str]) -> int:
-    """Run a live store request from the command line."""
-    what = args[0] if args else "deals"
-    out: object
-    if what == "deals":
-        refresh_deals()
-        out = load_deals()
-    elif what == "search":
-        out = fetch_store_search(term=" ".join(args[1:]))
-    elif what == "reviews":
-        out = fetch_reviews(int(args[1]))
-    elif what == "news":
-        out = fetch_news(int(args[1]))
-    elif what == "hltb":
-        out = fetch_hltb(" ".join(args[1:]))
-    elif what == "trending":
-        out = fetch_trending()
-    elif what == "recent":
-        out = fetch_recently_played()
-    else:
-        return usage()
-    print(json.dumps(out, indent=2))
-    return 0
-
-
-def usage() -> int:
-    print(
-        "usage: python -m slopstation.agent.tools.steamstore <deals|search ...|reviews <appid>|news <appid>"
-        "|hltb <name>|trending|recent>"
-    )
-    return 2
-
-
-if __name__ == "__main__":
-    sys.exit(probe(sys.argv[1:]))

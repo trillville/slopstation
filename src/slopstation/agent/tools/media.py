@@ -1975,7 +1975,9 @@ def from_config(cfg, secrets, log):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Inspect and request media")
+    parser = argparse.ArgumentParser(
+        description="Check the media stack and Proton's port"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("doctor", "proton-port"):
         sub.add_parser(name)
@@ -1984,30 +1986,6 @@ def main(argv=None):
     qbit_port = sub.add_parser("set-qbit-port")
     qbit_port.add_argument("port", type=int)
     qbit_port.add_argument("--execute", action="store_true")
-    find = sub.add_parser("find")
-    find.add_argument("kind", choices=("movie", "series"))
-    find.add_argument("query")
-    library = sub.add_parser("library")
-    library.add_argument("kind", choices=("movie", "series"))
-    library.add_argument("catalog_id", type=int)
-    movie = sub.add_parser("request-movie")
-    movie.add_argument("tmdb_id", type=int)
-    movie.add_argument("--preset", choices=PRESETS, default="default")
-    movie.add_argument("--execute", action="store_true")
-    series = sub.add_parser("request-series")
-    series.add_argument("tvdb_id", type=int)
-    series.add_argument("--preset", choices=PRESETS, default="default")
-    series.add_argument("--season", action="append", type=int, dest="seasons")
-    series.add_argument("--execute", action="store_true")
-    delete_movie = sub.add_parser("delete-movie")
-    delete_movie.add_argument("tmdb_id", type=int)
-    delete_movie.add_argument("--execute", action="store_true")
-    delete_series = sub.add_parser("delete-series")
-    delete_series.add_argument("tvdb_id", type=int)
-    scope = delete_series.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--season", action="append", type=int, dest="seasons")
-    scope.add_argument("--all-seasons", action="store_true")
-    delete_series.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
 
     log = logbook.logger("voice")
@@ -2038,53 +2016,6 @@ def main(argv=None):
             print(json.dumps(result, indent=2))
             return 0 if result["state"] in ("active", "inactive") else 1
 
-        service = from_config(cfg, secrets, log)
-        if service is None:
-            print("media is disabled or its configuration/API keys are incomplete")
-            return 1
-        if args.command == "find":
-            result = service.find(args.kind, args.query)
-        elif args.command == "library":
-            result = service.library(args.kind, args.catalog_id)
-        elif not args.execute:
-            print("change not submitted; repeat with --execute")
-            return 2
-        else:
-            from slopstation.agent.tools import operations
-
-            store = operations.OperationStore(log)
-            if args.command == "request-movie":
-                result = operations.track(
-                    store, service.request_movie(args.tmdb_id, args.preset)
-                )
-            elif args.command == "request-series":
-                result = operations.track(
-                    store,
-                    service.request_series(args.tvdb_id, args.preset, args.seasons),
-                )
-            elif args.command == "delete-movie":
-                covered, command_ids = operations.covered_by_delete(
-                    store, "movie", args.tmdb_id
-                )
-                result = service.delete_movie(args.tmdb_id, command_ids)
-                operations.record_deleted(store, covered, result)
-            else:
-                covered, command_ids = operations.covered_by_delete(
-                    store,
-                    "series",
-                    args.tvdb_id,
-                    args.seasons,
-                    args.all_seasons,
-                    service.episodes_in_seasons(args.tvdb_id, args.seasons)
-                    if not args.all_seasons
-                    else [],
-                )
-                result = service.delete_series(
-                    args.tvdb_id, args.seasons, args.all_seasons, command_ids
-                )
-                operations.record_deleted(store, covered, result)
-        print(json.dumps(result, indent=2))
-        return 0
     except MediaError as e:
         print(f"media request failed: {e}")
         return 1

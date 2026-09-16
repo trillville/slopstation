@@ -174,6 +174,11 @@ Under `state\`:
 ssh <sshHost> status
 ssh <sshHost> version
 
+# the game catalog, and the two audio checks
+.venv\Scripts\python -m slopstation.agent.tools.library refresh   # --owned, --meta [N]
+.venv\Scripts\python -m slopstation.agent.voice --devices         # list audio devices
+.venv\Scripts\python -m slopstation.agent.voice --announce-test   # speak one bulletin
+
 # tests, as CI runs them
 .venv\Scripts\pytest
 .venv\Scripts\ruff check .
