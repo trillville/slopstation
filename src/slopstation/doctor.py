@@ -1042,18 +1042,41 @@ def check_operations():
         report(PASS, "operations", note)
 
 
+# The voice lane's readiness events, newest wins: the mic is armed after
+# agent_up or a rebuilt device, waiting after a miss, rebuilding after a
+# stream death or a failed rebuild.
+READINESS = {
+    "agent_up": "armed",
+    "audio_device": "armed",
+    "audio_device_wait": "waiting for the microphone",
+    "wake_stream_died": "mic stream died, rebuilding",
+    "audio_rebuild_failed": "mic stream died, rebuilding",
+}
+
+
 def check_voice_agent():
-    _process_row(
+    running = _process_row(
         "voice agent",
         "voice",
-        "running (wake word armed)",
+        "running (text, MCP and the monitors are up)",
         "not running - wake word deaf (chord unaffected)",
         "run Start-Slopstation.bat",
     )
+    if not running:
+        return
+    # The task proves the process, not the wake word: the lane checks in before
+    # the mic wait, so a dead microphone keeps it alive and paged by nobody.
+    state = READINESS.get(_latest_events(READINESS).get("voice", ""), "")
+    if state == "armed":
+        report(PASS, "wake word", "armed")
+    elif state:
+        report(WARN, "wake word", state, "check the audio device in config.json")
+    else:
+        report(WARN, "wake word", "no readiness event on record", "")
 
 
-def _latest_checkins():
-    """Each lane's most recent check-in result, lane -> event name.
+def _latest_events(names):
+    """Each lane's most recent event among `names`, lane -> event name.
 
     A lane logs its first check-in and then only changes, so one that started
     days ago and is still checking in has nothing in today's file. Read back
@@ -1078,13 +1101,13 @@ def _latest_checkins():
         except OSError:
             continue
         for line in lines:
-            if '"checkin' not in line:
+            if not any(f'"{name}"' in line for name in names):
                 continue
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
-            if rec.get("event") in ("checkin", "checkin_failed"):
+            if rec.get("event") in names:
                 in_file[rec.get("lane")] = rec.get("event")
         for lane, event in in_file.items():
             latest.setdefault(lane, event)
@@ -1117,7 +1140,7 @@ def check_sentry():
 
     # From the event stream, so this costs no network and cannot create a
     # false check-in for a lane that is actually down.
-    seen = _latest_checkins()
+    seen = _latest_events(("checkin", "checkin_failed"))
     failing = sorted(lane for lane, e in seen.items() if e == "checkin_failed")
     if failing:
         report(

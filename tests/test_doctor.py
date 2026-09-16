@@ -267,6 +267,40 @@ def test_session_state_stale_lock(rows):
 # --- telemetry -------------------------------------------------------------
 
 
+def _write_events(path, *records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
+    """The task running proves the process; the events say whether the mic
+    ever answered. Newest event wins across files, so a lane that has been
+    waiting on a device since yesterday still reads as waiting."""
+    from slopstation import events
+
+    monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
+    _write_events(
+        events._path("20260913"),
+        {"lane": "voice", "event": "agent_up"},
+        {"lane": "voice", "event": "audio_device_wait"},
+    )
+    doctor.check_voice_agent()
+    assert rows.levels()["voice agent"] == "PASS"
+    assert rows.levels()["wake word"] == "WARN"
+    assert rows.detail("wake word") == "waiting for the microphone"
+
+    rows.clear()
+    _write_events(events._path("20260914"), {"lane": "voice", "event": "audio_device"})
+    doctor.check_voice_agent()
+    assert rows.levels()["wake word"] == "PASS"
+
+    # A lane that is not running gets no readiness row at all.
+    rows.clear()
+    monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Ready"})
+    doctor.check_voice_agent()
+    assert rows.levels()["voice agent"] == "WARN" and "wake word" not in rows.names()
+
+
 def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
     """A lane logs its first check-in and then only changes, so lanes that
     started days ago leave nothing in today's file and still count."""

@@ -9,7 +9,7 @@ import pytest
 
 import helpers
 from helpers import CapturingLog
-from slopstation import config, events, logbook
+from slopstation import checkin, config, events, logbook
 from slopstation.agent import voice
 from slopstation.agent.speech import announce
 from slopstation.agent.telemetry import sentry
@@ -427,20 +427,25 @@ def test_audio_opens_last(monkeypatch, run):
     # dead mic - so the monitors must already exist when it is called, or a
     # microphone failure takes the whole control plane down with it.
     at_audio = {}
+    checked_in = []
     monkeypatch.setattr(FakeSteam, "available_answer", True)
+    monkeypatch.setattr(checkin, "start", lambda lane, cfg: checked_in.append(lane))
 
     def counting_open(voice):
         at_audio["monitors"] = len(FakeSteamMonitor.made) + len(FakeMediaMonitor.made)
+        at_audio["checked_in"] = list(checked_in)
         return ("PA", 0, 1)
 
     monkeypatch.setattr(voice, "open_audio", counting_open)
     cfg = make_config()
     cfg["media"] = {"enabled": True}
-    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    rc, log, calls = run([], cfg, wakes=one_wake())
     assert at_audio["monitors"] == 2, (
         f"open_audio ran with {at_audio['monitors']} monitor(s) built - "
         "the control plane must be up before the mic wait"
     )
+    # Liveness too: a dead microphone must not read as a dead lane.
+    assert at_audio["checked_in"] == ["voice"], at_audio
 
 
 def test_a_crashing_session_closes_with_fail(run):

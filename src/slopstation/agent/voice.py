@@ -403,6 +403,16 @@ def main():
     # Configure tracing before the first session.
     sentry.setup(cfg, log)
 
+    # Liveness before the mic: the process is doing its job once the servers
+    # and monitors are up, whether or not a microphone ever answers. The
+    # doctor's "wake word" row reads readiness from the events. A one-shot
+    # --once run would page on its own quiet exit, so it stays out.
+    if not args.once:
+        events.start_heartbeat("voice")
+        # This lane's own cron monitor: its death pages on its own, and the
+        # listener's stays green. No-ops without a sentryDsn.
+        checkin.start("voice", cfg)
+
     # LAST: open_audio blocks until the configured device answers (~15 s on a
     # cold boot; forever on a dead mic). Everything above must already be
     # serving - text, MCP, and the monitors must not wait on a microphone.
@@ -422,14 +432,6 @@ def main():
         threshold=voice["wakeThreshold"],
         dry_run=args.dry_run or None,
     )
-    # Own thread: the wake loop blocks for minutes. A one-shot --once run
-    # would page on its own quiet exit, so it stays out.
-    if not args.once:
-        events.start_heartbeat("voice")
-        # This lane's own cron monitor: its death pages on its own, and the
-        # listener's stays green. No-ops without a sentryDsn.
-        checkin.start("voice", cfg)
-
     session_ctx = None
     while True:
         if session_ctx is not None:
