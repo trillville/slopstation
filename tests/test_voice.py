@@ -507,3 +507,24 @@ def test_a_steam_session_that_raises_disables_only_itself(monkeypatch, run):
     assert disabled["reason"] == "secrets.json unreadable"
     assert FakeSteamMonitor.made == [] and len(FakeMediaMonitor.made) == 1
     assert calls[0]["steam"] is None and calls[0]["media"] == "MEDIA"
+
+
+def test_a_corrupt_ledger_disables_the_operations_lane_only(monkeypatch, run):
+    """The store refuses a ledger it cannot read (test_operations); here the
+    lane keeps going without it: no announcer, no operation monitors, text
+    and the session up, one lane_disabled line naming the file."""
+
+    class RefusingStore(FakeOperationStore):
+        def __init__(self, log):
+            raise ValueError("operations.json is not valid JSON: line 9")
+
+    monkeypatch.setattr(operations, "OperationStore", RefusingStore)
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
+    cfg = make_config()
+    cfg["media"] = {"enabled": True}
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert rc == 0 and len(calls) == 1 and calls[0]["operations"] is None
+    (disabled,) = [e for e in log.find("lane_disabled") if e["what"] == "operations"]
+    assert "not valid JSON" in disabled["reason"]
+    assert FakeAnnouncer.made == [] and FakeSteamMonitor.made == []
+    assert FakeMediaMonitor.made == [] and calls[0]["media"] == "MEDIA"

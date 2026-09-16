@@ -41,8 +41,12 @@ class Services:
             events.Ticker("library-sync", library.SYNC_S, library.periodic_sync())
         )
 
-        self.operations = operations_mod.OperationStore(log)
-        if stt_live and not self.dry_run:
+        # A ledger that cannot be read disables everything that would write
+        # it; the file is left for a person, and the doctor names it.
+        self.operations = self._optional(
+            "operations", operations_mod.OperationStore, log
+        )
+        if self.operations is not None and stt_live and not self.dry_run:
             self.announcer = self._optional("announcer", self._announcer, duck)
 
         # Remote install + download status over ClientComm. Without a refresh
@@ -72,7 +76,7 @@ class Services:
                 reason="no refresh token - run steam_session enroll",
             )
 
-        if self.steam is not None:
+        if self.steam is not None and self.operations is not None:
             self._monitor(
                 "operation_monitor",
                 lambda: operations_monitors.SteamMonitor(
@@ -85,7 +89,7 @@ class Services:
             )
 
         self.media = self._optional("media", media.from_config, cfg, secrets, log)
-        if self.media is not None:
+        if self.media is not None and self.operations is not None:
             # Its reconcile dispatches deferred Sonarr searches and
             # indexer-recovery retries, both of which POST to the authority.
             poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)

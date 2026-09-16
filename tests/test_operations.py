@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import helpers
 from slopstation.agent.speech import announce
 from slopstation.agent.tools import operations, operations_monitors
@@ -847,3 +849,25 @@ def test_a_persisted_ledger_round_trips_untouched(log):
     assert after["op-series"]["metadata"]["search_retry_after"] == 1757824800
     assert after["op-movie"]["announcement_pending"] is True
     assert len(after["op-series"]["notifications"]) == 2
+
+
+def test_a_corrupt_ledger_is_refused_and_left_alone(log):
+    """Half a line at the end of operations.json, from a crash mid-write on a
+    build before tmp+replace, used to load as an empty ledger and be written
+    back empty on the next observation: every tracked job and every pending
+    bulletin gone. The store now refuses to construct; the file stays for a
+    person, and the doctor's operations row names it."""
+    target = operations.operations_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('[{"id": "op-1", "state": "RUNNING"', encoding="utf-8")
+    before = target.read_bytes()
+    with pytest.raises(ValueError, match="operations.json is not valid JSON"):
+        operations.OperationStore(log)
+    target.write_text('{"not": "a list"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="not a list of operations"):
+        operations.OperationStore(log)
+    target.write_bytes(before)
+    assert target.read_bytes() == before
+    # Absent is not corrupt: a fresh box starts with an empty ledger.
+    target.unlink()
+    assert operations.OperationStore(log).all() == []

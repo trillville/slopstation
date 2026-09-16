@@ -385,8 +385,8 @@ def main(argv=None):
         rows = store.active() if args.active else store.recent(50)
         if not rows:
             print("no operations")
-        for operation in rows:
-            print(_line(operation))
+        for row in rows:
+            print(_line(row))
         return 0
     if args.command == "show":
         operation = store.get(args.operation)

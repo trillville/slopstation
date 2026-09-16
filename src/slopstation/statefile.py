@@ -19,6 +19,23 @@ def load(path: pathlib.Path, default: Any) -> Any:
         return default
 
 
+def load_strict(path: pathlib.Path, default: Any) -> Any:
+    """A JSON state file, `default` when absent, and a ValueError naming the
+    file when it exists but cannot be read or parsed. For a file whose loss
+    would matter: a caller that took `default` there would write it back
+    over the real thing on its next save."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return default
+    except OSError as e:
+        raise ValueError(f"{path.name} unreadable: {e}") from e
+    try:
+        return json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"{path.name} is not valid JSON: {e}") from e
+
+
 @contextlib.contextmanager
 def guard(path: pathlib.Path):
     """Serialize a state file update across threads and processes.
