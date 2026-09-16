@@ -47,9 +47,18 @@ class Acknowledged:
 
 class TextApplication:
     def __init__(
-        self, cfg, secrets, log, operations=None, steam=None, media=None, dry_run=False
+        self,
+        cfg,
+        secrets,
+        log,
+        operations=None,
+        steam=None,
+        media=None,
+        dry_run=False,
+        health=None,
     ):
         self.cfg = cfg
+        self.health = health  # what the owning process has up; None answers {}
         self.secrets = secrets
         self.log = log
         self.operations = operations
@@ -174,6 +183,18 @@ class TextHandler(BaseHTTPRequestHandler):
         expected = "Bearer " + self.server.token
         return hmac.compare_digest(supplied, expected)
 
+    def do_GET(self):
+        """/health: what this process has running, for the doctor. Behind the
+        token like everything else here; it names services and ports."""
+        if self.path != "/health":
+            self._json(404, {"ok": False, "error": "not found"})
+            return
+        if not self._authorized():
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
+        health = self.server.app.health
+        self._json(200, {"ok": True, **(health() if health else {})})
+
     def do_POST(self):
         if self.path != "/v1/chat":
             self._json(404, {"ok": False, "error": "not found"})
@@ -202,7 +223,16 @@ class TextHandler(BaseHTTPRequestHandler):
             self._json(500, {"ok": False, "error": "assistant request failed"})
 
 
-def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=False):
+def start(
+    cfg,
+    secrets,
+    log,
+    operations=None,
+    steam=None,
+    media=None,
+    dry_run=False,
+    health=None,
+):
     text_cfg = cfg.get("textInterface") or {}
     if not text_cfg.get("enabled"):
         return None
@@ -225,7 +255,7 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=Fa
         return None
     host = str(text_cfg.get("host", "127.0.0.1"))
     port = int(text_cfg.get("port", 8765))
-    app = TextApplication(cfg, secrets, log, operations, steam, media, dry_run)
+    app = TextApplication(cfg, secrets, log, operations, steam, media, dry_run, health)
     try:
         server = TextServer((host, port), TextHandler)
     except OSError as e:

@@ -198,3 +198,24 @@ def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
     gate.release.set()
     stall_thread.join(timeout=10)
     assert stalled["result"][1]["ok"]
+
+
+def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
+    server = text.start(
+        cfg, SECRETS, log, health=lambda: {"steam": True, "media": False}
+    )
+    assert server is not None
+    try:
+        host, port = server.server_address
+        url = f"http://{host}:{port}/health"
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(url, timeout=5)
+        assert denied.value.code == 401
+        request = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {TOKEN}"}
+        )
+        with urllib.request.urlopen(request, timeout=5) as r:
+            assert json.loads(r.read()) == {"ok": True, "steam": True, "media": False}
+    finally:
+        server.shutdown()
+        server.server_close()

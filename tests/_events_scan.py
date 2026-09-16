@@ -15,6 +15,7 @@ DYNAMIC = {
     "enter_dispatched": {"dur_ms"},
     "enter_redispatched": {"dur_ms"},
     "exlink_send": {"again"},  # couch.tv_command(**fields) passthrough
+    "lane_up": {"active", "mounts"},  # services._monitor(**fields) passthrough
 }
 PC_DYNAMIC = {
     f"{t}_start": set()

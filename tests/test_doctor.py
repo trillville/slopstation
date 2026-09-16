@@ -301,6 +301,43 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
     assert rows.levels()["voice agent"] == "WARN" and "wake word" not in rows.names()
 
 
+def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkeypatch):
+    """A real text server on a free port answers /health; the row names what
+    the voice process has up and which monitors have stopped."""
+    from slopstation.agent.interfaces import text
+
+    token = "t" * 64
+    monkeypatch.setattr(config, "secrets", lambda: {"textInterfaceToken": token})
+    live = {**cfg, "textInterface": {"enabled": True, "host": "127.0.0.1", "port": 0}}
+    server = text.start(
+        live,
+        {"textInterfaceToken": token, "anthropicApiKey": "a" * 64},
+        helpers.CapturingLog("voice"),
+        health=lambda: {
+            "operations": True,
+            "steam": False,
+            "monitors": {"disk": False},
+        },
+    )
+    assert server is not None
+    try:
+        live["textInterface"]["port"] = server.server_address[1]
+        doctor.check_text(live)
+        assert rows.levels()["text interface"] == "WARN"
+        assert rows.detail("text interface").endswith("stopped: disk")
+        assert "up: operations;" in rows.detail("text interface")
+    finally:
+        server.shutdown()
+        server.server_close()
+    rows.clear()
+    doctor.check_text(live)  # nothing listening now
+    assert rows.levels()["text interface"] == "WARN"
+    assert rows.detail("text interface").startswith("no answer on")
+    rows.clear()
+    doctor.check_text({**cfg, "textInterface": {"enabled": False}})
+    assert rows.levels()["text interface"] == "PASS"
+
+
 def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
     """A lane logs its first check-in and then only changes, so lanes that
     started days ago leave nothing in today's file and still count."""

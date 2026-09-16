@@ -284,6 +284,15 @@ def main():
     duck = make_ducker(cfg, args.dry_run)
     services = Services(cfg, secrets, log, args.dry_run)
     services.start(stt_live, duck)
+    try:
+        return wake_loop(args, cfg, secrets, matcher, stt_live, duck, services)
+    finally:
+        services.stop()
+
+
+def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
+    """Open the microphone and run sessions until the process ends."""
+    voice = cfg["voice"]
     announcer, operation_store = services.announcer, services.operations
     steam, media_service = services.steam, services.media
 

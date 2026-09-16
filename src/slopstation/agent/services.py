@@ -5,6 +5,7 @@ Every piece is optional and says so with lane_up or lane_disabled. A dry run
 starts nothing that would write to an authority."""
 
 import time
+from typing import Any
 
 from slopstation import events
 
@@ -12,10 +13,10 @@ from slopstation import events
 class Services:
     def __init__(self, cfg, secrets, log, dry_run=False):
         self.cfg, self.secrets, self.log, self.dry_run = cfg, secrets, log, dry_run
-        self.operations = None
-        self.announcer = None
-        self.steam = None
-        self.media = None
+        self.operations: Any = None
+        self.announcer: Any = None
+        self.steam: Any = None
+        self.media: Any = None
         self.monitors: list = []
         self.servers: list = []
         self.tickers: list = []
@@ -27,7 +28,6 @@ class Services:
         before the first wake."""
         cfg, secrets, log = self.cfg, self.secrets, self.log
         from slopstation.agent.interfaces import mcp, text
-        from slopstation.agent.speech import announce
         from slopstation.agent.tools import (
             library,
             media,
@@ -43,22 +43,18 @@ class Services:
 
         self.operations = operations_mod.OperationStore(log)
         if stt_live and not self.dry_run:
-            self.announcer = announce.Announcer(cfg["voice"], secrets, log)
-            self.announcer.store = self.operations
-            self.announcer.duck = duck
-            self.operations.on_terminal = self.announcer.submit
-            self.operations.on_notification = self.announcer.submit_notification
-            for operation in self.operations.pending_announcements():
-                self.announcer.submit(operation)
-            for notification in self.operations.pending_notifications():
-                self.announcer.submit_notification(notification)
+            self.announcer = self._optional("announcer", self._announcer, duck)
 
         # Remote install + download status over ClientComm. Without a refresh
         # token, install_game keeps its controller-driven fallback. Never fatal.
-        account = steam_session.SteamSession(
-            secrets, log, machine_name=cfg.get("steamMachineName")
+        account = self._optional(
+            "steam_session",
+            steam_session.SteamSession,
+            secrets,
+            log,
+            machine_name=cfg.get("steamMachineName"),
         )
-        if account.available():
+        if account is not None and account.available():
             self.steam = account
             exp = account.token_expiry()
             log(
@@ -69,7 +65,7 @@ class Services:
                     time.strftime("%Y-%m-%d", time.localtime(exp)) if exp else None
                 ),
             )
-        else:
+        elif account is not None:
             log(
                 "lane_disabled",
                 what="steam_session",
@@ -88,7 +84,7 @@ class Services:
                 live_only=True,
             )
 
-        self.media = media.from_config(cfg, secrets, log)
+        self.media = self._optional("media", media.from_config, cfg, secrets, log)
         if self.media is not None:
             # Its reconcile dispatches deferred Sonarr searches and
             # indexer-recovery retries, both of which POST to the authority.
@@ -133,18 +129,71 @@ class Services:
                 steam=self.steam,
                 media=self.media,
                 dry_run=self.dry_run,
+                health=self.health,
             )
         )
         # Forwards to the text interface over localhost, so it takes no tools
         # and no dry_run of its own - both ride along inside that hop.
         self._server(mcp.start(cfg, secrets, log))
 
+    def stop(self):
+        """Signal every thread this owner started; the servers close their
+        sockets. Nothing here waits for an authority: outstanding work stays
+        outstanding in the ledger."""
+        for ticker in self.tickers:
+            ticker.stop.set()
+        for monitor in self.monitors:
+            monitor.stop()
+        for server in self.servers:
+            server.shutdown()
+            server.server_close()
+        if self.announcer is not None:
+            self.announcer.stop()
+
+    def health(self):
+        """What is up, for the text interface's /health and the doctor."""
+        return {
+            "operations": self.operations is not None,
+            "announcer": self.announcer is not None,
+            "steam": self.steam is not None,
+            "media": self.media is not None,
+            "monitors": {
+                m.THREAD_NAME: getattr(m, "ticker", None) is not None
+                and m.ticker.is_alive()
+                for m in self.monitors
+            },
+            "servers": [server.server_address[1] for server in self.servers],
+        }
+
+    def _announcer(self, duck):
+        from slopstation.agent.speech import announce
+
+        announcer = announce.Announcer(self.cfg["voice"], self.secrets, self.log)
+        announcer.store = self.operations
+        announcer.duck = duck
+        self.operations.on_terminal = announcer.submit
+        self.operations.on_notification = announcer.submit_notification
+        for operation in self.operations.pending_announcements():
+            announcer.submit(operation)
+        for notification in self.operations.pending_notifications():
+            announcer.submit_notification(notification)
+        return announcer
+
+    def _optional(self, what, build, *args, **kwargs):
+        """Build one optional piece; a raise disables that piece, not the
+        lane. The rest keep starting, and the doctor names what is missing."""
+        try:
+            return build(*args, **kwargs)
+        except Exception as e:
+            self.log.error("lane_disabled", what=what, reason=str(e))
+            return None
+
     def _monitor(self, what, build, fields, live_only=False):
         """Build and start an optional poller and say so. A dry run never
         builds one that writes to an authority; None means not configured."""
         if live_only and self.dry_run:
             return
-        monitor = build()
+        monitor = self._optional(what, build)
         if monitor is None:
             return
         monitor.start()

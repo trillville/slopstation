@@ -72,6 +72,9 @@ class FakeAnnouncer:
     def abort_current(self):
         pass
 
+    def stop(self):
+        self.stopped = True
+
 
 class FakeOperationStore:
     made = []
@@ -98,10 +101,14 @@ class FakeSteamMonitor:
         self.steam = steam
         self.poll_s = 30
         self.started = False
+        self.stopped = False
         FakeSteamMonitor.made.append(self)
 
     def start(self):
         self.started = True
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeMediaMonitor:
@@ -111,10 +118,14 @@ class FakeMediaMonitor:
     def __init__(self, store, service, log, poll_s=30):
         self.poll_s = poll_s
         self.started = False
+        self.stopped = False
         FakeMediaMonitor.made.append(self)
 
     def start(self):
         self.started = True
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeProtonPortMonitor:
@@ -123,10 +134,14 @@ class FakeProtonPortMonitor:
     def __init__(self, poll_s=30):
         self.poll_s = poll_s
         self.started = False
+        self.stopped = False
         FakeProtonPortMonitor.made.append(self)
 
     def start(self):
         self.started = True
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeSteam:
@@ -456,3 +471,39 @@ def test_a_crashing_session_closes_with_fail(run):
     assert rc == 0
     assert "session_crashed" in log.events()
     assert log.find("session_close")[0]["ending"] == "fail"
+
+
+def test_the_services_stop_when_the_lane_ends(monkeypatch, run):
+    """Whatever the owner started, it signals on the way out: the monitors,
+    the announcer, the library ticker. Ctrl-C and --once take this path."""
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
+    cfg = make_config()
+    cfg["media"] = {"enabled": True, "protonPortSync": True}
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert rc == 0 and len(calls) == 1
+    started = [
+        *FakeSteamMonitor.made,
+        *FakeMediaMonitor.made,
+        *FakeProtonPortMonitor.made,
+    ]
+    assert len(started) == 3 and all(m.stopped for m in started), started
+    assert FakeAnnouncer.made[0].stopped
+
+
+def test_a_steam_session_that_raises_disables_only_itself(monkeypatch, run):
+    """One optional piece failing to build is a lane_disabled line with the
+    reason; the rest start and the wake loop still opens a session."""
+
+    class BrokenSteam(FakeSteam):
+        def __init__(self, secrets, log, machine_name=None):
+            raise OSError("secrets.json unreadable")
+
+    monkeypatch.setattr(steam_session, "SteamSession", BrokenSteam)
+    cfg = make_config()
+    cfg["media"] = {"enabled": True}
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert rc == 0 and len(calls) == 1
+    (disabled,) = [e for e in log.find("lane_disabled") if e["what"] == "steam_session"]
+    assert disabled["reason"] == "secrets.json unreadable"
+    assert FakeSteamMonitor.made == [] and len(FakeMediaMonitor.made) == 1
+    assert calls[0]["steam"] is None and calls[0]["media"] == "MEDIA"

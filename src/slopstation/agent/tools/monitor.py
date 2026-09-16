@@ -8,7 +8,6 @@ from slopstation import events
 
 class Monitor:
     THREAD_NAME = "monitor"
-    FAIL_EVENT = "operation_monitor_failed"
     log: Any
     poll_s: float
     ticker: events.Ticker | None = None
@@ -28,4 +27,4 @@ class Monitor:
         try:
             self.reconcile_once()
         except Exception as e:
-            self.log.error(self.FAIL_EVENT, err=str(e))
+            self.log.error("operation_monitor_failed", err=str(e))

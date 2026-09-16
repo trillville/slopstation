@@ -572,6 +572,7 @@ def check_voice(cfg):
     check_steam_session()
     check_media(cfg)
     check_media_monitoring(cfg)
+    check_text(cfg)
     check_remote(cfg)
     check_operations()
     check_voice_agent()
@@ -948,6 +949,43 @@ def check_media_monitoring(cfg):
         f"{sum(drift.values())} episode(s) armed with nobody chasing them: " + listed,
         "unmonitor the scope you did not ask for; RSS can grab into it",
     )
+
+
+def check_text(cfg):
+    """The text interface's /health: what the voice process has up. WARN-only."""
+    text = cfg.get("textInterface") if isinstance(cfg, dict) else None
+    if not isinstance(text, dict) or not text.get("enabled"):
+        report(PASS, "text interface", "disabled")
+        return
+    token = config.secrets().get("textInterfaceToken")
+    if not config.real_key(token):
+        report(
+            WARN, "text interface", "textInterfaceToken missing or a placeholder", ""
+        )
+        return
+    port = int(text.get("port", 8765))
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/health", headers={"Authorization": f"Bearer {token}"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as r:
+            health = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        report(
+            WARN,
+            "text interface",
+            f"no answer on {port} ({e})",
+            "the voice agent hosts it; check the voice lane above",
+        )
+        return
+    up = [k for k in ("operations", "announcer", "steam", "media") if health.get(k)]
+    monitors = health.get("monitors") or {}
+    dead = sorted(name for name, alive in monitors.items() if not alive)
+    detail = f"listening on {port}; up: {', '.join(up) or 'nothing'}; monitors: {len(monitors)}"
+    if dead:
+        report(WARN, "text interface", f"{detail}; stopped: {', '.join(dead)}", "")
+    else:
+        report(PASS, "text interface", detail)
 
 
 def check_remote(cfg):
