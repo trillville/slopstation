@@ -31,15 +31,16 @@ def log():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_home(tmp_path):
+def _fresh_home(tmp_path, monkeypatch):
     """A fresh runtime home per test - state, logs and markers move with
     paths.HOME - and a clean correlation context, since `turn` and `session`
     would otherwise carry into the next test's events."""
     from slopstation import events, paths
 
-    paths.HOME = tmp_path
+    monkeypatch.setattr(paths, "HOME", tmp_path)
     paths.state().mkdir()
-    events._last_day = None  # or the new home never gets its log directory
+    # Or the new home never gets its log directory.
+    monkeypatch.setattr(events, "_last_day", None)
     token = events._ctx.set({})
     try:
         yield
