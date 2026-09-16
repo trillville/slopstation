@@ -28,3 +28,22 @@ class Monitor:
             self.reconcile_once()
         except Exception as e:
             self.log.error("operation_monitor_failed", err=str(e))
+
+
+class ChangeOnly:
+    """Which failures a poller has already reported, keyed by what failed. An
+    outage is one line when it starts and one when it changes, not one line
+    per poll until someone notices."""
+
+    def __init__(self):
+        self._last: dict = {}
+
+    def changed(self, key, detail) -> bool:
+        """True when `detail` is news for `key`; records it either way."""
+        if detail == self._last.get(key):
+            return False
+        self._last[key] = detail
+        return True
+
+    def cleared(self, key) -> None:
+        self._last[key] = None

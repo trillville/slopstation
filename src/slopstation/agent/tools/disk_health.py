@@ -3,7 +3,7 @@
 import shutil
 
 from slopstation.agent.tools.media_clients import _clean_text
-from slopstation.agent.tools.monitor import Monitor
+from slopstation.agent.tools.monitor import ChangeOnly, Monitor
 
 DISK_POLL_S = 300
 # One 2160p remux is ~70 GB, so a threshold below that reports a volume that
@@ -28,19 +28,17 @@ class DiskHealthMonitor(Monitor):
         self.poll_s = poll_s
         self.free_warn_bytes = free_warn_bytes
         self._low = set()
-        self._last_failure = {}
+        self._failures = ChangeOnly()
 
     def reconcile_once(self):
         for mount in self.mounts:
             try:
                 self._check(mount, shutil.disk_usage(mount))
-                self._last_failure[mount] = None
+                self._failures.cleared(mount)
             except Exception as e:
                 detail = _clean_text(e)
-                # A vanished volume fails every poll; only the change is news.
-                if detail != self._last_failure.get(mount):
+                if self._failures.changed(mount, detail):
                     self.log.error("disk_watch_failed", mount=mount, err=detail)
-                    self._last_failure[mount] = detail
 
     def _check(self, mount, usage):
         free_gb = round(usage.free / 1024**3, 1)

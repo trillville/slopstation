@@ -15,7 +15,7 @@ from slopstation.agent.tools.media_clients import (
     _clean_text,
     _parse_time,
 )
-from slopstation.agent.tools.monitor import Monitor
+from slopstation.agent.tools.monitor import ChangeOnly, Monitor
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
 PROTON_INACTIVE_STATUSES = {"DestroyPortMappingCommunication", "Stopped", "Error"}
@@ -186,7 +186,7 @@ class ProtonPortMonitor(Monitor):
         self.exe = exe
         self.launch = launch
         self.sleep = sleep
-        self._last_failure = None
+        self._failures = ChangeOnly()
         self._last_state = None
         self._reset_watch()
 
@@ -318,10 +318,8 @@ class ProtonPortMonitor(Monitor):
     def _tick(self):
         try:
             self.reconcile_once()
-            self._last_failure = None
+            self._failures.cleared("qbittorrent")
         except Exception as e:
             detail = _clean_text(e)
-            # A client that stays down is one line, not one line per poll.
-            if detail != self._last_failure:
+            if self._failures.changed("qbittorrent", detail):
                 self.log.error("proton_port_sync_failed", err=detail)
-                self._last_failure = detail
