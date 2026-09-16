@@ -8,7 +8,6 @@ from slopstation import config, logbook
 from slopstation.agent.tools import library, media, steam_session
 from slopstation.agent.tools.monitor import Monitor
 from slopstation.agent.tools.operations import (
-    CANCELED,
     FAILED,
     POLL_S,
     RUNNING,
@@ -295,17 +294,9 @@ class MediaMonitor(Monitor):
                     )
                 operation = self._dispatch_search_retry(operation, now)
                 observation = self.media.observe(operation)
-                state = (
-                    CANCELED
-                    if observation.get("canceled")
-                    else FAILED
-                    if observation.get("failed")
-                    else SUCCEEDED
-                    if observation["complete"]
-                    else RUNNING
-                )
+                state = observation.state
                 previous_phase = (operation.get("progress") or {}).get("phase")
-                progress = observation.get("progress", {})
+                progress = observation.progress
                 phase = progress.get("phase")
                 if (
                     state == RUNNING
@@ -313,9 +304,7 @@ class MediaMonitor(Monitor):
                     and previous_phase == "searching"
                 ):
                     operation = self._schedule_search_retry(operation, now)
-                self.store.observe(
-                    operation["id"], state, progress, observation.get("detail", "")
-                )
+                self.store.observe(operation["id"], state, progress, observation.detail)
                 if state == RUNNING and phase != previous_phase:
                     if phase == "downloading":
                         self.store.notify(

@@ -1,6 +1,7 @@
 """Request and inspect media through Radarr and Sonarr."""
 
 import argparse
+import dataclasses
 import datetime
 import json
 from pathlib import Path
@@ -27,8 +28,58 @@ from slopstation.agent.tools.media_proton import (
     ProtonPortMonitor,
     read_proton_port_state,
 )
+from slopstation.agent.tools.operations import CANCELED, FAILED, RUNNING, SUCCEEDED
 
 PRESETS = ("default", "1080p", "2160p")
+
+
+@dataclasses.dataclass(frozen=True)
+class Observation:
+    """One look at the authority for a tracked request. `state` is decided
+    here, where the evidence is, and is an operations state: RUNNING while
+    the authority still holds the work, SUCCEEDED, FAILED or CANCELED once it
+    does not. `metadata_ready` is False while Sonarr is still naming the
+    episodes a request covers."""
+
+    state: str
+    progress: dict[str, Any] = dataclasses.field(default_factory=dict)
+    detail: str = ""
+    metadata_ready: bool = True
+
+    @property
+    def complete(self) -> bool:
+        return self.state == SUCCEEDED
+
+    @property
+    def failed(self) -> bool:
+        return self.state == FAILED
+
+    @property
+    def canceled(self) -> bool:
+        return self.state == CANCELED
+
+
+def observed(
+    complete=False,
+    failed=False,
+    canceled=False,
+    progress=None,
+    detail="",
+    metadata_ready=True,
+) -> Observation:
+    """An Observation from what a producer knows. Canceled beats failed
+    beats complete: an unmonitored scope is a cancellation whatever else
+    the queue says, and a failed search is not a success."""
+    state = (
+        CANCELED
+        if canceled
+        else FAILED
+        if failed
+        else SUCCEEDED
+        if complete
+        else RUNNING
+    )
+    return Observation(state, dict(progress or {}), detail, metadata_ready)
 
 
 def _command(client, command_id):
@@ -987,7 +1038,7 @@ class MediaService:
                 baseline_episode_files=baseline_episode_files,
                 episode_ids=episode_ids,
             )
-            if observation["complete"]:
+            if observation.complete:
                 return self._submission(
                     "series",
                     series_id,
@@ -1003,7 +1054,7 @@ class MediaService:
                 )
             if episode_ids:
                 command_ids = self._search("series", series_id, episode_ids=episode_ids)
-            elif observation["metadata_ready"]:
+            elif observation.metadata_ready:
                 command_ids = self._search_series(series_id, seasons)
             else:
                 search_pending = True
@@ -1268,17 +1319,17 @@ class MediaService:
         movie = self._one(self.radarr.get(f"movie/{int(movie_id)}"), "Radarr", "movie")
         if movie.get("hasFile"):
             if baseline_file_id is None:
-                return {
-                    "complete": True,
-                    "progress": {"phase": "ready", "percent": 100},
-                    "detail": "Radarr reports the movie imported",
-                }
+                return observed(
+                    complete=True,
+                    progress={"phase": "ready", "percent": 100},
+                    detail="Radarr reports the movie imported",
+                )
             if self._movie_file_id(int(movie_id)) != int(baseline_file_id):
-                return {
-                    "complete": True,
-                    "progress": {"phase": "ready", "percent": 100},
-                    "detail": "Radarr imported the requested movie upgrade",
-                }
+                return observed(
+                    complete=True,
+                    progress={"phase": "ready", "percent": 100},
+                    detail="Radarr imported the requested movie upgrade",
+                )
         records = self._queue_records(self.radarr, "movieId", int(movie_id))
         percent = self._queue_progress(records)
         if records:
@@ -1296,21 +1347,21 @@ class MediaService:
             except MediaError as e:
                 if promise != "search":
                     raise
-                return {
-                    "complete": True,
-                    "failed": True,
-                    "progress": {"phase": "search_failed"},
-                    "detail": str(e),
-                }
+                return observed(
+                    complete=True,
+                    failed=True,
+                    progress={"phase": "search_failed"},
+                    detail=str(e),
+                )
             if promise == "search" and phase not in ("searching", "importing"):
                 # The search ran and the client holds nothing for it: that
                 # is the promise, kept; the old file is what it found.
-                return {
-                    "complete": True,
-                    "progress": {"phase": "searched"},
-                    "detail": "Radarr searched and found nothing better than "
+                return observed(
+                    complete=True,
+                    progress={"phase": "searched"},
+                    detail="Radarr searched and found nothing better than "
                     "the file it holds",
-                }
+                )
             progress = {"phase": phase}
             detail = (
                 "Radarr is importing the requested movie file"
@@ -1322,7 +1373,7 @@ class MediaService:
                 if phase == "searching"
                 else "no acceptable movie release is available yet; Radarr is watching"
             )
-        return {"complete": False, "progress": progress, "detail": detail}
+        return observed(progress=progress, detail=detail)
 
     def _target_episodes(
         self, rows, seasons=None, now=None, monitored_only=True, episode_ids=None
@@ -1380,17 +1431,17 @@ class MediaService:
             # rows that exist are unmonitored by design, not cancelled.
             episode_ids, missing = self._episode_ids_for(rows, self._episodes(episodes))
             if missing:
-                return {
-                    "complete": False,
-                    "progress": {
+                return observed(
+                    complete=False,
+                    progress={
                         "episodes": 0,
                         "total_episodes": 0,
                         "percent": 0,
                         "phase": "searching",
                     },
-                    "detail": "Sonarr is still populating episode metadata",
-                    "metadata_ready": False,
-                }
+                    detail="Sonarr is still populating episode metadata",
+                    metadata_ready=False,
+                )
         metadata_ready = bool(episode_ids) or self._episode_metadata_ready(
             rows, seasons
         )
@@ -1406,13 +1457,13 @@ class MediaService:
             ]
         )
         if metadata_ready and scope and not any(row.get("monitored") for row in scope):
-            return {
-                "complete": False,
-                "canceled": True,
-                "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
-                "detail": "Sonarr reports the requested episodes are unmonitored",
-                "metadata_ready": True,
-            }
+            return observed(
+                complete=False,
+                canceled=True,
+                progress={"episodes": 0, "total_episodes": 0, "percent": 0},
+                detail="Sonarr reports the requested episodes are unmonitored",
+                metadata_ready=True,
+            )
         targets = self._target_episodes(rows, seasons, now, episode_ids=episode_ids)
         baseline = baseline_episode_files or {}
         total = len(targets)
@@ -1473,24 +1524,24 @@ class MediaService:
                     if promise != "search":
                         raise
                     progress["phase"] = "search_failed"
-                    return {
-                        "complete": True,
-                        "failed": True,
-                        "progress": progress,
-                        "detail": str(e),
-                        "metadata_ready": metadata_ready,
-                    }
+                    return observed(
+                        complete=True,
+                        failed=True,
+                        progress=progress,
+                        detail=str(e),
+                        metadata_ready=metadata_ready,
+                    )
                 if promise == "search" and phase not in ("searching", "importing"):
                     # The search ran and the client holds nothing for it:
                     # that is the promise, kept, whatever it found.
                     progress["phase"] = "searched"
-                    return {
-                        "complete": True,
-                        "progress": progress,
-                        "detail": f"Sonarr searched; {ready} of {total} episodes "
+                    return observed(
+                        complete=True,
+                        progress=progress,
+                        detail=f"Sonarr searched; {ready} of {total} episodes "
                         "gained a file",
-                        "metadata_ready": metadata_ready,
-                    }
+                        metadata_ready=metadata_ready,
+                    )
                 progress["phase"] = phase
                 detail = (
                     f"Sonarr is importing episodes; {ready} of {total} are ready"
@@ -1503,12 +1554,12 @@ class MediaService:
                     else "no acceptable episode release is available yet; Sonarr is watching"
                 )
             complete = False
-        return {
-            "complete": complete,
-            "progress": progress,
-            "detail": detail,
-            "metadata_ready": metadata_ready,
-        }
+        return observed(
+            complete=complete,
+            progress=progress,
+            detail=detail,
+            metadata_ready=metadata_ready,
+        )
 
     def observe(self, operation):
         external_ref = int(operation["external_ref"])

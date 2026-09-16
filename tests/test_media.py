@@ -1297,9 +1297,9 @@ def test_movie_upgrade_completes_on_a_new_file(svc):
         "external_ref": "33",
         "metadata": {"baseline_file_id": 71},
     }
-    assert not svc.observe(operation)["complete"]
+    assert not svc.observe(operation).complete
     svc.radarr.movie_files[0]["id"] = 72
-    assert svc.observe(operation)["complete"]
+    assert svc.observe(operation).complete
 
 
 # --- selected series seasons --------------------------------------------------
@@ -1384,7 +1384,7 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
         {"name": "SeasonSearch", "seriesId": 41, "seasonNumber": 2},
     )
     observation = svc.observe_series(41, [2])
-    assert observation["progress"] == {
+    assert observation.progress == {
         "episodes": 0,
         "total_episodes": 2,
         "percent": 0,
@@ -1510,10 +1510,10 @@ def test_series_upgrade_completes_on_new_episode_files(svc):
         "external_ref": "42",
         "metadata": {"seasons": [1], "baseline_episode_files": {"101": 201}},
     }
-    assert not svc.observe(upgrade_operation)["complete"]
+    assert not svc.observe(upgrade_operation).complete
     svc.sonarr.episodes[0]["episodeFileId"] = 301
     svc.sonarr.episodes[1].update(hasFile=True, episodeFileId=302)
-    assert svc.observe(upgrade_operation)["complete"]
+    assert svc.observe(upgrade_operation).complete
 
 
 def test_request_episodes_touches_only_those_episodes(svc):
@@ -1583,8 +1583,8 @@ def test_request_episodes_touches_only_those_episodes(svc):
         "metadata": {"episodes": [[4, 13], [10, 4]], "episode_ids": [413, 1004]},
     }
     observation = svc.observe(operation)
-    assert observation["progress"]["total_episodes"] == 2
-    assert not observation["complete"]
+    assert observation.progress["total_episodes"] == 2
+    assert not observation.complete
     with pytest.raises(media_clients.MediaError, match="S04E99"):
         svc.request_series(75805, episodes=[{"season": 4, "episode": 99}])
     with pytest.raises(media_clients.MediaError, match="not both"):
@@ -1626,7 +1626,7 @@ def test_request_episodes_on_a_new_series_resolves_ids_when_sonarr_is_ready(svc)
     }
     # No rows yet: not ready, and not cancelled either.
     assert not svc.dispatch_pending_series_search(pending)
-    assert not svc.observe(pending)["metadata_ready"]
+    assert not svc.observe(pending).metadata_ready
     svc.sonarr.set(
         episodes=[
             {
@@ -1641,7 +1641,7 @@ def test_request_episodes_on_a_new_series_resolves_ids_when_sonarr_is_ready(svc)
     )
     # Rows, but Sonarr's add pass is still running.
     assert not svc.dispatch_pending_series_search(pending)
-    assert not svc.observe(pending).get("canceled")
+    assert not svc.observe(pending).canceled
     svc.sonarr.library[0]["addOptions"] = None
     assert svc.dispatch_pending_series_search(pending) == {
         "command_ids": [1],
@@ -1680,18 +1680,18 @@ def test_observe_movie_reports_the_download_without_its_title(svc):
         },
     )
     movie_progress = svc.observe_movie(50)
-    assert not movie_progress["complete"]
-    assert movie_progress["progress"] == {"phase": "downloading", "percent": 75}
-    assert "UNTRUSTED" not in movie_progress["detail"]
+    assert not movie_progress.complete
+    assert movie_progress.progress == {"phase": "downloading", "percent": 75}
+    assert "UNTRUSTED" not in movie_progress.detail
     svc.radarr.library[0]["hasFile"] = True
-    assert svc.observe_movie(50)["complete"]
+    assert svc.observe_movie(50).complete
 
 
 def test_observe_series_counts_aired_monitored_episodes(svc):
     now = datetime.datetime(2026, 8, 29, tzinfo=UTC)
     empty = svc.observe_series(60, [1], now)
-    assert not empty["metadata_ready"]
-    assert empty["detail"] == "Sonarr is still populating episode metadata"
+    assert not empty.metadata_ready
+    assert empty.detail == "Sonarr is still populating episode metadata"
     svc.sonarr.set(
         episodes=[
             {
@@ -1727,21 +1727,21 @@ def test_observe_series_counts_aired_monitored_episodes(svc):
         ]
     )
     progress = svc.observe_series(60, None, now)
-    assert progress["metadata_ready"]
-    assert not progress["complete"]
-    assert progress["progress"] == {
+    assert progress.metadata_ready
+    assert not progress.complete
+    assert progress.progress == {
         "episodes": 1,
         "total_episodes": 2,
         "percent": 50,
         "phase": "waiting_for_match",
     }
     svc.sonarr.episodes[2]["hasFile"] = True
-    assert svc.observe_series(60, None, now)["complete"]
+    assert svc.observe_series(60, None, now).complete
     for episode in svc.sonarr.episodes:
         if episode["seasonNumber"] == 1:
             episode["monitored"] = False
     canceled = svc.observe_series(60, [1], now)
-    assert canceled["canceled"] and not canceled["complete"]
+    assert canceled.canceled and not canceled.complete
 
 
 # --- Abandoned requests -------------------------------------------------------

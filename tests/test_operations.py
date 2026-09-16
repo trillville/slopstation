@@ -14,7 +14,7 @@ import pytest
 
 import helpers
 from slopstation.agent.speech import announce
-from slopstation.agent.tools import operations, operations_monitors
+from slopstation.agent.tools import media, operations, operations_monitors
 
 
 def wait_for(predicate, timeout=2):
@@ -80,7 +80,7 @@ class FakeMedia:
     def observe(self, operation):
         if self.error:
             raise self.error
-        return dict(self.result)
+        return media.observed(**self.result)
 
     def search_available(self, operation):
         return self.search_available_now
