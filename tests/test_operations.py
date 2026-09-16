@@ -3,8 +3,11 @@
 import contextlib
 import dataclasses
 import io
+import json
+import shutil
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import helpers
@@ -799,3 +802,48 @@ def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):
     assert not monitor.ticker.is_alive()
     (failed,) = log.find("operation_monitor_failed")
     assert failed["err"] == "authority offline"
+
+
+def test_a_persisted_ledger_round_trips_untouched(log):
+    """The ledger on the K15 outlives every deploy. Reads and a no-op leave
+    its bytes alone; a write keeps every field it does not own, including
+    an old minimal row, unknown keys, and a state a newer build wrote.
+    tests/fixtures/operations.json is synthetic, built from the shapes the
+    code writes; a redacted copy of the real file replaces it (plan step 6)."""
+    fixture = Path(__file__).parent / "fixtures" / "operations.json"
+    target = operations.operations_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(fixture, target)
+    before = target.read_bytes()
+    store = operations.OperationStore(log)
+
+    ids = {r["id"] for r in store.all()}
+    assert ids == {"op-steam-old", "op-movie", "op-series", "op-paused"}
+    active, total_active = store.for_assistant("active")
+    assert (
+        {r["id"] for r in active}
+        == {"op-steam-old", "op-series"}
+        == set(r["id"] for r in store.active())
+    )
+    assert total_active == 2
+    recent, total = store.for_assistant("recent", limit=10)
+    assert {r["id"] for r in recent} == ids and total == 4
+    assert [r["id"] for r in store.pending_announcements()] == ["op-movie"]
+    assert [n["key"] for n in store.pending_notifications()] == ["downloading"]
+    assert next(r for r in recent if r["id"] == "op-series")["scope"] == {
+        "seasons": [2],
+        "scope_label": "season 2",
+        "promise": "acquire",
+    }
+    assert store.update_metadata("op-series", {}) is not None  # no change, no write
+    assert target.read_bytes() == before
+
+    store.update_metadata("op-steam-old", {"note": "seen"})
+    after = {r["id"]: r for r in json.loads(target.read_text(encoding="utf-8"))}
+    assert after["op-steam-old"]["metadata"] == {"note": "seen"}
+    assert after["op-steam-old"]["legacy_note"] == "kept"
+    assert after["op-steam-old"]["progress"]["bytes_done"] == 512
+    assert after["op-paused"]["state"] == "PAUSED"
+    assert after["op-series"]["metadata"]["search_retry_after"] == 1757824800
+    assert after["op-movie"]["announcement_pending"] is True
+    assert len(after["op-series"]["notifications"]) == 2
