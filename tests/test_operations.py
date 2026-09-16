@@ -771,3 +771,31 @@ def test_media_monitor_reports_a_failed_search_as_failed(log):
     assert row["state"] == operations.FAILED
     assert row["summary"] == "Radarr's search for Arrival failed."
     assert len(terminal) == 1
+
+
+def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):
+    """A raise inside reconcile_once is one logged line; the ticker keeps
+    polling, and stop() ends the thread so an owner can join it."""
+    from slopstation.agent.tools.monitor import Monitor
+
+    class Flaky(Monitor):
+        THREAD_NAME = "flaky-monitor"
+
+        def __init__(self):
+            self.log, self.poll_s, self.polls = log, 0.01, 0
+            self.polled = threading.Event()
+
+        def reconcile_once(self):
+            self.polls += 1
+            if self.polls == 1:
+                raise RuntimeError("authority offline")
+            self.polled.set()
+
+    monitor = Flaky()
+    monitor.start()
+    assert monitor.polled.wait(2), "the poll after the failure never ran"
+    monitor.stop()
+    monitor.ticker.join(2)
+    assert not monitor.ticker.is_alive()
+    (failed,) = log.find("operation_monitor_failed")
+    assert failed["err"] == "authority offline"

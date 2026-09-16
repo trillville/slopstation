@@ -9,13 +9,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from slopstation import events
 from slopstation.agent.tools.media_clients import (
     MediaConfigurationError,
     MediaError,
     _clean_text,
     _parse_time,
 )
+from slopstation.agent.tools.monitor import Monitor
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
 PROTON_INACTIVE_STATUSES = {"DestroyPortMappingCommunication", "Stopped", "Error"}
@@ -156,12 +156,14 @@ def read_proton_port_state(path=None, now=None):
     }
 
 
-class ProtonPortMonitor:
+class ProtonPortMonitor(Monitor):
     """Hold qBittorrent's listening port to Proton's mapping and its peer
     sockets to an adapter that exists. A reconnect that keeps the port
     changes no preference, so nothing reopens the sockets and DHT stays
     empty; rebind on the reconnect, and when DHT stays empty anyway,
     rebind, then restart."""
+
+    THREAD_NAME = "proton-port-monitor"
 
     def __init__(
         self,
@@ -312,9 +314,6 @@ class ProtonPortMonitor:
                 return
             self.sleep(1)
         raise MediaError(err)
-
-    def start(self):
-        events.Ticker("proton-port-monitor", self.poll_s, self._tick).start()
 
     def _tick(self):
         try:

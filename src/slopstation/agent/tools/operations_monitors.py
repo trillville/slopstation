@@ -3,10 +3,10 @@
 import argparse
 import json
 import time
-from typing import Any
 
-from slopstation import config, events, logbook
+from slopstation import config, logbook
 from slopstation.agent.tools import library, media, steam_session
+from slopstation.agent.tools.monitor import Monitor
 from slopstation.agent.tools.operations import (
     CANCELED,
     FAILED,
@@ -60,26 +60,6 @@ def _fully_installed_appids():
         for r in library.fetch_installed_ssh()
         if int(r.get("state", 0)) & 4
     }
-
-
-class Monitor:
-    """Run a monitor repeatedly and log errors without stopping its thread."""
-
-    THREAD_NAME = "operation-monitor"
-    log: Any
-    poll_s: float
-
-    def reconcile_once(self):
-        raise NotImplementedError
-
-    def start(self):
-        events.Ticker(self.THREAD_NAME, self.poll_s, self._tick).start()
-
-    def _tick(self):
-        try:
-            self.reconcile_once()
-        except Exception as e:
-            self.log.error("operation_monitor_failed", err=str(e))
 
 
 class SteamMonitor(Monitor):

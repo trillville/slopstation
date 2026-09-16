@@ -2,8 +2,8 @@
 
 import shutil
 
-from slopstation import events
 from slopstation.agent.tools.media_clients import _clean_text
+from slopstation.agent.tools.monitor import Monitor
 
 DISK_POLL_S = 300
 # One 2160p remux is ~70 GB, so a threshold below that reports a volume that
@@ -11,12 +11,14 @@ DISK_POLL_S = 300
 FREE_WARN_BYTES = 250 * 1024**3
 
 
-class DiskHealthMonitor:
+class DiskHealthMonitor(Monitor):
     """Report a volume running out of room before an import fails on it.
 
     Emits on transition only: a full disk stays full, and one line per poll
     would bury the crossing that is the news.
     """
+
+    THREAD_NAME = "disk-health-monitor"
 
     def __init__(
         self, mounts, log, poll_s=DISK_POLL_S, free_warn_bytes=FREE_WARN_BYTES
@@ -27,9 +29,6 @@ class DiskHealthMonitor:
         self.free_warn_bytes = free_warn_bytes
         self._low = set()
         self._last_failure = {}
-
-    def start(self):
-        events.Ticker("disk-health-monitor", self.poll_s, self.reconcile_once).start()
 
     def reconcile_once(self):
         for mount in self.mounts:
