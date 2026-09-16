@@ -1,5 +1,26 @@
 # Architecture plan: lifecycle, contracts, operational knowledge, pruning
 
+## Status (2026-09-16)
+
+Executed on `tillman/architecture-lifecycle`, one commit per step, all 21
+steps. Every step passed ruff, mypy against the Windows target, and the
+suite on macOS under a stand-in for `msvcrt` (nine tests are Windows-only
+and fail there on `main` too); Windows CI has not run because the branch
+could not be pushed through Graphite from this session. Deviations from the
+text below: the Submission is a TypedDict beside its metadata key list, not
+a dataclass, because the value is the JSON the model reads; `quit_game`
+keeps `risk="act"` and asks through `ctx.confirm`, because the registry rule
+keeps destructive tools out of the default set; the three fakes named
+`FakeMedia` and the three fake Arr clients were not merged, because they
+fake different surfaces; the `sentry.py` fail-soft blocks stayed, because
+only three of eight are a bare `pass`. Size, counted as section 4 says:
+`src/` 22,892 to 23,220, `tests/` 16,522 to 16,654. The deletions happened
+(about 1,350 lines went) and the new behaviour outweighed them: the services
+owner, the stop path, the health route, the lane rule, the typed records
+and fifteen new tests. The measured ceiling in section 2 was also about half
+what the audit estimated, because the "duplicated fakes" shared names, not
+behaviour.
+
 Written against `main` at 6f58782 (2026-09-14). It replaces the plan on
 `tillman/architecture-refactor`, which was written against an Aug 31 base and
 cannot be merged: the Sep 3 restructure moved every file it touched.
