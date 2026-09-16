@@ -183,6 +183,24 @@ def _path(day: str) -> pathlib.Path:
     return paths.logs() / f"{stem}-{day}.jsonl"
 
 
+def log_file(day: str) -> pathlib.Path:
+    """This service's event file for a YYYYMMDD day, for readers such as the
+    doctor; the writer keeps its own path."""
+    return _path(day)
+
+
+def log_files() -> list[pathlib.Path]:
+    """Every retained event file of this service, newest first, from the
+    live folder and the archive: what a reader walks to find the latest
+    occurrence of an event."""
+    pattern = _path("*").name
+    return sorted(
+        [*paths.logs().glob(pattern), *(paths.logs() / ARCHIVE_NAME).glob(pattern)],
+        key=lambda f: f.name,
+        reverse=True,
+    )
+
+
 def _prune() -> None:
     """Move closed daily files out of the shipper's glob (every tailed file
     costs it CPU whether or not it can still change), then delete the expired

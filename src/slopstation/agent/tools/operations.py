@@ -691,3 +691,22 @@ if __name__ == "__main__":
     from slopstation.agent.tools.operations_monitors import main
 
     raise SystemExit(main())
+
+
+def owned_seasons() -> dict:
+    """series id -> the seasons an active series operation owns, None meaning
+    the whole series. For a reader with no store of its own (the doctor): an
+    unreadable ledger owns nothing, so the reader over-reports, which is the
+    safe direction."""
+    owned: dict = {}
+    rows = statefile.load(operations_file(), [])
+    for row in rows if isinstance(rows, list) else []:
+        if row.get("kind") != "series_acquisition" or row.get("state") not in ACTIVE:
+            continue
+        seasons = (row.get("metadata") or {}).get("seasons")
+        key = str(row.get("external_ref"))
+        if seasons is None or owned.get(key, ()) is None:
+            owned[key] = None
+        else:
+            owned.setdefault(key, set()).update(int(n) for n in seasons)
+    return owned

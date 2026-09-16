@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from slopstation import config, haptics, paths, sessionlock, statefile, supervise
+from slopstation import config, haptics, paths, sessionlock, supervise
 from slopstation.agent.tools import media_proton, operations
 from slopstation.agent.tools.media_clients import ArrClient
 
@@ -854,26 +854,6 @@ def check_port_reservations():
         )
 
 
-def _owned_seasons():
-    """series id -> monitored seasons an active operation owns, None meaning
-    the whole series. An unreadable ledger owns nothing: the row then
-    over-reports, which is the safe direction."""
-    owned: dict = {}
-    for row in statefile.load(operations.operations_file(), []):
-        if (
-            row.get("kind") != "series_acquisition"
-            or row.get("state") not in operations.ACTIVE
-        ):
-            continue
-        seasons = (row.get("metadata") or {}).get("seasons")
-        key = str(row.get("external_ref"))
-        if seasons is None or owned.get(key, ()) is None:
-            owned[key] = None
-        else:
-            owned.setdefault(key, set()).update(int(n) for n in seasons)
-    return owned
-
-
 def check_media_monitoring(cfg):
     """Monitored-and-missing episodes no active operation owns. Sonarr never
     searches for these, but RSS grabs any NEW upload that matches one - which
@@ -921,7 +901,7 @@ def check_media_monitoring(cfg):
     cutoff = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - MONITOR_STALE_DAYS * 86400)
     )
-    owned = _owned_seasons()
+    owned = operations.owned_seasons()
     drift: dict = {}
     for row in records:
         if not isinstance(row, dict):
@@ -1122,17 +1102,8 @@ def _latest_events(names):
     skipped, since this is a diagnosis, not a parser test."""
     from slopstation import events
 
-    pattern = events._path("*").name
-    files = sorted(
-        [
-            *paths.logs().glob(pattern),
-            *(paths.logs() / events.ARCHIVE_NAME).glob(pattern),
-        ],
-        key=lambda f: f.name,
-        reverse=True,
-    )
     latest: dict = {}
-    for f in files:
+    for f in events.log_files():
         in_file = {}
         try:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -1202,7 +1173,7 @@ def check_telemetry():
     """Event stream written, and anything shipping it? WARN-only."""
     from slopstation import events
 
-    today = events._path(time.strftime("%Y%m%d"))  # local date, like events
+    today = events.log_file(time.strftime("%Y%m%d"))  # local date, like events
     try:
         age = time.time() - today.stat().st_mtime
         size_kb = today.stat().st_size / 1024
