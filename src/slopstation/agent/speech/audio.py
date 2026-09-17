@@ -162,8 +162,6 @@ def open_audio(voice: dict) -> tuple:
         except Exception as e:
             log.error("audio_rebuild_failed", err=str(e), retry_s=RETRY_S)
         else:
-            # Both devices: resolve_device logs audio_device for the input
-            # before the output can fail.
             log("audio_ready", waited_s=round(waited))
             return built
         time.sleep(RETRY_S)

@@ -298,10 +298,7 @@ def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
     # Configure tracing before the first session.
     sentry.setup(cfg, log)
 
-    # Check in before the mic: the process is doing its job once the servers
-    # and monitors are up, even if no microphone answers. The doctor's wake
-    # word row reads mic readiness from the events. A --once run stays out; its
-    # quiet exit would page.
+    # Heartbeat before the mic wait, so a dead microphone does not page.
     if not args.once:
         events.start_heartbeat("voice")
         # This lane's own cron monitor, so its death pages alone. No-op without

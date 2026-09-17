@@ -43,8 +43,8 @@ class Services:
             events.Ticker("library-sync", library.SYNC_S, library.periodic_sync())
         )
 
-        # An unreadable ledger disables everything that writes it. The file is
-        # left for a person; the doctor names it.
+        # If operations.json cannot be read, nothing below that writes to it
+        # starts. The file is not touched; the doctor reports it.
         self.operations = self._optional(
             "operations", operations_mod.OperationStore, log
         )

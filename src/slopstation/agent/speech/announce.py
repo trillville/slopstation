@@ -123,8 +123,6 @@ class Announcer:
             try:
                 item = self._pending(kind, operation_id, key)
             except Exception as e:
-                # The ledger cannot be read. The row keeps its pending flag;
-                # this thread must not die.
                 self.log.error(
                     "announce_failed",
                     operation=operation_id,

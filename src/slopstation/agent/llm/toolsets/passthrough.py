@@ -209,8 +209,6 @@ def _spec(name, description, needs, keywords, extra=None, busy=None):
         description,
         _params_schema(extra),
         ("method", "path"),
-        # Gated like every other write: asks first, previews on a dry run, acts
-        # on a later yes.
         risk="destructive",
         area="api",
         keywords=keywords,
@@ -449,8 +447,6 @@ def impls(ctx: ToolContext):
                 f"{service} {method} /{path}",
                 turn=ctx.turn(),
             )
-            # A wire failure may still have reached the service; the row says
-            # so.
             failure = " - ".join(
                 str(s) for s in (out.get("error"), out.get("detail")) if s
             )

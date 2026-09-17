@@ -19,10 +19,6 @@ from slopstation import config, events
 INTERVAL_S = 60
 TIMEOUT_S = 5
 
-# Sentry creates the monitor from this on the first check-in. Two missed
-# 1-minute check-ins page about 4 minutes after a lane dies and survive one
-# network blip. The schedule is the interval in Sentry's unit, so the two
-# cannot drift.
 MONITOR_CONFIG = {
     "schedule": {"type": "interval", "value": INTERVAL_S // 60, "unit": "minute"},
     "checkin_margin": 2,
