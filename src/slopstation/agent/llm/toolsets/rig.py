@@ -80,13 +80,15 @@ online, and the free space on each Steam library drive - the answer to 'can
 I install that' and 'is the PC awake'. Reaching an asleep PC takes a few
 seconds to time out."""
 
-PC_POWER = """\
-Wake the gaming PC (a magic packet; it takes a minute to come up, and
-start_session does this itself) or put it to sleep. Sleep asks first: the
-first call answers with the question, and the same call on a later turn,
-after a yes, sleeps. It is refused while a session is live, a game is
-running, or someone is signed in at the desk, so it cannot end what is on
-the TV or under someone's hands."""
+WAKE_PC = """\
+Wake the gaming PC with a magic packet. It takes a minute to come up;
+start_session does this itself."""
+
+SLEEP_PC = """\
+Put the gaming PC to sleep. Asks first: the first call answers with the
+question, and the same call on a later turn, after a yes, sleeps. Refused
+while a session is live, a game is running, or someone is signed in at the
+desk."""
 
 DISPLAY = """\
 Move the PC's desktop with no session: 'tv' switches the TV to the PC and
@@ -340,14 +342,23 @@ SPECS += [
         busy="moving the desktop",
     ),
     ToolSpec(
-        "pc_power",
-        PC_POWER,
-        {"action": {"type": "string", "enum": ["wake", "sleep"]}},
-        ("action",),
-        risk="destructive",  # sleep ends whatever is on the TV; wake is free
+        "wake_pc",
+        WAKE_PC,
+        {},
+        (),
+        risk="act",
+        area="session",
+        keywords=("wake the pc", "wake up the pc", "turn on the pc", "power"),
+        default=False,
+    ),
+    ToolSpec(
+        "sleep_pc",
+        SLEEP_PC,
+        {},
+        (),
+        risk="destructive",
         area="session",
         keywords=(
-            "wake the pc",
             "sleep the pc",
             "pc to sleep",
             "put the pc",
@@ -728,26 +739,25 @@ def impls(ctx: ToolContext):
         r = dispatch.display(str(args.get("target") or ""))
         return _outcome(r)
 
+    @bind
+    def wake_pc(args):
+        if dry := ctx.preview("wake the PC"):
+            return dry
+        from slopstation import couch
+
+        try:
+            couch.wol()
+        except Exception as e:
+            return {"ok": False, "error": f"couldn't reach the PC ({e})"}
+        return {"ok": True, "detail": "wake packet sent - give it a minute"}
+
     @bind.destructive
-    def pc_power(args):
-        action = str(args.get("action") or "")
-        if action not in ("wake", "sleep"):
-            return {"ok": False, "error": "action must be wake or sleep"}
-        if action == "sleep" and sessionlock.active():
+    def sleep_pc(args):
+        if sessionlock.active():
             return {
                 "ok": False,
                 "error": "a session is live - end it first, or the TV goes dark mid-game",
             }
-        if dry := ctx.preview(f"{action} the PC"):
-            return dry
-        if action == "wake":
-            from slopstation import couch
-
-            try:
-                couch.wol()
-            except Exception as e:
-                return {"ok": False, "error": f"couldn't reach the PC ({e})"}
-            return {"ok": True, "detail": "wake packet sent - give it a minute"}
 
         def sleep():
             try:
@@ -763,8 +773,6 @@ def impls(ctx: ToolContext):
                 }
             return {"ok": False, "error": f"the PC answered {out}"}
 
-        return Plan(
-            ("pc_power", "sleep"), "Put the PC to sleep?", sleep, "sleep the PC"
-        )
+        return Plan(("sleep_pc",), "Put the PC to sleep?", sleep, "sleep the PC")
 
     return bind.impls()

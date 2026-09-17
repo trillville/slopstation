@@ -123,6 +123,12 @@ class Services:
         # and no dry_run of its own - both ride along inside that hop.
         mcp.start(self)
 
+    def dispatch(self, **hooks):
+        """The Dispatch one conversation runs its commands through."""
+        from slopstation.agent.dispatch import Dispatch
+
+        return Dispatch(self.cfg, self.log, dry_run=self.dry_run, **hooks)
+
     def toolkit(self, dispatch, **kwargs):
         """The tools one conversation runs over these services. A session
         builds its own Dispatch (it carries the utterance) and its own

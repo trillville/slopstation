@@ -379,7 +379,7 @@ def test_display_tool_hands_the_target_to_dispatch(rig):
     assert not tk.call("display", {"target": "projector"})["ok"]
 
 
-def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
+def test_tv_status_pc_status_wake_and_sleep(rig, monkeypatch):
     tk, dispatch, steam, _ = rig
     tv = tk.call("tv_status", {})
     assert tv == {"ok": True, "power": "on", "volume": 14, "muted": False}
@@ -452,28 +452,25 @@ def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
     # Power: wake sends the packet; sleep is refused while a session is live.
     woke = []
     monkeypatch.setattr("slopstation.couch.wol", lambda: woke.append(1))
-    assert tk.call("pc_power", {"action": "wake"})["ok"] and woke == [1]
+    assert tk.call("wake_pc", {})["ok"] and woke == [1]
     monkeypatch.setattr(sessionlock, "active", lambda *a: True)
-    assert "end it first" in tk.call("pc_power", {"action": "sleep"})["error"]
+    assert "end it first" in tk.call("sleep_pc", {})["error"]
     monkeypatch.setattr(sessionlock, "active", lambda *a: False)
     sent = []
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: sent.append(cmd) or "OK")
     # Sleep asks first, and the same call on a later turn's yes acts.
-    asked = tk.call("pc_power", {"action": "sleep"})
+    asked = tk.call("sleep_pc", {})
     assert not asked["ok"] and asked["acknowledgment"] == "Put the PC to sleep?"
     assert sent == []
     dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
-    assert tk.call("pc_power", {"action": "sleep"})["ok"] and sent == [
-        "sleep --turn aa0002"
-    ]
+    assert tk.call("sleep_pc", {})["ok"] and sent == ["sleep --turn aa0002"]
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: "BUSY:12345")
     dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="sleep it")
-    assert not tk.call("pc_power", {"action": "sleep"})["ok"]  # asked again
+    assert not tk.call("sleep_pc", {})["ok"]  # asked again
     dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
-    assert "refused" in tk.call("pc_power", {"action": "sleep"})["error"]
-    assert not tk.call("pc_power", {"action": "reboot"})["ok"]
+    assert "refused" in tk.call("sleep_pc", {})["error"]
     dispatch.dry_run = True
-    assert tk.call("pc_power", {"action": "sleep"})["dry_run"]
+    assert tk.call("sleep_pc", {})["dry_run"] and tk.call("wake_pc", {})["dry_run"]
 
 
 # --- store parsing for the new helpers ------------------------------------------

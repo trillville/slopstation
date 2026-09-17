@@ -68,7 +68,8 @@ ASKS = {
     "uninstall_game": "uninstall valheim to free up space on the pc",
     "tv_status": "is the tv on and how loud is it",
     "pc_status": "is the pc awake and how much room is there to install",
-    "pc_power": "put the pc to sleep",
+    "wake_pc": "wake up the pc",
+    "sleep_pc": "put the pc to sleep",
 }
 
 

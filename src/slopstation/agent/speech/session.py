@@ -193,14 +193,13 @@ class Session:
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
         from pipecat.workers.runner import WorkerRunner
 
-        from slopstation.agent.dispatch import Dispatch
         from slopstation.agent.llm.assistant import PROVIDER_KEY
         from slopstation.agent.speech.audio import wake_phrase as _wake_phrase
         from slopstation.agent.speech.grammar_gate import GrammarGate
         from slopstation.agent.speech.level import RoomLevel
         from slopstation.agent.speech.preroll import PrerollFeeder
 
-        cfg, secrets, voice = self.cfg, self.secrets, self.voice
+        secrets, voice = self.secrets, self.voice
         catalog = library.Catalog.load()
         game_terms = keyterms.load_titles(voice["keytermCount"], catalog.installed)
         wake_phrase = _wake_phrase(voice["wakeModel"])
@@ -250,9 +249,7 @@ class Session:
         level = RoomLevel(
             floor_db=float(voice.get("chatterFloorDb", 0) or 0), log=log, loud=loud
         )
-        dispatcher = Dispatch(
-            cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
-        )
+        dispatcher = self.services.dispatch(on_end_session=self.on_end_session)
         assistant_live = config.real_key(secrets.get(PROVIDER_KEY[self.provider]))
         gate = GrammarGate(
             self.matcher,

@@ -10,7 +10,6 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from slopstation import config
-from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.llm import assistant, backends
 from slopstation.agent.telemetry import traces
 
@@ -65,7 +64,7 @@ class TextApplication:
             effort=self.voice["assistantReasoningEffort"],
             voice=self.voice,
         )
-        dispatch = Dispatch(self.cfg, self.log, dry_run=self.dry_run)
+        dispatch = self.services.dispatch()
         toolkit = self.services.toolkit(dispatch)
         if self.system_text is None:
             # The offered set is the same for every session of this process,

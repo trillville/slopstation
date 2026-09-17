@@ -39,7 +39,7 @@ class FakeSteam:
 
 
 WAITING = {
-    "complete": False,
+    "state": operations.RUNNING,
     "progress": {
         "phase": "waiting_for_match",
         "episodes": 80,
@@ -54,7 +54,7 @@ WAITING = {
 class FakeMedia:
     result: dict = dataclasses.field(
         default_factory=lambda: {
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"percent": 20},
             "detail": "1 of 5 aired episodes are ready",
         }
@@ -80,7 +80,7 @@ class FakeMedia:
     def observe(self, operation):
         if self.error:
             raise self.error
-        return media.observed(**self.result)
+        return media.Observation(**self.result)
 
     def search_available(self, operation):
         return self.search_available_now
@@ -273,7 +273,7 @@ def test_media_monitor_observes_a_series_acquisition(log):
     assert not terminal
     fake_media.error = None
     fake_media.result = {
-        "complete": True,
+        "state": operations.SUCCEEDED,
         "progress": {"percent": 100},
         "detail": "5 of 5 aired episodes are ready",
     }
@@ -294,13 +294,13 @@ def test_media_monitor_notifies_once_per_phase(log):
     monitor = operations_monitors.MediaMonitor(store, fake_media, log)
     phase_op = _movie(store, "51", "Arrival", 329865, 9)
     fake_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "searching"},
         "detail": "Radarr is searching",
     }
     monitor.reconcile_once()
     fake_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "waiting_for_match"},
         "detail": "no acceptable release yet",
     }
@@ -309,7 +309,7 @@ def test_media_monitor_notifies_once_per_phase(log):
     assert store.pending_notifications()[0]["key"] == "waiting_for_match"
     assert "search_retry_pending" not in store.get(phase_op["id"])["metadata"]
     fake_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "downloading", "percent": 2},
         "detail": "download is 2% complete",
     }
@@ -334,7 +334,7 @@ def test_search_retry_backs_off_then_gives_up(log):
     retry_media = FakeMedia(
         search_available_now=False,
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "waiting_for_match"},
             "detail": "no acceptable release yet",
         },
@@ -390,7 +390,7 @@ def test_failed_search_retry_backs_off_longer(log):
     )
     retry_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "waiting_for_match"},
             "detail": "no acceptable release yet",
         },
@@ -424,7 +424,7 @@ def test_a_retry_waits_for_the_pending_search(log):
     )
     pending_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "searching"},
             "detail": "Sonarr is still populating episode metadata",
         }
@@ -513,7 +513,7 @@ def test_waiting_series_is_abandoned_after_a_day(log):
     assert len(heads_up) == 1 and heads_up[0]["key"] == "waiting_for_match"
     assert "11" in heads_up[0]["summary"]
     give_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "downloading", "total_episodes": 91},
         "detail": "download is active",
     }
@@ -537,7 +537,7 @@ def test_unaired_season_waits_indefinitely(log):
     store = operations.OperationStore(log)
     give_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {
                 "phase": "waiting_for_match",
                 "episodes": 0,
@@ -573,7 +573,7 @@ def test_empty_movie_wait_fails_silently(log):
     store = operations.OperationStore(log)
     give_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "waiting_for_match", "percent": 0},
             "detail": "no acceptable movie release is available yet",
         },
@@ -615,8 +615,7 @@ def test_unmonitored_request_is_canceled(log):
     )
     canceled_media = FakeMedia(
         result={
-            "complete": False,
-            "canceled": True,
+            "state": operations.CANCELED,
             "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
             "detail": "requested episodes are unmonitored",
         }
@@ -768,8 +767,7 @@ def test_media_monitor_reports_a_failed_search_as_failed(log):
     monitor = operations_monitors.MediaMonitor(store, fake_media, log)
     op = _movie(store, "61", "Arrival", 329865, 9, promise="search")
     fake_media.result = {
-        "complete": True,
-        "failed": True,
+        "state": operations.FAILED,
         "progress": {"phase": "search_failed"},
         "detail": "Radarr search failed",
     }

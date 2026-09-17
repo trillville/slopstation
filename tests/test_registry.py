@@ -35,7 +35,7 @@ def test_every_spec_is_well_formed():
         "resolve_queue_item",
         "uninstall_game",
         "quit_game",
-        "pc_power",
+        "sleep_pc",
         "radarr_api",
         "sonarr_api",
         "prowlarr_api",
