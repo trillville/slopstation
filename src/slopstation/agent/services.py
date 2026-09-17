@@ -1,8 +1,8 @@
-"""The services the voice lane shares with text, MCP and the doctors, owned
-in one place: built once, started before the microphone, stopped together.
+"""The services the voice lane shares with the text lane, the MCP wrapper and the
+doctor: built once, started before the microphone, stopped together.
 
-Every piece is optional and says so with lane_up or lane_disabled. A dry run
-starts nothing that would write to an authority."""
+Every piece is optional and logs lane_up or lane_disabled. A dry run starts
+nothing that writes to Radarr, Sonarr, qBittorrent or Steam."""
 
 import threading
 import time
@@ -21,14 +21,13 @@ class Services:
         self.monitors: list = []
         self.servers: list = []
         self.tickers: list = []
-        # Every thread this owner started, by lane name, for health().
+        # every thread this owner started, by name, for health()
         self.threads: list[tuple[str, threading.Thread]] = []
 
     def start(self, stt_live, duck):
         """Build and start everything. `stt_live` gates the announcer, which
-        speaks; `duck` is the room volume control the announcer shares with
-        the sessions, built by the caller because a bulletin can arrive
-        before the first wake."""
+        speaks. `duck` is the room volume control; the caller builds it because
+        a bulletin can arrive before the first wake."""
         cfg, secrets, log = self.cfg, self.secrets, self.log
         from slopstation.agent.interfaces import mcp, text
         from slopstation.agent.tools import (
@@ -39,21 +38,21 @@ class Services:
         )
         from slopstation.agent.tools import operations as operations_mod
 
-        # The catalog refreshes on its own clock, never blocking wake detection.
+        # Refreshes the catalog on its own clock; never blocks wake detection.
         self._ticker(
             events.Ticker("library-sync", library.SYNC_S, library.periodic_sync())
         )
 
-        # A ledger that cannot be read disables everything that would write
-        # it; the file is left for a person, and the doctor names it.
+        # An unreadable ledger disables everything that writes it. The file is
+        # left for a person; the doctor names it.
         self.operations = self._optional(
             "operations", operations_mod.OperationStore, log
         )
         if self.operations is not None and stt_live and not self.dry_run:
             self.announcer = self._optional("announcer", self._announcer, duck)
 
-        # Remote install + download status over ClientComm. Without a refresh
-        # token, install_game keeps its controller-driven fallback. Never fatal.
+        # Remote install and download status over ClientComm. Without a refresh
+        # token, install_game falls back to the controller. Never fatal.
         account = self._optional(
             "steam_session",
             steam_session.SteamSession,
@@ -90,8 +89,8 @@ class Services:
 
         self.media = self._optional("media", media.from_config, cfg, secrets, log)
         if self.media is not None and self.operations is not None:
-            # Its reconcile dispatches deferred Sonarr searches and
-            # indexer-recovery retries, both of which POST to the authority.
+            # Its reconcile POSTs deferred searches and indexer retries to
+            # Sonarr and Radarr.
             poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
             self._monitor(
                 "media_operation_monitor",
@@ -100,8 +99,8 @@ class Services:
                 ),
                 live_only=True,
             )
-        # It writes the listening port into a live qBittorrent, so a dry run
-        # must not start it.
+        # Writes the listening port into a live qBittorrent; a dry run must not
+        # start it.
         self._monitor(
             "proton_port_sync",
             lambda: media.proton_port_monitor_from_config(cfg, secrets, log),
@@ -120,7 +119,7 @@ class Services:
 
         text.start(self)
         # Forwards to the text interface over localhost, so it takes no tools
-        # and no dry_run of its own - both ride along inside that hop.
+        # and no dry_run of its own.
         mcp.start(self)
 
     def dispatch(self, **hooks):
@@ -130,10 +129,8 @@ class Services:
         return Dispatch(self.cfg, self.log, dry_run=self.dry_run, **hooks)
 
     def toolkit(self, dispatch, **kwargs):
-        """The tools one conversation runs over these services. A session
-        builds its own Dispatch (it carries the utterance) and its own
-        Toolkit (it carries the loaded set); what every session shares is
-        filled in here."""
+        """The tools for one conversation. The session owns its Dispatch and
+        Toolkit; the shared services are filled in here."""
         from slopstation.agent.llm.assistant import Toolkit
 
         return Toolkit(
@@ -147,11 +144,9 @@ class Services:
         )
 
     def stop(self):
-        """Signal every thread this owner started; the servers close their
-        sockets. Runs on a clean exit or an exception out of the wake loop;
-        a supervisor kill never reaches it, and nothing here needs it to.
-        Nothing waits for an authority: outstanding work stays outstanding
-        in the ledger."""
+        """Signal every thread this owner started and close the servers. Runs
+        on a clean exit, not on a supervisor kill. Nothing waits: outstanding
+        work stays in the ledger."""
         for ticker in self.tickers:
             ticker.stop.set()
         for monitor in self.monitors:
@@ -163,10 +158,9 @@ class Services:
             self.announcer.stop()
 
     def health(self):
-        """What is up, for the text interface's /health and the doctor: which
-        services were built, and whether each thread this owner started is
-        still running. A name missing from `threads` was never started (off
-        by config, or a dry run); False means it died since."""
+        """What is up, for /health and the doctor: which services were built,
+        and whether each thread this owner started is alive. A name missing
+        from `threads` was never started; False means it died."""
         return {
             "operations": self.operations is not None,
             "steam": self.steam is not None,
@@ -175,8 +169,8 @@ class Services:
         }
 
     def serve(self, server, name):
-        """Run an HTTP server on its own thread and keep both, so stop()
-        closes it and health() reports it."""
+        """Run an HTTP server on its own thread; keep both for stop() and
+        health()."""
         thread = threading.Thread(target=server.serve_forever, daemon=True, name=name)
         thread.start()
         self.servers.append(server)
@@ -198,8 +192,8 @@ class Services:
         return announcer
 
     def _optional(self, what, build, *args, **kwargs):
-        """Build one optional piece; a raise disables that piece, not the
-        lane. The rest keep starting, and the doctor names what is missing."""
+        """Build one optional piece. A raise disables that piece only, with a
+        lane_disabled line."""
         try:
             return build(*args, **kwargs)
         except Exception as e:
@@ -207,8 +201,8 @@ class Services:
             return None
 
     def _monitor(self, what, build, live_only=False):
-        """Build and start an optional poller and say so. A dry run never
-        builds one that writes to an authority; None means not configured."""
+        """Build and start an optional poller and log lane_up. A dry run skips
+        one that writes to a service; None means not configured."""
         if live_only and self.dry_run:
             return
         monitor = self._optional(what, build)

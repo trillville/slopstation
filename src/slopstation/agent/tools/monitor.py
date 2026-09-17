@@ -1,5 +1,5 @@
-"""One base for the pollers: a stoppable ticker, and a raise that costs one
-log line rather than the thread."""
+"""Base for the pollers: a stoppable ticker, and a raise that costs one log
+line, not the thread."""
 
 from typing import Any
 
@@ -16,7 +16,7 @@ class Monitor:
         raise NotImplementedError
 
     def start(self) -> events.Ticker:
-        """Start polling; the ticker comes back so the owner can watch it."""
+        """Start polling. Returns the ticker so the owner can watch it."""
         self.ticker = events.Ticker(self.THREAD_NAME, self.poll_s, self._tick)
         self.ticker.start()
         return self.ticker
@@ -33,15 +33,14 @@ class Monitor:
 
 
 class ChangeOnly:
-    """Which failures a poller has already reported, keyed by what failed. An
-    outage is one line when it starts and one when it changes, not one line
-    per poll until someone notices."""
+    """Failures already reported, by key. An outage logs once when it starts
+    and once when it changes, not once per poll."""
 
     def __init__(self):
         self._last: dict = {}
 
     def changed(self, key, detail) -> bool:
-        """True when `detail` is news for `key`; records it either way."""
+        """True when `detail` is new for `key`; records it either way."""
         if detail == self._last.get(key):
             return False
         self._last[key] = detail

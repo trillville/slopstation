@@ -943,8 +943,8 @@ def check_text(cfg):
             WARN, "text interface", "textInterfaceToken missing or a placeholder", ""
         )
         return
-    # The address the lane bound, as the MCP wrapper reads it: a wildcard
-    # bind answers on loopback, any other host answers only on itself.
+    # The host the lane bound. A wildcard bind answers on loopback; any other
+    # host answers only on itself.
     host = str(text.get("host", "127.0.0.1"))
     if host in ("0.0.0.0", "::"):
         host = "127.0.0.1"
@@ -964,8 +964,8 @@ def check_text(cfg):
         )
         return
     up = [k for k in ("operations", "steam", "media") if health.get(k)]
-    # Every thread the voice process started: a name missing was never
-    # started (off by config, dry run); False means it died since.
+    # Every thread the voice process started. Missing: never started. False:
+    # died.
     threads = health.get("threads") or {}
     dead = sorted(name for name, alive in threads.items() if not alive)
     detail = f"listening on {port}; up: {', '.join(up) or 'nothing'}; threads: {len(threads)}"
@@ -1068,8 +1068,7 @@ def check_operations():
 
 
 # The voice lane's readiness events, newest wins: armed once both devices
-# answered (at startup or after a rebuild), waiting after a miss, rebuilding
-# after a stream death or a failed rebuild.
+# answered, waiting after a miss, rebuilding after a stream death.
 READINESS = {
     "audio_ready": "armed",
     "audio_device_wait": "waiting for the microphone",
@@ -1089,7 +1088,7 @@ def check_voice_agent():
     if not running:
         return
     # The task proves the process, not the wake word: the lane checks in before
-    # the mic wait, so a dead microphone keeps it alive and paged by nobody.
+    # the mic wait.
     state = READINESS.get(_latest_events(READINESS).get("voice", ""), "")
     if state == "armed":
         report(PASS, "wake word", "armed")
@@ -1100,12 +1099,9 @@ def check_voice_agent():
 
 
 def _latest_events(names):
-    """Each lane's most recent event among `names`, lane -> event name.
-
-    A lane logs its first check-in and then only changes, so one that started
-    days ago and is still checking in has nothing in today's file. Read back
-    through every retained event file, newest first; an unparseable line is
-    skipped, since this is a diagnosis, not a parser test."""
+    """Each lane's most recent event among `names`: lane -> event name. Walks
+    every retained event file, newest first, because a lane logs a check-in
+    once and then only changes. Unparseable lines are skipped."""
     from slopstation import events
 
     latest: dict = {}

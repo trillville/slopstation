@@ -360,9 +360,8 @@ def test_stop_listening_is_refused_with_nothing_to_stop(dispatch, log, impls):
 
 
 def test_quit_game_asks_first_and_acts_on_a_later_yes(monkeypatch, live_dispatch, log):
-    """Unsaved progress is on the line, so quit_game goes through the same
-    ask-then-act gate as every other write: a question on the first call,
-    the act on a later turn, nothing on the same turn."""
+    """quit_game asks first like every other write: a question on the first
+    call, the act on a later turn, nothing on the same turn."""
     from slopstation.agent.dispatch import Result
 
     quit = []
@@ -382,8 +381,8 @@ def test_quit_game_asks_first_and_acts_on_a_later_yes(monkeypatch, live_dispatch
 
 
 def test_quit_game_on_a_dry_run_previews_and_never_asks(dispatch, log):
-    """A dry run answers before the gate, like every destructive tool: the
-    first call is the preview, no question is asked, nothing is dispatched."""
+    """A dry run previews before the gate: the first call is the preview;
+    nothing is asked or dispatched."""
     impls = toolkit_impls(dispatch, log)
     dispatch.begin_utterance("aa0001", "quit valheim")
     out = impls["quit_game"]({"appid": INSTALLED})
@@ -392,9 +391,9 @@ def test_quit_game_on_a_dry_run_previews_and_never_asks(dispatch, log):
 
 
 def test_a_room_refusal_is_an_error_and_says_busy(monkeypatch, dispatch, impls):
-    """Every toolset spells a failure `error`; the rig tools add `busy` when
-    the refusal was a live session, which the model reports as "already
-    running" rather than as a failure. A success keeps its receipt."""
+    """Every toolset spells a failure `error`; the rig tools add `busy` when a
+    live session refused, so the model says "already running". A success keeps
+    its receipt."""
     from slopstation.agent.dispatch import Result
 
     monkeypatch.setattr(
@@ -786,8 +785,8 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
 
 
 def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
-    # A tool-calling llm span traces as output:null, so Tools.call is the
-    # one place that emits which tool ran with what args.
+    # A tool-calling llm span traces as output:null; Tools.call is where the
+    # tool and its args are recorded.
     tlog = CapturingLog("voice")
     calls = {"n": 0}
 

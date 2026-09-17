@@ -47,8 +47,8 @@ class Announcer:
         self._q: queue.Queue = queue.Queue()
 
     def start(self) -> threading.Thread:
-        """Start delivering on a background thread; submissions queued
-        before this are delivered first."""
+        """Start delivering on a background thread. Items queued before this
+        are delivered first."""
         thread = threading.Thread(target=self._run, daemon=True, name="announcer")
         thread.start()
         return thread
@@ -123,8 +123,8 @@ class Announcer:
             try:
                 item = self._pending(kind, operation_id, key)
             except Exception as e:
-                # The ledger refuses to load (a corrupt file). The row keeps its
-                # pending flag for the pull path; this thread has to outlive it.
+                # The ledger cannot be read. The row keeps its pending flag;
+                # this thread must not die.
                 self.log.error(
                     "announce_failed",
                     operation=operation_id,
@@ -141,7 +141,8 @@ class Announcer:
                 self._restore_room()
 
     def _pending(self, kind, operation_id, key):
-        """The queued item as the ledger holds it now, or None once heard."""
+        """The queued item as the ledger holds it now, or None if already
+        delivered."""
         if self.store is None:
             return None
         if kind == "terminal":

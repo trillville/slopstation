@@ -97,7 +97,7 @@ class Tools:
 
     registry = REGISTRY
     log: Any = None
-    dispatch: Any = None  # whose utterance a call is pinned to; None reads live
+    dispatch: Any = None  # utterance pinned per call; None reads dispatch live
     impls: dict
     loaded: list
 
@@ -107,13 +107,10 @@ class Tools:
         return REGISTRY.anthropic_tools(self.loaded)
 
     def call(self, name, args):
-        """Run one loaded tool. Unloaded is refused even when offered: the
-        prompt says a tool outside the default set is found first, so that
-        has to be true (the ask before a destructive tool is the binding's,
-        not this step's). A raising tool becomes an error dict, never a broken turn (an
-        Anthropic history with a tool_use and no tool_result fails every
-        later request of that session). Every call is recorded here, so no
-        lane can forget to."""
+        """Run one loaded tool. An unloaded tool is refused even when offered:
+        the prompt promises it is found first. A raising tool becomes an error
+        dict, because an Anthropic history with a tool_use and no tool_result
+        fails every later request. Every call is recorded here."""
         fn = self.impls.get(name)
         if fn is None:
             return {"ok": False, "error": f"there is no tool called {name}"}

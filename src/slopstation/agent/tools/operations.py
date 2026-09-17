@@ -23,7 +23,7 @@ ACTIVE = {QUEUED, RUNNING, UNKNOWN}
 TERMINAL = {SUCCEEDED, FAILED, CANCELED}
 STATES = ACTIVE | TERMINAL
 
-# progress["phase"], in the order a media acquisition moves through them; the
+# progress["phase"] values, in the order an acquisition moves through them. The
 # two search phases belong to a search-only promise.
 PHASES = (
     "searching",
@@ -37,10 +37,8 @@ PHASES = (
 )
 
 
-# The keys track() copies from a MediaService._submission result into the
-# row's metadata: what a later observation, retry or deletion needs to know
-# about the request. The rest of the submission is the receipt and the
-# row's own columns.
+# Keys track() copies from a MediaService._submission result into the row's
+# metadata. The other keys are the receipt and the row's own columns.
 METADATA_KEYS = (
     "catalog_id",
     "preset",
@@ -70,10 +68,9 @@ class Notification(TypedDict, total=False):
 
 
 class OperationRow(TypedDict, total=False):
-    """One row of operations.json. Everything after `delivered` is optional:
-    old rows lack it, and a row is never rejected for what it lacks. Keys the
-    code does not know are preserved through every write, so a newer build's
-    row survives an older one."""
+    """One row of operations.json. Keys after `delivered` are optional: old
+    rows lack them, and a row is never rejected for what it lacks. Unknown keys
+    survive every write."""
 
     id: str
     turn: str | None
@@ -82,7 +79,7 @@ class OperationRow(TypedDict, total=False):
     external_ref: str
     title: str
     state: str  # STATES, or one a newer build wrote
-    progress: dict[str, Any]  # "phase" in PHASES, plus what the authority said
+    progress: dict[str, Any]  # "phase" in PHASES, plus what the server said
     detail: str
     created: int
     updated: int
@@ -136,9 +133,8 @@ class OperationStore:
         self.on_terminal = on_terminal
         self.on_notification = on_notification
         self.path = operations_file()
-        # Read once now: a ledger that cannot be read is refused here, with
-        # the file left exactly as it was, rather than read as empty and then
-        # written back empty on the first observation.
+        # A ledger that cannot be read is refused here and the file left as it
+        # is.
         with statefile.guard(self.path):
             self._load()
 
@@ -644,10 +640,9 @@ def record_deleted(store, rows, result=None, episodes=None):
 
 
 def owned_seasons() -> dict:
-    """series id -> the seasons an active series operation owns, None meaning
-    the whole series. For a reader with no store of its own (the doctor): an
-    unreadable ledger owns nothing, so the reader over-reports, which is the
-    safe direction."""
+    """series id -> seasons an active series operation owns; None means the
+    whole series. An unreadable ledger owns nothing, so a reader over- reports,
+    which is the safe direction."""
     owned: dict = {}
     rows = statefile.load(operations_file(), [])
     for row in rows if isinstance(rows, list) else []:

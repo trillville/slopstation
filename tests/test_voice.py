@@ -460,7 +460,7 @@ def test_audio_opens_last(monkeypatch, run):
         f"open_audio ran with {at_audio['monitors']} monitor(s) built - "
         "the control plane must be up before the mic wait"
     )
-    # Liveness too: a dead microphone must not read as a dead lane.
+    # A dead microphone must not read as a dead lane.
     assert at_audio["checked_in"] == ["voice"], at_audio
 
 
@@ -475,8 +475,8 @@ def test_a_crashing_session_closes_with_fail(run):
 
 
 def test_the_services_stop_when_the_lane_ends(monkeypatch, run):
-    """Whatever the owner started, it signals on the way out: the monitors,
-    the announcer, the library ticker. Ctrl-C and --once take this path."""
+    """Whatever the owner started, it signals on the way out: monitors,
+    announcer, library ticker. Ctrl-C and --once take this path."""
     monkeypatch.setattr(FakeSteam, "available_answer", True)
     cfg = make_config()
     cfg["media"] = {"enabled": True, "protonPortSync": True}
@@ -492,8 +492,8 @@ def test_the_services_stop_when_the_lane_ends(monkeypatch, run):
 
 
 def test_a_steam_session_that_raises_disables_only_itself(monkeypatch, run):
-    """One optional piece failing to build is a lane_disabled line with the
-    reason; the rest start and the wake loop still opens a session."""
+    """One optional piece failing to build logs lane_disabled with the reason;
+    the rest start and a session still opens."""
 
     class BrokenSteam(FakeSteam):
         def __init__(self, secrets, log, machine_name=None):
@@ -511,9 +511,9 @@ def test_a_steam_session_that_raises_disables_only_itself(monkeypatch, run):
 
 
 def test_a_corrupt_ledger_disables_the_operations_lane_only(monkeypatch, run):
-    """The store refuses a ledger it cannot read (test_operations); here the
-    lane keeps going without it: no announcer, no operation monitors, text
-    and the session up, one lane_disabled line naming the file."""
+    """The lane runs without a ledger it cannot read: no announcer, no
+    operation monitors, text and the session up, one lane_disabled line naming
+    the file."""
 
     class RefusingStore(FakeOperationStore):
         def __init__(self, log):

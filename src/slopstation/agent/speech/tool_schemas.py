@@ -1,12 +1,11 @@
-"""Render a conversation's loaded tools as Pipecat function schemas. This is
-the voice lane's adapter over the shared Tools.call: the text lane calls the
-same Tools without any of this."""
+"""Pipecat function schemas for a conversation's loaded tools: the voice lane's
+adapter over Tools.call. The text lane calls Tools directly."""
 
 
 def pipecat_schemas(tools, log):
-    """Pipecat schemas whose handlers run `tools.call` in a worker thread and
-    turn the result into speech: an acknowledgment is spoken as-is with no
-    second model turn, and end_turn closes the turn to a closing mic."""
+    """Pipecat schemas whose handlers run `tools.call` on a worker thread. An
+    acknowledgment is spoken as-is with no second model turn; end_turn closes
+    the turn without a reply."""
     import asyncio
 
     from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -14,16 +13,15 @@ def pipecat_schemas(tools, log):
 
     def wrap(name):
         async def handler(params):
-            # `call` never raises and records the call itself. The await does
-            # not lose the OTel context (contextvars are per-task), so the
-            # span still parents onto Pipecat's llm span.
+            # `call` never raises and records the call itself. Contextvars are
+            # per task, so the span still parents onto Pipecat's llm span.
             out = await asyncio.to_thread(tools.call, name, dict(params.arguments))
             acknowledgment = (
                 out.get("acknowledgment") if isinstance(out, dict) else None
             )
             end_turn = isinstance(out, dict) and bool(out.get("end_turn"))
             if end_turn:
-                # The session ends on this call: no goodbye to a closing mic.
+                # The session ends on this call: nothing is spoken.
                 await params.result_callback(
                     out, properties=FunctionCallResultProperties(run_llm=False)
                 )

@@ -98,9 +98,8 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
 
 
 def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
-    """Nobody curated a passthrough write, so the ledger is the only record
-    it happened: one row per write, terminal at once, never announced, and
-    a read leaves no row."""
+    """A passthrough write is recorded only in the ledger: one row per write,
+    terminal at once, never announced. A read leaves no row."""
     from slopstation.agent.tools import operations
 
     _, dispatch, media = live
@@ -121,7 +120,7 @@ def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
     )
     assert row["summary"] == "radarr POST /command ran."
     assert row["announcement_pending"] is False and store.pending_announcements() == []
-    # A wire failure says in the row that the write may have landed anyway.
+    # A wire failure: the row says the write may have landed.
     media.radarr.call = lambda *a, **k: (_ for _ in ()).throw(Exception("down"))
     ask = {"method": "POST", "path": "command", "body": {"name": "RefreshMovie"}}
     tk.call("radarr_api", dict(ask))

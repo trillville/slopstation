@@ -111,10 +111,10 @@ class Plan:
     preview: str
 
 
-# The utterance a running tool was called under, pinned by Tools.call. The
-# grammar gate replaces dispatch.utterance with each final transcript, and a
-# tool runs on a worker thread, so a live read mid-call could name the wrong
-# turn. Unset outside a call, where the live read is right (REPL, tests).
+# The utterance a running tool was called under. The grammar gate replaces
+# dispatch.utterance with each transcript while a tool may still be running on
+# a worker thread, so a tool reads this pin, not the live value. None outside a
+# call (REPL, tests).
 _UTTERANCE: contextvars.ContextVar[tuple[str | None, str] | None] = (
     contextvars.ContextVar("utterance", default=None)
 )
@@ -122,9 +122,8 @@ _UTTERANCE: contextvars.ContextVar[tuple[str | None, str] | None] = (
 
 @contextlib.contextmanager
 def utterance_snapshot(dispatch):
-    """Pin dispatch.utterance's turn and words for the tool about to run.
-    No dispatch (StaticTools over a bare dict) pins nothing, so a tool with
-    a dispatch of its own keeps reading that one live."""
+    """Pin dispatch.utterance for the tool about to run. With no dispatch (a
+    bare tools dict) nothing is pinned."""
     if dispatch is None:
         yield
         return
@@ -155,15 +154,15 @@ class ToolContext:
     toolkit: Any = None
 
     def turn(self) -> str | None:
-        """The turn id of the utterance this tool was called under, or None
-        when there is no utterance: the gate then fails closed."""
+        """Turn id of the utterance this tool runs under. None means no
+        utterance, and the confirmation gate refuses."""
         pinned = _UTTERANCE.get()
         if pinned is not None:
             return pinned[0]
         return getattr(getattr(self.dispatch, "utterance", None), "turn", None)
 
     def asked(self) -> str:
-        """The words of the utterance this tool was called under, or ""."""
+        """Words of the utterance this tool runs under, or ""."""
         pinned = _UTTERANCE.get()
         if pinned is not None:
             return pinned[1]

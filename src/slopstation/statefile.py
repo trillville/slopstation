@@ -20,10 +20,9 @@ def load(path: pathlib.Path, default: Any) -> Any:
 
 
 def load_strict(path: pathlib.Path, default: Any) -> Any:
-    """A JSON state file, `default` when absent, and a ValueError naming the
-    file when it exists but cannot be read or parsed. For a file whose loss
-    would matter: a caller that took `default` there would write it back
-    over the real thing on its next save."""
+    """A JSON state file, or `default` when absent. ValueError, naming the
+    file, when it exists but cannot be read or parsed: a caller that took
+    `default` would write it back over the real file."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:

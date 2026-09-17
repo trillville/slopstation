@@ -29,8 +29,7 @@ DRAIN_MAX = 1024 * 1024
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
 TOOL_NAME = "ask_slopstation"
-# What it covers is the registry's own area table, so a new area reaches the
-# connector's description without a second list.
+# Built from the registry's AREAS table; a new area needs no edit here.
 TOOL_DESCRIPTION = (
     "Talk to Slopstation, the assistant that runs the user's living-room "
     "system. Use it for anything about that system: "
@@ -337,8 +336,8 @@ class RemoteServer(ThreadingHTTPServer):
 
 
 def start(services):
-    """Serve the MCP wrapper, or return None when it is off by config or
-    cannot bind. The owner runs the thread."""
+    """Serve the MCP wrapper on a thread the owner runs. None when disabled or
+    the port is taken."""
     cfg, secrets, log = services.cfg, services.secrets, services.log
     remote_cfg = cfg.get("remoteInterface") or {}
     if not remote_cfg.get("enabled"):

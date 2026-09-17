@@ -926,8 +926,8 @@ def test_health_watch_refuses_a_bad_stall_grace_without_falling_over():
 
 
 def test_health_watch_refuses_a_missing_arr_url_the_same_way():
-    """The URL is read by the shared client builder, so a missing one has to
-    be a configuration error there: the watch factories catch nothing else."""
+    """A missing URL is a MediaConfigurationError from the shared client
+    builder; the watch factories catch nothing else."""
     cfg = {"media": {"enabled": True, "sonarrUrl": "http://s"}}
     secrets = {"radarrApiKey": "k" * 32, "sonarrApiKey": "k" * 32}
     log = CapturingLog("voice")

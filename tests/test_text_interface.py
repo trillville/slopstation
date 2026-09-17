@@ -202,9 +202,8 @@ def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
 
 
 def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
-    """The owner's health() is what /health answers: which services were
-    built, and for every thread the owner started, whether it still runs.
-    Nothing answers without the token."""
+    """health() answers /health: which services were built, and whether each
+    thread the owner started is alive. Nothing answers without the token."""
     services = Services(cfg, SECRETS, log)
     services.steam = object()
     services.threads.append(("announcer", threading.Thread(name="announcer")))

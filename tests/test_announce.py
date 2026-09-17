@@ -8,9 +8,8 @@ from slopstation.agent.speech import announce
 
 
 def test_an_unreadable_ledger_skips_the_bulletin_not_the_thread():
-    """The store refuses a corrupt file with a raise. The loop that speaks
-    bulletins has to outlive that: the row keeps its pending flag, and the
-    next queued item is still looked up."""
+    """The store raises on a corrupt file. The delivery loop must survive it:
+    the row keeps its pending flag and the next queued item is still looked up."""
     reads = []
 
     class Store:

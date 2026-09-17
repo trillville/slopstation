@@ -39,7 +39,7 @@ def _fresh_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(paths, "HOME", tmp_path)
     paths.state().mkdir()
-    # Or the new home never gets its log directory.
+    # so the new home gets its own log directory
     monkeypatch.setattr(events, "_last_day", None)
     token = events._ctx.set({})
     try:

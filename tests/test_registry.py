@@ -175,9 +175,9 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
 
 
 def test_a_tool_reads_the_utterance_it_was_called_under():
-    """The gate overwrites dispatch.utterance with each final transcript
-    while a tool is still on its worker thread. Tools.call pins the one the
-    call started under; outside a call the context reads live."""
+    """The gate overwrites dispatch.utterance with each transcript while a tool
+    may still be running. Tools.call pins the one the call started under;
+    outside a call the context reads live."""
     first = types.SimpleNamespace(turn="aa1111", asked="delete dune")
     dispatch = types.SimpleNamespace(dry_run=False, utterance=first)
     toolkit = assistant.Toolkit(dispatch, CapturingLog("voice"))
@@ -193,7 +193,7 @@ def test_a_tool_reads_the_utterance_it_was_called_under():
     assert toolkit.call("probe", {})["ok"]
     assert seen == {"turn": "aa1111", "asked": "delete dune"}
     assert toolkit.ctx.turn() == "bb2222" and toolkit.ctx.asked() == "never mind"
-    # StaticTools has no dispatch: its snapshot pins nothing, so a tool that
-    # reads a dispatch of its own still sees that one live, not a None turn.
+    # A bare tools dict has no dispatch: nothing is pinned, so a tool with its
+    # own dispatch reads it live.
     with registry.utterance_snapshot(None):
         assert toolkit.ctx.turn() == "bb2222"

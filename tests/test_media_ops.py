@@ -46,8 +46,8 @@ class Arr:
 
 
 def breaking_bad(store, metadata, work_id=None):
-    """A tracked request for the series the fixtures hold, with the given
-    metadata on top of its catalog id."""
+    """A tracked request for the fixture series, with the given metadata on top
+    of its catalog id."""
     return store.track_external(
         "series_acquisition",
         "sonarr",
@@ -1275,8 +1275,7 @@ def test_a_search_promises_the_search_not_the_old_file(stack):
 
 def test_every_submission_key_is_a_row_column_or_lands_in_metadata(log):
     """track() reads the receipt's columns and copies METADATA_KEYS into the
-    row; a key _submission emits that is neither is silently lost, and a
-    later observation never sees it. Both shapes a series can take."""
+    row. A key that is neither is lost. Both shapes a series can take."""
     store = operations.OperationStore(log)
     columns = {"ok", "kind", "authority", "external_ref", "title", "phase", "detail"}
     columns |= {"already_available", "work_id"}

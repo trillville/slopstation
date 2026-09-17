@@ -273,13 +273,12 @@ def _write_events(path, *records):
 
 
 def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
-    """The task running proves the process; the events say whether the mic
-    ever answered. Newest event wins across files, so a lane that has been
-    waiting on a device since yesterday still reads as waiting."""
+    """The task proves the process; the events say whether the mic answered.
+    Newest event wins across files."""
     from slopstation import events
 
     monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
-    # audio_device is the input answering; the output can still miss after it.
+    # audio_device is the input answering; the output can still fail.
     _write_events(
         events._path("20260913"),
         {"lane": "voice", "event": "audio_device_wait"},

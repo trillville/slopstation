@@ -40,11 +40,10 @@ PRESETS = ("default", "1080p", "2160p")
 
 @dataclasses.dataclass(frozen=True)
 class Observation:
-    """One look at the authority for a tracked request. `state` is decided
-    here, where the evidence is, and is an operations state: RUNNING while
-    the authority still holds the work, SUCCEEDED, FAILED or CANCELED once it
-    does not. `metadata_ready` is False while Sonarr is still naming the
-    episodes a request covers."""
+    """One look at Radarr or Sonarr for a tracked request. `state` is an
+    operations state: RUNNING while the server still holds the work; SUCCEEDED,
+    FAILED or CANCELED once it does not. `metadata_ready` is False while Sonarr
+    is still listing the episodes a request covers."""
 
     state: str
     progress: dict[str, Any] = dataclasses.field(default_factory=dict)
@@ -1800,8 +1799,8 @@ def _arr_clients(media_cfg, secrets):
 
 
 def _optional_monitor(cfg, log, flag, what, build, default=True):
-    """A monitor from the media section, or None: off by config, or refused
-    with a lane_disabled line naming why. A refusal never stops the lane."""
+    """A monitor from the media config, or None: off by config, or refused with
+    a lane_disabled line."""
     media_cfg = _media_cfg(cfg, flag, default)
     if media_cfg is None:
         return None
@@ -1872,9 +1871,9 @@ def disk_health_monitor_from_config(cfg, log):
             raise MediaConfigurationError(
                 f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
             )
-        # Both volumes matter and are normally different: the library fills
-        # from downloads, the checkout drive holds the config databases and
-        # the event log. Anchors, so one volume named twice is watched once.
+        # The library volume fills from downloads; the checkout volume holds
+        # the databases and the event log. Anchors, so one volume named twice
+        # is watched once.
         mounts = sorted(
             {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
         )

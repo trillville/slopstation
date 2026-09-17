@@ -209,8 +209,8 @@ def _spec(name, description, needs, keywords, extra=None, busy=None):
         description,
         _params_schema(extra),
         ("method", "path"),
-        # A write through here is gated like every other write: the binding
-        # asks, previews on a dry run, and acts on a later turn's yes.
+        # Gated like every other write: asks first, previews on a dry run, acts
+        # on a later yes.
         risk="destructive",
         area="api",
         keywords=keywords,
@@ -432,14 +432,13 @@ def impls(ctx: ToolContext):
 
         if method == "GET":
             return run()
-        # The literal, not just the verb and path: on the text lane this
-        # question is the whole reply, so a body or query the user never saw
-        # would be one they never said yes to.
+        # The whole request, body included: on the text lane this question is
+        # the entire reply, so the user sees what they say yes to.
         return Plan(scope, f"Send {literal} to {service}?", run, f"run {literal}")
 
     def _record(service, method, path, literal, out):
-        """A write through the passthrough is work nobody curated: it lands
-        in the ledger, already finished, so `operations list` shows it."""
+        """Record a passthrough write in the ledger as finished, so `operations
+        list` shows it."""
         if operations is None:
             return
         try:
@@ -450,8 +449,8 @@ def impls(ctx: ToolContext):
                 f"{service} {method} /{path}",
                 turn=ctx.turn(),
             )
-            # A wire failure carries its "may or may not have reached" detail
-            # into the row: the ledger is where a person checks what landed.
+            # A wire failure may still have reached the service; the row says
+            # so.
             failure = " - ".join(
                 str(s) for s in (out.get("error"), out.get("detail")) if s
             )

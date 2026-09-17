@@ -46,7 +46,7 @@ class Acknowledged:
 
 class TextApplication:
     def __init__(self, services):
-        self.services = services  # the owner: tools per session, /health
+        self.services = services  # builds each session's tools; answers /health
         self.cfg, self.secrets, self.log = services.cfg, services.secrets, services.log
         self.dry_run = services.dry_run
         self.voice = self.cfg["voice"]
@@ -161,8 +161,7 @@ class TextHandler(BaseHTTPRequestHandler):
         return hmac.compare_digest(supplied, expected)
 
     def do_GET(self):
-        """/health: what this process has running, for the doctor. Behind the
-        token like everything else here; it names services and ports."""
+        """GET /health: what the voice process has running. Needs the token."""
         if self.path != "/health":
             self._json(404, {"ok": False, "error": "not found"})
             return
@@ -200,8 +199,8 @@ class TextHandler(BaseHTTPRequestHandler):
 
 
 def start(services):
-    """Serve the text interface over the owner's services, or return None
-    when it is off by config or cannot bind. The owner runs the thread."""
+    """Serve the text interface on a thread the owner runs. None when disabled
+    or the port is taken."""
     cfg, secrets, log = services.cfg, services.secrets, services.log
     text_cfg = cfg.get("textInterface") or {}
     if not text_cfg.get("enabled"):

@@ -92,17 +92,15 @@ class CapturingLog(logbook.Logger):
 
 
 def toolkit_impls(dispatch, log, **services):
-    """Every callable tool for the given services, keyed by name: the
-    Toolkit's impls without the conversation-shaped rest of it."""
+    """Every callable tool for the given services, keyed by name."""
     from slopstation.agent.llm.assistant import Toolkit
 
     return Toolkit(dispatch, log, **services).impls
 
 
 def fake_dispatch(turn="aa0001", asked="", dry_run=False):
-    """The two attributes of Dispatch a tool reads: dry_run, and the
-    utterance it runs under. turn=None is no utterance at all, which the
-    confirmation gate treats as a call it must refuse."""
+    """The two attributes of Dispatch a tool reads: dry_run and the utterance.
+    turn=None is no utterance, which the confirmation gate refuses."""
     utterance = None if turn is None else types.SimpleNamespace(turn=turn, asked=asked)
     return types.SimpleNamespace(dry_run=dry_run, utterance=utterance)
 
@@ -110,8 +108,8 @@ def fake_dispatch(turn="aa0001", asked="", dry_run=False):
 def sonarr_episode(
     id, season, *, number=None, has_file=None, monitored=None, aired=None, file_id=None
 ):
-    """One Sonarr episode row, with only the keys given: the code reads the
-    absence of airDateUtc and of monitored, so a helper must not fill them."""
+    """One Sonarr episode row with only the keys given. The code reads the
+    absence of airDateUtc and monitored, so the helper must not fill them."""
     row = {"id": id, "seasonNumber": season}
     if number is not None:
         row["episodeNumber"] = number

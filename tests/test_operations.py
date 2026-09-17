@@ -779,8 +779,8 @@ def test_media_monitor_reports_a_failed_search_as_failed(log):
 
 
 def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):
-    """A raise inside reconcile_once is one logged line; the ticker keeps
-    polling, and stop() ends the thread so an owner can join it."""
+    """A raise inside reconcile_once is one log line; polling continues, and
+    stop() ends the thread."""
     from slopstation.agent.tools.monitor import Monitor
 
     class Flaky(Monitor):
@@ -807,11 +807,10 @@ def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):
 
 
 def test_a_persisted_ledger_round_trips_untouched(log):
-    """The ledger on the K15 outlives every deploy. Reads and a no-op leave
-    its bytes alone; a write keeps every field it does not own, including
-    an old minimal row, unknown keys, and a state a newer build wrote.
-    tests/fixtures/operations.json is synthetic, built from the shapes the
-    code writes; a redacted copy of the real file replaces it."""
+    """The ledger outlives every deploy. Reads and no-ops leave its bytes
+    alone; a write keeps every field it does not own, including unknown keys
+    and states from a newer build. The fixture is synthetic; a redacted copy of
+    the real file should replace it."""
     fixture = Path(__file__).parent / "fixtures" / "operations.json"
     target = operations.operations_file()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -852,11 +851,9 @@ def test_a_persisted_ledger_round_trips_untouched(log):
 
 
 def test_a_corrupt_ledger_is_refused_and_left_alone(log):
-    """Half a line at the end of operations.json, from a crash mid-write on a
-    build before tmp+replace, used to load as an empty ledger and be written
-    back empty on the next observation: every tracked job and every pending
-    bulletin gone. The store now refuses to construct; the file stays for a
-    person, and the doctor's operations row names it."""
+    """A truncated operations.json (a crash mid-write) is refused at
+    construction and left as it is for a person; the doctor's operations row
+    names it."""
     target = operations.operations_file()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text('[{"id": "op-1", "state": "RUNNING"', encoding="utf-8")

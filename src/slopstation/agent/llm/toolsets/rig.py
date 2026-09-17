@@ -188,9 +188,9 @@ SPECS = [
         QUIT_GAME,
         {"appid": {"type": "integer", "description": "appid of the running game"}},
         ("appid",),
-        # Quitting can lose unsaved progress, so it asks first like every
-        # other write. It stays in the default set: "quit the game" is said
-        # mid-session and cannot wait for a search step; the ask is the pause.
+        # Asks first: quitting can lose unsaved progress. Stays in the default
+        # set because "quit the game" is said mid-session; the question is the
+        # pause.
         risk="destructive",
         area="session",
         keywords=("quit", "close game", "exit game", "stop game", "kill"),
@@ -379,10 +379,8 @@ def known_appids():
 
 
 def _outcome(r):
-    """A dispatch Result as a tool result: a receipt on success; on a refusal
-    the reason under `error` like every other toolset, and `busy` when the
-    room refused because something was already running, so the model can
-    say that rather than that it failed."""
+    """A dispatch Result as a tool result. Success: a receipt. Refusal: the
+    reason under `error`, plus `busy` when something was already running."""
     if r.ok:
         return {"ok": True, "detail": r.detail}
     out = {"ok": False, "error": r.detail}

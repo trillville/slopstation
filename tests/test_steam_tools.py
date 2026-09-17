@@ -458,7 +458,7 @@ def test_tv_status_pc_status_wake_and_sleep(rig, monkeypatch):
     monkeypatch.setattr(sessionlock, "active", lambda *a: False)
     sent = []
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: sent.append(cmd) or "OK")
-    # Sleep asks first, and the same call on a later turn's yes acts.
+    # Sleep asks first; the same call on a later turn's yes acts.
     asked = tk.call("sleep_pc", {})
     assert not asked["ok"] and asked["acknowledgment"] == "Put the PC to sleep?"
     assert sent == []

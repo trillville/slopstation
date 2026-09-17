@@ -185,14 +185,13 @@ def _path(day: str) -> pathlib.Path:
 
 def log_file(day: str) -> pathlib.Path:
     """This service's event file for a YYYYMMDD day, for readers such as the
-    doctor; the writer keeps its own path."""
+    doctor."""
     return _path(day)
 
 
 def log_files() -> list[pathlib.Path]:
-    """Every retained event file of this service, newest first, from the
-    live folder and the archive: what a reader walks to find the latest
-    occurrence of an event."""
+    """Every retained event file of this service, newest first: the live
+    folder, then the archive."""
     pattern = _path("*").name
     return sorted(
         [*paths.logs().glob(pattern), *(paths.logs() / ARCHIVE_NAME).glob(pattern)],

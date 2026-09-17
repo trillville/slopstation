@@ -5,10 +5,9 @@ import pathlib
 
 import helpers
 
-# What the chord lane is made of: the controller, the launch, the devices,
-# and the modules every lane shares. A voice failure must not be able to
-# take these down, so they import nothing from slopstation.agent, not even
-# lazily inside a function.
+# The chord lane: controller, launch, devices, and the shared modules. A voice
+# failure must not take these down, so they import nothing from
+# slopstation.agent, not even lazily.
 CHORD_LANE = (
     "chord_listener",
     "couch",
