@@ -90,7 +90,7 @@ def boom(_):
 def recording_nav(seen):
     """A Dispatch.nav double: records (kind, arg), answers ok."""
 
-    def nav(kind, arg=None):
+    def nav(kind, arg=None, turn=None):
         seen.append((kind, arg))
         return types.SimpleNamespace(ok=True, detail="showing")
 
@@ -368,7 +368,7 @@ def test_quit_game_asks_first_and_acts_on_a_later_yes(monkeypatch, live_dispatch
     monkeypatch.setattr(
         live_dispatch,
         "quit_game",
-        lambda appid: quit.append(appid) or Result(True, "ok", "quit"),
+        lambda appid, turn=None: quit.append(appid) or Result(True, "ok", "quit"),
     )
     impls = toolkit_impls(live_dispatch, log)
     live_dispatch.begin_utterance("aa0001", "quit valheim")
@@ -397,17 +397,21 @@ def test_a_room_refusal_is_an_error_and_says_busy(monkeypatch, dispatch, impls):
     from slopstation.agent.dispatch import Result
 
     monkeypatch.setattr(
-        dispatch, "play_game", lambda appid: Result(False, "busy", "a session is live")
+        dispatch,
+        "play_game",
+        lambda appid, turn=None: Result(False, "busy", "a session is live"),
     )
     r = impls["launch_game"]({"appid": INSTALLED})
     assert r == {"ok": False, "error": "a session is live", "busy": True}
     monkeypatch.setattr(
-        dispatch, "play_game", lambda appid: Result(False, "fail", "the PC is asleep")
+        dispatch,
+        "play_game",
+        lambda appid, turn=None: Result(False, "fail", "the PC is asleep"),
     )
     r = impls["launch_game"]({"appid": INSTALLED})
     assert r == {"ok": False, "error": "the PC is asleep"} and "detail" not in r
     monkeypatch.setattr(
-        dispatch, "play_game", lambda appid: Result(True, "ok", "launched")
+        dispatch, "play_game", lambda appid, turn=None: Result(True, "ok", "launched")
     )
     assert impls["launch_game"]({"appid": INSTALLED}) == {
         "ok": True,

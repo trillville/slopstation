@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from slopstation import config, haptics, paths, sessionlock, supervise
+from slopstation import config, events, haptics, paths, sessionlock, supervise
 from slopstation.agent.tools import media_proton, operations
 from slopstation.agent.tools.media_clients import ArrClient
 
@@ -129,12 +129,13 @@ def _service_row(name, service, stopped_hint, absent_hint):
 
 
 def _process_row(name, lane, up, down, down_hint):
-    """One 'is this lane running' row, read from its scheduled task."""
+    """One 'is this lane running' row, read from its scheduled task. Returns
+    the task row while it runs, else None."""
     try:
         task = supervise.query(lane)
     except Exception as e:
         report(WARN, name, f"could not query the task ({e})", "")
-        return False
+        return None
     if task is None:
         report(
             WARN,
@@ -142,17 +143,17 @@ def _process_row(name, lane, up, down, down_hint):
             f"task {supervise.TASKS[lane]} not registered",
             "run Setup-K15-Tasks.ps1",
         )
-        return False
+        return None
     if task.get("Status") == "Running":
         report(PASS, name, up)
-        return True
+        return task
     report(
         WARN,
         name,
         f"{down} (task {task.get('Status')}, last result {task.get('Last Result')})",
         down_hint,
     )
-    return False
+    return None
 
 
 def check_listener():
@@ -1067,43 +1068,68 @@ def check_operations():
         report(PASS, "operations", note)
 
 
-# The voice lane's readiness events, newest wins: armed once both devices
-# answered, waiting after a miss, rebuilding after a stream death.
+# The voice lane's readiness events, newest wins: (row text, hint).
+_DEVICE_HINT = "check the audio device in config.json"
 READINESS = {
-    "audio_ready": "armed",
-    "audio_device_wait": "waiting for the microphone",
-    "wake_stream_died": "mic stream died, rebuilding",
-    "audio_rebuild_failed": "mic stream died, rebuilding",
+    "audio_ready": ("armed", ""),
+    "audio_device_wait": ("waiting for the microphone", _DEVICE_HINT),
+    "wake_stream_died": ("mic stream died, rebuilding", _DEVICE_HINT),
+    "audio_rebuild_failed": (
+        "audio failed to open; retrying every 5 s",
+        "see audio_rebuild_failed in the voice event log",
+    ),
+    "wake_model_missing": (
+        "wake model missing",
+        "see wake_model_missing in the voice event log",
+    ),
+    "wake_verifier_missing": (
+        "wake verifier missing",
+        "see wake_verifier_missing in the voice event log",
+    ),
 }
 
 
 def check_voice_agent():
-    running = _process_row(
+    task = _process_row(
         "voice agent",
         "voice",
-        "running (text, MCP and the monitors are up)",
+        "running",
         "not running - wake word deaf (chord unaffected)",
         "run Start-Slopstation.bat",
     )
-    if not running:
+    if task is None:
         return
     # The task proves the process, not the wake word: the lane checks in before
     # the mic wait.
-    state = READINESS.get(_latest_events(READINESS).get("voice", ""), "")
+    state, hint = READINESS.get(_latest_events(READINESS).get("voice", ""), ("", ""))
     if state == "armed":
         report(PASS, "wake word", "armed")
     elif state:
-        report(WARN, "wake word", state, "check the audio device in config.json")
+        report(WARN, "wake word", state, hint)
+    elif _started_before_retention(task):
+        report(
+            PASS,
+            "wake word",
+            f"no event retained; lane older than {events.TTL_DAYS} days",
+        )
     else:
         report(WARN, "wake word", "no readiness event on record", "")
+
+
+def _started_before_retention(task):
+    """True when the task's last start is older than the event retention, so
+    an armed lane has no readiness event left to show."""
+    try:
+        started = time.strptime(task.get("Last Run Time", ""), "%m/%d/%Y %I:%M:%S %p")
+    except ValueError:
+        return False
+    return time.mktime(started) < time.time() - events.TTL_DAYS * 86400
 
 
 def _latest_events(names):
     """Each lane's most recent event among `names`: lane -> event name. Walks
     every retained event file, newest first, because a lane logs a check-in
     once and then only changes. Unparseable lines are skipped."""
-    from slopstation import events
-
     latest: dict = {}
     for f in events.log_files():
         in_file = {}
@@ -1173,7 +1199,6 @@ def check_sentry():
 
 def check_telemetry():
     """Event stream written, and anything shipping it? WARN-only."""
-    from slopstation import events
 
     today = events.log_file(time.strftime("%Y%m%d"))  # local date, like events
     try:

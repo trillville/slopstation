@@ -84,7 +84,7 @@ class Dispatch:
     # -- session ---------------------------------------------------------------
 
     def start_session(
-        self, appid: int | str | None = None, nav: tuple | None = None
+        self, appid: int | str | None = None, nav: tuple | None = None, turn=None
     ) -> Result:
         """Advisory busy check; the real arbiter is couch.py's acquire_lock.
         `appid` launches that game once the session is up; `nav` (kind, arg)
@@ -102,7 +102,7 @@ class Dispatch:
         args = COUCH + ["start"] + ([str(appid)] if appid else [])
         if page:
             args += ["--nav", *page]
-        turn = self.utterance.turn or events.current().get("turn")
+        turn = turn or self.utterance.turn or events.current().get("turn")
         if turn:
             args += ["--turn", turn]
         subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -170,15 +170,15 @@ class Dispatch:
         except Exception:
             return True
 
-    def play_game(self, appid: int | str) -> Result:
+    def play_game(self, appid: int | str, turn=None) -> Result:
         """Session live -> direct host launch (OK/ALREADY/BUSY/NOTREADY).
         No session -> full couch launch, game queued for after READY."""
         if not sessionlock.active():
-            return self.start_session(appid)
+            return self.start_session(appid, turn=turn)
         if self.dry_run:
             return self._would(f"ssh launch {appid}")
         try:
-            out = gamepc.launch(appid, self.utterance.turn)
+            out = gamepc.launch(appid, turn or self.utterance.turn)
         except Exception as e:
             self.log.error("launch_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh launch: {e})")
@@ -202,14 +202,14 @@ class Dispatch:
             return _no_task(out)
         return _fail(f"the launch failed (ssh launch: {out})")
 
-    def quit_game(self, appid: int | str) -> Result:
+    def quit_game(self, appid: int | str, turn=None) -> Result:
         """Quit the running game. The host re-checks RunningAppID and answers
         BUSY on a mismatch, so a raced id never kills the wrong game."""
         appid = int(appid)
         if self.dry_run:
             return self._would(f"ssh stop {appid}")
         try:
-            out = gamepc.stop(appid, self.utterance.turn)
+            out = gamepc.stop(appid, turn or self.utterance.turn)
         except Exception as e:
             self.log.error("quit_failed", appid=appid, err=str(e))
             return _fail(f"couldn't reach the PC (ssh stop: {e})")
@@ -250,7 +250,7 @@ class Dispatch:
         "url",
     }
 
-    def nav(self, kind: str, arg: int | str | None = None) -> Result:
+    def nav(self, kind: str, arg: int | str | None = None, turn=None) -> Result:
         """Fire a steam:// navigation into Big Picture via the host `nav`
         verb. Shared by the assistant tool and the grammar; host-gated on
         the session."""
@@ -270,7 +270,7 @@ class Dispatch:
         if self.dry_run:
             return self._would(f"ssh {cmd}")
         try:
-            out = gamepc.nav(kind, arg, self.utterance.turn)
+            out = gamepc.nav(kind, arg, turn or self.utterance.turn)
         except Exception as e:
             self.log.error("nav_failed", kind=kind, err=str(e))
             return _fail(f"couldn't reach the PC (ssh {cmd}: {e})")
@@ -317,7 +317,7 @@ class Dispatch:
 
     DISPLAY_TARGETS = ("tv", "monitor")
 
-    def display(self, target: str) -> Result:
+    def display(self, target: str, turn=None) -> Result:
         """Move the PC's desktop to the TV or back to its monitor with no
         session: no Puck claim, no Big Picture, no session lock. For `tv` the
         TV is powered on and switched to the PC first. Refused while a session
@@ -340,7 +340,7 @@ class Dispatch:
             except Exception as e:
                 return _fail(f"the TV did not take the PC input ({e})")
         try:
-            out = gamepc.display(target, self.utterance.turn)
+            out = gamepc.display(target, turn or self.utterance.turn)
         except Exception as e:
             self.log.error("display_failed", target=target, err=str(e))
             return _fail(f"couldn't reach the PC (ssh display {target}: {e})")

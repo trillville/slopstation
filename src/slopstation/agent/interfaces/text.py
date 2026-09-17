@@ -39,8 +39,10 @@ class Acknowledged:
 
     def call(self, name, args):
         out = self.toolkit.call(name, args)
-        if isinstance(out, dict) and out.get("acknowledgment"):
-            self.acknowledgments.append(str(out["acknowledgment"]))
+        if isinstance(out, dict):
+            shown = out.get("confirm") or out.get("acknowledgment")
+            if shown:
+                self.acknowledgments.append(str(shown))
         return out
 
 

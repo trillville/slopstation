@@ -121,7 +121,7 @@ def rig(catalog, log, monkeypatch):
         tv=types.SimpleNamespace(
             power_state=lambda: "on", volume=lambda: 14, muted=lambda: False
         ),
-        display=lambda target: types.SimpleNamespace(
+        display=lambda target, turn=None: types.SimpleNamespace(
             ok=target in ("tv", "monitor"), detail=f"display {target}"
         ),
     )

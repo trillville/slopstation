@@ -146,11 +146,11 @@ def test_puck_enumerates_or_fails(rows, monkeypatch):
 
 def test_listener_task_running_or_not(rows, monkeypatch):
     monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
-    assert doctor.check_listener() is True and rows.levels()["listener"] == "PASS"
+    assert doctor.check_listener() and rows.levels()["listener"] == "PASS"
     monkeypatch.setattr(
         supervise, "query", lambda lane: {"Status": "Ready", "Last Result": "1"}
     )
-    assert doctor.check_listener() is False and rows.levels()["listener"] == "WARN"
+    assert doctor.check_listener() is None and rows.levels()["listener"] == "WARN"
 
 
 # --- ssh: status, DENIED probe, deploy skew ----------------------------------
@@ -293,6 +293,27 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
     _write_events(events._path("20260914"), {"lane": "voice", "event": "audio_ready"})
     doctor.check_voice_agent()
     assert rows.levels()["wake word"] == "PASS"
+
+    # A missing model is a WARN with its own hint, not a stale "armed".
+    rows.clear()
+    _write_events(
+        events._path("20260915"), {"lane": "voice", "event": "wake_model_missing"}
+    )
+    doctor.check_voice_agent()
+    assert rows.detail("wake word") == "wake model missing"
+
+    # No event retained, but the task started before the retention window.
+    rows.clear()
+    for path in events.log_files():
+        path.unlink()
+    monkeypatch.setattr(
+        supervise,
+        "query",
+        lambda lane: {"Status": "Running", "Last Run Time": "1/1/2026 9:00:00 AM"},
+    )
+    doctor.check_voice_agent()
+    assert rows.levels()["wake word"] == "PASS"
+    assert rows.detail("wake word").startswith("no event retained")
 
     # A lane that is not running gets no readiness row at all.
     rows.clear()

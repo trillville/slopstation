@@ -106,9 +106,10 @@ class Plan:
     identifies the question, so a different target is a different ask."""
 
     scope: tuple
-    ask: str
+    ask: str  # spoken as-is; "" hands the turn back to the model
     act: Callable[[], dict]
     preview: str
+    confirm: str = ""  # the literal a text lane shows instead of `ask`
 
 
 # The utterance a running tool was called under. The grammar gate replaces
@@ -255,7 +256,15 @@ class Bindings:
                 return plan
             if dry := ctx.preview(plan.preview):
                 return dry
-            return ctx.confirm(name, plan.scope, {"acknowledgment": plan.ask}, plan.act)
+            if plan.ask:
+                ask = {"acknowledgment": plan.ask}
+            else:
+                ask = {
+                    "confirm": plan.confirm,
+                    "error": "not run yet: read this request back to the user in "
+                    "plain words, and call again unchanged once they say yes",
+                }
+            return ctx.confirm(name, plan.scope, ask, plan.act)
 
         run.__name__ = name
         self._add(run, gated=True)

@@ -430,9 +430,9 @@ def impls(ctx: ToolContext):
 
         if method == "GET":
             return run()
-        # The whole request, body included: on the text lane this question is
-        # the entire reply, so the user sees what they say yes to.
-        return Plan(scope, f"Send {literal} to {service}?", run, f"run {literal}")
+        # The text lane shows the literal, body included; the voice lane has
+        # the model read it back in words.
+        return Plan(scope, "", run, f"run {literal}", confirm=literal)
 
     def _record(service, method, path, literal, out):
         """Record a passthrough write in the ledger as finished, so `operations

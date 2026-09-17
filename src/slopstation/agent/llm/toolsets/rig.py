@@ -412,7 +412,7 @@ def impls(ctx: ToolContext):
                 "error": "that game is owned but not "
                 "installed - installing needs the controller",
             }
-        r = dispatch.play_game(appid)
+        r = dispatch.play_game(appid, turn=ctx.turn())
         return _outcome(r)
 
     @bind.destructive
@@ -424,7 +424,7 @@ def impls(ctx: ToolContext):
         return Plan(
             ("quit_game", appid),
             f"Quit {title}?",
-            lambda: _outcome(dispatch.quit_game(appid)),
+            lambda: _outcome(dispatch.quit_game(appid, turn=ctx.turn())),
             f"quit {title}",
         )
 
@@ -470,7 +470,7 @@ def impls(ctx: ToolContext):
         # With no session, nav starts one and the page comes up with it; the
         # receipt has to say so rather than claim the page is on the TV now.
         starting = not sessionlock.active()
-        r = dispatch.nav("details", appid)
+        r = dispatch.nav("details", appid, turn=ctx.turn())
         if not r.ok:
             return _outcome(r)
         if starting:
@@ -494,13 +494,13 @@ def impls(ctx: ToolContext):
             appid = int(appid or 0)
             if refused := _unknown("nav", appid):
                 return refused
-            r = dispatch.nav("details", appid)
+            r = dispatch.nav("details", appid, turn=ctx.turn())
         elif target == "store_page":
             # No catalog check: a store page is for a game they do NOT own.
             appid = int(appid or 0)
             if appid <= 0:
                 return {"ok": False, "error": "I need the game's store appid"}
-            r = dispatch.nav("store", appid)
+            r = dispatch.nav("store", appid, turn=ctx.turn())
         elif target == "collection":
             # Grammar mishears land here: resolve fuzzily, and on
             # a miss hand back the real names for the model to act on.
@@ -528,7 +528,7 @@ def impls(ctx: ToolContext):
                     else "which collection?",
                     "collections": [r["name"] for r in rows],
                 }
-            r = dispatch.nav("collection", cid)
+            r = dispatch.nav("collection", cid, turn=ctx.turn())
         elif target in ("dlc", "community_hub", "workshop", "verify_files"):
             # Any Steam appid: these pages exist for games the user does not
             # own too, and a DLC list is one way to put a purchase on the TV.
@@ -538,10 +538,10 @@ def impls(ctx: ToolContext):
             kind = {"community_hub": "hub", "verify_files": "validate"}.get(
                 target, target
             )
-            r = dispatch.nav(kind, appid)
+            r = dispatch.nav(kind, appid, turn=ctx.turn())
         elif target == "news":
             appid = int(appid or 0)
-            r = dispatch.nav("news", appid if appid > 0 else None)
+            r = dispatch.nav("news", appid if appid > 0 else None, turn=ctx.turn())
         elif target == "search":
             query = str(args.get("query") or "").strip()
             if not query:
@@ -554,7 +554,7 @@ def impls(ctx: ToolContext):
                 url = STORE_SEARCH + urllib.parse.quote_plus(words)
             if not words:
                 return {"ok": False, "error": "those search words cannot be encoded"}
-            r = dispatch.nav("url", url)
+            r = dispatch.nav("url", url, turn=ctx.turn())
         elif target == "web":
             url = str(args.get("url") or "").strip()
             if not gamepc.NAV_URL_RE.fullmatch(url):
@@ -563,7 +563,7 @@ def impls(ctx: ToolContext):
                     "error": "web opens store.steampowered.com or "
                     "steamcommunity.com pages only, as a plain https URL",
                 }
-            r = dispatch.nav("url", url)
+            r = dispatch.nav("url", url, turn=ctx.turn())
         elif target in (
             "downloads",
             "library",
@@ -573,7 +573,7 @@ def impls(ctx: ToolContext):
             "screenshots",
             "wishlist",
         ):
-            r = dispatch.nav(target)
+            r = dispatch.nav(target, turn=ctx.turn())
         else:
             return {"ok": False, "error": f"unknown nav target {target}"}
         return _outcome(r)
@@ -586,7 +586,7 @@ def impls(ctx: ToolContext):
         elif action == "end_session":
             r = dispatch.end_session()
         elif action == "start_session":
-            r = dispatch.start_session()
+            r = dispatch.start_session(turn=ctx.turn())
         else:
             return {"ok": False, "error": f"unknown action {action}"}
         return _outcome(r)
@@ -734,7 +734,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def display(args):
-        r = dispatch.display(str(args.get("target") or ""))
+        r = dispatch.display(str(args.get("target") or ""), turn=ctx.turn())
         return _outcome(r)
 
     @bind

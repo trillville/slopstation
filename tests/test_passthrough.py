@@ -78,7 +78,8 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
         "body": {"name": "MoviesSearch", "movieIds": [12]},
     }
     first = tk.call("radarr_api", dict(ask))
-    assert not first["ok"] and first["acknowledgment"].startswith("Send POST /command")
+    assert not first["ok"] and first["confirm"].startswith("POST /command")
+    assert "acknowledgment" not in first  # the voice lane paraphrases it
     assert media.radarr.calls == []
     # Same turn again: still refused - the model cannot answer itself.
     assert not tk.call("radarr_api", dict(ask))["ok"]
@@ -178,11 +179,9 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
         "body": [{"path": "/x", "movieId": 2}],
     }
     first = tk.call("radarr_api", dict(ask))
-    assert not first["ok"] and first["acknowledgment"].startswith(
-        "Send POST /manualimport"
-    )
+    assert not first["ok"] and first["confirm"].startswith("POST /manualimport")
     # The body is in the question: on the text lane it is the whole reply.
-    assert '"movieId": 2' in first["acknowledgment"], first["acknowledgment"]
+    assert '"movieId": 2' in first["confirm"], first["confirm"]
     assert not tk.call(
         "qbittorrent_api", {"method": "POST", "path": "torrents/add", "body": [1]}
     )["ok"]
@@ -422,11 +421,11 @@ def test_a_steam_post_is_confirmed_with_its_credential_in_scope(live, log):
     tk, dispatch, _ = live
     ask = {"method": "POST", "path": "IPlayerService/X/v1", "body": {"a": 1}}
     first = tk.call("steam_api", {**ask, "auth": "none"})
-    assert not first["ok"] and "(auth: none)" in first["acknowledgment"]
+    assert not first["ok"] and "(auth: none)" in first["confirm"]
     dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
     # A different credential is a different request: asked again, not run.
     again = tk.call("steam_api", {**ask, "auth": "account"})
-    assert not again["ok"] and "(auth: account)" in again["acknowledgment"]
+    assert not again["ok"] and "(auth: account)" in again["confirm"]
 
 
 # --- describe_api -------------------------------------------------------------

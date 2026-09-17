@@ -298,6 +298,15 @@ def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
     # Configure tracing before the first session.
     sentry.setup(cfg, log)
 
+    # The wake model loads before the check-in starts: a missing model exits
+    # and pages, instead of restarting green every ten seconds.
+    try:
+        listener = WakeListener(None, voice, None)
+    except FileNotFoundError as e:
+        # wake_model_missing is already logged with the paths tried.
+        print(f"[voice] {e}")
+        return 1
+
     # Heartbeat before the mic wait, so a dead microphone does not page.
     if not args.once:
         events.start_heartbeat("voice")
@@ -309,13 +318,7 @@ def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
     # cold boot; forever on a dead mic). Everything above must already be
     # serving - text, MCP, and the monitors must not wait on a microphone.
     pa, input_idx, output_idx = open_audio(voice)
-
-    try:
-        listener = WakeListener(pa, voice, input_idx)
-    except FileNotFoundError as e:
-        # wake_model_missing is already logged with the paths tried.
-        print(f"[voice] {e}")
-        return 1
+    listener.rebind(pa, input_idx)
     # model_source: a vendored and a pretrained model can share a name.
     log(
         "agent_up",

@@ -182,13 +182,15 @@ class Services:
         announcer = announce.Announcer(self.cfg["voice"], self.secrets, self.log)
         announcer.store = self.operations
         announcer.duck = duck
-        self.operations.on_terminal = announcer.submit
-        self.operations.on_notification = announcer.submit_notification
         for operation in self.operations.pending_announcements():
             announcer.submit(operation)
         for notification in self.operations.pending_notifications():
             announcer.submit_notification(notification)
         self.threads.append(("announcer", announcer.start()))
+        # Hooked last: a raise above leaves the store with no announcer, not
+        # with hooks into a queue nothing reads.
+        self.operations.on_terminal = announcer.submit
+        self.operations.on_notification = announcer.submit_notification
         return announcer
 
     def _optional(self, what, build, *args, **kwargs):

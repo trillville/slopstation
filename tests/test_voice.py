@@ -47,6 +47,9 @@ class FakeListener:
     def __init__(self, pa, voice, idx):
         pass
 
+    def rebind(self, pa, idx):
+        pass
+
     def wait_for_wake_capture(self, threshold, on_quiet=None, interrupt=None):
         if FakeListener.wakes:
             return FakeListener.wakes.pop(0)

@@ -8,6 +8,7 @@ from slopstation import config, logbook
 from slopstation.agent.tools import library, media, steam_session
 from slopstation.agent.tools.monitor import Monitor
 from slopstation.agent.tools.operations import (
+    CANCELED,
     FAILED,
     POLL_S,
     RUNNING,
@@ -368,7 +369,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     log = logbook.logger("voice")
-    store = OperationStore(log)
+    try:
+        store = OperationStore(log)
+    except ValueError as e:
+        print(e)
+        return 1
 
     if args.command == "list":
         rows = store.active() if args.active else store.recent(50)
@@ -392,12 +397,16 @@ def main(argv=None):
         if operation.get("state") in TERMINAL:
             print(f"{args.operation} is already {operation['state'].lower()}")
             return 1
-        if operation.get("kind") not in MediaMonitor.KINDS:
-            print("only Radarr and Sonarr operations support clean abandonment")
-            return 1
         if not args.execute:
             print("nothing deleted; repeat with --execute")
             return 2
+        if operation.get("kind") not in MediaMonitor.KINDS:
+            # Nothing to undo on the service; the row just needs closing.
+            store.observe(
+                operation["id"], CANCELED, {}, "abandoned by hand", announce=False
+            )
+            print(f"{args.operation} marked canceled; nothing deleted")
+            return 0
         service = media.from_config(config.current(), config.secrets(), log)
         if service is None:
             print("media is disabled or its configuration/API keys are incomplete")

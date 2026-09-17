@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 from slopstation import config, events
 
 INTERVAL_S = 60
+# Sentry takes the interval in whole minutes; 0 is refused.
+assert INTERVAL_S >= 60 and INTERVAL_S % 60 == 0
 TIMEOUT_S = 5
 
 MONITOR_CONFIG = {
