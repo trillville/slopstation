@@ -1271,3 +1271,34 @@ def test_a_search_promises_the_search_not_the_old_file(stack):
     assert again["operation_id"] != op["operation_id"]
     row = store.observe(again["operation_id"], operations.FAILED, failed.progress, "")
     assert row["summary"] == "Radarr's search for Dune failed."
+
+
+def test_every_submission_key_is_a_row_column_or_lands_in_metadata(log):
+    """track() reads the receipt's columns and copies METADATA_KEYS into the
+    row; a key _submission emits that is neither is silently lost, and a
+    later observation never sees it. Both shapes a series can take."""
+    store = operations.OperationStore(log)
+    columns = {"ok", "kind", "authority", "external_ref", "title", "phase", "detail"}
+    columns |= {"already_available", "work_id"}
+    by_season = media.MediaService._submission(
+        "series",
+        5,
+        "Andor",
+        393189,
+        preset="2160p",
+        profile=7,
+        seasons=[1],
+        baseline_episode_files={"900": None},
+        search_pending=True,
+        command_ids=[1],
+        detail="queued",
+        promise="search",
+        work_id="w1",
+    )
+    by_season["all_seasons"] = False
+    by_episode = media.MediaService._submission(
+        "series", 5, "Andor", 393189, episode_ids=[900], episodes=[[1, 1]]
+    )
+    for submission in (by_season, by_episode):
+        row = store.get(operations.track(store, dict(submission))["operation_id"])
+        assert set(submission) - columns <= set(row["metadata"]), submission

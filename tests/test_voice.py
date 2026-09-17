@@ -72,6 +72,9 @@ class FakeAnnouncer:
     def abort_current(self):
         pass
 
+    def start(self):
+        return threading.Thread(name="announcer")  # never run
+
     def stop(self):
         self.stopped = True
 
@@ -106,6 +109,7 @@ class FakeSteamMonitor:
 
     def start(self):
         self.started = True
+        return threading.Thread(name="fake-monitor")  # never run
 
     def stop(self):
         self.stopped = True
@@ -123,6 +127,7 @@ class FakeMediaMonitor:
 
     def start(self):
         self.started = True
+        return threading.Thread(name="fake-monitor")  # never run
 
     def stop(self):
         self.stopped = True
@@ -139,6 +144,7 @@ class FakeProtonPortMonitor:
 
     def start(self):
         self.started = True
+        return threading.Thread(name="fake-monitor")  # never run
 
     def stop(self):
         self.stopped = True
@@ -275,21 +281,18 @@ def run(monkeypatch, stubbed):
 
             def __init__(
                 self,
-                cfg,
-                secrets,
+                services,
                 matcher,
-                dry_run,
                 input_idx,
                 output_idx,
                 capture=None,
-                services=None,
                 ack=None,
                 on_end_session=None,
                 room=None,
             ):
                 calls.append(
                     dict(
-                        dry_run=dry_run,
+                        dry_run=services.dry_run,
                         operations=services.operations,
                         steam=services.steam,
                         media=services.media,

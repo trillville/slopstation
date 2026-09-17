@@ -639,6 +639,7 @@ def announcer_with_a_ducker(log, monkeypatch, order, follow_up):
     voice = dict(helpers.CONFIG["voice"])
     voice["followUpAfterAnnounce"] = follow_up
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    ann.start()
     store = operations.OperationStore(log, on_terminal=ann.submit)
     monkeypatch.setattr(ann, "store", store)
     monkeypatch.setattr(announce, "synth", lambda *a, **kw: b"speech")
@@ -724,6 +725,7 @@ def test_a_follow_up_that_opens_no_session_gives_the_room_back(log, monkeypatch)
 def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
     voice = dict(helpers.CONFIG["voice"])
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    ann.start()
     store = operations.OperationStore(
         log, on_terminal=ann.submit, on_notification=ann.submit_notification
     )

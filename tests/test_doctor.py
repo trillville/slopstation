@@ -304,7 +304,7 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
 
 def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkeypatch):
     """A real text server on a free port answers /health; the row names what
-    the voice process has up and which monitors have stopped."""
+    the voice process has up and which of its threads have stopped."""
     from slopstation.agent.interfaces import text
     from slopstation.agent.services import Services
 
@@ -316,9 +316,13 @@ def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkey
     monkeypatch.setattr(
         services,
         "health",
-        lambda: {"operations": True, "steam": False, "monitors": {"disk": False}},
+        lambda: {
+            "operations": True,
+            "steam": False,
+            "threads": {"announcer": False, "disk_watch": True},
+        },
     )
-    server = text.start(live, secrets, helpers.CapturingLog("voice"), services)
+    server = text.start(services)
     assert server is not None
     try:
         live["textInterface"]["port"] = server.server_address[1]
@@ -327,7 +331,7 @@ def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkey
         )
         doctor.check_text(live)
         assert rows.levels()["text interface"] == "WARN"
-        assert rows.detail("text interface").endswith("stopped: disk")
+        assert rows.detail("text interface").endswith("stopped: announcer")
         assert "up: operations;" in rows.detail("text interface")
     finally:
         server.shutdown()

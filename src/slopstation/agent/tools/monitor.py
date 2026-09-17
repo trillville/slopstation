@@ -15,9 +15,11 @@ class Monitor:
     def reconcile_once(self):
         raise NotImplementedError
 
-    def start(self):
+    def start(self) -> events.Ticker:
+        """Start polling; the ticker comes back so the owner can watch it."""
         self.ticker = events.Ticker(self.THREAD_NAME, self.poll_s, self._tick)
         self.ticker.start()
+        return self.ticker
 
     def stop(self):
         if self.ticker is not None:

@@ -3,7 +3,6 @@
 import functools
 import json
 import threading
-import types
 import urllib.error
 import urllib.request
 
@@ -142,7 +141,7 @@ def base(cfg, log, gate, fake_backend, saved):
     """A text interface on a free port, torn down after the test."""
     services = Services(cfg, SECRETS, log)
     services.operations, services.media = FakeOperations(), FakeMedia()
-    server = text.start(cfg, SECRETS, log, services)
+    server = text.start(services)
     assert server is not None
     try:
         host, port = server.server_address
@@ -203,16 +202,14 @@ def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
 
 
 def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
-    """The owner's health() is what /health answers: a dead thread reads as
-    down, an absent piece as not up, and nothing answers without the token."""
+    """The owner's health() is what /health answers: which services were
+    built, and for every thread the owner started, whether it still runs.
+    Nothing answers without the token."""
     services = Services(cfg, SECRETS, log)
     services.steam = object()
-    services.announcer = types.SimpleNamespace(
-        thread=types.SimpleNamespace(is_alive=lambda: False)
-    )
-    server = text.start(cfg, SECRETS, log, services)
+    services.threads.append(("announcer", threading.Thread(name="announcer")))
+    server = text.start(services)
     assert server is not None
-    services.servers.append(server)
     try:
         host, port = server.server_address
         url = f"http://{host}:{port}/health"
@@ -226,11 +223,9 @@ def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
             assert json.loads(r.read()) == {
                 "ok": True,
                 "operations": False,
-                "announcer": False,
                 "steam": True,
                 "media": False,
-                "monitors": {},
-                "servers": {"text-interface": True},
+                "threads": {"announcer": False, "text-interface": True},
             }
     finally:
         server.shutdown()

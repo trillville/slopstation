@@ -108,8 +108,9 @@ class Tools:
 
     def call(self, name, args):
         """Run one loaded tool. Unloaded is refused even when offered: the
-        search step is the pause before a destructive tool, so it has to be
-        real. A raising tool becomes an error dict, never a broken turn (an
+        prompt says a tool outside the default set is found first, so that
+        has to be true (the ask before a destructive tool is the binding's,
+        not this step's). A raising tool becomes an error dict, never a broken turn (an
         Anthropic history with a tool_use and no tool_result fails every
         later request of that session). Every call is recorded here, so no
         lane can forget to."""

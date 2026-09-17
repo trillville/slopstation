@@ -381,6 +381,16 @@ def test_quit_game_asks_first_and_acts_on_a_later_yes(monkeypatch, live_dispatch
     assert quit == [INSTALLED]
 
 
+def test_quit_game_on_a_dry_run_previews_and_never_asks(dispatch, log):
+    """A dry run answers before the gate, like every destructive tool: the
+    first call is the preview, no question is asked, nothing is dispatched."""
+    impls = toolkit_impls(dispatch, log)
+    dispatch.begin_utterance("aa0001", "quit valheim")
+    out = impls["quit_game"]({"appid": INSTALLED})
+    assert out["dry_run"] and out["detail"] == "would quit Valheim"
+    assert "acknowledgment" not in out and log.find("dry_run_would")
+
+
 def test_a_room_refusal_is_an_error_and_says_busy(monkeypatch, dispatch, impls):
     """Every toolset spells a failure `error`; the rig tools add `busy` when
     the refusal was a live session, which the model reports as "already
@@ -776,7 +786,7 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
 
 
 def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
-    # A tool-calling llm span traces as output:null, so function_schemas is the
+    # A tool-calling llm span traces as output:null, so Tools.call is the
     # one place that emits which tool ran with what args.
     tlog = CapturingLog("voice")
     calls = {"n": 0}

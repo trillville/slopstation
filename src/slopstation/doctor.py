@@ -963,10 +963,12 @@ def check_text(cfg):
             "the voice agent hosts it; check the voice lane above",
         )
         return
-    up = [k for k in ("operations", "announcer", "steam", "media") if health.get(k)]
-    monitors = health.get("monitors") or {}
-    dead = sorted(name for name, alive in monitors.items() if not alive)
-    detail = f"listening on {port}; up: {', '.join(up) or 'nothing'}; monitors: {len(monitors)}"
+    up = [k for k in ("operations", "steam", "media") if health.get(k)]
+    # Every thread the voice process started: a name missing was never
+    # started (off by config, dry run); False means it died since.
+    threads = health.get("threads") or {}
+    dead = sorted(name for name, alive in threads.items() if not alive)
+    detail = f"listening on {port}; up: {', '.join(up) or 'nothing'}; threads: {len(threads)}"
     if dead:
         report(WARN, "text interface", f"{detail}; stopped: {', '.join(dead)}", "")
     else:

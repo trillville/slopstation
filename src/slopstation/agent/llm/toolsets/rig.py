@@ -186,9 +186,9 @@ SPECS = [
         QUIT_GAME,
         {"appid": {"type": "integer", "description": "appid of the running game"}},
         ("appid",),
-        # Unsaved progress is on the line, so it asks first like every other
-        # write. It stays in the default set: a spoken "quit the game" cannot
-        # wait for a search step, and the ask is the pause.
+        # Quitting can lose unsaved progress, so it asks first like every
+        # other write. It stays in the default set: "quit the game" is said
+        # mid-session and cannot wait for a search step; the ask is the pause.
         risk="destructive",
         area="session",
         keywords=("quit", "close game", "exit game", "stop game", "kill"),

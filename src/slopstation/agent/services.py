@@ -4,6 +4,7 @@ in one place: built once, started before the microphone, stopped together.
 Every piece is optional and says so with lane_up or lane_disabled. A dry run
 starts nothing that would write to an authority."""
 
+import threading
 import time
 from typing import Any
 
@@ -20,6 +21,8 @@ class Services:
         self.monitors: list = []
         self.servers: list = []
         self.tickers: list = []
+        # Every thread this owner started, by lane name, for health().
+        self.threads: list[tuple[str, threading.Thread]] = []
 
     def start(self, stt_live, duck):
         """Build and start everything. `stt_live` gates the announcer, which
@@ -115,10 +118,10 @@ class Services:
             lambda: media.disk_health_monitor_from_config(cfg, log),
         )
 
-        self._server(text.start(cfg, secrets, log, self))
+        text.start(self)
         # Forwards to the text interface over localhost, so it takes no tools
         # and no dry_run of its own - both ride along inside that hop.
-        self._server(mcp.start(cfg, secrets, log))
+        mcp.start(self)
 
     def toolkit(self, dispatch, **kwargs):
         """The tools one conversation runs over these services. A session
@@ -154,21 +157,24 @@ class Services:
             self.announcer.stop()
 
     def health(self):
-        """What is up, for the text interface's /health and the doctor. A
-        thread that died since start is reported as not alive, not as up."""
+        """What is up, for the text interface's /health and the doctor: which
+        services were built, and whether each thread this owner started is
+        still running. A name missing from `threads` was never started (off
+        by config, or a dry run); False means it died since."""
         return {
             "operations": self.operations is not None,
-            "announcer": self.announcer is not None
-            and self.announcer.thread.is_alive(),
             "steam": self.steam is not None,
             "media": self.media is not None,
-            "monitors": {
-                m.THREAD_NAME: getattr(m, "ticker", None) is not None
-                and m.ticker.is_alive()
-                for m in self.monitors
-            },
-            "servers": {s.thread.name: s.thread.is_alive() for s in self.servers},
+            "threads": {name: thread.is_alive() for name, thread in self.threads},
         }
+
+    def serve(self, server, name):
+        """Run an HTTP server on its own thread and keep both, so stop()
+        closes it and health() reports it."""
+        thread = threading.Thread(target=server.serve_forever, daemon=True, name=name)
+        thread.start()
+        self.servers.append(server)
+        self.threads.append((name, thread))
 
     def _announcer(self, duck):
         from slopstation.agent.speech import announce
@@ -182,6 +188,7 @@ class Services:
             announcer.submit(operation)
         for notification in self.operations.pending_notifications():
             announcer.submit_notification(notification)
+        self.threads.append(("announcer", announcer.start()))
         return announcer
 
     def _optional(self, what, build, *args, **kwargs):
@@ -201,14 +208,11 @@ class Services:
         monitor = self._optional(what, build)
         if monitor is None:
             return
-        monitor.start()
+        self.threads.append((what, monitor.start()))
         self.monitors.append(monitor)
         self.log("lane_up", what=what, poll_s=monitor.poll_s)
-
-    def _server(self, server):
-        if server is not None:
-            self.servers.append(server)
 
     def _ticker(self, ticker):
         ticker.start()
         self.tickers.append(ticker)
+        self.threads.append((ticker.name, ticker))

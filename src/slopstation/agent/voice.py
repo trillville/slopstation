@@ -89,7 +89,7 @@ def bench_mode(args, cfg, secrets):
     if args.announce_test:
         from slopstation.agent.speech import announce
 
-        ann = announce.Announcer(voice, secrets, log)
+        ann = announce.Announcer(voice, secrets, log)  # speak() needs no thread
         log("announce_test_start")
         try:
             done = ann.speak(
@@ -395,14 +395,11 @@ def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
                 # Inside the try so the finally's unduck is always paired with it.
                 room = duck(restore=False)
                 session = Session(
-                    cfg,
-                    secrets,
+                    services,
                     matcher,
-                    args.dry_run,
                     input_idx,
                     output_idx,
                     capture,
-                    services=services,
                     ack=ack,
                     on_end_session=lambda: duck(restore=True),
                     room=room,

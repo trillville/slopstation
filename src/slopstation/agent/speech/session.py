@@ -151,26 +151,24 @@ class Session:
 
     def __init__(
         self,
-        cfg,
-        secrets,
+        services,
         matcher,
-        dry_run,
         input_idx,
         output_idx,
         capture=None,
-        services=None,
         ack=None,
         on_end_session=None,
         room=None,
     ):
-        self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
-        self.dry_run = dry_run
+        self.services, self.matcher = services, matcher
+        self.cfg, self.secrets = services.cfg, services.secrets
+        self.dry_run = services.dry_run
         self.input_idx, self.output_idx = input_idx, output_idx
         self.capture = capture
-        self.services, self.ack = services, ack
+        self.ack = ack
         self.on_end_session = on_end_session  # the room ducker's restore
         self.room = room  # voice.RoomState, or None when ducking is off
-        self.voice = cfg["voice"]
+        self.voice = self.cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None  # the LLM lane's, once built
         self.toolkit = None  # the LLM lane's tools, once built

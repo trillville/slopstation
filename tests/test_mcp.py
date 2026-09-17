@@ -11,6 +11,7 @@ import pytest
 
 import helpers
 from slopstation.agent.interfaces import mcp
+from slopstation.agent.services import Services
 
 INNER_TOKEN = "i" * 64
 OUTER_TOKEN = "o" * 64
@@ -123,7 +124,7 @@ def cfg(inner):
 @pytest.fixture
 def server(cfg, log):
     """The MCP wrapper on a free port, forwarding to `inner`."""
-    server = mcp.start(cfg, SECRETS, log)
+    server = mcp.start(Services(cfg, SECRETS, log))
     assert server is not None
     yield server
     server.shutdown()
@@ -137,7 +138,7 @@ def base(server):
 
 
 def test_start_needs_a_reachable_text_interface(cfg, log):
-    disabled = mcp.start(cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log)
+    disabled = mcp.start(Services(cfg, {"remoteInterfaceToken": OUTER_TOKEN}, log))
     assert disabled is None, "started without a reachable text interface"
     assert log.find("lane_disabled")[0]["what"] == "remote_interface"
 

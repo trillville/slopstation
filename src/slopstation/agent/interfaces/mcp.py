@@ -328,7 +328,6 @@ class RemoteHandler(BaseHTTPRequestHandler):
 class RemoteServer(ThreadingHTTPServer):
     app: RemoteApplication
     token: str
-    thread: threading.Thread
 
     def handle_error(self, request, client_address):
         # Refusing a body closes the socket mid-write, which the client sees
@@ -337,7 +336,10 @@ class RemoteServer(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def start(cfg, secrets, log):
+def start(services):
+    """Serve the MCP wrapper, or return None when it is off by config or
+    cannot bind. The owner runs the thread."""
+    cfg, secrets, log = services.cfg, services.secrets, services.log
     remote_cfg = cfg.get("remoteInterface") or {}
     if not remote_cfg.get("enabled"):
         return None
@@ -372,9 +374,6 @@ def start(cfg, secrets, log):
         return None
     server.app = app
     server.token = str(token)
-    server.thread = threading.Thread(
-        target=server.serve_forever, daemon=True, name="remote-interface"
-    )
-    server.thread.start()
+    services.serve(server, "remote-interface")
     log("lane_up", what="remote_interface", host=host, port=server.server_address[1])
     return server

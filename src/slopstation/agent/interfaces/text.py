@@ -46,13 +46,11 @@ class Acknowledged:
 
 
 class TextApplication:
-    def __init__(self, cfg, secrets, log, services):
-        self.cfg = cfg
-        self.secrets = secrets
-        self.log = log
+    def __init__(self, services):
         self.services = services  # the owner: tools per session, /health
+        self.cfg, self.secrets, self.log = services.cfg, services.secrets, services.log
         self.dry_run = services.dry_run
-        self.voice = cfg["voice"]
+        self.voice = self.cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.system_text = None  # built with the first session's offered set
         self.sessions = OrderedDict()
@@ -141,7 +139,6 @@ class TextApplication:
 class TextServer(ThreadingHTTPServer):
     app: TextApplication
     token: str
-    thread: threading.Thread
 
 
 class TextHandler(BaseHTTPRequestHandler):
@@ -203,10 +200,10 @@ class TextHandler(BaseHTTPRequestHandler):
             self._json(500, {"ok": False, "error": "assistant request failed"})
 
 
-def start(cfg, secrets, log, services):
-    """The text interface over `services` (a Services, or a test's stand-in
-    with the same toolkit, health and dry_run), or None when it is off or
-    cannot bind."""
+def start(services):
+    """Serve the text interface over the owner's services, or return None
+    when it is off by config or cannot bind. The owner runs the thread."""
+    cfg, secrets, log = services.cfg, services.secrets, services.log
     text_cfg = cfg.get("textInterface") or {}
     if not text_cfg.get("enabled"):
         return None
@@ -229,7 +226,7 @@ def start(cfg, secrets, log, services):
         return None
     host = str(text_cfg.get("host", "127.0.0.1"))
     port = int(text_cfg.get("port", 8765))
-    app = TextApplication(cfg, secrets, log, services)
+    app = TextApplication(services)
     try:
         server = TextServer((host, port), TextHandler)
     except OSError as e:
@@ -237,10 +234,7 @@ def start(cfg, secrets, log, services):
         return None
     server.app = app
     server.token = str(token)
-    server.thread = threading.Thread(
-        target=server.serve_forever, daemon=True, name="text-interface"
-    )
-    server.thread.start()
+    services.serve(server, "text-interface")
     log(
         "lane_up",
         what="text_interface",
