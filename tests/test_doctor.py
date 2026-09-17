@@ -306,20 +306,19 @@ def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkey
     """A real text server on a free port answers /health; the row names what
     the voice process has up and which monitors have stopped."""
     from slopstation.agent.interfaces import text
+    from slopstation.agent.services import Services
 
     token = "t" * 64
     monkeypatch.setattr(config, "secrets", lambda: {"textInterfaceToken": token})
     live = {**cfg, "textInterface": {"enabled": True, "host": "127.0.0.1", "port": 0}}
-    server = text.start(
-        live,
-        {"textInterfaceToken": token, "anthropicApiKey": "a" * 64},
-        helpers.CapturingLog("voice"),
-        health=lambda: {
-            "operations": True,
-            "steam": False,
-            "monitors": {"disk": False},
-        },
+    secrets = {"textInterfaceToken": token, "anthropicApiKey": "a" * 64}
+    services = Services(live, secrets, helpers.CapturingLog("voice"))
+    monkeypatch.setattr(
+        services,
+        "health",
+        lambda: {"operations": True, "steam": False, "monitors": {"disk": False}},
     )
+    server = text.start(live, secrets, helpers.CapturingLog("voice"), services)
     assert server is not None
     try:
         live["textInterface"]["port"] = server.server_address[1]
@@ -351,20 +350,16 @@ def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
         config, "load", lambda: {"sentryDsn": "https://key@o1.ingest.sentry.io/42"}
     )
 
-    def write(path, *records):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
-        )
-
     archived = paths.logs() / events.ARCHIVE_NAME / events._path("20260901").name
-    write(
+    _write_events(
         archived,
         {"lane": "listener", "event": "checkin"},
         {"lane": "voice", "event": "checkin_failed"},
     )
-    write(events._path("20260913"), {"lane": "voice", "event": "checkin"})
-    write(events._path(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"})
+    _write_events(events._path("20260913"), {"lane": "voice", "event": "checkin"})
+    _write_events(
+        events._path(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"}
+    )
     doctor.check_sentry()
     assert rows.levels()["cron check-in"] == "PASS"
     assert rows.detail("cron check-in") == "accepted for listener, voice"

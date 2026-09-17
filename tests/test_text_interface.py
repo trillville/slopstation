@@ -3,6 +3,7 @@
 import functools
 import json
 import threading
+import types
 import urllib.error
 import urllib.request
 
@@ -11,6 +12,7 @@ import pytest
 import helpers
 from slopstation.agent.interfaces import text
 from slopstation.agent.llm import backends
+from slopstation.agent.services import Services
 from slopstation.agent.telemetry import traces
 
 TOKEN = "t" * 64
@@ -138,9 +140,9 @@ def saved(monkeypatch):
 @pytest.fixture
 def base(cfg, log, gate, fake_backend, saved):
     """A text interface on a free port, torn down after the test."""
-    server = text.start(
-        cfg, SECRETS, log, operations=FakeOperations(), media=FakeMedia()
-    )
+    services = Services(cfg, SECRETS, log)
+    services.operations, services.media = FakeOperations(), FakeMedia()
+    server = text.start(cfg, SECRETS, log, services)
     assert server is not None
     try:
         host, port = server.server_address
@@ -201,10 +203,16 @@ def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
 
 
 def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
-    server = text.start(
-        cfg, SECRETS, log, health=lambda: {"steam": True, "media": False}
+    """The owner's health() is what /health answers: a dead thread reads as
+    down, an absent piece as not up, and nothing answers without the token."""
+    services = Services(cfg, SECRETS, log)
+    services.steam = object()
+    services.announcer = types.SimpleNamespace(
+        thread=types.SimpleNamespace(is_alive=lambda: False)
     )
+    server = text.start(cfg, SECRETS, log, services)
     assert server is not None
+    services.servers.append(server)
     try:
         host, port = server.server_address
         url = f"http://{host}:{port}/health"
@@ -215,7 +223,15 @@ def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
             url, headers={"Authorization": f"Bearer {TOKEN}"}
         )
         with urllib.request.urlopen(request, timeout=5) as r:
-            assert json.loads(r.read()) == {"ok": True, "steam": True, "media": False}
+            assert json.loads(r.read()) == {
+                "ok": True,
+                "operations": False,
+                "announcer": False,
+                "steam": True,
+                "media": False,
+                "monitors": {},
+                "servers": {"text-interface": True},
+            }
     finally:
         server.shutdown()
         server.server_close()

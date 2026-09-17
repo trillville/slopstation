@@ -719,9 +719,10 @@ def test_a_dead_token_falls_through_to_the_tv_path(
 
 def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
     results = []
-    schema = tool_schemas.function_schemas(
+    tools = assistant.as_tools(
         {"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log
-    )[0]
+    )
+    schema = tool_schemas.pipecat_schemas(tools, log)[0]
 
     class Params:
         arguments = {}
@@ -739,7 +740,7 @@ def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
 def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
     spoken = []
     receipt_result = []
-    receipt_schema = tool_schemas.function_schemas(
+    tools = assistant.as_tools(
         {
             "request_series": lambda _: {
                 "ok": True,
@@ -747,7 +748,8 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
             }
         },
         log,
-    )[0]
+    )
+    receipt_schema = tool_schemas.pipecat_schemas(tools, log)[0]
 
     class ReceiptWorker:
         async def queue_frame(self, frame):
@@ -783,13 +785,14 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
         calls["n"] += 1
 
     monkeypatch.setattr(assistant.sentry, "tool_span", spy)
-    schemas = tool_schemas.function_schemas(
+    tools = assistant.as_tools(
         {
             "get_now_playing": lambda a: {"ok": True, "game": "Hades"},
             "launch_game": boom,
         },
         tlog,
     )
+    schemas = tool_schemas.pipecat_schemas(tools, tlog)
 
     answered = []
 

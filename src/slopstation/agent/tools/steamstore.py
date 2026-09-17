@@ -2,10 +2,6 @@
 
 Deals are cached in state/deals.json. Most requests use ``_get`` so network
 failures return no data instead of stopping the agent.
-
-CLI:
-    python -m slopstation.agent.tools.steamstore <deals|search ...|reviews <appid>
-                                                  |news <appid>|hltb <name>|trending|recent>
 """
 
 from __future__ import annotations

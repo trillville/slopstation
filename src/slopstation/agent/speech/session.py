@@ -158,10 +158,8 @@ class Session:
         input_idx,
         output_idx,
         capture=None,
-        operations=None,
+        services=None,
         ack=None,
-        steam=None,
-        media=None,
         on_end_session=None,
         room=None,
     ):
@@ -169,8 +167,7 @@ class Session:
         self.dry_run = dry_run
         self.input_idx, self.output_idx = input_idx, output_idx
         self.capture = capture
-        self.operations, self.ack, self.steam = operations, ack, steam
-        self.media = media
+        self.services, self.ack = services, ack
         self.on_end_session = on_end_session  # the room ducker's restore
         self.room = room  # voice.RoomState, or None when ducking is off
         self.voice = cfg["voice"]
@@ -395,7 +392,6 @@ class Session:
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
         from slopstation.agent.llm.assistant import (
-            Toolkit,
             server_tools,
             system_instruction,
         )
@@ -422,14 +418,9 @@ class Session:
         # on_load runs on the tool's worker thread (asyncio.to_thread), not
         # the loop: set_tools is one attribute assignment, so that is safe,
         # and the loop only reads the list after the tool result lands.
-        self.toolkit = Toolkit(
+        self.toolkit = self.services.toolkit(
             dispatcher,
-            log,
-            operations=self.operations,
             on_stop_listening=gate.request_stop,
-            voice=voice,
-            steam=self.steam,
-            media=self.media,
             on_load=lambda: (
                 self.context.set_tools(tools_schema())
                 if self.context is not None

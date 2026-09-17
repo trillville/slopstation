@@ -46,25 +46,12 @@ class Acknowledged:
 
 
 class TextApplication:
-    def __init__(
-        self,
-        cfg,
-        secrets,
-        log,
-        operations=None,
-        steam=None,
-        media=None,
-        dry_run=False,
-        health=None,
-    ):
+    def __init__(self, cfg, secrets, log, services):
         self.cfg = cfg
-        self.health = health  # what the owning process has up; None answers {}
         self.secrets = secrets
         self.log = log
-        self.operations = operations
-        self.steam = steam
-        self.media = media
-        self.dry_run = dry_run
+        self.services = services  # the owner: tools per session, /health
+        self.dry_run = services.dry_run
         self.voice = cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.system_text = None  # built with the first session's offered set
@@ -81,14 +68,7 @@ class TextApplication:
             voice=self.voice,
         )
         dispatch = Dispatch(self.cfg, self.log, dry_run=self.dry_run)
-        toolkit = assistant.Toolkit(
-            dispatch,
-            self.log,
-            operations=self.operations,
-            voice=self.voice,
-            steam=self.steam,
-            media=self.media,
-        )
+        toolkit = self.services.toolkit(dispatch)
         if self.system_text is None:
             # The offered set is the same for every session of this process,
             # so the prompt is built once and stays cache-stable.
@@ -161,6 +141,7 @@ class TextApplication:
 class TextServer(ThreadingHTTPServer):
     app: TextApplication
     token: str
+    thread: threading.Thread
 
 
 class TextHandler(BaseHTTPRequestHandler):
@@ -192,8 +173,7 @@ class TextHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, {"ok": False, "error": "unauthorized"})
             return
-        health = self.server.app.health
-        self._json(200, {"ok": True, **(health() if health else {})})
+        self._json(200, {"ok": True, **self.server.app.services.health()})
 
     def do_POST(self):
         if self.path != "/v1/chat":
@@ -223,16 +203,10 @@ class TextHandler(BaseHTTPRequestHandler):
             self._json(500, {"ok": False, "error": "assistant request failed"})
 
 
-def start(
-    cfg,
-    secrets,
-    log,
-    operations=None,
-    steam=None,
-    media=None,
-    dry_run=False,
-    health=None,
-):
+def start(cfg, secrets, log, services):
+    """The text interface over `services` (a Services, or a test's stand-in
+    with the same toolkit, health and dry_run), or None when it is off or
+    cannot bind."""
     text_cfg = cfg.get("textInterface") or {}
     if not text_cfg.get("enabled"):
         return None
@@ -255,7 +229,7 @@ def start(
         return None
     host = str(text_cfg.get("host", "127.0.0.1"))
     port = int(text_cfg.get("port", 8765))
-    app = TextApplication(cfg, secrets, log, operations, steam, media, dry_run, health)
+    app = TextApplication(cfg, secrets, log, services)
     try:
         server = TextServer((host, port), TextHandler)
     except OSError as e:
@@ -263,14 +237,15 @@ def start(
         return None
     server.app = app
     server.token = str(token)
-    threading.Thread(
+    server.thread = threading.Thread(
         target=server.serve_forever, daemon=True, name="text-interface"
-    ).start()
+    )
+    server.thread.start()
     log(
         "lane_up",
         what="text_interface",
         host=host,
         port=server.server_address[1],
-        dry_run=dry_run or None,
+        dry_run=services.dry_run or None,
     )
     return server

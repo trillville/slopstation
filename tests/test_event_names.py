@@ -89,7 +89,6 @@ PYTHON = {
     "lane_reloaded": {"killed", "what"},
     "lane_started": {"what"},
     "lane_up": {
-        "active",
         "backend",
         "dry_run",
         "effort",

@@ -2,13 +2,6 @@
 the voice lane's adapter over the shared Tools.call: the text lane calls the
 same Tools without any of this."""
 
-from slopstation.agent.llm.assistant import as_tools
-
-
-def function_schemas(impls, log):
-    """Pipecat schemas for a bare impls dict (tests, the REPL)."""
-    return pipecat_schemas(as_tools(impls, log), log)
-
 
 def pipecat_schemas(tools, log):
     """Pipecat schemas whose handlers run `tools.call` in a worker thread and

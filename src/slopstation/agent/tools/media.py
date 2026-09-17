@@ -33,7 +33,6 @@ from slopstation.agent.tools.operations import (
     FAILED,
     RUNNING,
     SUCCEEDED,
-    Submission,
 )
 
 PRESETS = ("default", "1080p", "2160p")
@@ -51,18 +50,6 @@ class Observation:
     progress: dict[str, Any] = dataclasses.field(default_factory=dict)
     detail: str = ""
     metadata_ready: bool = True
-
-    @property
-    def complete(self) -> bool:
-        return self.state == SUCCEEDED
-
-    @property
-    def failed(self) -> bool:
-        return self.state == FAILED
-
-    @property
-    def canceled(self) -> bool:
-        return self.state == CANCELED
 
 
 def observed(
@@ -1044,7 +1031,7 @@ class MediaService:
                 baseline_episode_files=baseline_episode_files,
                 episode_ids=episode_ids,
             )
-            if observation.complete:
+            if observation.state == SUCCEEDED:
                 return self._submission(
                     "series",
                     series_id,
@@ -1132,14 +1119,14 @@ class MediaService:
         work_id=None,
         scope_label=None,
         episodes=None,
-    ) -> Submission:
+    ) -> dict:
         """What one accepted piece of work looks like to the operation store.
         A request carries its preset and profile and a season scope, or the
         (season, episode) pairs it asked for; work on a held title (a grab, a
         search, an import) carries the phase it starts in and, for a series,
         the exact episodes it covers. `promise` is what done means: media on
         disk for the scope, or a search run."""
-        out: Submission = {
+        out: dict = {
             "ok": True,
             "kind": f"{kind}_acquisition",
             "authority": _kind(kind)["authority"],

@@ -37,39 +37,10 @@ PHASES = (
 )
 
 
-class Submission(TypedDict, total=False):
-    """What one accepted piece of media work looks like, as the tool result
-    the model reads and as the source of the row's metadata. Built in one
-    place, MediaService._submission; `all_seasons` is added by the request
-    tool. Every key that belongs in the row's metadata is in METADATA_KEYS
-    beside this, and a test holds the two together."""
-
-    ok: bool
-    kind: str
-    authority: str
-    external_ref: str
-    title: str
-    catalog_id: Any
-    already_available: bool
-    phase: str
-    detail: str
-    preset: str
-    profile: Any
-    seasons: Any
-    all_seasons: bool
-    episode_ids: list[int]
-    episodes: list[list[int]]
-    scope_label: str
-    promise: str
-    work_id: str
-    baseline_file_id: Any
-    baseline_episode_files: Any
-    search_pending: bool
-    command_ids: Any
-
-
-# The Submission keys track() copies into the row's metadata: what a later
-# observation, retry or deletion needs to know about the request.
+# The keys track() copies from a MediaService._submission result into the
+# row's metadata: what a later observation, retry or deletion needs to know
+# about the request. The rest of the submission is the receipt and the
+# row's own columns.
 METADATA_KEYS = (
     "catalog_id",
     "preset",
@@ -84,20 +55,6 @@ METADATA_KEYS = (
     "episodes",
     "promise",
     "scope_label",
-)
-# The rest of a Submission is the receipt and the row's own columns.
-SUBMISSION_ROW_KEYS = frozenset(
-    {
-        "ok",
-        "kind",
-        "authority",
-        "external_ref",
-        "title",
-        "already_available",
-        "phase",
-        "detail",
-        "work_id",
-    }
 )
 
 
@@ -531,7 +488,7 @@ class OperationStore:
         ], total
 
 
-def track(store, submission: Submission, turn=None) -> dict:
+def track(store, submission: dict, turn=None) -> dict:
     """Record one accepted external submission. The mutation already happened,
     so a failed local write reports itself and never invites a second one."""
     if store is None or submission.get("already_available"):
@@ -541,8 +498,7 @@ def track(store, submission: Submission, turn=None) -> dict:
     detail = (
         submission.get("detail") or f"{authority} accepted the request and is searching"
     )
-    given: dict[str, Any] = dict(submission)
-    metadata = {k: given[k] for k in METADATA_KEYS if k in given}
+    metadata = {k: submission[k] for k in METADATA_KEYS if k in submission}
     try:
         operation = store.track_external(
             submission["kind"],
@@ -687,12 +643,6 @@ def record_deleted(store, rows, result=None, episodes=None):
     return result
 
 
-if __name__ == "__main__":
-    from slopstation.agent.tools.operations_monitors import main
-
-    raise SystemExit(main())
-
-
 def owned_seasons() -> dict:
     """series id -> the seasons an active series operation owns, None meaning
     the whole series. For a reader with no store of its own (the doctor): an
@@ -710,3 +660,9 @@ def owned_seasons() -> dict:
         else:
             owned.setdefault(key, set()).update(int(n) for n in seasons)
     return owned
+
+
+if __name__ == "__main__":
+    from slopstation.agent.tools.operations_monitors import main
+
+    raise SystemExit(main())

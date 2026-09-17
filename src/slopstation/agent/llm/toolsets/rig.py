@@ -5,7 +5,7 @@ import subprocess
 import urllib.parse
 
 from slopstation import gamepc, sessionlock
-from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import library
 
 STORE_SEARCH = "https://store.steampowered.com/search/?term="
@@ -186,7 +186,10 @@ SPECS = [
         QUIT_GAME,
         {"appid": {"type": "integer", "description": "appid of the running game"}},
         ("appid",),
-        risk="act",
+        # Unsaved progress is on the line, so it asks first like every other
+        # write. It stays in the default set: a spoken "quit the game" cannot
+        # wait for a search step, and the ask is the pause.
+        risk="destructive",
         area="session",
         keywords=("quit", "close game", "exit game", "stop game", "kill"),
         busy="quitting {game}",
@@ -341,7 +344,7 @@ SPECS += [
         PC_POWER,
         {"action": {"type": "string", "enum": ["wake", "sleep"]}},
         ("action",),
-        risk="act",
+        risk="destructive",  # sleep ends whatever is on the TV; wake is free
         area="session",
         keywords=(
             "wake the pc",
@@ -403,19 +406,17 @@ def impls(ctx: ToolContext):
         r = dispatch.play_game(appid)
         return _outcome(r)
 
-    @bind
+    @bind.destructive
     def quit_game(args):
         appid = int(args.get("appid", 0))
         if refused := _unknown("quit_game", appid):
             return refused
-        # Unsaved progress is on the line, so the same gate every other write
-        # asks through: the ask, then the act on a later turn's yes.
         title = library.installed_name(appid) or "the game"
-        return ctx.confirm(
-            "quit_game",
+        return Plan(
             ("quit_game", appid),
-            {"acknowledgment": f"Quit {title}?"},
+            f"Quit {title}?",
             lambda: _outcome(dispatch.quit_game(appid)),
+            f"quit {title}",
         )
 
     @bind
@@ -727,7 +728,7 @@ def impls(ctx: ToolContext):
         r = dispatch.display(str(args.get("target") or ""))
         return _outcome(r)
 
-    @bind
+    @bind.destructive
     def pc_power(args):
         action = str(args.get("action") or "")
         if action not in ("wake", "sleep"):
@@ -762,11 +763,8 @@ def impls(ctx: ToolContext):
                 }
             return {"ok": False, "error": f"the PC answered {out}"}
 
-        return ctx.confirm(
-            "pc_power",
-            ("pc_power", "sleep"),
-            {"acknowledgment": "Put the PC to sleep?"},
-            sleep,
+        return Plan(
+            ("pc_power", "sleep"), "Put the PC to sleep?", sleep, "sleep the PC"
         )
 
     return bind.impls()

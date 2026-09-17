@@ -293,8 +293,7 @@ def main():
 def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
     """Open the microphone and run sessions until the process ends."""
     voice = cfg["voice"]
-    announcer, operation_store = services.announcer, services.operations
-    steam, media_service = services.steam, services.media
+    announcer = services.announcer
 
     # Configure tracing before the first session.
     sentry.setup(cfg, log)
@@ -403,10 +402,8 @@ def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
                     input_idx,
                     output_idx,
                     capture,
-                    operations=operation_store,
+                    services=services,
                     ack=ack,
-                    steam=steam,
-                    media=media_service,
                     on_end_session=lambda: duck(restore=True),
                     room=room,
                 )

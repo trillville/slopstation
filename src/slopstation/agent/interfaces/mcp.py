@@ -328,6 +328,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
 class RemoteServer(ThreadingHTTPServer):
     app: RemoteApplication
     token: str
+    thread: threading.Thread
 
     def handle_error(self, request, client_address):
         # Refusing a body closes the socket mid-write, which the client sees
@@ -371,8 +372,9 @@ def start(cfg, secrets, log):
         return None
     server.app = app
     server.token = str(token)
-    threading.Thread(
+    server.thread = threading.Thread(
         target=server.serve_forever, daemon=True, name="remote-interface"
-    ).start()
+    )
+    server.thread.start()
     log("lane_up", what="remote_interface", host=host, port=server.server_address[1])
     return server

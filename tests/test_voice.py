@@ -282,19 +282,17 @@ def run(monkeypatch, stubbed):
                 input_idx,
                 output_idx,
                 capture=None,
-                operations=None,
+                services=None,
                 ack=None,
-                steam=None,
-                media=None,
                 on_end_session=None,
                 room=None,
             ):
                 calls.append(
                     dict(
                         dry_run=dry_run,
-                        operations=operations,
-                        steam=steam,
-                        media=media,
+                        operations=services.operations,
+                        steam=services.steam,
+                        media=services.media,
                         capture=capture,
                         matcher=matcher,
                         on_end_session=on_end_session,

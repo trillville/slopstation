@@ -882,9 +882,14 @@ def test_new_episode_work_cannot_complete_an_existing_season_request(
     assert visible[1]["scope"]["scope_label"] == "season 2"
     monkeypatch.setitem(episodes[2], "hasFile", True)
     monkeypatch.setitem(episodes[2], "episodeFileId", 2001)
-    assert svc.observe(store.get(searched["operation_id"])).complete
+    assert (
+        svc.observe(store.get(searched["operation_id"])).state == operations.SUCCEEDED
+    )
     original = svc.observe(store.get(request["id"]))
-    assert not original.complete and original.progress["total_episodes"] == 2
+    assert (
+        original.state != operations.SUCCEEDED
+        and original.progress["total_episodes"] == 2
+    )
     assert store.get(request["id"])["metadata"] == request["metadata"]
 
 
@@ -919,9 +924,11 @@ def test_grab_cannot_change_what_a_separate_search_promises(
     )
     monkeypatch.setitem(episodes[1], "hasFile", True)
     monkeypatch.setitem(episodes[1], "episodeFileId", 1002)
-    assert svc.observe(store.get(grabbed["operation_id"])).complete
+    assert svc.observe(store.get(grabbed["operation_id"])).state == operations.SUCCEEDED
     result = svc.observe(store.get(searched["operation_id"]))
-    assert result.complete and result.progress["phase"] == "searched"
+    assert (
+        result.state == operations.SUCCEEDED and result.progress["phase"] == "searched"
+    )
 
 
 def test_partial_search_announcement_reports_the_files_gained(
@@ -940,7 +947,7 @@ def test_partial_search_announcement_reports_the_files_gained(
     )
     monkeypatch.setitem(episodes[0], "episodeFileId", 2001)
     result = svc.observe(store.get(searched["operation_id"]))
-    assert result.complete and result.progress["episodes"] == 1
+    assert result.state == operations.SUCCEEDED and result.progress["episodes"] == 1
     done = store.observe(
         searched["operation_id"],
         operations.SUCCEEDED,
@@ -1148,8 +1155,8 @@ def test_delete_season_cancels_only_covered_work_and_retains_other_episodes(
     assert not any(path in ("command/2", "command/3") for path, _ in sonarr.deletes)
     monkeypatch.setitem(episodes[2], "hasFile", True)
     monkeypatch.setitem(episodes[2], "episodeFileId", 2001)
-    assert svc.observe(store.get(rows[1]["id"])).complete
-    assert svc.observe(store.get(rows[2]["id"])).complete
+    assert svc.observe(store.get(rows[1]["id"])).state == operations.SUCCEEDED
+    assert svc.observe(store.get(rows[2]["id"])).state == operations.SUCCEEDED
 
 
 def test_abandon_episode_operation_does_not_delete_the_series(
@@ -1203,7 +1210,7 @@ def test_one_episode_is_done_when_that_episode_arrives(stack):
     out = svc.observe_series(
         5, baseline_episode_files=sub["baseline_episode_files"], episode_ids=[101]
     )
-    assert not out.complete and out.progress["total_episodes"] == 1
+    assert out.state != operations.SUCCEEDED and out.progress["total_episodes"] == 1
     sonarr.answers["episode"]({})[0]["episodeFileId"]  # the rows are rebuilt each call
     rows = sonarr.answers["episode"]({})
     rows[0]["episodeFileId"] = 1010
@@ -1211,16 +1218,16 @@ def test_one_episode_is_done_when_that_episode_arrives(stack):
     out = svc.observe_series(
         5, baseline_episode_files=sub["baseline_episode_files"], episode_ids=[101]
     )
-    assert out.complete and out.progress["episodes"] == 1
+    assert out.state == operations.SUCCEEDED and out.progress["episodes"] == 1
     # Episode 2 kept its old file and was never in scope.
     # A season pack covers the season's episodes, specials included when it
     # is season 0; an unmonitored special counts because it was chosen.
     special = svc.grab_release("series", 81189, "g2", 3, season=0)
     assert special["episode_ids"] == [900]
     out = svc.observe_series(5, episode_ids=[900])
-    assert not out.complete and out.progress["total_episodes"] == 1
+    assert out.state != operations.SUCCEEDED and out.progress["total_episodes"] == 1
     rows[2].update(hasFile=True, episodeFileId=9000)
-    assert svc.observe_series(5, episode_ids=[900]).complete
+    assert svc.observe_series(5, episode_ids=[900]).state == operations.SUCCEEDED
     # A season search for the specials is a season search, seasonNumber 0.
     sub = svc.search_again("series", 81189, season=0)
     assert sonarr.posts[-1][1] == {
@@ -1243,10 +1250,10 @@ def test_a_search_promises_the_search_not_the_old_file(stack):
     radarr.answers["command/99"] = {"id": 99, "status": "started"}
     op = operations.track(store, sub)
     seen = svc.observe(store.get(op["operation_id"]))
-    assert not seen.complete and seen.progress["phase"] == "searching"
+    assert seen.state != operations.SUCCEEDED and seen.progress["phase"] == "searching"
     radarr.answers["command/99"] = {"id": 99, "status": "completed"}
     seen = svc.observe(store.get(op["operation_id"]))
-    assert seen.complete and seen.progress["phase"] == "searched"
+    assert seen.state == operations.SUCCEEDED and seen.progress["phase"] == "searched"
     done = store.observe(op["operation_id"], operations.SUCCEEDED, seen.progress, "")
     assert done["summary"] == "Radarr searched again for Dune and found nothing better."
     # A search that found a better file is the file arriving.
@@ -1258,7 +1265,7 @@ def test_a_search_promises_the_search_not_the_old_file(stack):
     radarr.answers["moviefile"] = lambda p: [{"id": 501}]
     radarr.answers["command/99"] = {"id": 99, "status": "failed"}
     failed = svc.observe_movie(1, 501, [99], "searching", promise="search")
-    assert failed.failed and not failed.complete
+    assert failed.state == operations.FAILED
     # The first operation is closed; the failure lands on a fresh one.
     again = operations.track(store, sub)
     assert again["operation_id"] != op["operation_id"]

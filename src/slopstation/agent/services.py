@@ -82,9 +82,6 @@ class Services:
                 lambda: operations_monitors.SteamMonitor(
                     self.operations, self.steam, log
                 ),
-                lambda m: dict(
-                    active=len(self.operations.active(kind="steam_install"))
-                ),
                 live_only=True,
             )
 
@@ -98,9 +95,6 @@ class Services:
                 lambda: operations_monitors.MediaMonitor(
                     self.operations, self.media, log, poll_s=poll_s
                 ),
-                lambda m: dict(
-                    active=sum(len(self.operations.active(kind=k)) for k in m.KINDS)
-                ),
                 live_only=True,
             )
         # It writes the listening port into a live qBittorrent, so a dry run
@@ -108,7 +102,6 @@ class Services:
         self._monitor(
             "proton_port_sync",
             lambda: media.proton_port_monitor_from_config(cfg, secrets, log),
-            lambda m: {},
             live_only=True,
         )
         self._monitor(
@@ -116,34 +109,40 @@ class Services:
             lambda: media.media_health_monitor_from_config(
                 cfg, secrets, log, operations=self.operations
             ),
-            lambda m: {},
         )
         self._monitor(
             "disk_watch",
             lambda: media.disk_health_monitor_from_config(cfg, log),
-            lambda m: dict(mounts=" ".join(m.mounts)),
         )
 
-        self._server(
-            text.start(
-                cfg,
-                secrets,
-                log,
-                operations=self.operations,
-                steam=self.steam,
-                media=self.media,
-                dry_run=self.dry_run,
-                health=self.health,
-            )
-        )
+        self._server(text.start(cfg, secrets, log, self))
         # Forwards to the text interface over localhost, so it takes no tools
         # and no dry_run of its own - both ride along inside that hop.
         self._server(mcp.start(cfg, secrets, log))
 
+    def toolkit(self, dispatch, **kwargs):
+        """The tools one conversation runs over these services. A session
+        builds its own Dispatch (it carries the utterance) and its own
+        Toolkit (it carries the loaded set); what every session shares is
+        filled in here."""
+        from slopstation.agent.llm.assistant import Toolkit
+
+        return Toolkit(
+            dispatch,
+            self.log,
+            operations=self.operations,
+            voice=self.cfg["voice"],
+            steam=self.steam,
+            media=self.media,
+            **kwargs,
+        )
+
     def stop(self):
         """Signal every thread this owner started; the servers close their
-        sockets. Nothing here waits for an authority: outstanding work stays
-        outstanding in the ledger."""
+        sockets. Runs on a clean exit or an exception out of the wake loop;
+        a supervisor kill never reaches it, and nothing here needs it to.
+        Nothing waits for an authority: outstanding work stays outstanding
+        in the ledger."""
         for ticker in self.tickers:
             ticker.stop.set()
         for monitor in self.monitors:
@@ -155,10 +154,12 @@ class Services:
             self.announcer.stop()
 
     def health(self):
-        """What is up, for the text interface's /health and the doctor."""
+        """What is up, for the text interface's /health and the doctor. A
+        thread that died since start is reported as not alive, not as up."""
         return {
             "operations": self.operations is not None,
-            "announcer": self.announcer is not None,
+            "announcer": self.announcer is not None
+            and self.announcer.thread.is_alive(),
             "steam": self.steam is not None,
             "media": self.media is not None,
             "monitors": {
@@ -166,7 +167,7 @@ class Services:
                 and m.ticker.is_alive()
                 for m in self.monitors
             },
-            "servers": [server.server_address[1] for server in self.servers],
+            "servers": {s.thread.name: s.thread.is_alive() for s in self.servers},
         }
 
     def _announcer(self, duck):
@@ -192,7 +193,7 @@ class Services:
             self.log.error("lane_disabled", what=what, reason=str(e))
             return None
 
-    def _monitor(self, what, build, fields, live_only=False):
+    def _monitor(self, what, build, live_only=False):
         """Build and start an optional poller and say so. A dry run never
         builds one that writes to an authority; None means not configured."""
         if live_only and self.dry_run:
@@ -202,7 +203,7 @@ class Services:
             return
         monitor.start()
         self.monitors.append(monitor)
-        self.log("lane_up", what=what, poll_s=monitor.poll_s, **fields(monitor))
+        self.log("lane_up", what=what, poll_s=monitor.poll_s)
 
     def _server(self, server):
         if server is not None:

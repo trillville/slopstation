@@ -811,7 +811,7 @@ def test_a_persisted_ledger_round_trips_untouched(log):
     its bytes alone; a write keeps every field it does not own, including
     an old minimal row, unknown keys, and a state a newer build wrote.
     tests/fixtures/operations.json is synthetic, built from the shapes the
-    code writes; a redacted copy of the real file replaces it (plan step 6)."""
+    code writes; a redacted copy of the real file replaces it."""
     fixture = Path(__file__).parent / "fixtures" / "operations.json"
     target = operations.operations_file()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -871,12 +871,3 @@ def test_a_corrupt_ledger_is_refused_and_left_alone(log):
     # Absent is not corrupt: a fresh box starts with an empty ledger.
     target.unlink()
     assert operations.OperationStore(log).all() == []
-
-
-def test_every_submission_key_is_either_metadata_or_a_row_column():
-    """track() copies METADATA_KEYS out of a Submission into the row. A key
-    added to Submission has to be classified here, or a later observation
-    would silently never see it."""
-    keys = set(operations.Submission.__annotations__)
-    assert set(operations.METADATA_KEYS) | operations.SUBMISSION_ROW_KEYS == keys
-    assert not set(operations.METADATA_KEYS) & operations.SUBMISSION_ROW_KEYS

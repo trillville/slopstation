@@ -34,15 +34,20 @@ def test_every_spec_is_well_formed():
         "delete_path",
         "resolve_queue_item",
         "uninstall_game",
+        "quit_game",
+        "pc_power",
         "radarr_api",
         "sonarr_api",
         "prowlarr_api",
         "qbittorrent_api",
         "steam_api",
     }
-    # Destructive tools are never in the default set: the search step is a
-    # natural pause before them.
-    assert all(not assistant.REGISTRY.get(n).default for n in destructive)
+    # Destructive tools stay out of the default set, so the search step is a
+    # pause before them. quit_game is the exception: "quit the game" is said
+    # mid-session and cannot wait for a search, and its ask is the pause.
+    assert {n for n in destructive if assistant.REGISTRY.get(n).default} == {
+        "quit_game"
+    }
 
 
 def test_constructor_refuses_a_bad_spec():

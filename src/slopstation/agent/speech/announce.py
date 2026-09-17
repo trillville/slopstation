@@ -45,7 +45,8 @@ class Announcer:
         self.handoff = threading.Lock()  # a wake and a restore never interleave
         self.follow_up_enabled = voice_cfg["followUpAfterAnnounce"]
         self._q: queue.Queue = queue.Queue()
-        threading.Thread(target=self._run, daemon=True, name="announcer").start()
+        self.thread = threading.Thread(target=self._run, daemon=True, name="announcer")
+        self.thread.start()
 
     def submit(self, operation):
         """OperationStore terminal hook, called off-thread."""
