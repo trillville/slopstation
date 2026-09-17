@@ -323,6 +323,9 @@ def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkey
     assert server is not None
     try:
         live["textInterface"]["port"] = server.server_address[1]
+        live["textInterface"]["host"] = (
+            "0.0.0.0"  # a wildcard bind is probed on loopback
+        )
         doctor.check_text(live)
         assert rows.levels()["text interface"] == "WARN"
         assert rows.detail("text interface").endswith("stopped: disk")

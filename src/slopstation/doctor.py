@@ -943,9 +943,14 @@ def check_text(cfg):
             WARN, "text interface", "textInterfaceToken missing or a placeholder", ""
         )
         return
+    # The address the lane bound, as the MCP wrapper reads it: a wildcard
+    # bind answers on loopback, any other host answers only on itself.
+    host = str(text.get("host", "127.0.0.1"))
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
     port = int(text.get("port", 8765))
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/health", headers={"Authorization": f"Bearer {token}"}
+        f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {token}"}
     )
     try:
         with urllib.request.urlopen(request, timeout=2) as r:

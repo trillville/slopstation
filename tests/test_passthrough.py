@@ -121,6 +121,15 @@ def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
     )
     assert row["summary"] == "radarr POST /command ran."
     assert row["announcement_pending"] is False and store.pending_announcements() == []
+    # A wire failure says in the row that the write may have landed anyway.
+    media.radarr.call = lambda *a, **k: (_ for _ in ()).throw(Exception("down"))
+    ask = {"method": "POST", "path": "command", "body": {"name": "RefreshMovie"}}
+    tk.call("radarr_api", dict(ask))
+    dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="yes")
+    assert not tk.call("radarr_api", dict(ask))["ok"]
+    row = store.all()[-1]
+    assert row["state"] == operations.FAILED and row["detail"].startswith("down - ")
+    assert "may or may not" in row["detail"], row["detail"]
 
 
 def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):

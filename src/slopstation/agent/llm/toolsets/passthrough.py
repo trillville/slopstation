@@ -450,11 +450,16 @@ def impls(ctx: ToolContext):
                 f"{service} {method} /{path}",
                 turn=ctx.turn(),
             )
+            # A wire failure carries its "may or may not have reached" detail
+            # into the row: the ledger is where a person checks what landed.
+            failure = " - ".join(
+                str(s) for s in (out.get("error"), out.get("detail")) if s
+            )
             operations.observe(
                 row["id"],
                 operations_mod.SUCCEEDED if out["ok"] else operations_mod.FAILED,
                 {},
-                str(out.get("error") or ""),
+                "" if out["ok"] else failure,
                 summary=f"{service} {method} /{path} "
                 + ("ran." if out["ok"] else "failed."),
                 announce=False,
