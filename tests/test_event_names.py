@@ -19,6 +19,7 @@ PYTHON = {
     "audio_device": {"device", "index", "kind"},
     "audio_device_missing": {"kind", "wanted"},
     "audio_device_wait": {"kind", "retry_s", "waited_s", "wanted"},
+    "audio_ready": {"waited_s"},
     "audio_rebuild_failed": {"err", "retry_s"},
     "audio_teardown_failed": {"err"},
     "buzz_failed": {"err", "pattern"},

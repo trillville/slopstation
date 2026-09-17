@@ -925,6 +925,16 @@ def test_health_watch_refuses_a_bad_stall_grace_without_falling_over():
     assert "stalledGraceMinutes" in log.find("lane_disabled")[-1]["reason"]
 
 
+def test_health_watch_refuses_a_missing_arr_url_the_same_way():
+    """The URL is read by the shared client builder, so a missing one has to
+    be a configuration error there: the watch factories catch nothing else."""
+    cfg = {"media": {"enabled": True, "sonarrUrl": "http://s"}}
+    secrets = {"radarrApiKey": "k" * 32, "sonarrApiKey": "k" * 32}
+    log = CapturingLog("voice")
+    assert media.media_health_monitor_from_config(cfg, secrets, log) is None
+    assert log.find("lane_disabled")[-1]["reason"] == "media.radarrUrl is missing"
+
+
 def test_disk_watch_needs_a_host_root():
     # No media/.env in the runtime home means no host root to resolve: a
     # checkout that is not the K15 runs the supervisor without inventing a

@@ -122,7 +122,12 @@ _UTTERANCE: contextvars.ContextVar[tuple[str | None, str] | None] = (
 
 @contextlib.contextmanager
 def utterance_snapshot(dispatch):
-    """Pin dispatch.utterance's turn and words for the tool about to run."""
+    """Pin dispatch.utterance's turn and words for the tool about to run.
+    No dispatch (StaticTools over a bare dict) pins nothing, so a tool with
+    a dispatch of its own keeps reading that one live."""
+    if dispatch is None:
+        yield
+        return
     live = getattr(dispatch, "utterance", None)
     token = _UTTERANCE.set(
         (getattr(live, "turn", None), getattr(live, "asked", None) or "")

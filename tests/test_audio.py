@@ -105,6 +105,8 @@ def test_open_audio_waits_rather_than_binding_the_wrong_endpoint(monkeypatch):
     assert waits, f"a multi-round outage logged no wait event: {log.events()}"
     assert waits[0]["waited_s"] == 0 and waits[0]["level"] == "error", waits[0]
     assert all(w["wanted"] == "ReSpeaker" for w in waits), waits
+    ready = log.find("audio_ready")
+    assert len(ready) == 1 and ready[0]["waited_s"] == 3 * audio.RETRY_S, ready
 
 
 def test_build_audio_terminates_the_instance_it_could_not_use(monkeypatch):

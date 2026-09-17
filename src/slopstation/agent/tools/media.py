@@ -1839,6 +1839,9 @@ def _arr_clients(media_cfg, secrets):
     ]
     if missing:
         raise MediaConfigurationError("missing media API keys: " + ", ".join(missing))
+    for name in ("radarrUrl", "sonarrUrl"):
+        if not isinstance(media_cfg.get(name), str) or not media_cfg[name]:
+            raise MediaConfigurationError(f"media.{name} is missing")
     return tuple(
         ArrClient(name, media_cfg[f"{name.lower()}Url"], secrets[key])
         for name, key in (("Radarr", "radarrApiKey"), ("Sonarr", "sonarrApiKey"))
@@ -1853,7 +1856,7 @@ def _optional_monitor(cfg, log, flag, what, build, default=True):
         return None
     try:
         return build(media_cfg)
-    except (MediaConfigurationError, KeyError) as e:
+    except MediaConfigurationError as e:
         log.warn("lane_disabled", what=what, reason=str(e))
         return None
 

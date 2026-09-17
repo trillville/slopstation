@@ -114,28 +114,18 @@ class Announcer:
             while self.session_active.is_set():
                 time.sleep(0.5)
             self.abort.clear()
-            if kind == "terminal":
-                item = next(
-                    (
-                        o
-                        for o in (
-                            self.store.pending_announcements() if self.store else []
-                        )
-                        if o["id"] == operation_id
-                    ),
-                    None,
+            try:
+                item = self._pending(kind, operation_id, key)
+            except Exception as e:
+                # The ledger refuses to load (a corrupt file). The row keeps its
+                # pending flag for the pull path; this thread has to outlive it.
+                self.log.error(
+                    "announce_failed",
+                    operation=operation_id,
+                    err=str(e),
+                    fallback="skipped",
                 )
-            else:
-                item = next(
-                    (
-                        o
-                        for o in (
-                            self.store.pending_notifications() if self.store else []
-                        )
-                        if o["operation_id"] == operation_id and o["key"] == key
-                    ),
-                    None,
-                )
+                continue
             if item is None:
                 continue  # already heard via pull
             self._duck_room()
@@ -143,6 +133,19 @@ class Announcer:
                 self._deliver(kind, operation_id, key, item)
             finally:
                 self._restore_room()
+
+    def _pending(self, kind, operation_id, key):
+        """The queued item as the ledger holds it now, or None once heard."""
+        if self.store is None:
+            return None
+        if kind == "terminal":
+            rows = self.store.pending_announcements()
+            return next((o for o in rows if o["id"] == operation_id), None)
+        rows = self.store.pending_notifications()
+        return next(
+            (o for o in rows if o["operation_id"] == operation_id and o["key"] == key),
+            None,
+        )
 
     def _duck_room(self):
         """Take the room down BEFORE the bulletin. The ducker runs off-thread

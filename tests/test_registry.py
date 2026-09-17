@@ -194,3 +194,7 @@ def test_a_tool_reads_the_utterance_it_was_called_under():
     assert toolkit.call("probe", {})["ok"]
     assert seen == {"turn": "aa1111", "asked": "delete dune"}
     assert toolkit.ctx.turn() == "bb2222" and toolkit.ctx.asked() == "never mind"
+    # StaticTools has no dispatch: its snapshot pins nothing, so a tool that
+    # reads a dispatch of its own still sees that one live, not a None turn.
+    with registry.utterance_snapshot(None):
+        assert toolkit.ctx.turn() == "bb2222"

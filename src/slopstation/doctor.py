@@ -1060,12 +1060,11 @@ def check_operations():
         report(PASS, "operations", note)
 
 
-# The voice lane's readiness events, newest wins: the mic is armed after
-# agent_up or a rebuilt device, waiting after a miss, rebuilding after a
-# stream death or a failed rebuild.
+# The voice lane's readiness events, newest wins: armed once both devices
+# answered (at startup or after a rebuild), waiting after a miss, rebuilding
+# after a stream death or a failed rebuild.
 READINESS = {
-    "agent_up": "armed",
-    "audio_device": "armed",
+    "audio_ready": "armed",
     "audio_device_wait": "waiting for the microphone",
     "wake_stream_died": "mic stream died, rebuilding",
     "audio_rebuild_failed": "mic stream died, rebuilding",

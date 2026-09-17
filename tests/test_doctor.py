@@ -279,10 +279,11 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
     from slopstation import events
 
     monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
+    # audio_device is the input answering; the output can still miss after it.
     _write_events(
         events._path("20260913"),
-        {"lane": "voice", "event": "agent_up"},
         {"lane": "voice", "event": "audio_device_wait"},
+        {"lane": "voice", "event": "audio_device", "kind": "input"},
     )
     doctor.check_voice_agent()
     assert rows.levels()["voice agent"] == "PASS"
@@ -290,7 +291,7 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
     assert rows.detail("wake word") == "waiting for the microphone"
 
     rows.clear()
-    _write_events(events._path("20260914"), {"lane": "voice", "event": "audio_device"})
+    _write_events(events._path("20260914"), {"lane": "voice", "event": "audio_ready"})
     doctor.check_voice_agent()
     assert rows.levels()["wake word"] == "PASS"
 

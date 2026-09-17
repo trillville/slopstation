@@ -173,6 +173,8 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
     assert not first["ok"] and first["acknowledgment"].startswith(
         "Send POST /manualimport"
     )
+    # The body is in the question: on the text lane it is the whole reply.
+    assert '"movieId": 2' in first["acknowledgment"], first["acknowledgment"]
     assert not tk.call(
         "qbittorrent_api", {"method": "POST", "path": "torrents/add", "body": [1]}
     )["ok"]

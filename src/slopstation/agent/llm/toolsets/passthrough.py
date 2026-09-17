@@ -432,12 +432,10 @@ def impls(ctx: ToolContext):
 
         if method == "GET":
             return run()
-        return Plan(
-            scope,
-            f"Send {method} /{path}{f' ({tag})' if tag else ''} to {service}?",
-            run,
-            f"run {literal}",
-        )
+        # The literal, not just the verb and path: on the text lane this
+        # question is the whole reply, so a body or query the user never saw
+        # would be one they never said yes to.
+        return Plan(scope, f"Send {literal} to {service}?", run, f"run {literal}")
 
     def _record(service, method, path, literal, out):
         """A write through the passthrough is work nobody curated: it lands
