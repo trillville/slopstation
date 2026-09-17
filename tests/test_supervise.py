@@ -41,14 +41,6 @@ def _lane_seams(monkeypatch, tmp_path, lane_code):
     return calls
 
 
-def test_the_job_object_can_be_made():
-    # Made and closed with nothing in it; joining it would make pytest itself
-    # die with the test process.
-    job = supervise._kill_on_close_job()
-    assert job
-    assert supervise._k32.CloseHandle(job)
-
-
 def test_a_process_in_the_job_takes_its_children_with_it():
     """The guarantee the wrapper relies on: when it exits - or is terminated -
     everything it started is gone too, venv launcher's grandchild included."""

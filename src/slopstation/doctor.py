@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from slopstation import config, haptics, paths, sessionlock, statefile, supervise
+from slopstation import config, events, haptics, paths, sessionlock, supervise
 from slopstation.agent.tools import media_proton, operations
 from slopstation.agent.tools.media_clients import ArrClient
 
@@ -129,12 +129,13 @@ def _service_row(name, service, stopped_hint, absent_hint):
 
 
 def _process_row(name, lane, up, down, down_hint):
-    """One 'is this lane running' row, read from its scheduled task."""
+    """One 'is this lane running' row, read from its scheduled task. Returns
+    the task row while it runs, else None."""
     try:
         task = supervise.query(lane)
     except Exception as e:
         report(WARN, name, f"could not query the task ({e})", "")
-        return False
+        return None
     if task is None:
         report(
             WARN,
@@ -142,17 +143,17 @@ def _process_row(name, lane, up, down, down_hint):
             f"task {supervise.TASKS[lane]} not registered",
             "run Setup-K15-Tasks.ps1",
         )
-        return False
+        return None
     if task.get("Status") == "Running":
         report(PASS, name, up)
-        return True
+        return task
     report(
         WARN,
         name,
         f"{down} (task {task.get('Status')}, last result {task.get('Last Result')})",
         down_hint,
     )
-    return False
+    return None
 
 
 def check_listener():
@@ -572,6 +573,7 @@ def check_voice(cfg):
     check_steam_session()
     check_media(cfg)
     check_media_monitoring(cfg)
+    check_text(cfg)
     check_remote(cfg)
     check_operations()
     check_voice_agent()
@@ -853,26 +855,6 @@ def check_port_reservations():
         )
 
 
-def _owned_seasons():
-    """series id -> monitored seasons an active operation owns, None meaning
-    the whole series. An unreadable ledger owns nothing: the row then
-    over-reports, which is the safe direction."""
-    owned: dict = {}
-    for row in statefile.load(operations.operations_file(), []):
-        if (
-            row.get("kind") != "series_acquisition"
-            or row.get("state") not in operations.ACTIVE
-        ):
-            continue
-        seasons = (row.get("metadata") or {}).get("seasons")
-        key = str(row.get("external_ref"))
-        if seasons is None or owned.get(key, ()) is None:
-            owned[key] = None
-        else:
-            owned.setdefault(key, set()).update(int(n) for n in seasons)
-    return owned
-
-
 def check_media_monitoring(cfg):
     """Monitored-and-missing episodes no active operation owns. Sonarr never
     searches for these, but RSS grabs any NEW upload that matches one - which
@@ -920,7 +902,7 @@ def check_media_monitoring(cfg):
     cutoff = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - MONITOR_STALE_DAYS * 86400)
     )
-    owned = _owned_seasons()
+    owned = operations.owned_seasons()
     drift: dict = {}
     for row in records:
         if not isinstance(row, dict):
@@ -948,6 +930,50 @@ def check_media_monitoring(cfg):
         f"{sum(drift.values())} episode(s) armed with nobody chasing them: " + listed,
         "unmonitor the scope you did not ask for; RSS can grab into it",
     )
+
+
+def check_text(cfg):
+    """The text interface's /health: what the voice process has up. WARN-only."""
+    text = cfg.get("textInterface") if isinstance(cfg, dict) else None
+    if not isinstance(text, dict) or not text.get("enabled"):
+        report(PASS, "text interface", "disabled")
+        return
+    token = config.secrets().get("textInterfaceToken")
+    if not config.real_key(token):
+        report(
+            WARN, "text interface", "textInterfaceToken missing or a placeholder", ""
+        )
+        return
+    # The host the lane bound. A wildcard bind answers on loopback; any other
+    # host answers only on itself.
+    host = str(text.get("host", "127.0.0.1"))
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    port = int(text.get("port", 8765))
+    request = urllib.request.Request(
+        f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {token}"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as r:
+            health = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        report(
+            WARN,
+            "text interface",
+            f"no answer on {port} ({e})",
+            "the voice agent hosts it; check the voice lane above",
+        )
+        return
+    up = [k for k in ("operations", "steam", "media") if health.get(k)]
+    # Every thread the voice process started. Missing: never started. False:
+    # died.
+    threads = health.get("threads") or {}
+    dead = sorted(name for name, alive in threads.items() if not alive)
+    detail = f"listening on {port}; up: {', '.join(up) or 'nothing'}; threads: {len(threads)}"
+    if dead:
+        report(WARN, "text interface", f"{detail}; stopped: {', '.join(dead)}", "")
+    else:
+        report(PASS, "text interface", detail)
 
 
 def check_remote(cfg):
@@ -1042,49 +1068,83 @@ def check_operations():
         report(PASS, "operations", note)
 
 
+# The voice lane's readiness events, newest wins: (row text, hint).
+_DEVICE_HINT = "check the audio device in config.json"
+READINESS = {
+    "audio_ready": ("armed", ""),
+    "audio_device_wait": ("waiting for the microphone", _DEVICE_HINT),
+    "wake_stream_died": ("mic stream died, rebuilding", _DEVICE_HINT),
+    "audio_rebuild_failed": (
+        "audio failed to open; retrying every 5 s",
+        "see audio_rebuild_failed in the voice event log",
+    ),
+    "wake_model_missing": (
+        "wake model missing",
+        "see wake_model_missing in the voice event log",
+    ),
+    "wake_verifier_missing": (
+        "wake verifier missing",
+        "see wake_verifier_missing in the voice event log",
+    ),
+}
+
+
 def check_voice_agent():
-    _process_row(
+    task = _process_row(
         "voice agent",
         "voice",
-        "running (wake word armed)",
+        "running",
         "not running - wake word deaf (chord unaffected)",
         "run Start-Slopstation.bat",
     )
+    if task is None:
+        return
+    # The task proves the process, not the wake word: the lane checks in before
+    # the mic wait.
+    state, hint = READINESS.get(_latest_events(READINESS).get("voice", ""), ("", ""))
+    if state == "armed":
+        report(PASS, "wake word", "armed")
+    elif state:
+        report(WARN, "wake word", state, hint)
+    elif _started_before_retention(task):
+        report(
+            PASS,
+            "wake word",
+            f"no event retained; lane older than {events.TTL_DAYS} days",
+        )
+    else:
+        report(WARN, "wake word", "no readiness event on record", "")
 
 
-def _latest_checkins():
-    """Each lane's most recent check-in result, lane -> event name.
+def _started_before_retention(task):
+    """True when the task's last start is older than the event retention, so
+    an armed lane has no readiness event left to show."""
+    try:
+        started = time.strptime(task.get("Last Run Time", ""), "%m/%d/%Y %I:%M:%S %p")
+    except ValueError:
+        return False
+    return time.mktime(started) < time.time() - events.TTL_DAYS * 86400
 
-    A lane logs its first check-in and then only changes, so one that started
-    days ago and is still checking in has nothing in today's file. Read back
-    through every retained event file, newest first; an unparseable line is
-    skipped, since this is a diagnosis, not a parser test."""
-    from slopstation import events
 
-    pattern = events._path("*").name
-    files = sorted(
-        [
-            *paths.logs().glob(pattern),
-            *(paths.logs() / events.ARCHIVE_NAME).glob(pattern),
-        ],
-        key=lambda f: f.name,
-        reverse=True,
-    )
+def _latest_events(names):
+    """Each lane's most recent event among `names`: lane -> event name. Walks
+    every retained event file, newest first, because a lane logs a check-in
+    once and then only changes. Unparseable lines are skipped."""
     latest: dict = {}
-    for f in files:
+    for f in events.log_files():
         in_file = {}
         try:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         for line in lines:
-            if '"checkin' not in line:
+            if not any(f'"{name}"' in line for name in names):
                 continue
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
-            if rec.get("event") in ("checkin", "checkin_failed"):
+            if rec.get("event") in names:
                 in_file[rec.get("lane")] = rec.get("event")
         for lane, event in in_file.items():
             latest.setdefault(lane, event)
@@ -1117,7 +1177,7 @@ def check_sentry():
 
     # From the event stream, so this costs no network and cannot create a
     # false check-in for a lane that is actually down.
-    seen = _latest_checkins()
+    seen = _latest_events(("checkin", "checkin_failed"))
     failing = sorted(lane for lane, e in seen.items() if e == "checkin_failed")
     if failing:
         report(
@@ -1139,9 +1199,8 @@ def check_sentry():
 
 def check_telemetry():
     """Event stream written, and anything shipping it? WARN-only."""
-    from slopstation import events
 
-    today = events._path(time.strftime("%Y%m%d"))  # local date, like events
+    today = events.log_file(time.strftime("%Y%m%d"))  # local date, like events
     try:
         age = time.time() - today.stat().st_mtime
         size_kb = today.stat().st_size / 1024

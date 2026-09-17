@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import fake_dispatch
 from slopstation import config, gamepc, sessionlock, statefile
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import library, steamstore
@@ -56,11 +56,6 @@ META = {
 def catalog():
     statefile.write(library.library_file(), INDEX)
     statefile.write(library.meta_cache_file(), META)
-
-
-@pytest.fixture
-def log():
-    return CapturingLog("voice")
 
 
 class FakeSteam:
@@ -126,7 +121,7 @@ def rig(catalog, log, monkeypatch):
         tv=types.SimpleNamespace(
             power_state=lambda: "on", volume=lambda: 14, muted=lambda: False
         ),
-        display=lambda target: types.SimpleNamespace(
+        display=lambda target, turn=None: types.SimpleNamespace(
             ok=target in ("tv", "monitor"), detail=f"display {target}"
         ),
     )
@@ -369,7 +364,7 @@ def test_steam_client_tools_report_what_steam_holds(rig, log):
 
 
 def test_steam_client_tools_need_the_account_session(catalog, log):
-    dispatch = types.SimpleNamespace(dry_run=False, utterance=None)
+    dispatch = fake_dispatch(None)
     tk = assistant.Toolkit(dispatch, log)
     assert "download_status" not in tk.offered and "uninstall_game" not in tk.offered
     unenrolled = assistant.Toolkit(dispatch, log, steam=FakeSteam(enrolled=False))
@@ -384,7 +379,7 @@ def test_display_tool_hands_the_target_to_dispatch(rig):
     assert not tk.call("display", {"target": "projector"})["ok"]
 
 
-def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
+def test_tv_status_pc_status_wake_and_sleep(rig, monkeypatch):
     tk, dispatch, steam, _ = rig
     tv = tk.call("tv_status", {})
     assert tv == {"ok": True, "power": "on", "volume": 14, "muted": False}
@@ -457,20 +452,25 @@ def test_tv_status_pc_status_and_pc_power(rig, monkeypatch):
     # Power: wake sends the packet; sleep is refused while a session is live.
     woke = []
     monkeypatch.setattr("slopstation.couch.wol", lambda: woke.append(1))
-    assert tk.call("pc_power", {"action": "wake"})["ok"] and woke == [1]
+    assert tk.call("wake_pc", {})["ok"] and woke == [1]
     monkeypatch.setattr(sessionlock, "active", lambda *a: True)
-    assert "end it first" in tk.call("pc_power", {"action": "sleep"})["error"]
+    assert "end it first" in tk.call("sleep_pc", {})["error"]
     monkeypatch.setattr(sessionlock, "active", lambda *a: False)
     sent = []
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: sent.append(cmd) or "OK")
-    assert tk.call("pc_power", {"action": "sleep"})["ok"] and sent == [
-        "sleep --turn aa0001"
-    ]
+    # Sleep asks first; the same call on a later turn's yes acts.
+    asked = tk.call("sleep_pc", {})
+    assert not asked["ok"] and asked["acknowledgment"] == "Put the PC to sleep?"
+    assert sent == []
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    assert tk.call("sleep_pc", {})["ok"] and sent == ["sleep --turn aa0002"]
     monkeypatch.setattr(gamepc, "ssh", lambda cmd, **kw: "BUSY:12345")
-    assert "refused" in tk.call("pc_power", {"action": "sleep"})["error"]
-    assert not tk.call("pc_power", {"action": "reboot"})["ok"]
+    dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="sleep it")
+    assert not tk.call("sleep_pc", {})["ok"]  # asked again
+    dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
+    assert "refused" in tk.call("sleep_pc", {})["error"]
     dispatch.dry_run = True
-    assert tk.call("pc_power", {"action": "sleep"})["dry_run"]
+    assert tk.call("sleep_pc", {})["dry_run"] and tk.call("wake_pc", {})["dry_run"]
 
 
 # --- store parsing for the new helpers ------------------------------------------

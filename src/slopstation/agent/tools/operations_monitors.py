@@ -3,10 +3,10 @@
 import argparse
 import json
 import time
-from typing import Any
 
-from slopstation import config, events, logbook
+from slopstation import config, logbook
 from slopstation.agent.tools import library, media, steam_session
+from slopstation.agent.tools.monitor import Monitor
 from slopstation.agent.tools.operations import (
     CANCELED,
     FAILED,
@@ -60,26 +60,6 @@ def _fully_installed_appids():
         for r in library.fetch_installed_ssh()
         if int(r.get("state", 0)) & 4
     }
-
-
-class Monitor:
-    """Run a monitor repeatedly and log errors without stopping its thread."""
-
-    THREAD_NAME = "operation-monitor"
-    log: Any
-    poll_s: float
-
-    def reconcile_once(self):
-        raise NotImplementedError
-
-    def start(self):
-        events.Ticker(self.THREAD_NAME, self.poll_s, self._tick).start()
-
-    def _tick(self):
-        try:
-            self.reconcile_once()
-        except Exception as e:
-            self.log.error("operation_monitor_failed", err=str(e))
 
 
 class SteamMonitor(Monitor):
@@ -315,17 +295,9 @@ class MediaMonitor(Monitor):
                     )
                 operation = self._dispatch_search_retry(operation, now)
                 observation = self.media.observe(operation)
-                state = (
-                    CANCELED
-                    if observation.get("canceled")
-                    else FAILED
-                    if observation.get("failed")
-                    else SUCCEEDED
-                    if observation["complete"]
-                    else RUNNING
-                )
+                state = observation.state
                 previous_phase = (operation.get("progress") or {}).get("phase")
-                progress = observation.get("progress", {})
+                progress = observation.progress
                 phase = progress.get("phase")
                 if (
                     state == RUNNING
@@ -333,9 +305,7 @@ class MediaMonitor(Monitor):
                     and previous_phase == "searching"
                 ):
                     operation = self._schedule_search_retry(operation, now)
-                self.store.observe(
-                    operation["id"], state, progress, observation.get("detail", "")
-                )
+                self.store.observe(operation["id"], state, progress, observation.detail)
                 if state == RUNNING and phase != previous_phase:
                     if phase == "downloading":
                         self.store.notify(
@@ -399,14 +369,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     log = logbook.logger("voice")
-    store = OperationStore(log)
+    try:
+        store = OperationStore(log)
+    except ValueError as e:
+        print(e)
+        return 1
 
     if args.command == "list":
         rows = store.active() if args.active else store.recent(50)
         if not rows:
             print("no operations")
-        for operation in rows:
-            print(_line(operation))
+        for row in rows:
+            print(_line(row))
         return 0
     if args.command == "show":
         operation = store.get(args.operation)
@@ -423,12 +397,16 @@ def main(argv=None):
         if operation.get("state") in TERMINAL:
             print(f"{args.operation} is already {operation['state'].lower()}")
             return 1
-        if operation.get("kind") not in MediaMonitor.KINDS:
-            print("only Radarr and Sonarr operations support clean abandonment")
-            return 1
         if not args.execute:
             print("nothing deleted; repeat with --execute")
             return 2
+        if operation.get("kind") not in MediaMonitor.KINDS:
+            # Nothing to undo on the service; the row just needs closing.
+            store.observe(
+                operation["id"], CANCELED, {}, "abandoned by hand", announce=False
+            )
+            print(f"{args.operation} marked canceled; nothing deleted")
+            return 0
         service = media.from_config(config.current(), config.secrets(), log)
         if service is None:
             print("media is disabled or its configuration/API keys are incomplete")

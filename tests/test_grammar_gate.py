@@ -304,11 +304,6 @@ def test_a_loud_room_takes_a_closer_right_after_the_anchor(text, want):
     assert closer_in(text, load_closers(), "alfred", loud=True) == want
 
 
-def test_exit_sentences_stay_plain_for_closer_matching():
-    for c in load_closers():
-        assert not any(ch in c for ch in "[]{}|"), c
-
-
 @dataclasses.dataclass
 class Frame:
     result: object

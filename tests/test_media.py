@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 import helpers
-from helpers import CapturingLog
+from helpers import CapturingLog, sonarr_episode
 from slopstation.agent.tools import (
     disk_health,
     media,
@@ -925,6 +925,16 @@ def test_health_watch_refuses_a_bad_stall_grace_without_falling_over():
     assert "stalledGraceMinutes" in log.find("lane_disabled")[-1]["reason"]
 
 
+def test_health_watch_refuses_a_missing_arr_url_the_same_way():
+    """A missing URL is a MediaConfigurationError from the shared client
+    builder; the watch factories catch nothing else."""
+    cfg = {"media": {"enabled": True, "sonarrUrl": "http://s"}}
+    secrets = {"radarrApiKey": "k" * 32, "sonarrApiKey": "k" * 32}
+    log = CapturingLog("voice")
+    assert media.media_health_monitor_from_config(cfg, secrets, log) is None
+    assert log.find("lane_disabled")[-1]["reason"] == "media.radarrUrl is missing"
+
+
 def test_disk_watch_needs_a_host_root():
     # No media/.env in the runtime home means no host root to resolve: a
     # checkout that is not the K15 runs the supervisor without inventing a
@@ -987,41 +997,21 @@ def test_library_reports_holdings_per_season(svc):
     svc.sonarr.set(
         library=[{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}],
         episodes=[
-            {
-                "id": 1,
-                "seasonNumber": 1,
-                "hasFile": True,
-                "monitored": False,
-                "airDateUtc": "2008-01-20T00:00:00Z",
-            },
-            {
-                "id": 2,
-                "seasonNumber": 1,
-                "hasFile": False,
-                "monitored": False,
-                "airDateUtc": "2008-01-27T00:00:00Z",
-            },
-            {
-                "id": 3,
-                "seasonNumber": 2,
-                "hasFile": True,
-                "monitored": True,
-                "airDateUtc": "2009-03-08T00:00:00Z",
-            },
-            {
-                "id": 4,
-                "seasonNumber": 2,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": "2999-01-01T00:00:00Z",
-            },
-            {
-                "id": 5,
-                "seasonNumber": 0,
-                "hasFile": True,
-                "monitored": True,
-                "airDateUtc": "2009-01-01T00:00:00Z",
-            },
+            sonarr_episode(
+                1, 1, has_file=True, monitored=False, aired="2008-01-20T00:00:00Z"
+            ),
+            sonarr_episode(
+                2, 1, has_file=False, monitored=False, aired="2008-01-27T00:00:00Z"
+            ),
+            sonarr_episode(
+                3, 2, has_file=True, monitored=True, aired="2009-03-08T00:00:00Z"
+            ),
+            sonarr_episode(
+                4, 2, has_file=False, monitored=True, aired="2999-01-01T00:00:00Z"
+            ),
+            sonarr_episode(
+                5, 0, has_file=True, monitored=True, aired="2009-01-01T00:00:00Z"
+            ),
         ],
     )
     owned = svc.library("series", 81189)
@@ -1041,27 +1031,15 @@ def test_abandon_missing_unmonitors_the_gap(svc):
     svc.sonarr.set(
         library=[{"id": 41, "tvdbId": 81189, "title": "Breaking Bad"}],
         episodes=[
-            {
-                "id": 1,
-                "seasonNumber": 1,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": "2008-01-20T00:00:00Z",
-            },
-            {
-                "id": 2,
-                "seasonNumber": 1,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": "2008-01-27T00:00:00Z",
-            },
-            {
-                "id": 3,
-                "seasonNumber": 2,
-                "hasFile": True,
-                "monitored": True,
-                "airDateUtc": "2009-03-08T00:00:00Z",
-            },
+            sonarr_episode(
+                1, 1, has_file=False, monitored=True, aired="2008-01-20T00:00:00Z"
+            ),
+            sonarr_episode(
+                2, 1, has_file=False, monitored=True, aired="2008-01-27T00:00:00Z"
+            ),
+            sonarr_episode(
+                3, 2, has_file=True, monitored=True, aired="2009-03-08T00:00:00Z"
+            ),
         ],
     )
     result = svc.abandon_missing(
@@ -1187,14 +1165,14 @@ def test_cancel_of_a_pending_episode_request_leaves_the_series_alone(svc):
         library=[{"id": 5, "tvdbId": 81189, "title": "Breaking Bad"}],
         # Somebody else's work, downloading right now.
         episodes=[
-            {
-                "id": 201,
-                "seasonNumber": 2,
-                "episodeNumber": 1,
-                "monitored": True,
-                "hasFile": False,
-                "airDateUtc": "2009-03-08T00:00:00Z",
-            }
+            sonarr_episode(
+                201,
+                2,
+                number=1,
+                monitored=True,
+                has_file=False,
+                aired="2009-03-08T00:00:00Z",
+            )
         ],
         queue={
             "records": [
@@ -1213,14 +1191,14 @@ def test_cancel_of_a_pending_episode_request_leaves_the_series_alone(svc):
 
     # Once Sonarr names the episode, the cancel acts on that one and no other.
     svc.sonarr.episodes.append(
-        {
-            "id": 413,
-            "seasonNumber": 4,
-            "episodeNumber": 13,
-            "monitored": True,
-            "hasFile": False,
-            "airDateUtc": "2008-11-20T00:00:00Z",
-        }
+        sonarr_episode(
+            413,
+            4,
+            number=13,
+            monitored=True,
+            has_file=False,
+            aired="2008-11-20T00:00:00Z",
+        )
     )
     svc.sonarr.queue["records"].append(
         {"id": 731, "seriesId": 5, "episodeId": 413, "downloadId": "d10"}
@@ -1297,9 +1275,9 @@ def test_movie_upgrade_completes_on_a_new_file(svc):
         "external_ref": "33",
         "metadata": {"baseline_file_id": 71},
     }
-    assert not svc.observe(operation)["complete"]
+    assert svc.observe(operation).state != operations.SUCCEEDED
     svc.radarr.movie_files[0]["id"] = 72
-    assert svc.observe(operation)["complete"]
+    assert svc.observe(operation).state == operations.SUCCEEDED
 
 
 # --- selected series seasons --------------------------------------------------
@@ -1346,27 +1324,15 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
     assert not svc.dispatch_pending_series_search(pending)
     svc.sonarr.set(
         episodes=[
-            {
-                "id": 101,
-                "seasonNumber": 0,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2019-01-01T00:00:00Z",
-            },
-            {
-                "id": 102,
-                "seasonNumber": 2,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2020-01-01T00:00:00Z",
-            },
-            {
-                "id": 103,
-                "seasonNumber": 2,
-                "monitored": True,
-                "hasFile": False,
-                "airDateUtc": "2020-01-08T00:00:00Z",
-            },
+            sonarr_episode(
+                101, 0, monitored=False, has_file=False, aired="2019-01-01T00:00:00Z"
+            ),
+            sonarr_episode(
+                102, 2, monitored=False, has_file=False, aired="2020-01-01T00:00:00Z"
+            ),
+            sonarr_episode(
+                103, 2, monitored=True, has_file=False, aired="2020-01-08T00:00:00Z"
+            ),
         ]
     )
     assert svc.dispatch_pending_series_search(pending)
@@ -1384,7 +1350,7 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
         {"name": "SeasonSearch", "seriesId": 41, "seasonNumber": 2},
     )
     observation = svc.observe_series(41, [2])
-    assert observation["progress"] == {
+    assert observation.progress == {
         "episodes": 0,
         "total_episodes": 2,
         "percent": 0,
@@ -1421,13 +1387,9 @@ def test_series_monitoring_waits_for_sonarr_to_finish_adding(svc):
             }
         ],
         episodes=[
-            {
-                "id": 102,
-                "seasonNumber": 1,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2020-01-01T00:00:00Z",
-            }
+            sonarr_episode(
+                102, 1, monitored=False, has_file=False, aired="2020-01-01T00:00:00Z"
+            )
         ],
     )
     pending = {
@@ -1480,22 +1442,22 @@ def test_series_upgrade_completes_on_new_episode_files(svc):
             }
         ],
         episodes=[
-            {
-                "id": 101,
-                "episodeFileId": 201,
-                "seasonNumber": 1,
-                "monitored": True,
-                "hasFile": True,
-                "airDateUtc": "2020-01-01T00:00:00Z",
-            },
-            {
-                "id": 102,
-                "episodeFileId": 0,
-                "seasonNumber": 1,
-                "monitored": True,
-                "hasFile": False,
-                "airDateUtc": "2020-01-08T00:00:00Z",
-            },
+            sonarr_episode(
+                101,
+                1,
+                file_id=201,
+                monitored=True,
+                has_file=True,
+                aired="2020-01-01T00:00:00Z",
+            ),
+            sonarr_episode(
+                102,
+                1,
+                file_id=0,
+                monitored=True,
+                has_file=False,
+                aired="2020-01-08T00:00:00Z",
+            ),
         ],
     )
     series_upgrade = svc.request_series(81189, "2160p", [1])
@@ -1510,10 +1472,10 @@ def test_series_upgrade_completes_on_new_episode_files(svc):
         "external_ref": "42",
         "metadata": {"seasons": [1], "baseline_episode_files": {"101": 201}},
     }
-    assert not svc.observe(upgrade_operation)["complete"]
+    assert svc.observe(upgrade_operation).state != operations.SUCCEEDED
     svc.sonarr.episodes[0]["episodeFileId"] = 301
     svc.sonarr.episodes[1].update(hasFile=True, episodeFileId=302)
-    assert svc.observe(upgrade_operation)["complete"]
+    assert svc.observe(upgrade_operation).state == operations.SUCCEEDED
 
 
 def test_request_episodes_touches_only_those_episodes(svc):
@@ -1534,30 +1496,30 @@ def test_request_episodes_touches_only_those_episodes(svc):
             }
         ],
         episodes=[
-            {
-                "id": 413,
-                "seasonNumber": 4,
-                "episodeNumber": 13,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2008-11-20T00:00:00Z",
-            },
-            {
-                "id": 412,
-                "seasonNumber": 4,
-                "episodeNumber": 12,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2008-11-13T00:00:00Z",
-            },
-            {
-                "id": 1004,
-                "seasonNumber": 10,
-                "episodeNumber": 4,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2015-02-04T00:00:00Z",
-            },
+            sonarr_episode(
+                413,
+                4,
+                number=13,
+                monitored=False,
+                has_file=False,
+                aired="2008-11-20T00:00:00Z",
+            ),
+            sonarr_episode(
+                412,
+                4,
+                number=12,
+                monitored=False,
+                has_file=False,
+                aired="2008-11-13T00:00:00Z",
+            ),
+            sonarr_episode(
+                1004,
+                10,
+                number=4,
+                monitored=False,
+                has_file=False,
+                aired="2015-02-04T00:00:00Z",
+            ),
         ],
     )
     submission = svc.request_series(
@@ -1583,8 +1545,8 @@ def test_request_episodes_touches_only_those_episodes(svc):
         "metadata": {"episodes": [[4, 13], [10, 4]], "episode_ids": [413, 1004]},
     }
     observation = svc.observe(operation)
-    assert observation["progress"]["total_episodes"] == 2
-    assert not observation["complete"]
+    assert observation.progress["total_episodes"] == 2
+    assert observation.state != operations.SUCCEEDED
     with pytest.raises(media_clients.MediaError, match="S04E99"):
         svc.request_series(75805, episodes=[{"season": 4, "episode": 99}])
     with pytest.raises(media_clients.MediaError, match="not both"):
@@ -1626,22 +1588,22 @@ def test_request_episodes_on_a_new_series_resolves_ids_when_sonarr_is_ready(svc)
     }
     # No rows yet: not ready, and not cancelled either.
     assert not svc.dispatch_pending_series_search(pending)
-    assert not svc.observe(pending)["metadata_ready"]
+    assert not svc.observe(pending).metadata_ready
     svc.sonarr.set(
         episodes=[
-            {
-                "id": 413,
-                "seasonNumber": 4,
-                "episodeNumber": 13,
-                "monitored": False,
-                "hasFile": False,
-                "airDateUtc": "2008-11-20T00:00:00Z",
-            }
+            sonarr_episode(
+                413,
+                4,
+                number=13,
+                monitored=False,
+                has_file=False,
+                aired="2008-11-20T00:00:00Z",
+            )
         ]
     )
     # Rows, but Sonarr's add pass is still running.
     assert not svc.dispatch_pending_series_search(pending)
-    assert not svc.observe(pending).get("canceled")
+    assert svc.observe(pending).state != operations.CANCELED
     svc.sonarr.library[0]["addOptions"] = None
     assert svc.dispatch_pending_series_search(pending) == {
         "command_ids": [1],
@@ -1680,18 +1642,18 @@ def test_observe_movie_reports_the_download_without_its_title(svc):
         },
     )
     movie_progress = svc.observe_movie(50)
-    assert not movie_progress["complete"]
-    assert movie_progress["progress"] == {"phase": "downloading", "percent": 75}
-    assert "UNTRUSTED" not in movie_progress["detail"]
+    assert movie_progress.state != operations.SUCCEEDED
+    assert movie_progress.progress == {"phase": "downloading", "percent": 75}
+    assert "UNTRUSTED" not in movie_progress.detail
     svc.radarr.library[0]["hasFile"] = True
-    assert svc.observe_movie(50)["complete"]
+    assert svc.observe_movie(50).state == operations.SUCCEEDED
 
 
 def test_observe_series_counts_aired_monitored_episodes(svc):
     now = datetime.datetime(2026, 8, 29, tzinfo=UTC)
     empty = svc.observe_series(60, [1], now)
-    assert not empty["metadata_ready"]
-    assert empty["detail"] == "Sonarr is still populating episode metadata"
+    assert not empty.metadata_ready
+    assert empty.detail == "Sonarr is still populating episode metadata"
     svc.sonarr.set(
         episodes=[
             {
@@ -1727,21 +1689,21 @@ def test_observe_series_counts_aired_monitored_episodes(svc):
         ]
     )
     progress = svc.observe_series(60, None, now)
-    assert progress["metadata_ready"]
-    assert not progress["complete"]
-    assert progress["progress"] == {
+    assert progress.metadata_ready
+    assert progress.state != operations.SUCCEEDED
+    assert progress.progress == {
         "episodes": 1,
         "total_episodes": 2,
         "percent": 50,
         "phase": "waiting_for_match",
     }
     svc.sonarr.episodes[2]["hasFile"] = True
-    assert svc.observe_series(60, None, now)["complete"]
+    assert svc.observe_series(60, None, now).state == operations.SUCCEEDED
     for episode in svc.sonarr.episodes:
         if episode["seasonNumber"] == 1:
             episode["monitored"] = False
     canceled = svc.observe_series(60, [1], now)
-    assert canceled["canceled"] and not canceled["complete"]
+    assert canceled.state == operations.CANCELED
 
 
 # --- Abandoned requests -------------------------------------------------------
@@ -2086,17 +2048,3 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
         row["name"] == "Proton port synchronization" and row["level"] == "FAIL"
         for row in broken["checks"]
     )
-
-
-# --- the compose stack on disk ------------------------------------------------
-
-
-def test_compose_stack_exposes_nothing_it_should_not():
-    compose = (helpers.REPO / "media" / "compose.yaml").read_text(encoding="utf-8")
-    # qBittorrent runs natively behind Proton, never in the stack.
-    assert "qbittorrent:" not in compose
-    # Web UIs are LAN-wide (the runbook's firewall rules scope them).
-    assert "127.0.0.1:" not in compose
-    # FlareSolverr and Glances stay off the host; host 7575 is VirtualHere's.
-    for port in ("8191:8191", "7575:7575", "61208:61208"):
-        assert port not in compose

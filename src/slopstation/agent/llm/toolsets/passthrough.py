@@ -14,8 +14,9 @@ import json
 import re
 from typing import Any
 
-from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import apidocs, library, steam_session
+from slopstation.agent.tools import operations as operations_mod
 
 METHODS = ("GET", "POST", "PUT", "DELETE")
 # Status text the media clients raise for an answered-and-refused request.
@@ -208,7 +209,7 @@ def _spec(name, description, needs, keywords, extra=None, busy=None):
         description,
         _params_schema(extra),
         ("method", "path"),
-        risk="act",
+        risk="destructive",
         area="api",
         keywords=keywords,
         default=False,
@@ -335,7 +336,7 @@ def _qbit_mutates(method, path):
 
 def impls(ctx: ToolContext):
     bind = Bindings(ctx, SPECS)
-    dispatch, log, media, steam = ctx.dispatch, ctx.log, ctx.media, ctx.steam
+    log, media, steam, operations = ctx.log, ctx.media, ctx.steam, ctx.operations
 
     def _run(service, args, send, tag=""):
         """`tag` names anything beyond method, path and body that the user is
@@ -380,7 +381,7 @@ def impls(ctx: ToolContext):
             json.dumps(params, sort_keys=True),
             json.dumps(body, sort_keys=True),
         )
-        asked = getattr(dispatch.utterance, "asked", None) or ""
+        asked = ctx.asked()
 
         def run():
             """Send, and answer with one receipt: ok is whether the service
@@ -423,24 +424,43 @@ def impls(ctx: ToolContext):
                 status=status,
                 asked=str(asked)[:120],
             )
+            if method != "GET":
+                _record(service, method, path, literal, out)
             return {"service": service, "request": literal, **out}
 
         if method == "GET":
             return run()
-        if dry := ctx.preview(f"run {literal}"):
-            return dry
-        # A refused or unanswered request keeps the ask armed: the model can
-        # try again without asking the user twice.
-        return ctx.confirm(
-            f"{service}_api",
-            scope,
-            {
-                "confirm": literal,
-                "error": "not run yet: read this request back to the user in "
-                "plain words, and call again unchanged once they say yes",
-            },
-            run,
-        )
+        # The text lane shows the literal, body included; the voice lane has
+        # the model read it back in words.
+        return Plan(scope, "", run, f"run {literal}", confirm=literal)
+
+    def _record(service, method, path, literal, out):
+        """Record a passthrough write in the ledger as finished, so `operations
+        list` shows it."""
+        if operations is None:
+            return
+        try:
+            row = operations.track_external(
+                "api_write",
+                service,
+                literal,
+                f"{service} {method} /{path}",
+                turn=ctx.turn(),
+            )
+            failure = " - ".join(
+                str(s) for s in (out.get("error"), out.get("detail")) if s
+            )
+            operations.observe(
+                row["id"],
+                operations_mod.SUCCEEDED if out["ok"] else operations_mod.FAILED,
+                {},
+                "" if out["ok"] else failure,
+                summary=f"{service} {method} /{path} "
+                + ("ran." if out["ok"] else "failed."),
+                announce=False,
+            )
+        except Exception as e:
+            log.error("tool_error", tool=f"{service}_api", err=f"ledger: {e}")
 
     def _arr(client):
         def send(method, path, params, body):
@@ -542,23 +562,23 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool="describe_api", err=str(e))
             return {"ok": False, "error": str(e)}
 
-    @bind
+    @bind.destructive
     def radarr_api(args):
         return _run("radarr", args, _arr(media.radarr))
 
-    @bind
+    @bind.destructive
     def sonarr_api(args):
         return _run("sonarr", args, _arr(media.sonarr))
 
-    @bind
+    @bind.destructive
     def prowlarr_api(args):
         return _run("prowlarr", args, _arr(media.prowlarr))
 
-    @bind
+    @bind.destructive
     def qbittorrent_api(args):
         return _run("qbittorrent", args, _qbit)
 
-    @bind
+    @bind.destructive
     def steam_api(args):
         auth = str(args.get("auth") or "none")
         if auth not in ("none", "key", "account"):

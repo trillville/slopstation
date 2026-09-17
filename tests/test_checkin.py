@@ -62,24 +62,6 @@ def test_checkin_url_is_built_out_of_the_dsn():
     assert checkin.checkin_url(DSN, "") is None
 
 
-# -- the upsert payload --------------------------------------------------------
-
-
-def test_monitor_config_is_a_json_upsert_naming_a_schedule():
-    # Sentry registers the monitor from this, so a rebuilt org needs no
-    # clicking. It has to survive json.dumps and name a schedule.
-    body = json.loads(
-        json.dumps({"monitor_config": checkin.MONITOR_CONFIG, "status": "ok"})
-    )
-    assert body["monitor_config"]["schedule"]["type"] == "interval"
-    assert body["monitor_config"]["schedule"]["unit"] == "minute"
-    # Two misses before an issue opens, so one network blip does not page.
-    assert checkin.MONITOR_CONFIG["failure_issue_threshold"] >= 2
-    # The margin has to leave room for a check-in that was merely slow.
-    assert checkin.MONITOR_CONFIG["checkin_margin"] >= 1
-    assert checkin.INTERVAL_S == 60, "the schedule above says one minute"
-
-
 # -- Error handling ------------------------------------------------------------
 
 

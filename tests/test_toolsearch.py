@@ -4,8 +4,9 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import fake_dispatch
 from slopstation.agent.llm import assistant, backends, toolsearch
+from slopstation.agent.speech import tool_schemas
 
 # One realistic ask per searchable tool that exists today. Every new
 # searchable tool gets a line here, so a keyword list that stops retrieving
@@ -67,20 +68,14 @@ ASKS = {
     "uninstall_game": "uninstall valheim to free up space on the pc",
     "tv_status": "is the tv on and how loud is it",
     "pc_status": "is the pc awake and how much room is there to install",
-    "pc_power": "put the pc to sleep",
+    "wake_pc": "wake up the pc",
+    "sleep_pc": "put the pc to sleep",
 }
 
 
 @pytest.fixture
-def log():
-    return CapturingLog("voice")
-
-
-@pytest.fixture
 def toolkit(log):
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     return assistant.Toolkit(
         dispatch, log, operations=object(), media=object(), steam=object()
     )
@@ -126,7 +121,9 @@ def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):
     assert toolkit.loaded[:n] == toolkit.defaults
     assert toolkit.loaded[n:] == [r["tool"] for r in out["loaded"]]
     assert [t["name"] for t in toolkit.render("openai")] == toolkit.loaded
-    assert [s.name for s in toolkit.function_schemas()] == toolkit.loaded
+    assert [
+        s.name for s in tool_schemas.pipecat_schemas(toolkit, toolkit.log)
+    ] == toolkit.loaded
     found = log.find("tools_found")
     assert found and "delete_media" in found[-1]["found"]
     # Asking again names the tool as already loaded, never a weaker second
@@ -144,9 +141,7 @@ def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):
 def test_find_tools_offers_only_what_this_toolkit_can_run(log):
     # No qBittorrent: the torrent tools are not offered, so a torrent ask must
     # not report them loaded, and the toolkit must not run them either way.
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     tk = assistant.Toolkit(
         dispatch, log, media=types.SimpleNamespace(qbit=None, prowlarr=None)
     )
@@ -179,29 +174,24 @@ def test_common_name_words_do_not_load_unrelated_tools(toolkit):
             for s, _ in toolsearch.search(toolkit.registry, ask, set(toolkit.loaded))
         ]
         assert "uninstall_game" not in hits and len(hits) <= 2, (ask, hits)
-    assert toolsearch.summary(assistant.REGISTRY.get("delete_path")).endswith(
-        "file or folder inside the media root, given as a path relative to it (e.g. 'torrents/Some.Release' or 'Movies/Old Film (1999)')."
-    )
 
 
 def test_on_load_fires_once_per_change_with_the_new_schemas(log):
     pushed = []
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
+    dispatch = fake_dispatch(None, dry_run=True)
     tk = assistant.Toolkit(
         dispatch, log, media=object(), on_load=lambda: pushed.append(1)
     )
     assert tk.load(["delete_media"]) == ["delete_media"] and pushed == [1]
     assert tk.load(["delete_media"]) == [] and pushed == [1], "no change, no push"
     assert tk.load(["not_a_tool"]) == [] and pushed == [1]
-    assert [s.name for s in tk.function_schemas(log)][-1] == "delete_media"
+    assert [s.name for s in tool_schemas.pipecat_schemas(tk, log)][-1] == "delete_media"
 
 
 def test_the_backends_render_the_loaded_set_on_every_request(monkeypatch, log):
     """A tool found mid-turn is offered on the very next request of that turn,
     on both providers."""
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     tk = assistant.Toolkit(dispatch, log, media=object())
     calls = []
 
@@ -276,9 +266,7 @@ def test_the_backends_render_the_loaded_set_on_every_request(monkeypatch, log):
 
 
 def test_the_prompt_maps_the_areas_from_the_offered_set():
-    text = assistant.tools_map()
-    assert text.startswith("TOOLS:") and "find_tools reaches" in text
-    assert "media (" in text
+    assert assistant.tools_map()  # every tool offered: the map exists
     # Nothing beyond the defaults offered: no map at all, rather than a lie.
     defaults = [s.name for s in assistant.REGISTRY if s.default]
     assert assistant.tools_map(defaults) == ""

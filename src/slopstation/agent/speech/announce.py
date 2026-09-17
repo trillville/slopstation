@@ -45,7 +45,13 @@ class Announcer:
         self.handoff = threading.Lock()  # a wake and a restore never interleave
         self.follow_up_enabled = voice_cfg["followUpAfterAnnounce"]
         self._q: queue.Queue = queue.Queue()
-        threading.Thread(target=self._run, daemon=True, name="announcer").start()
+
+    def start(self) -> threading.Thread:
+        """Start delivering on a background thread. Items queued before this
+        are delivered first."""
+        thread = threading.Thread(target=self._run, daemon=True, name="announcer")
+        thread.start()
+        return thread
 
     def submit(self, operation):
         """OperationStore terminal hook, called off-thread."""
@@ -114,28 +120,16 @@ class Announcer:
             while self.session_active.is_set():
                 time.sleep(0.5)
             self.abort.clear()
-            if kind == "terminal":
-                item = next(
-                    (
-                        o
-                        for o in (
-                            self.store.pending_announcements() if self.store else []
-                        )
-                        if o["id"] == operation_id
-                    ),
-                    None,
+            try:
+                item = self._pending(kind, operation_id, key)
+            except Exception as e:
+                self.log.error(
+                    "announce_failed",
+                    operation=operation_id,
+                    err=str(e),
+                    fallback="skipped",
                 )
-            else:
-                item = next(
-                    (
-                        o
-                        for o in (
-                            self.store.pending_notifications() if self.store else []
-                        )
-                        if o["operation_id"] == operation_id and o["key"] == key
-                    ),
-                    None,
-                )
+                continue
             if item is None:
                 continue  # already heard via pull
             self._duck_room()
@@ -143,6 +137,20 @@ class Announcer:
                 self._deliver(kind, operation_id, key, item)
             finally:
                 self._restore_room()
+
+    def _pending(self, kind, operation_id, key):
+        """The queued item as the ledger holds it now, or None if already
+        delivered."""
+        if self.store is None:
+            return None
+        if kind == "terminal":
+            rows = self.store.pending_announcements()
+            return next((o for o in rows if o["id"] == operation_id), None)
+        rows = self.store.pending_notifications()
+        return next(
+            (o for o in rows if o["operation_id"] == operation_id and o["key"] == key),
+            None,
+        )
 
     def _duck_room(self):
         """Take the room down BEFORE the bulletin. The ducker runs off-thread

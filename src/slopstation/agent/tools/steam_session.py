@@ -621,7 +621,7 @@ def _print_qr(text):
 def _cli(argv):
     secrets = config.secrets()
     s = SteamSession(secrets)
-    cmd = argv[0] if argv else "status"
+    cmd = argv[0] if argv else ""
     if cmd == "enroll":
         return s.enroll()
     if not s.available():
@@ -640,19 +640,14 @@ def _cli(argv):
         except Exception as e:
             print(f"FAIL {e}")
             return 1
-    if cmd == "sessions":
-        print(json.dumps(s.sessions(), indent=2))
-    elif cmd == "downloads":
-        print(json.dumps(s.download_status(), indent=2))
-    elif cmd == "install" and len(argv) > 1:
+    if cmd == "install" and len(argv) > 1:
         print(json.dumps(s.install(int(argv[1])), indent=2))
-    else:
-        print(
-            "usage: python -m slopstation.agent.tools.steam_session enroll | token | sessions | downloads "
-            "| install <appid>"
-        )
-        return 2
-    return 0
+        return 0
+    print(
+        "usage: python -m slopstation.agent.tools.steam_session enroll | token "
+        "| install <appid>"
+    )
+    return 2
 
 
 if __name__ == "__main__":

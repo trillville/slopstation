@@ -147,7 +147,7 @@ def open_audio(voice: dict) -> tuple:
     waited = 0.0
     while True:
         try:
-            return build_audio(voice)
+            built = build_audio(voice)
         except DeviceMissing as e:
             # First miss, then every WAIT_QUIET_S: an outage is one event with
             # a duration, not a scroll of identical lines.
@@ -161,6 +161,9 @@ def open_audio(voice: dict) -> tuple:
                 )
         except Exception as e:
             log.error("audio_rebuild_failed", err=str(e), retry_s=RETRY_S)
+        else:
+            log("audio_ready", waited_s=round(waited))
+            return built
         time.sleep(RETRY_S)
         waited += RETRY_S
 

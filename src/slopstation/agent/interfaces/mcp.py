@@ -10,6 +10,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from slopstation import config
+from slopstation.agent.llm.registry import AREAS
 
 MAX_BODY = 64 * 1024
 # claude.ai gives a tool call 300 s and progress notifications do not extend
@@ -28,17 +29,12 @@ DRAIN_MAX = 1024 * 1024
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
 TOOL_NAME = "ask_slopstation"
+# Built from the registry's AREAS table; a new area needs no edit here.
 TOOL_DESCRIPTION = (
     "Talk to Slopstation, the assistant that runs the user's living-room "
-    "system. Use it for anything about that system: downloading or queueing "
-    "movies and TV shows, checking download or import status, torrents and "
-    "qBittorrent (what is downloading or seeding, pausing, cleaning up), disk "
-    "space and files under the media root, the Steam game library and store, "
-    "Steam downloads and installs, launching or quitting a game, the TV and "
-    "the PC's power and display, and Slopstation's own tracked operations. "
-    "When no purpose-built tool "
-    "fits, it can call Radarr, Sonarr, Prowlarr, qBittorrent and Steam's APIs "
-    "directly. It reaches real hardware and real download services.\n\n"
+    "system. Use it for anything about that system: "
+    + "; ".join(AREAS.values())
+    + ". It reaches real hardware and real download services.\n\n"
     "Send a SELF-CONTAINED request. Slopstation cannot see this conversation, "
     "so resolve references before sending: \"for the It's Always Sunny "
     'request just made, only season 3", never "just season 3".\n\n'
@@ -339,7 +335,10 @@ class RemoteServer(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def start(cfg, secrets, log):
+def start(services):
+    """Serve the MCP wrapper on a thread the owner runs. None when disabled or
+    the port is taken."""
+    cfg, secrets, log = services.cfg, services.secrets, services.log
     remote_cfg = cfg.get("remoteInterface") or {}
     if not remote_cfg.get("enabled"):
         return None
@@ -374,8 +373,6 @@ def start(cfg, secrets, log):
         return None
     server.app = app
     server.token = str(token)
-    threading.Thread(
-        target=server.serve_forever, daemon=True, name="remote-interface"
-    ).start()
+    services.serve(server, "remote-interface")
     log("lane_up", what="remote_interface", host=host, port=server.server_address[1])
     return server

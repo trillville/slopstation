@@ -76,15 +76,32 @@ test changes: patch through `monkeypatch` inside a test or a fixture, never by
 assignment and never at module scope, which runs during collection and leaks
 into the whole session.
 
+The suite's shared pieces live in `tests/helpers.py`: `CapturingLog` is the
+logger double (assert on `.events()` and `.find(name)`, never on prose);
+`wants("steam")` / `wants("audio")` skip a test the machine cannot run;
+`seed_lock(age)` plants a session lock; `toolkit_impls(dispatch, log, ...)`
+builds the assistant's tools for the given services; `fake_dispatch(turn,
+asked, dry_run)` is the two attributes of Dispatch a tool reads;
+`sonarr_episode(...)` is one episode row with only the keys given. A fake
+of a service (a Radarr client, a Steam session, the media service) lives in
+the file that uses it, shaped for what that file tests; the same name in two
+files is two fakes on purpose. `test_couch.py`'s `wire` scripts the gaming
+PC's ssh replies in order; `test_doctor.py`'s `rows` collects the doctor's
+report calls. Fake a dependency at its real boundary (an HTTP client, ssh, a
+file) and assert the outcome; a test that patches the function under test
+and checks the patch was called proves nothing.
+
 Several rules here are tests: `test_event_names` (the frozen vocabulary - a new
-event is added there, a rename is a deliberate edit there), `test_imports`
-(every module imports in a fresh interpreter with no config.json - run it after
-any move), `test_gaming_pc_scripts` (every `.ps1` parses; the PC-side contract
-agrees with itself; every gaming-pc script is included in `Deploy.ps1`, so one
-cannot be omitted from a successful deployment). `test_turn_ids.py` reads the
-SHIPPING `Dispatch.ps1`, so gaming-pc regex changes are drilled from here. mypy runs
-with `check_untyped_defs`, so a moved attribute fails there even in unannotated
-code.
+event is added there, a rename is a deliberate edit there; a name built at
+runtime is listed by hand in `tests/_events_scan.py`), `test_lanes` (the chord
+lane imports nothing under `slopstation.agent`), `test_imports` (every module
+imports in a fresh interpreter with no config.json - run it after any move),
+`test_gaming_pc_scripts` (every `.ps1` parses; the PC-side contract agrees with
+itself; every gaming-pc script is included in `Deploy.ps1`, so one cannot be
+omitted from a successful deployment). `test_turn_ids.py` reads the SHIPPING
+`Dispatch.ps1`, so gaming-pc regex changes are drilled from here. Those four
+freeze counts and source text on purpose; nothing else should. mypy runs with
+`check_untyped_defs`, so a moved attribute fails there even in unannotated code.
 `test_library` needs a local Steam (the gaming PC); `test_voice_session`
 needs audio devices (the K15); both skip themselves. The python in `ci.yml` and
 `pyproject.toml` MIRRORS the K15's interpreter and is not a floor:

@@ -4,7 +4,6 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
 from slopstation.agent.llm import assistant, confirm
 from slopstation.agent.tools import media_proton
 
@@ -219,11 +218,6 @@ class FakeMedia:
 
     def download_known(self, download_id):
         return download_id in {LINKED, SEEDING}
-
-
-@pytest.fixture
-def log():
-    return CapturingLog("voice")
 
 
 @pytest.fixture

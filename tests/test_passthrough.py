@@ -2,12 +2,11 @@
 
 import json
 import sys
-import time
 import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import fake_dispatch
 from slopstation import paths
 from slopstation.agent.llm import assistant, confirm
 from slopstation.agent.llm.toolsets import passthrough
@@ -25,17 +24,9 @@ class FakeClient:
 
 
 @pytest.fixture
-def log():
-    return CapturingLog("voice")
-
-
-@pytest.fixture
 def live(log):
     """A live (not dry-run) Toolkit over fake clients, inside one utterance."""
-    dispatch = types.SimpleNamespace(
-        dry_run=False,
-        utterance=types.SimpleNamespace(turn="aa0001", asked="pause the dune torrent"),
-    )
+    dispatch = fake_dispatch("aa0001", "pause the dune torrent", dry_run=False)
     media = types.SimpleNamespace(
         cfg={"radarrUrl": "http://r:7878"},
         radarr=FakeClient({"apiKey": "SECRET", "rows": [{"title": "Dune"}]}),
@@ -88,7 +79,8 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
     }
     first = tk.call("radarr_api", dict(ask))
     assert not first["ok"] and first["confirm"].startswith("POST /command")
-    assert '"MoviesSearch"' in first["confirm"] and media.radarr.calls == []
+    assert "acknowledgment" not in first  # the voice lane paraphrases it
+    assert media.radarr.calls == []
     # Same turn again: still refused - the model cannot answer itself.
     assert not tk.call("radarr_api", dict(ask))["ok"]
     assert log.find("tool_refused")[-1]["reason"] == "unconfirmed"
@@ -104,6 +96,40 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
     monkeypatch.setattr(confirm, "ASK_TTL_S", -1)
     dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
     assert not tk.call("radarr_api", other)["ok"]
+
+
+def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
+    """A passthrough write is recorded only in the ledger: one row per write,
+    terminal at once, never announced. A read leaves no row."""
+    from slopstation.agent.tools import operations
+
+    _, dispatch, media = live
+    store = operations.OperationStore(log)
+    tk = assistant.Toolkit(dispatch, log, media=media, operations=store)
+    tk.load(assistant.REGISTRY.names())
+    tk.call("radarr_api", {"method": "GET", "path": "system/status"})
+    assert store.all() == []
+    ask = {"method": "POST", "path": "command", "body": {"name": "RssSync"}}
+    tk.call("radarr_api", dict(ask))
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    assert tk.call("radarr_api", dict(ask))["ok"]
+    (row,) = store.all()
+    assert row["kind"] == "api_write" and row["authority"] == "radarr"
+    assert row["turn"] == "aa0002"  # the turn that said yes, pinned for the act
+    assert (
+        row["state"] == operations.SUCCEEDED and row["title"] == "radarr POST /command"
+    )
+    assert row["summary"] == "radarr POST /command ran."
+    assert row["announcement_pending"] is False and store.pending_announcements() == []
+    # A wire failure: the row says the write may have landed.
+    media.radarr.call = lambda *a, **k: (_ for _ in ()).throw(Exception("down"))
+    ask = {"method": "POST", "path": "command", "body": {"name": "RefreshMovie"}}
+    tk.call("radarr_api", dict(ask))
+    dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="yes")
+    assert not tk.call("radarr_api", dict(ask))["ok"]
+    row = store.all()[-1]
+    assert row["state"] == operations.FAILED and row["detail"].startswith("down - ")
+    assert "may or may not" in row["detail"], row["detail"]
 
 
 def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
@@ -154,6 +180,8 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
     }
     first = tk.call("radarr_api", dict(ask))
     assert not first["ok"] and first["confirm"].startswith("POST /manualimport")
+    # The body is in the question: on the text lane it is the whole reply.
+    assert '"movieId": 2' in first["confirm"], first["confirm"]
     assert not tk.call(
         "qbittorrent_api", {"method": "POST", "path": "torrents/add", "body": [1]}
     )["ok"]
@@ -163,9 +191,7 @@ def test_the_blocklist_and_the_shape_checks_refuse_outright(live, log):
 
 
 def test_dry_run_reports_a_mutation_without_sending_it(log):
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     media = types.SimpleNamespace(
         cfg={}, radarr=FakeClient(), sonarr=None, prowlarr=None, qbit=FakeClient()
     )
@@ -200,7 +226,7 @@ def test_dry_run_reports_a_mutation_without_sending_it(log):
 
 
 def test_offered_only_with_the_matching_service(log):
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
+    dispatch = fake_dispatch(None, dry_run=True)
     bare = assistant.Toolkit(dispatch, log)
     assert "steam_api" in bare.offered and "radarr_api" not in bare.offered
     without_qbit = types.SimpleNamespace(
@@ -538,4 +564,3 @@ def test_scrub_is_recursive_and_keeps_the_rest():
         passthrough.scrub("failed: https://api/x?key=KEY123&access_token=TOK&steamid=1")
         == "failed: https://api/x?key=[redacted]&access_token=[redacted]&steamid=1"
     )
-    assert time.time() > 0  # keeps the import honest

@@ -10,7 +10,6 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from slopstation import config
-from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.llm import assistant, backends
 from slopstation.agent.telemetry import traces
 
@@ -40,23 +39,19 @@ class Acknowledged:
 
     def call(self, name, args):
         out = self.toolkit.call(name, args)
-        if isinstance(out, dict) and out.get("acknowledgment"):
-            self.acknowledgments.append(str(out["acknowledgment"]))
+        if isinstance(out, dict):
+            shown = out.get("confirm") or out.get("acknowledgment")
+            if shown:
+                self.acknowledgments.append(str(shown))
         return out
 
 
 class TextApplication:
-    def __init__(
-        self, cfg, secrets, log, operations=None, steam=None, media=None, dry_run=False
-    ):
-        self.cfg = cfg
-        self.secrets = secrets
-        self.log = log
-        self.operations = operations
-        self.steam = steam
-        self.media = media
-        self.dry_run = dry_run
-        self.voice = cfg["voice"]
+    def __init__(self, services):
+        self.services = services  # builds each session's tools; answers /health
+        self.cfg, self.secrets, self.log = services.cfg, services.secrets, services.log
+        self.dry_run = services.dry_run
+        self.voice = self.cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.system_text = None  # built with the first session's offered set
         self.sessions = OrderedDict()
@@ -71,15 +66,8 @@ class TextApplication:
             effort=self.voice["assistantReasoningEffort"],
             voice=self.voice,
         )
-        dispatch = Dispatch(self.cfg, self.log, dry_run=self.dry_run)
-        toolkit = assistant.Toolkit(
-            dispatch,
-            self.log,
-            operations=self.operations,
-            voice=self.voice,
-            steam=self.steam,
-            media=self.media,
-        )
+        dispatch = self.services.dispatch()
+        toolkit = self.services.toolkit(dispatch)
         if self.system_text is None:
             # The offered set is the same for every session of this process,
             # so the prompt is built once and stays cache-stable.
@@ -174,6 +162,16 @@ class TextHandler(BaseHTTPRequestHandler):
         expected = "Bearer " + self.server.token
         return hmac.compare_digest(supplied, expected)
 
+    def do_GET(self):
+        """GET /health: what the voice process has running. Needs the token."""
+        if self.path != "/health":
+            self._json(404, {"ok": False, "error": "not found"})
+            return
+        if not self._authorized():
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
+        self._json(200, {"ok": True, **self.server.app.services.health()})
+
     def do_POST(self):
         if self.path != "/v1/chat":
             self._json(404, {"ok": False, "error": "not found"})
@@ -202,7 +200,10 @@ class TextHandler(BaseHTTPRequestHandler):
             self._json(500, {"ok": False, "error": "assistant request failed"})
 
 
-def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=False):
+def start(services):
+    """Serve the text interface on a thread the owner runs. None when disabled
+    or the port is taken."""
+    cfg, secrets, log = services.cfg, services.secrets, services.log
     text_cfg = cfg.get("textInterface") or {}
     if not text_cfg.get("enabled"):
         return None
@@ -225,7 +226,7 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=Fa
         return None
     host = str(text_cfg.get("host", "127.0.0.1"))
     port = int(text_cfg.get("port", 8765))
-    app = TextApplication(cfg, secrets, log, operations, steam, media, dry_run)
+    app = TextApplication(services)
     try:
         server = TextServer((host, port), TextHandler)
     except OSError as e:
@@ -233,14 +234,12 @@ def start(cfg, secrets, log, operations=None, steam=None, media=None, dry_run=Fa
         return None
     server.app = app
     server.token = str(token)
-    threading.Thread(
-        target=server.serve_forever, daemon=True, name="text-interface"
-    ).start()
+    services.serve(server, "text-interface")
     log(
         "lane_up",
         what="text_interface",
         host=host,
         port=server.server_address[1],
-        dry_run=dry_run or None,
+        dry_run=services.dry_run or None,
     )
     return server

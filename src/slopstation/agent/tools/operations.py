@@ -2,7 +2,7 @@
 
 import time
 import uuid
-from typing import Any
+from typing import Any, TypedDict
 
 from slopstation import paths, statefile
 
@@ -22,6 +22,75 @@ CANCELED = "CANCELED"
 ACTIVE = {QUEUED, RUNNING, UNKNOWN}
 TERMINAL = {SUCCEEDED, FAILED, CANCELED}
 STATES = ACTIVE | TERMINAL
+
+# progress["phase"] values, in the order an acquisition moves through them. The
+# two search phases belong to a search-only promise.
+PHASES = (
+    "searching",
+    "waiting_for_match",
+    "grabbed",
+    "downloading",
+    "importing",
+    "ready",
+    "searched",
+    "search_failed",
+)
+
+
+# Keys track() copies from a MediaService._submission result into the row's
+# metadata. The other keys are the receipt and the row's own columns.
+METADATA_KEYS = (
+    "catalog_id",
+    "preset",
+    "profile",
+    "seasons",
+    "all_seasons",
+    "baseline_file_id",
+    "baseline_episode_files",
+    "search_pending",
+    "command_ids",
+    "episode_ids",
+    "episodes",
+    "promise",
+    "scope_label",
+)
+
+
+class Notification(TypedDict, total=False):
+    """One spoken heads-up about an operation, keyed so it is said once."""
+
+    operation_id: str
+    key: str
+    summary: str
+    pending: bool
+    created: int
+    delivered: int | None
+
+
+class OperationRow(TypedDict, total=False):
+    """One row of operations.json. Keys after `delivered` are optional: old
+    rows lack them, and a row is never rejected for what it lacks. Unknown keys
+    survive every write."""
+
+    id: str
+    turn: str | None
+    kind: str
+    authority: str
+    external_ref: str
+    title: str
+    state: str  # STATES, or one a newer build wrote
+    progress: dict[str, Any]  # "phase" in PHASES, plus what the server said
+    detail: str
+    created: int
+    updated: int
+    last_observed: int | None
+    finished: int | None
+    announcement_pending: bool
+    delivered: int | None
+    summary: str
+    metadata: dict[str, Any]
+    work_id: str
+    notifications: list[Notification]
 
 
 def _summary(operation, state):
@@ -64,34 +133,42 @@ class OperationStore:
         self.on_terminal = on_terminal
         self.on_notification = on_notification
         self.path = operations_file()
+        # A ledger that cannot be read is refused here and the file left as it
+        # is.
+        with statefile.guard(self.path):
+            self._load()
 
-    def _load(self):
-        rows = statefile.load(self.path, [])
-        return rows if isinstance(rows, list) else []
+    def _load(self) -> list[OperationRow]:
+        rows = statefile.load_strict(self.path, [])
+        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+            raise ValueError(f"{self.path.name} is not a list of operations")
+        return rows
 
-    def _save(self, rows):
+    def _save(self, rows: list[OperationRow]) -> None:
         statefile.write(self.path, rows)
 
-    def all(self):
+    def all(self) -> list[OperationRow]:
         with statefile.guard(self.path):
-            return [dict(r) for r in self._load()]
+            return [r.copy() for r in self._load()]
 
-    def recent(self, limit=10):
+    def recent(self, limit=10) -> list[OperationRow]:
         rows = self.all()
         rows.sort(key=lambda r: r.get("updated", 0), reverse=True)
         return rows[:limit]
 
-    def active(self, kind=None):
+    def active(self, kind=None) -> list[OperationRow]:
         return [
             r
             for r in self.all()
             if r.get("state") in ACTIVE and (kind is None or r.get("kind") == kind)
         ]
 
-    def get(self, operation_id):
+    def get(self, operation_id) -> OperationRow | None:
         return next((r for r in self.all() if r.get("id") == operation_id), None)
 
-    def update_metadata(self, operation_id, updates=None, remove=()):
+    def update_metadata(
+        self, operation_id, updates=None, remove=()
+    ) -> OperationRow | None:
         now = int(time.time())
         with statefile.guard(self.path):
             rows = self._load()
@@ -103,9 +180,9 @@ class OperationStore:
             for key in remove:
                 metadata.pop(key, None)
             if metadata != row.get("metadata", {}):
-                row.update(metadata=metadata, updated=now)
+                row.update({"metadata": metadata, "updated": now})
                 self._save(rows)
-            return dict(row)
+            return row.copy()
 
     def track_external(
         self,
@@ -129,8 +206,7 @@ class OperationStore:
             raise ValueError(f"new operation state must be active, got {state}")
         external_ref = str(external_ref)
         now = int(time.time())
-        created = None
-        reused = None
+        reused: OperationRow | None = None
         previous = None
         with statefile.guard(self.path):
             rows = self._load()
@@ -146,20 +222,21 @@ class OperationStore:
                 None,
             )
             if existing is not None:
-                updates: dict[str, Any] = {}
+                updates: OperationRow = {}
                 if existing.get("state") != state:
                     previous = existing["state"]
-                    updates.update(state=state, detail=detail)
+                    updates.update({"state": state, "detail": detail})
                 if metadata is not None and existing.get("metadata") != metadata:
                     updates["metadata"] = metadata
                 if updates:
-                    existing.update(updates, updated=now)
+                    updates["updated"] = now
+                    existing.update(updates)
                     if observed:
                         existing["last_observed"] = now
                     self._save(rows)
-                reused = dict(existing)
+                reused = existing.copy()
             else:
-                created = {
+                created: OperationRow = {
                     "id": "op-" + uuid.uuid4().hex[:12],
                     "turn": turn,
                     "kind": kind,
@@ -224,22 +301,22 @@ class OperationStore:
 
     def observe(
         self, operation_id, state, progress=None, detail="", summary=None, announce=True
-    ):
+    ) -> OperationRow | None:
         """Persist one authority observation and fire on the first terminal edge."""
         if state not in STATES:
             raise ValueError(f"unknown operation state {state}")
         now = int(time.time())
-        terminal = None
+        terminal: OperationRow | None = None
         changed = False
         previous = None
-        out = None
+        out: OperationRow | None = None
         with statefile.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
                 return None
             if row.get("state") in TERMINAL:
-                return dict(row)
+                return row.copy()
             previous = row.get("state")
             progress = progress or {}
             changed = (
@@ -249,17 +326,26 @@ class OperationStore:
             )
             row["last_observed"] = now
             if changed:
-                row.update(state=state, progress=progress, detail=detail, updated=now)
+                row.update(
+                    {
+                        "state": state,
+                        "progress": progress,
+                        "detail": detail,
+                        "updated": now,
+                    }
+                )
             if state in TERMINAL and previous != state:
                 row.update(
-                    finished=now,
-                    announcement_pending=announce,
-                    summary=summary or _summary(row, state),
+                    {
+                        "finished": now,
+                        "announcement_pending": announce,
+                        "summary": summary or _summary(row, state),
+                    }
                 )
                 if announce:
-                    terminal = dict(row)
+                    terminal = row.copy()
             self._save(rows)
-            out = dict(row)
+            out = row.copy()
         if changed:
             self.log(
                 "operation_observed",
@@ -279,16 +365,15 @@ class OperationStore:
                 )
         return out
 
-    def pending_announcements(self):
+    def pending_announcements(self) -> list[OperationRow]:
         return [
             r
             for r in self.all()
             if r.get("state") in TERMINAL and r.get("announcement_pending")
         ]
 
-    def notify(self, operation_id, key, summary):
+    def notify(self, operation_id, key, summary) -> Notification | None:
         now = int(time.time())
-        notification = None
         with statefile.guard(self.path):
             rows = self._load()
             row = next((r for r in rows if r.get("id") == operation_id), None)
@@ -297,7 +382,7 @@ class OperationStore:
             notifications = list(row.get("notifications") or [])
             if any(item.get("key") == key for item in notifications):
                 return None
-            notification = {
+            notification: Notification = {
                 "operation_id": operation_id,
                 "key": key,
                 "summary": summary,
@@ -306,27 +391,27 @@ class OperationStore:
                 "delivered": None,
             }
             notifications.append(notification)
-            row.update(notifications=notifications, updated=now)
+            row.update({"notifications": notifications, "updated": now})
             self._save(rows)
         self.log("operation_notification", operation=operation_id, key=key)
         if self.on_notification is not None:
             try:
-                self.on_notification(dict(notification))
+                self.on_notification(notification.copy())
             except Exception as e:
                 self.log.error(
                     "operation_announce_hook_failed", operation=operation_id, err=str(e)
                 )
-        return dict(notification)
+        return notification.copy()
 
-    def pending_notifications(self):
+    def pending_notifications(self) -> list[Notification]:
         return [
-            dict(item)
+            item.copy()
             for row in self.all()
             for item in row.get("notifications") or []
             if item.get("pending")
         ]
 
-    def mark_notification_delivered(self, operation_id, key):
+    def mark_notification_delivered(self, operation_id, key) -> bool:
         now = int(time.time())
         with statefile.guard(self.path):
             rows = self._load()
@@ -336,25 +421,33 @@ class OperationStore:
             changed = False
             for item in row.get("notifications") or []:
                 if item.get("key") == key and item.get("pending"):
-                    item.update(pending=False, delivered=now)
+                    item.update({"pending": False, "delivered": now})
                     changed = True
             if changed:
                 row["updated"] = now
                 self._save(rows)
             return changed
 
-    def mark_delivered(self, operation_id):
+    def mark_delivered(self, operation_id) -> bool:
         now = int(time.time())
         with statefile.guard(self.path):
             rows = self._load()
             for row in rows:
                 if row.get("id") == operation_id:
-                    row.update(announcement_pending=False, delivered=now, updated=now)
+                    row.update(
+                        {
+                            "announcement_pending": False,
+                            "delivered": now,
+                            "updated": now,
+                        }
+                    )
                     self._save(rows)
                     return True
         return False
 
-    def for_assistant(self, scope="active", limit=10, offset=0, acknowledge=False):
+    def for_assistant(
+        self, scope="active", limit=10, offset=0, acknowledge=False
+    ) -> tuple[list[dict], int]:
         """One page of the scope's rows as the model reads them, and the
         scope's total. Only the rows on the page are acknowledged: a bulletin
         on a page nobody heard stays pending."""
@@ -391,35 +484,17 @@ class OperationStore:
         ], total
 
 
-def track(store, submission, turn=None):
+def track(store, submission: dict, turn=None) -> dict:
     """Record one accepted external submission. The mutation already happened,
     so a failed local write reports itself and never invites a second one."""
     if store is None or submission.get("already_available"):
-        return submission
+        return dict(submission)
     phase = submission.get("phase") or "searching"
     authority = str(submission["authority"]).title()
     detail = (
         submission.get("detail") or f"{authority} accepted the request and is searching"
     )
-    metadata = {
-        k: submission[k]
-        for k in (
-            "catalog_id",
-            "preset",
-            "profile",
-            "seasons",
-            "all_seasons",
-            "baseline_file_id",
-            "baseline_episode_files",
-            "search_pending",
-            "command_ids",
-            "episode_ids",
-            "episodes",
-            "promise",
-            "scope_label",
-        )
-        if k in submission
-    }
+    metadata = {k: submission[k] for k in METADATA_KEYS if k in submission}
     try:
         operation = store.track_external(
             submission["kind"],
@@ -562,6 +637,24 @@ def record_deleted(store, rows, result=None, episodes=None):
                 )
             store.update_metadata(operation["id"], update)
     return result
+
+
+def owned_seasons() -> dict:
+    """series id -> seasons an active series operation owns; None means the
+    whole series. An unreadable ledger owns nothing, so a reader over- reports,
+    which is the safe direction."""
+    owned: dict = {}
+    rows = statefile.load(operations_file(), [])
+    for row in rows if isinstance(rows, list) else []:
+        if row.get("kind") != "series_acquisition" or row.get("state") not in ACTIVE:
+            continue
+        seasons = (row.get("metadata") or {}).get("seasons")
+        key = str(row.get("external_ref"))
+        if seasons is None or owned.get(key, ()) is None:
+            owned[key] = None
+        else:
+            owned.setdefault(key, set()).update(int(n) for n in seasons)
+    return owned
 
 
 if __name__ == "__main__":

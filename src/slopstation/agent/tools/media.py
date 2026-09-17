@@ -1,6 +1,7 @@
 """Request and inspect media through Radarr and Sonarr."""
 
 import argparse
+import dataclasses
 import datetime
 import json
 from pathlib import Path
@@ -27,8 +28,27 @@ from slopstation.agent.tools.media_proton import (
     ProtonPortMonitor,
     read_proton_port_state,
 )
+from slopstation.agent.tools.operations import (
+    CANCELED,
+    FAILED,
+    RUNNING,
+    SUCCEEDED,
+)
 
 PRESETS = ("default", "1080p", "2160p")
+
+
+@dataclasses.dataclass(frozen=True)
+class Observation:
+    """One look at Radarr or Sonarr for a tracked request. `state` is an
+    operations state: RUNNING while the server still holds the work; SUCCEEDED,
+    FAILED or CANCELED once it does not. `metadata_ready` is False while Sonarr
+    is still listing the episodes a request covers."""
+
+    state: str
+    progress: dict[str, Any] = dataclasses.field(default_factory=dict)
+    detail: str = ""
+    metadata_ready: bool = True
 
 
 def _command(client, command_id):
@@ -987,7 +1007,7 @@ class MediaService:
                 baseline_episode_files=baseline_episode_files,
                 episode_ids=episode_ids,
             )
-            if observation["complete"]:
+            if observation.state == SUCCEEDED:
                 return self._submission(
                     "series",
                     series_id,
@@ -1003,7 +1023,7 @@ class MediaService:
                 )
             if episode_ids:
                 command_ids = self._search("series", series_id, episode_ids=episode_ids)
-            elif observation["metadata_ready"]:
+            elif observation.metadata_ready:
                 command_ids = self._search_series(series_id, seasons)
             else:
                 search_pending = True
@@ -1075,14 +1095,14 @@ class MediaService:
         work_id=None,
         scope_label=None,
         episodes=None,
-    ):
+    ) -> dict:
         """What one accepted piece of work looks like to the operation store.
         A request carries its preset and profile and a season scope, or the
         (season, episode) pairs it asked for; work on a held title (a grab, a
         search, an import) carries the phase it starts in and, for a series,
         the exact episodes it covers. `promise` is what done means: media on
         disk for the scope, or a search run."""
-        out = {
+        out: dict = {
             "ok": True,
             "kind": f"{kind}_acquisition",
             "authority": _kind(kind)["authority"],
@@ -1268,17 +1288,17 @@ class MediaService:
         movie = self._one(self.radarr.get(f"movie/{int(movie_id)}"), "Radarr", "movie")
         if movie.get("hasFile"):
             if baseline_file_id is None:
-                return {
-                    "complete": True,
-                    "progress": {"phase": "ready", "percent": 100},
-                    "detail": "Radarr reports the movie imported",
-                }
+                return Observation(
+                    SUCCEEDED,
+                    {"phase": "ready", "percent": 100},
+                    "Radarr reports the movie imported",
+                )
             if self._movie_file_id(int(movie_id)) != int(baseline_file_id):
-                return {
-                    "complete": True,
-                    "progress": {"phase": "ready", "percent": 100},
-                    "detail": "Radarr imported the requested movie upgrade",
-                }
+                return Observation(
+                    SUCCEEDED,
+                    {"phase": "ready", "percent": 100},
+                    "Radarr imported the requested movie upgrade",
+                )
         records = self._queue_records(self.radarr, "movieId", int(movie_id))
         percent = self._queue_progress(records)
         if records:
@@ -1296,21 +1316,15 @@ class MediaService:
             except MediaError as e:
                 if promise != "search":
                     raise
-                return {
-                    "complete": True,
-                    "failed": True,
-                    "progress": {"phase": "search_failed"},
-                    "detail": str(e),
-                }
+                return Observation(FAILED, {"phase": "search_failed"}, str(e))
             if promise == "search" and phase not in ("searching", "importing"):
                 # The search ran and the client holds nothing for it: that
                 # is the promise, kept; the old file is what it found.
-                return {
-                    "complete": True,
-                    "progress": {"phase": "searched"},
-                    "detail": "Radarr searched and found nothing better than "
-                    "the file it holds",
-                }
+                return Observation(
+                    SUCCEEDED,
+                    {"phase": "searched"},
+                    "Radarr searched and found nothing better than the file it holds",
+                )
             progress = {"phase": phase}
             detail = (
                 "Radarr is importing the requested movie file"
@@ -1322,7 +1336,7 @@ class MediaService:
                 if phase == "searching"
                 else "no acceptable movie release is available yet; Radarr is watching"
             )
-        return {"complete": False, "progress": progress, "detail": detail}
+        return Observation(RUNNING, progress, detail)
 
     def _target_episodes(
         self, rows, seasons=None, now=None, monitored_only=True, episode_ids=None
@@ -1380,17 +1394,17 @@ class MediaService:
             # rows that exist are unmonitored by design, not cancelled.
             episode_ids, missing = self._episode_ids_for(rows, self._episodes(episodes))
             if missing:
-                return {
-                    "complete": False,
-                    "progress": {
+                return Observation(
+                    RUNNING,
+                    {
                         "episodes": 0,
                         "total_episodes": 0,
                         "percent": 0,
                         "phase": "searching",
                     },
-                    "detail": "Sonarr is still populating episode metadata",
-                    "metadata_ready": False,
-                }
+                    "Sonarr is still populating episode metadata",
+                    metadata_ready=False,
+                )
         metadata_ready = bool(episode_ids) or self._episode_metadata_ready(
             rows, seasons
         )
@@ -1406,13 +1420,11 @@ class MediaService:
             ]
         )
         if metadata_ready and scope and not any(row.get("monitored") for row in scope):
-            return {
-                "complete": False,
-                "canceled": True,
-                "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
-                "detail": "Sonarr reports the requested episodes are unmonitored",
-                "metadata_ready": True,
-            }
+            return Observation(
+                CANCELED,
+                {"episodes": 0, "total_episodes": 0, "percent": 0},
+                "Sonarr reports the requested episodes are unmonitored",
+            )
         targets = self._target_episodes(rows, seasons, now, episode_ids=episode_ids)
         baseline = baseline_episode_files or {}
         total = len(targets)
@@ -1473,24 +1485,19 @@ class MediaService:
                     if promise != "search":
                         raise
                     progress["phase"] = "search_failed"
-                    return {
-                        "complete": True,
-                        "failed": True,
-                        "progress": progress,
-                        "detail": str(e),
-                        "metadata_ready": metadata_ready,
-                    }
+                    return Observation(
+                        FAILED, progress, str(e), metadata_ready=metadata_ready
+                    )
                 if promise == "search" and phase not in ("searching", "importing"):
                     # The search ran and the client holds nothing for it:
                     # that is the promise, kept, whatever it found.
                     progress["phase"] = "searched"
-                    return {
-                        "complete": True,
-                        "progress": progress,
-                        "detail": f"Sonarr searched; {ready} of {total} episodes "
-                        "gained a file",
-                        "metadata_ready": metadata_ready,
-                    }
+                    return Observation(
+                        SUCCEEDED,
+                        progress,
+                        f"Sonarr searched; {ready} of {total} episodes gained a file",
+                        metadata_ready=metadata_ready,
+                    )
                 progress["phase"] = phase
                 detail = (
                     f"Sonarr is importing episodes; {ready} of {total} are ready"
@@ -1503,12 +1510,12 @@ class MediaService:
                     else "no acceptable episode release is available yet; Sonarr is watching"
                 )
             complete = False
-        return {
-            "complete": complete,
-            "progress": progress,
-            "detail": detail,
-            "metadata_ready": metadata_ready,
-        }
+        return Observation(
+            SUCCEEDED if complete else RUNNING,
+            progress,
+            detail,
+            metadata_ready=metadata_ready,
+        )
 
     def observe(self, operation):
         external_ref = int(operation["external_ref"])
@@ -1782,34 +1789,47 @@ def _arr_clients(media_cfg, secrets):
     ]
     if missing:
         raise MediaConfigurationError("missing media API keys: " + ", ".join(missing))
+    for name in ("radarrUrl", "sonarrUrl"):
+        if not isinstance(media_cfg.get(name), str) or not media_cfg[name]:
+            raise MediaConfigurationError(f"media.{name} is missing")
     return tuple(
         ArrClient(name, media_cfg[f"{name.lower()}Url"], secrets[key])
         for name, key in (("Radarr", "radarrApiKey"), ("Sonarr", "sonarrApiKey"))
     )
 
 
-def proton_port_monitor_from_config(cfg, secrets, log):
-    media_cfg = _media_cfg(cfg, "protonPortSync", default=False)
+def _optional_monitor(cfg, log, flag, what, build, default=True):
+    """A monitor from the media config, or None: off by config, or refused with
+    a lane_disabled line."""
+    media_cfg = _media_cfg(cfg, flag, default)
     if media_cfg is None:
         return None
     try:
-        return ProtonPortMonitor(
+        return build(media_cfg)
+    except MediaConfigurationError as e:
+        log.warn("lane_disabled", what=what, reason=str(e))
+        return None
+
+
+def proton_port_monitor_from_config(cfg, secrets, log):
+    return _optional_monitor(
+        cfg,
+        log,
+        "protonPortSync",
+        "proton_port_sync",
+        lambda media_cfg: ProtonPortMonitor(
             _qbit_from_config(media_cfg, secrets),
             log,
             poll_s=_positive(media_cfg, "pollS", 30),
             interface=str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN")),
             exe=media_cfg.get("qbittorrentExe") or None,
-        )
-    except MediaConfigurationError as e:
-        log.warn("lane_disabled", what="proton_port_sync", reason=str(e))
-        return None
+        ),
+        default=False,
+    )
 
 
 def media_health_monitor_from_config(cfg, secrets, log, operations=None):
-    media_cfg = _media_cfg(cfg, "healthSync")
-    if media_cfg is None:
-        return None
-    try:
+    def build(media_cfg):
         # 0 turns the reaping off; the watch still reports stalls.
         grace = media_cfg.get("stalledGraceMinutes", 30)
         if isinstance(grace, bool) or not isinstance(grace, (int, float)) or grace < 0:
@@ -1823,9 +1843,8 @@ def media_health_monitor_from_config(cfg, secrets, log, operations=None):
             operations=operations,
             stall_grace_s=60 * grace,
         )
-    except (MediaConfigurationError, KeyError) as e:
-        log.warn("lane_disabled", what="media_health_sync", reason=str(e))
-        return None
+
+    return _optional_monitor(cfg, log, "healthSync", "media_health_sync", build)
 
 
 def _media_root(env_path):
@@ -1843,10 +1862,7 @@ def _media_root(env_path):
 
 
 def disk_health_monitor_from_config(cfg, log):
-    media_cfg = _media_cfg(cfg, "diskWatch")
-    if media_cfg is None:
-        return None
-    try:
+    def build(media_cfg):
         poll_s = _positive(media_cfg, "diskPollS", DISK_POLL_S)
         warn_gb = _positive(media_cfg, "diskFreeWarnGb", FREE_WARN_BYTES // 1024**3)
         env_path = paths.HOME / "media" / ".env"
@@ -1855,18 +1871,17 @@ def disk_health_monitor_from_config(cfg, log):
             raise MediaConfigurationError(
                 f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
             )
-    except MediaConfigurationError as e:
-        log.warn("lane_disabled", what="disk_watch", reason=str(e))
-        return None
-    # Both volumes matter and are normally different: the library fills
-    # from downloads, the checkout drive holds the config databases and
-    # the event log. Anchors, so one volume named twice is watched once.
-    mounts = sorted(
-        {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
-    )
-    return DiskHealthMonitor(
-        mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
-    )
+        # The library volume fills from downloads; the checkout volume holds
+        # the databases and the event log. Anchors, so one volume named twice
+        # is watched once.
+        mounts = sorted(
+            {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
+        )
+        return DiskHealthMonitor(
+            mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
+        )
+
+    return _optional_monitor(cfg, log, "diskWatch", "disk_watch", build)
 
 
 def from_config(cfg, secrets, log):
@@ -1913,7 +1928,9 @@ def from_config(cfg, secrets, log):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Inspect and request media")
+    parser = argparse.ArgumentParser(
+        description="Check the media stack and Proton's port"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("doctor", "proton-port"):
         sub.add_parser(name)
@@ -1922,30 +1939,6 @@ def main(argv=None):
     qbit_port = sub.add_parser("set-qbit-port")
     qbit_port.add_argument("port", type=int)
     qbit_port.add_argument("--execute", action="store_true")
-    find = sub.add_parser("find")
-    find.add_argument("kind", choices=("movie", "series"))
-    find.add_argument("query")
-    library = sub.add_parser("library")
-    library.add_argument("kind", choices=("movie", "series"))
-    library.add_argument("catalog_id", type=int)
-    movie = sub.add_parser("request-movie")
-    movie.add_argument("tmdb_id", type=int)
-    movie.add_argument("--preset", choices=PRESETS, default="default")
-    movie.add_argument("--execute", action="store_true")
-    series = sub.add_parser("request-series")
-    series.add_argument("tvdb_id", type=int)
-    series.add_argument("--preset", choices=PRESETS, default="default")
-    series.add_argument("--season", action="append", type=int, dest="seasons")
-    series.add_argument("--execute", action="store_true")
-    delete_movie = sub.add_parser("delete-movie")
-    delete_movie.add_argument("tmdb_id", type=int)
-    delete_movie.add_argument("--execute", action="store_true")
-    delete_series = sub.add_parser("delete-series")
-    delete_series.add_argument("tvdb_id", type=int)
-    scope = delete_series.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--season", action="append", type=int, dest="seasons")
-    scope.add_argument("--all-seasons", action="store_true")
-    delete_series.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
 
     log = logbook.logger("voice")
@@ -1976,53 +1969,6 @@ def main(argv=None):
             print(json.dumps(result, indent=2))
             return 0 if result["state"] in ("active", "inactive") else 1
 
-        service = from_config(cfg, secrets, log)
-        if service is None:
-            print("media is disabled or its configuration/API keys are incomplete")
-            return 1
-        if args.command == "find":
-            result = service.find(args.kind, args.query)
-        elif args.command == "library":
-            result = service.library(args.kind, args.catalog_id)
-        elif not args.execute:
-            print("change not submitted; repeat with --execute")
-            return 2
-        else:
-            from slopstation.agent.tools import operations
-
-            store = operations.OperationStore(log)
-            if args.command == "request-movie":
-                result = operations.track(
-                    store, service.request_movie(args.tmdb_id, args.preset)
-                )
-            elif args.command == "request-series":
-                result = operations.track(
-                    store,
-                    service.request_series(args.tvdb_id, args.preset, args.seasons),
-                )
-            elif args.command == "delete-movie":
-                covered, command_ids = operations.covered_by_delete(
-                    store, "movie", args.tmdb_id
-                )
-                result = service.delete_movie(args.tmdb_id, command_ids)
-                operations.record_deleted(store, covered, result)
-            else:
-                covered, command_ids = operations.covered_by_delete(
-                    store,
-                    "series",
-                    args.tvdb_id,
-                    args.seasons,
-                    args.all_seasons,
-                    service.episodes_in_seasons(args.tvdb_id, args.seasons)
-                    if not args.all_seasons
-                    else [],
-                )
-                result = service.delete_series(
-                    args.tvdb_id, args.seasons, args.all_seasons, command_ids
-                )
-                operations.record_deleted(store, covered, result)
-        print(json.dumps(result, indent=2))
-        return 0
     except MediaError as e:
         print(f"media request failed: {e}")
         return 1

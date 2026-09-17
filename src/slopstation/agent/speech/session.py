@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from slopstation import config, logbook
-from slopstation.agent.speech import keyterms
+from slopstation.agent.speech import keyterms, tool_schemas
 from slopstation.agent.telemetry import sentry, traces
 from slopstation.agent.tools import library, titles
 
@@ -151,29 +151,24 @@ class Session:
 
     def __init__(
         self,
-        cfg,
-        secrets,
+        services,
         matcher,
-        dry_run,
         input_idx,
         output_idx,
         capture=None,
-        operations=None,
         ack=None,
-        steam=None,
-        media=None,
         on_end_session=None,
         room=None,
     ):
-        self.cfg, self.secrets, self.matcher = cfg, secrets, matcher
-        self.dry_run = dry_run
+        self.services, self.matcher = services, matcher
+        self.cfg, self.secrets = services.cfg, services.secrets
+        self.dry_run = services.dry_run
         self.input_idx, self.output_idx = input_idx, output_idx
         self.capture = capture
-        self.operations, self.ack, self.steam = operations, ack, steam
-        self.media = media
+        self.ack = ack
         self.on_end_session = on_end_session  # the room ducker's restore
         self.room = room  # voice.RoomState, or None when ducking is off
-        self.voice = cfg["voice"]
+        self.voice = self.cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.context = None  # the LLM lane's, once built
         self.toolkit = None  # the LLM lane's tools, once built
@@ -198,14 +193,13 @@ class Session:
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
         from pipecat.workers.runner import WorkerRunner
 
-        from slopstation.agent.dispatch import Dispatch
         from slopstation.agent.llm.assistant import PROVIDER_KEY
         from slopstation.agent.speech.audio import wake_phrase as _wake_phrase
         from slopstation.agent.speech.grammar_gate import GrammarGate
         from slopstation.agent.speech.level import RoomLevel
         from slopstation.agent.speech.preroll import PrerollFeeder
 
-        cfg, secrets, voice = self.cfg, self.secrets, self.voice
+        secrets, voice = self.secrets, self.voice
         catalog = library.Catalog.load()
         game_terms = keyterms.load_titles(voice["keytermCount"], catalog.installed)
         wake_phrase = _wake_phrase(voice["wakeModel"])
@@ -255,9 +249,7 @@ class Session:
         level = RoomLevel(
             floor_db=float(voice.get("chatterFloorDb", 0) or 0), log=log, loud=loud
         )
-        dispatcher = Dispatch(
-            cfg, log, dry_run=self.dry_run, on_end_session=self.on_end_session
-        )
+        dispatcher = self.services.dispatch(on_end_session=self.on_end_session)
         assistant_live = config.real_key(secrets.get(PROVIDER_KEY[self.provider]))
         gate = GrammarGate(
             self.matcher,
@@ -395,7 +387,6 @@ class Session:
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
         from slopstation.agent.llm.assistant import (
-            Toolkit,
             server_tools,
             system_instruction,
         )
@@ -412,7 +403,7 @@ class Session:
             assert self.toolkit is not None
             return ToolsSchema(
                 # -> one tool_call event per call
-                standard_tools=self.toolkit.function_schemas(log),
+                standard_tools=tool_schemas.pipecat_schemas(self.toolkit, log),
                 custom_tools={AdapterType.OPENAI: native} if native else None,
             )
 
@@ -422,14 +413,9 @@ class Session:
         # on_load runs on the tool's worker thread (asyncio.to_thread), not
         # the loop: set_tools is one attribute assignment, so that is safe,
         # and the loop only reads the list after the tool result lands.
-        self.toolkit = Toolkit(
+        self.toolkit = self.services.toolkit(
             dispatcher,
-            log,
-            operations=self.operations,
             on_stop_listening=gate.request_stop,
-            voice=voice,
-            steam=self.steam,
-            media=self.media,
             on_load=lambda: (
                 self.context.set_tools(tools_schema())
                 if self.context is not None

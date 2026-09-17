@@ -9,7 +9,7 @@ import pytest
 
 import helpers
 from helpers import CapturingLog
-from slopstation import config, events, logbook
+from slopstation import checkin, config, events, logbook
 from slopstation.agent import voice
 from slopstation.agent.speech import announce
 from slopstation.agent.telemetry import sentry
@@ -47,6 +47,9 @@ class FakeListener:
     def __init__(self, pa, voice, idx):
         pass
 
+    def rebind(self, pa, idx):
+        pass
+
     def wait_for_wake_capture(self, threshold, on_quiet=None, interrupt=None):
         if FakeListener.wakes:
             return FakeListener.wakes.pop(0)
@@ -71,6 +74,12 @@ class FakeAnnouncer:
 
     def abort_current(self):
         pass
+
+    def start(self):
+        return threading.Thread(name="announcer")  # never run
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeOperationStore:
@@ -98,10 +107,15 @@ class FakeSteamMonitor:
         self.steam = steam
         self.poll_s = 30
         self.started = False
+        self.stopped = False
         FakeSteamMonitor.made.append(self)
 
     def start(self):
         self.started = True
+        return threading.Thread(name="fake-monitor")  # never run
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeMediaMonitor:
@@ -111,10 +125,15 @@ class FakeMediaMonitor:
     def __init__(self, store, service, log, poll_s=30):
         self.poll_s = poll_s
         self.started = False
+        self.stopped = False
         FakeMediaMonitor.made.append(self)
 
     def start(self):
         self.started = True
+        return threading.Thread(name="fake-monitor")  # never run
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeProtonPortMonitor:
@@ -123,10 +142,15 @@ class FakeProtonPortMonitor:
     def __init__(self, poll_s=30):
         self.poll_s = poll_s
         self.started = False
+        self.stopped = False
         FakeProtonPortMonitor.made.append(self)
 
     def start(self):
         self.started = True
+        return threading.Thread(name="fake-monitor")  # never run
+
+    def stop(self):
+        self.stopped = True
 
 
 class FakeSteam:
@@ -260,26 +284,21 @@ def run(monkeypatch, stubbed):
 
             def __init__(
                 self,
-                cfg,
-                secrets,
+                services,
                 matcher,
-                dry_run,
                 input_idx,
                 output_idx,
                 capture=None,
-                operations=None,
                 ack=None,
-                steam=None,
-                media=None,
                 on_end_session=None,
                 room=None,
             ):
                 calls.append(
                     dict(
-                        dry_run=dry_run,
-                        operations=operations,
-                        steam=steam,
-                        media=media,
+                        dry_run=services.dry_run,
+                        operations=services.operations,
+                        steam=services.steam,
+                        media=services.media,
                         capture=capture,
                         matcher=matcher,
                         on_end_session=on_end_session,
@@ -427,20 +446,25 @@ def test_audio_opens_last(monkeypatch, run):
     # dead mic - so the monitors must already exist when it is called, or a
     # microphone failure takes the whole control plane down with it.
     at_audio = {}
+    checked_in = []
     monkeypatch.setattr(FakeSteam, "available_answer", True)
+    monkeypatch.setattr(checkin, "start", lambda lane, cfg: checked_in.append(lane))
 
     def counting_open(voice):
         at_audio["monitors"] = len(FakeSteamMonitor.made) + len(FakeMediaMonitor.made)
+        at_audio["checked_in"] = list(checked_in)
         return ("PA", 0, 1)
 
     monkeypatch.setattr(voice, "open_audio", counting_open)
     cfg = make_config()
     cfg["media"] = {"enabled": True}
-    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    rc, log, calls = run([], cfg, wakes=one_wake())
     assert at_audio["monitors"] == 2, (
         f"open_audio ran with {at_audio['monitors']} monitor(s) built - "
         "the control plane must be up before the mic wait"
     )
+    # A dead microphone must not read as a dead lane.
+    assert at_audio["checked_in"] == ["voice"], at_audio
 
 
 def test_a_crashing_session_closes_with_fail(run):
@@ -451,3 +475,60 @@ def test_a_crashing_session_closes_with_fail(run):
     assert rc == 0
     assert "session_crashed" in log.events()
     assert log.find("session_close")[0]["ending"] == "fail"
+
+
+def test_the_services_stop_when_the_lane_ends(monkeypatch, run):
+    """Whatever the owner started, it signals on the way out: monitors,
+    announcer, library ticker. Ctrl-C and --once take this path."""
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
+    cfg = make_config()
+    cfg["media"] = {"enabled": True, "protonPortSync": True}
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert rc == 0 and len(calls) == 1
+    started = [
+        *FakeSteamMonitor.made,
+        *FakeMediaMonitor.made,
+        *FakeProtonPortMonitor.made,
+    ]
+    assert len(started) == 3 and all(m.stopped for m in started), started
+    assert FakeAnnouncer.made[0].stopped
+
+
+def test_a_steam_session_that_raises_disables_only_itself(monkeypatch, run):
+    """One optional piece failing to build logs lane_disabled with the reason;
+    the rest start and a session still opens."""
+
+    class BrokenSteam(FakeSteam):
+        def __init__(self, secrets, log, machine_name=None):
+            raise OSError("secrets.json unreadable")
+
+    monkeypatch.setattr(steam_session, "SteamSession", BrokenSteam)
+    cfg = make_config()
+    cfg["media"] = {"enabled": True}
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert rc == 0 and len(calls) == 1
+    (disabled,) = [e for e in log.find("lane_disabled") if e["what"] == "steam_session"]
+    assert disabled["reason"] == "secrets.json unreadable"
+    assert FakeSteamMonitor.made == [] and len(FakeMediaMonitor.made) == 1
+    assert calls[0]["steam"] is None and calls[0]["media"] == "MEDIA"
+
+
+def test_a_corrupt_ledger_disables_the_operations_lane_only(monkeypatch, run):
+    """The lane runs without a ledger it cannot read: no announcer, no
+    operation monitors, text and the session up, one lane_disabled line naming
+    the file."""
+
+    class RefusingStore(FakeOperationStore):
+        def __init__(self, log):
+            raise ValueError("operations.json is not valid JSON: line 9")
+
+    monkeypatch.setattr(operations, "OperationStore", RefusingStore)
+    monkeypatch.setattr(FakeSteam, "available_answer", True)
+    cfg = make_config()
+    cfg["media"] = {"enabled": True}
+    rc, log, calls = run(["--once"], cfg, wakes=one_wake())
+    assert rc == 0 and len(calls) == 1 and calls[0]["operations"] is None
+    (disabled,) = [e for e in log.find("lane_disabled") if e["what"] == "operations"]
+    assert "not valid JSON" in disabled["reason"]
+    assert FakeAnnouncer.made == [] and FakeSteamMonitor.made == []
+    assert FakeMediaMonitor.made == [] and calls[0]["media"] == "MEDIA"

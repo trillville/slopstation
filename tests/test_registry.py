@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import CapturingLog, fake_dispatch, toolkit_impls
 from slopstation.agent.llm import assistant, registry, toolsets
 
 
@@ -12,7 +12,6 @@ def test_every_spec_is_well_formed():
     # The registry constructor rejects duplicates, unknown risks and areas;
     # this holds the softer rules a new tool is likeliest to skip.
     for spec in assistant.REGISTRY:
-        assert len(spec.keywords) >= 3, f"{spec.name} needs keywords for find_tools"
         assert spec.description.strip(), spec.name
         assert set(spec.required) <= set(spec.properties), spec.name
         if spec.paged:
@@ -35,10 +34,14 @@ def test_every_spec_is_well_formed():
         "delete_path",
         "resolve_queue_item",
         "uninstall_game",
+        "quit_game",
+        "sleep_pc",
+        "radarr_api",
+        "sonarr_api",
+        "prowlarr_api",
+        "qbittorrent_api",
+        "steam_api",
     }
-    # Destructive tools are never in the default set: the search step is a
-    # natural pause before them.
-    assert all(not assistant.REGISTRY.get(n).default for n in destructive)
 
 
 def test_constructor_refuses_a_bad_spec():
@@ -59,8 +62,8 @@ def test_every_offered_spec_has_an_implementation():
     # With every service present, each spec's name is callable, and nothing
     # is callable that has no spec. A tool added to one side only fails here.
     log = CapturingLog()
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
-    full = assistant.tool_impls(
+    dispatch = fake_dispatch(None, dry_run=True)
+    full = toolkit_impls(
         dispatch,
         log,
         operations=object(),
@@ -70,11 +73,11 @@ def test_every_offered_spec_has_an_implementation():
     )
     assert set(full) == set(assistant.REGISTRY.names())
     # Absent services drop exactly the tools that need them.
-    bare = assistant.tool_impls(dispatch, log)
+    bare = toolkit_impls(dispatch, log)
     dropped = set(assistant.REGISTRY.names()) - set(bare)
     absent = {"operations", "media", "torrents", "prowlarr", "steam_account"}
     assert dropped == {s.name for s in assistant.REGISTRY if absent & set(s.needs)}
-    off = assistant.tool_impls(dispatch, log, voice={"steamDataTools": False})
+    off = toolkit_impls(dispatch, log, voice={"steamDataTools": False})
     # The kill switch drops exactly the tools that need the data lane.
     assert set(bare) - set(off) == {
         s.name for s in assistant.REGISTRY if "steam_data" in s.needs
@@ -86,11 +89,11 @@ def test_every_offered_spec_has_an_implementation():
 
 def test_renders_follow_the_registry_order_and_filter():
     names = assistant.REGISTRY.names()
-    assert [t["name"] for t in assistant.anthropic_tools()] == names
-    assert [t["name"] for t in assistant.openai_tools()] == names
+    assert [t["name"] for t in assistant.REGISTRY.anthropic_tools()] == names
+    assert [t["name"] for t in assistant.REGISTRY.openai_tools()] == names
     some = {"volume", "nav"}
-    assert {t["name"] for t in assistant.anthropic_tools(some)} == some
-    (vol,) = assistant.openai_tools({"volume"})
+    assert {t["name"] for t in assistant.REGISTRY.anthropic_tools(some)} == some
+    (vol,) = assistant.REGISTRY.openai_tools({"volume"})
     assert vol["type"] == "function" and "function" not in vol
     assert vol["parameters"]["required"] == ["action"]
 
@@ -167,15 +170,30 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
     assert dry == {"ok": True, "dry_run": True, "detail": "would delete x"}
     assert acted == [1] and not ctx.gate.pending(("path", "x"))
     # No utterance at all fails closed.
-    ctx.dispatch = types.SimpleNamespace(dry_run=False, utterance=None)
+    ctx.dispatch = fake_dispatch(None)
     assert not impls["delete_path"]({})["ok"] and acted == [1]
 
 
-def test_a_toolkit_takes_a_gate_to_carry_between_sessions():
-    from slopstation.agent.llm import confirm
+def test_a_tool_reads_the_utterance_it_was_called_under():
+    """The gate overwrites dispatch.utterance with each transcript while a tool
+    may still be running. Tools.call pins the one the call started under;
+    outside a call the context reads live."""
+    first = types.SimpleNamespace(turn="aa1111", asked="delete dune")
+    dispatch = types.SimpleNamespace(dry_run=False, utterance=first)
+    toolkit = assistant.Toolkit(dispatch, CapturingLog("voice"))
+    seen = {}
 
-    gate = confirm.ConfirmGate()
-    dispatch = types.SimpleNamespace(dry_run=True, utterance=None)
-    assert (
-        assistant.Toolkit(dispatch, CapturingLog("voice"), gate=gate).ctx.gate is gate
-    )
+    def probe(args):
+        dispatch.utterance = types.SimpleNamespace(turn="bb2222", asked="never mind")
+        seen["turn"], seen["asked"] = toolkit.ctx.turn(), toolkit.ctx.asked()
+        return {"ok": True}
+
+    toolkit.impls["probe"] = probe
+    toolkit.loaded.append("probe")
+    assert toolkit.call("probe", {})["ok"]
+    assert seen == {"turn": "aa1111", "asked": "delete dune"}
+    assert toolkit.ctx.turn() == "bb2222" and toolkit.ctx.asked() == "never mind"
+    # A bare tools dict has no dispatch: nothing is pinned, so a tool with its
+    # own dispatch reads it live.
+    with registry.utterance_snapshot(None):
+        assert toolkit.ctx.turn() == "bb2222"

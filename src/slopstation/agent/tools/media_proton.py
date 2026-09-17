@@ -9,13 +9,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from slopstation import events
 from slopstation.agent.tools.media_clients import (
     MediaConfigurationError,
     MediaError,
     _clean_text,
     _parse_time,
 )
+from slopstation.agent.tools.monitor import ChangeOnly, Monitor
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
 PROTON_INACTIVE_STATUSES = {"DestroyPortMappingCommunication", "Stopped", "Error"}
@@ -156,12 +156,14 @@ def read_proton_port_state(path=None, now=None):
     }
 
 
-class ProtonPortMonitor:
+class ProtonPortMonitor(Monitor):
     """Hold qBittorrent's listening port to Proton's mapping and its peer
     sockets to an adapter that exists. A reconnect that keeps the port
     changes no preference, so nothing reopens the sockets and DHT stays
     empty; rebind on the reconnect, and when DHT stays empty anyway,
     rebind, then restart."""
+
+    THREAD_NAME = "proton-port-monitor"
 
     def __init__(
         self,
@@ -184,7 +186,7 @@ class ProtonPortMonitor:
         self.exe = exe
         self.launch = launch
         self.sleep = sleep
-        self._last_failure = None
+        self._failures = ChangeOnly()
         self._last_state = None
         self._reset_watch()
 
@@ -313,16 +315,11 @@ class ProtonPortMonitor:
             self.sleep(1)
         raise MediaError(err)
 
-    def start(self):
-        events.Ticker("proton-port-monitor", self.poll_s, self._tick).start()
-
     def _tick(self):
         try:
             self.reconcile_once()
-            self._last_failure = None
+            self._failures.cleared("qbittorrent")
         except Exception as e:
             detail = _clean_text(e)
-            # A client that stays down is one line, not one line per poll.
-            if detail != self._last_failure:
+            if self._failures.changed("qbittorrent", detail):
                 self.log.error("proton_port_sync_failed", err=detail)
-                self._last_failure = detail

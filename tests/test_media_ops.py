@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog
+from helpers import CapturingLog, fake_dispatch, sonarr_episode
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import media, operations, operations_monitors
 from slopstation.agent.tools.media_clients import MediaError
@@ -43,6 +43,19 @@ class Arr:
 
     def delete(self, endpoint, params=None):
         self.deletes.append((endpoint, params))
+
+
+def breaking_bad(store, metadata, work_id=None):
+    """A tracked request for the fixture series, with the given metadata on top
+    of its catalog id."""
+    return store.track_external(
+        "series_acquisition",
+        "sonarr",
+        "5",
+        "Breaking Bad",
+        work_id=work_id,
+        metadata={"catalog_id": 81189, **metadata},
+    )
 
 
 @pytest.fixture
@@ -269,31 +282,21 @@ def stack():
             {"id": 21, "name": "Series UHD"},
         ],
         episode=lambda p: [
-            {
-                "id": 101,
-                "seasonNumber": 1,
-                "episodeNumber": 1,
-                "hasFile": True,
-                "episodeFileId": 1001,
-                "monitored": True,
-                "airDateUtc": iso(-400),
-            },
-            {
-                "id": 102,
-                "seasonNumber": 1,
-                "episodeNumber": 2,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": iso(-390),
-            },
-            {
-                "id": 201,
-                "seasonNumber": 2,
-                "episodeNumber": 1,
-                "hasFile": False,
-                "monitored": True,
-                "airDateUtc": iso(3),
-            },
+            sonarr_episode(
+                101,
+                1,
+                number=1,
+                has_file=True,
+                file_id=1001,
+                monitored=True,
+                aired=iso(-400),
+            ),
+            sonarr_episode(
+                102, 1, number=2, has_file=False, monitored=True, aired=iso(-390)
+            ),
+            sonarr_episode(
+                201, 2, number=1, has_file=False, monitored=True, aired=iso(3)
+            ),
         ],
         **{
             "wanted/missing": {
@@ -387,9 +390,7 @@ def stack():
 def rig(stack):
     svc, *_ = stack
     log = CapturingLog("voice")
-    dispatch = types.SimpleNamespace(
-        dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch("aa0001")
     tk = assistant.Toolkit(dispatch, log, media=svc)
     tk.load([s.name for s in assistant.REGISTRY if s.area == "media"])
     return tk, dispatch, log
@@ -475,13 +476,7 @@ def test_search_releases_and_grab(rig, stack):
     assert ep["ok"]
     # A special (season 0) is found too.
     sonarr.answers["episode"] = lambda p: [
-        {
-            "id": 900,
-            "seasonNumber": 0,
-            "episodeNumber": 1,
-            "hasFile": False,
-            "monitored": True,
-        }
+        sonarr_episode(900, 0, number=1, has_file=False, monitored=True)
     ]
     special = tk.call(
         "search_releases",
@@ -759,9 +754,7 @@ def test_history_health_collections_and_indexer_search(rig, stack):
 def test_dry_run_and_failures_come_back_as_errors(stack):
     svc, radarr, sonarr, _ = stack
     log = CapturingLog("voice")
-    dispatch = types.SimpleNamespace(
-        dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch(dry_run=True)
     tk = assistant.Toolkit(dispatch, log, media=svc)
     tk.load(["grab_release", "resolve_queue_item", "browse_media", "set_monitored"])
     assert (
@@ -792,9 +785,7 @@ def test_dry_run_and_failures_come_back_as_errors(stack):
 def tracked(stack, log):
     svc, *_ = stack
     store = operations.OperationStore(log)
-    dispatch = types.SimpleNamespace(
-        dry_run=False, utterance=types.SimpleNamespace(turn="aa0001", asked="")
-    )
+    dispatch = fake_dispatch("aa0001")
     toolkit = assistant.Toolkit(dispatch, log, media=svc, operations=store)
     toolkit.load(
         [
@@ -817,7 +808,7 @@ def test_work_receipts_are_distinct_and_repeated_receipts_deduplicate(stack, tra
     )
     op = store.get(grabbed["operation_id"])
     assert op["metadata"]["baseline_file_id"] == 501 and op["turn"] == "aa0001"
-    assert svc.observe(op)["progress"]["phase"] == "grabbed"
+    assert svc.observe(op).progress["phase"] == "grabbed"
     searched = tk.call("retry_search", {"kind": "movie", "catalog_id": 438631})
     assert searched["operation_id"] != op["id"]
     assert store.get(op["id"]) == op
@@ -841,13 +832,7 @@ def test_cancel_request_asks_only_when_a_download_would_be_lost(
     _, _, sonarr, _ = stack
     tk, store, dispatch = tracked
     monkeypatch.setitem(sonarr.answers, "command/1", {"id": 1, "status": "started"})
-    request = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
-    )
+    request = breaking_bad(store, {"seasons": [1], "command_ids": [1]})
     stopped = tk.call("cancel_request", {"operation_id": request["id"]})
     assert stopped["ok"] and "1 already imported and kept" in stopped["acknowledgment"]
     closed = store.get(request["id"])
@@ -861,13 +846,7 @@ def test_cancel_request_asks_only_when_a_download_would_be_lost(
             "records": [{"id": 7, "seriesId": 5, "episodeId": 102, "downloadId": "d1"}]
         },
     )
-    downloading = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
-    )
+    downloading = breaking_bad(store, {"seasons": [1], "command_ids": [1]})
     asked = tk.call("cancel_request", {"operation_id": downloading["id"]})
     assert (
         not asked["ok"] and "erases 1 download in progress" in asked["acknowledgment"]
@@ -893,13 +872,7 @@ def test_new_episode_work_cannot_complete_an_existing_season_request(
     monkeypatch.setitem(episodes[0], "hasFile", False)
     monkeypatch.setitem(sonarr.answers, "episode", episodes)
     monkeypatch.setitem(sonarr.answers, "command/1", {"status": "started"})
-    request = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        metadata={"catalog_id": 81189, "seasons": [1], "command_ids": [1]},
-    )
+    request = breaking_bad(store, {"seasons": [1], "command_ids": [1]})
     searched = tk.call(
         "retry_search", {"kind": "series", "catalog_id": 81189, "season": 2}
     )
@@ -909,9 +882,14 @@ def test_new_episode_work_cannot_complete_an_existing_season_request(
     assert visible[1]["scope"]["scope_label"] == "season 2"
     monkeypatch.setitem(episodes[2], "hasFile", True)
     monkeypatch.setitem(episodes[2], "episodeFileId", 2001)
-    assert svc.observe(store.get(searched["operation_id"]))["complete"]
+    assert (
+        svc.observe(store.get(searched["operation_id"])).state == operations.SUCCEEDED
+    )
     original = svc.observe(store.get(request["id"]))
-    assert not original["complete"] and original["progress"]["total_episodes"] == 2
+    assert (
+        original.state != operations.SUCCEEDED
+        and original.progress["total_episodes"] == 2
+    )
     assert store.get(request["id"])["metadata"] == request["metadata"]
 
 
@@ -946,9 +924,11 @@ def test_grab_cannot_change_what_a_separate_search_promises(
     )
     monkeypatch.setitem(episodes[1], "hasFile", True)
     monkeypatch.setitem(episodes[1], "episodeFileId", 1002)
-    assert svc.observe(store.get(grabbed["operation_id"]))["complete"]
+    assert svc.observe(store.get(grabbed["operation_id"])).state == operations.SUCCEEDED
     result = svc.observe(store.get(searched["operation_id"]))
-    assert result["complete"] and result["progress"]["phase"] == "searched"
+    assert (
+        result.state == operations.SUCCEEDED and result.progress["phase"] == "searched"
+    )
 
 
 def test_partial_search_announcement_reports_the_files_gained(
@@ -967,12 +947,12 @@ def test_partial_search_announcement_reports_the_files_gained(
     )
     monkeypatch.setitem(episodes[0], "episodeFileId", 2001)
     result = svc.observe(store.get(searched["operation_id"]))
-    assert result["complete"] and result["progress"]["episodes"] == 1
+    assert result.state == operations.SUCCEEDED and result.progress["episodes"] == 1
     done = store.observe(
         searched["operation_id"],
         operations.SUCCEEDED,
-        result["progress"],
-        result["detail"],
+        result.progress,
+        result.detail,
     )
     assert "1 episode gained a file" in done["summary"]
     assert "nothing better" not in done["summary"]
@@ -987,20 +967,9 @@ def test_delete_season_cancels_a_request_still_waiting_for_its_episode_ids(
     _, _, sonarr, _ = stack
     tk, store, dispatch = tracked
     monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
-    pending = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        metadata={"catalog_id": 81189, "episodes": [[1, 2]], "search_pending": True},
-    )
-    other_season = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        work_id="command:other",
-        metadata={"catalog_id": 81189, "episodes": [[2, 1]], "search_pending": True},
+    pending = breaking_bad(store, {"episodes": [[1, 2]], "search_pending": True})
+    other_season = breaking_bad(
+        store, {"episodes": [[2, 1]], "search_pending": True}, work_id="command:other"
     )
     ask = {"kind": "series", "catalog_id": 81189, "seasons": [1]}
     assert not tk.call("delete_media", ask)["ok"]
@@ -1067,33 +1036,13 @@ def test_delete_media_takes_individual_episodes(stack, tracked, monkeypatch):
     _, _, sonarr, _ = stack
     tk, store, dispatch = tracked
     monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
-    kept = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        work_id="command:keep",
-        metadata={"catalog_id": 81189, "episodes": [[1, 2], [2, 1]]},
-    )
-    covered = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        metadata={"catalog_id": 81189, "episodes": [[1, 1]]},
-    )
+    kept = breaking_bad(store, {"episodes": [[1, 2], [2, 1]]}, work_id="command:keep")
+    covered = breaking_bad(store, {"episodes": [[1, 1]]})
     # A request on a held series carries Sonarr's ids beside its pairs.
-    partial = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
+    partial = breaking_bad(
+        store,
+        {"episodes": [[1, 1], [1, 2]], "episode_ids": [101, 102]},
         work_id="command:partial",
-        metadata={
-            "catalog_id": 81189,
-            "episodes": [[1, 1], [1, 2]],
-            "episode_ids": [101, 102],
-        },
     )
     ask = {
         "kind": "series",
@@ -1150,13 +1099,9 @@ def test_delete_season_trims_it_from_a_pending_request_spanning_seasons(
     _, _, sonarr, _ = stack
     tk, store, dispatch = tracked
     monkeypatch.setitem(sonarr.answers, "queue", {"records": []})
-    spanning = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        metadata={
-            "catalog_id": 81189,
+    spanning = breaking_bad(
+        store,
+        {
             "episodes": [[1, 2], [2, 1]],
             "scope_label": "episodes S01E02, S02E01",
             "search_pending": True,
@@ -1190,17 +1135,10 @@ def test_delete_season_cancels_only_covered_work_and_retains_other_episodes(
             {"status": "queued" if command_id == 1 else "started"},
         )
         rows.append(
-            store.track_external(
-                "series_acquisition",
-                "sonarr",
-                "5",
-                "Breaking Bad",
+            breaking_bad(
+                store,
+                {"episode_ids": ids, "command_ids": [command_id]},
                 work_id=f"command:{command_id}",
-                metadata={
-                    "catalog_id": 81189,
-                    "episode_ids": ids,
-                    "command_ids": [command_id],
-                },
             )
         )
     ask = {"kind": "series", "catalog_id": 81189, "seasons": [1]}
@@ -1217,8 +1155,8 @@ def test_delete_season_cancels_only_covered_work_and_retains_other_episodes(
     assert not any(path in ("command/2", "command/3") for path, _ in sonarr.deletes)
     monkeypatch.setitem(episodes[2], "hasFile", True)
     monkeypatch.setitem(episodes[2], "episodeFileId", 2001)
-    assert svc.observe(store.get(rows[1]["id"]))["complete"]
-    assert svc.observe(store.get(rows[2]["id"]))["complete"]
+    assert svc.observe(store.get(rows[1]["id"])).state == operations.SUCCEEDED
+    assert svc.observe(store.get(rows[2]["id"])).state == operations.SUCCEEDED
 
 
 def test_abandon_episode_operation_does_not_delete_the_series(
@@ -1226,14 +1164,7 @@ def test_abandon_episode_operation_does_not_delete_the_series(
 ):
     svc, _, sonarr, _ = stack
     _, store, _ = tracked
-    operation = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "5",
-        "Breaking Bad",
-        work_id="release:101",
-        metadata={"catalog_id": 81189, "episode_ids": [101]},
-    )
+    operation = breaking_bad(store, {"episode_ids": [101]}, work_id="release:101")
     monkeypatch.setattr(media, "from_config", lambda *args, **kwargs: svc)
     assert operations_monitors.main(["abandon", operation["id"], "--execute"]) == 0
     assert ("episodefile/1001", None) in sonarr.deletes
@@ -1250,32 +1181,27 @@ def test_one_episode_is_done_when_that_episode_arrives(stack):
     # wait on the other episode, and a special (season 0) is grabbable.
     svc, _, sonarr, _ = stack
     sonarr.answers["episode"] = lambda p: [
-        {
-            "id": 101,
-            "seasonNumber": 1,
-            "episodeNumber": 1,
-            "hasFile": True,
-            "episodeFileId": 1001,
-            "monitored": True,
-            "airDateUtc": iso(-400),
-        },
-        {
-            "id": 102,
-            "seasonNumber": 1,
-            "episodeNumber": 2,
-            "hasFile": True,
-            "episodeFileId": 1002,
-            "monitored": True,
-            "airDateUtc": iso(-390),
-        },
-        {
-            "id": 900,
-            "seasonNumber": 0,
-            "episodeNumber": 1,
-            "hasFile": False,
-            "monitored": False,
-            "airDateUtc": iso(-10),
-        },
+        sonarr_episode(
+            101,
+            1,
+            number=1,
+            has_file=True,
+            file_id=1001,
+            monitored=True,
+            aired=iso(-400),
+        ),
+        sonarr_episode(
+            102,
+            1,
+            number=2,
+            has_file=True,
+            file_id=1002,
+            monitored=True,
+            aired=iso(-390),
+        ),
+        sonarr_episode(
+            900, 0, number=1, has_file=False, monitored=False, aired=iso(-10)
+        ),
     ]
     sub = svc.grab_release("series", 81189, "g1", 3, season=1, episode=1)
     assert sub["episode_ids"] == [101] and "seasons" not in sub
@@ -1284,7 +1210,7 @@ def test_one_episode_is_done_when_that_episode_arrives(stack):
     out = svc.observe_series(
         5, baseline_episode_files=sub["baseline_episode_files"], episode_ids=[101]
     )
-    assert not out["complete"] and out["progress"]["total_episodes"] == 1
+    assert out.state != operations.SUCCEEDED and out.progress["total_episodes"] == 1
     sonarr.answers["episode"]({})[0]["episodeFileId"]  # the rows are rebuilt each call
     rows = sonarr.answers["episode"]({})
     rows[0]["episodeFileId"] = 1010
@@ -1292,16 +1218,16 @@ def test_one_episode_is_done_when_that_episode_arrives(stack):
     out = svc.observe_series(
         5, baseline_episode_files=sub["baseline_episode_files"], episode_ids=[101]
     )
-    assert out["complete"] and out["progress"]["episodes"] == 1
+    assert out.state == operations.SUCCEEDED and out.progress["episodes"] == 1
     # Episode 2 kept its old file and was never in scope.
     # A season pack covers the season's episodes, specials included when it
     # is season 0; an unmonitored special counts because it was chosen.
     special = svc.grab_release("series", 81189, "g2", 3, season=0)
     assert special["episode_ids"] == [900]
     out = svc.observe_series(5, episode_ids=[900])
-    assert not out["complete"] and out["progress"]["total_episodes"] == 1
+    assert out.state != operations.SUCCEEDED and out.progress["total_episodes"] == 1
     rows[2].update(hasFile=True, episodeFileId=9000)
-    assert svc.observe_series(5, episode_ids=[900])["complete"]
+    assert svc.observe_series(5, episode_ids=[900]).state == operations.SUCCEEDED
     # A season search for the specials is a season search, seasonNumber 0.
     sub = svc.search_again("series", 81189, season=0)
     assert sonarr.posts[-1][1] == {
@@ -1324,26 +1250,54 @@ def test_a_search_promises_the_search_not_the_old_file(stack):
     radarr.answers["command/99"] = {"id": 99, "status": "started"}
     op = operations.track(store, sub)
     seen = svc.observe(store.get(op["operation_id"]))
-    assert not seen["complete"] and seen["progress"]["phase"] == "searching"
+    assert seen.state != operations.SUCCEEDED and seen.progress["phase"] == "searching"
     radarr.answers["command/99"] = {"id": 99, "status": "completed"}
     seen = svc.observe(store.get(op["operation_id"]))
-    assert seen["complete"] and seen["progress"]["phase"] == "searched"
-    done = store.observe(op["operation_id"], operations.SUCCEEDED, seen["progress"], "")
+    assert seen.state == operations.SUCCEEDED and seen.progress["phase"] == "searched"
+    done = store.observe(op["operation_id"], operations.SUCCEEDED, seen.progress, "")
     assert done["summary"] == "Radarr searched again for Dune and found nothing better."
     # A search that found a better file is the file arriving.
     radarr.answers["moviefile"] = lambda p: [{"id": 777}]
-    assert svc.observe_movie(1, 501, [99], "searching", promise="search")["detail"] == (
+    assert svc.observe_movie(1, 501, [99], "searching", promise="search").detail == (
         "Radarr imported the requested movie upgrade"
     )
     # A search the app failed is a failure, not a success.
     radarr.answers["moviefile"] = lambda p: [{"id": 501}]
     radarr.answers["command/99"] = {"id": 99, "status": "failed"}
     failed = svc.observe_movie(1, 501, [99], "searching", promise="search")
-    assert failed["complete"] and failed["failed"]
+    assert failed.state == operations.FAILED
     # The first operation is closed; the failure lands on a fresh one.
     again = operations.track(store, sub)
     assert again["operation_id"] != op["operation_id"]
-    row = store.observe(
-        again["operation_id"], operations.FAILED, failed["progress"], ""
-    )
+    row = store.observe(again["operation_id"], operations.FAILED, failed.progress, "")
     assert row["summary"] == "Radarr's search for Dune failed."
+
+
+def test_every_submission_key_is_a_row_column_or_lands_in_metadata(log):
+    """track() reads the receipt's columns and copies METADATA_KEYS into the
+    row. A key that is neither is lost. Both shapes a series can take."""
+    store = operations.OperationStore(log)
+    columns = {"ok", "kind", "authority", "external_ref", "title", "phase", "detail"}
+    columns |= {"already_available", "work_id"}
+    by_season = media.MediaService._submission(
+        "series",
+        5,
+        "Andor",
+        393189,
+        preset="2160p",
+        profile=7,
+        seasons=[1],
+        baseline_episode_files={"900": None},
+        search_pending=True,
+        command_ids=[1],
+        detail="queued",
+        promise="search",
+        work_id="w1",
+    )
+    by_season["all_seasons"] = False
+    by_episode = media.MediaService._submission(
+        "series", 5, "Andor", 393189, episode_ids=[900], episodes=[[1, 1]]
+    )
+    for submission in (by_season, by_episode):
+        row = store.get(operations.track(store, dict(submission))["operation_id"])
+        assert set(submission) - columns <= set(row["metadata"]), submission

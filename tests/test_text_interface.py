@@ -11,6 +11,7 @@ import pytest
 import helpers
 from slopstation.agent.interfaces import text
 from slopstation.agent.llm import backends
+from slopstation.agent.services import Services
 from slopstation.agent.telemetry import traces
 
 TOKEN = "t" * 64
@@ -138,9 +139,9 @@ def saved(monkeypatch):
 @pytest.fixture
 def base(cfg, log, gate, fake_backend, saved):
     """A text interface on a free port, torn down after the test."""
-    server = text.start(
-        cfg, SECRETS, log, operations=FakeOperations(), media=FakeMedia()
-    )
+    services = Services(cfg, SECRETS, log)
+    services.operations, services.media = FakeOperations(), FakeMedia()
+    server = text.start(services)
     assert server is not None
     try:
         host, port = server.server_address
@@ -150,11 +151,6 @@ def base(cfg, log, gate, fake_backend, saved):
         gate.release.set()
         server.shutdown()
         server.server_close()
-
-
-def test_dry_run_reaches_the_dispatch(cfg, log, fake_backend):
-    dry = text.TextApplication(cfg, SECRETS, log, dry_run=True)
-    assert dry._new_session()["dispatch"].dry_run
 
 
 def test_a_session_carries_turns_tools_and_one_trace_file(base, log, saved):
@@ -203,3 +199,33 @@ def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
     gate.release.set()
     stall_thread.join(timeout=10)
     assert stalled["result"][1]["ok"]
+
+
+def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
+    """health() answers /health: which services were built, and whether each
+    thread the owner started is alive. Nothing answers without the token."""
+    services = Services(cfg, SECRETS, log)
+    services.steam = object()
+    services.threads.append(("announcer", threading.Thread(name="announcer")))
+    server = text.start(services)
+    assert server is not None
+    try:
+        host, port = server.server_address
+        url = f"http://{host}:{port}/health"
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(url, timeout=5)
+        assert denied.value.code == 401
+        request = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {TOKEN}"}
+        )
+        with urllib.request.urlopen(request, timeout=5) as r:
+            assert json.loads(r.read()) == {
+                "ok": True,
+                "operations": False,
+                "steam": True,
+                "media": False,
+                "threads": {"announcer": False, "text-interface": True},
+            }
+    finally:
+        server.shutdown()
+        server.server_close()

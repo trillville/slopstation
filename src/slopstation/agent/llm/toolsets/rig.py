@@ -5,23 +5,19 @@ import subprocess
 import urllib.parse
 
 from slopstation import gamepc, sessionlock
-from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.tools import library
 
 STORE_SEARCH = "https://store.steampowered.com/search/?term="
 
 LAUNCH_GAME = """\
-Launch a game from the catalog by appid. Starts a session automatically if
-none is running - never call start_session first."""
+Launch a game from the catalog by appid. Never call start_session first."""
 
 SESSION = """\
 Control the session: end_session, start_session, switch_input (with input
 name; the valid names are in the system prompt). Ending the session and
 switching input both interrupt what is on the TV, so never take either as a
-guess. switch_input only changes which input the TV shows; putting the PC's
-DESKTOP on the TV, or back on the monitor, is the display tool, not this.
-nav and launch_game start a session themselves when none is live, so
-start_session is for 'start a session' said plainly. start_session returns
+guess. start_session is for 'start a session' said plainly, and returns
 while the session is still coming up - don't call nav in the same turn; say
 it's starting and let the user ask again."""
 
@@ -49,18 +45,17 @@ idle."""
 
 QUIT_GAME = """\
 Quit the game that is currently running. This ENDS the game and can lose
-unsaved progress, so treat it as destructive: call it only when the user
-clearly tells you to quit or close the game now, and if there is ANY doubt,
-confirm first ('Quit Elden Ring?') and act only on a yes - never on a
-guess. The appid must be the running game (get_now_playing tells you
-which). This is NOT end_session and NOT the TV - only the game closes; Big
-Picture stays up. It also clears the way when a different game is blocking
-a launch."""
+unsaved progress, so the tool asks first: the first call answers with the
+question to put to the user, and the same call on a later turn, after a
+yes, quits. Call it only when the user tells you to quit or close the game.
+The appid must be the running game (get_now_playing tells you which). This
+is NOT end_session and NOT the TV - only the game closes; Big Picture stays
+up. It also clears the way when a different game is blocking a launch."""
 
 NAV = """\
 Navigate the Big Picture UI on the TV. With no session live this starts one
-and opens the page once Big Picture is up, about fifteen seconds later: say
-the page is coming, and never call start_session first. Pages that need
+and opens the page once Big Picture is up; never call start_session first.
+Pages that need
 nothing else: 'downloads', 'library', 'store', 'friends', 'settings',
 'screenshots', 'wishlist', 'news'. Pages for one game, by appid: 'game_page'
 (an OWNED game's library page with its Play button - 'show me <game>'),
@@ -85,21 +80,23 @@ online, and the free space on each Steam library drive - the answer to 'can
 I install that' and 'is the PC awake'. Reaching an asleep PC takes a few
 seconds to time out."""
 
-PC_POWER = """\
-Wake the gaming PC (a magic packet; it takes a minute to come up, and
-start_session does this itself) or put it to sleep. Sleep is refused while a
-session is live, a game is running, or someone is signed in at the desk, so
-it cannot end what is on the TV or under someone's hands."""
+WAKE_PC = """\
+Wake the gaming PC with a magic packet. It takes a minute to come up;
+start_session does this itself."""
+
+SLEEP_PC = """\
+Put the gaming PC to sleep. Asks first: the first call answers with the
+question, and the same call on a later turn, after a yes, sleeps. Refused
+while a session is live, a game is running, or someone is signed in at the
+desk."""
 
 DISPLAY = """\
-Put the PC's DESKTOP on the TV, or back on the desk monitor, with NO
-session: 'tv' switches the TV to the PC and moves the desktop there, for
-using the PC on the TV without Steam Big Picture or to fix a display stuck
-the wrong way; 'monitor' puts it back on the desk. Mouse and keyboard only -
-the controller is not part of this - and nothing moves it back on its own:
-say so. This is what 'desktop' or 'monitor' means when no session is live.
-Refused while a session is live: then 'back to the monitor' and 'back to
-the office' mean end_session, which restores the monitor itself."""
+Move the PC's desktop with no session: 'tv' switches the TV to the PC and
+moves the desktop there, for using the PC on the TV without Steam Big
+Picture or to fix a display stuck the wrong way; 'monitor' puts it back on
+the desk. Nothing moves it back on its own: say so. Refused while a session
+is live: then 'back to the monitor' and 'back to the office' mean
+end_session, which restores the monitor itself."""
 
 INSTALL_GAME = """\
 Start downloading a game the user owns but hasn't installed yet - use this
@@ -191,7 +188,10 @@ SPECS = [
         QUIT_GAME,
         {"appid": {"type": "integer", "description": "appid of the running game"}},
         ("appid",),
-        risk="act",
+        # Asks first: quitting can lose unsaved progress. Stays in the default
+        # set because "quit the game" is said mid-session; the question is the
+        # pause.
+        risk="destructive",
         area="session",
         keywords=("quit", "close game", "exit game", "stop game", "kill"),
         busy="quitting {game}",
@@ -342,14 +342,23 @@ SPECS += [
         busy="moving the desktop",
     ),
     ToolSpec(
-        "pc_power",
-        PC_POWER,
-        {"action": {"type": "string", "enum": ["wake", "sleep"]}},
-        ("action",),
+        "wake_pc",
+        WAKE_PC,
+        {},
+        (),
         risk="act",
         area="session",
+        keywords=("wake the pc", "wake up the pc", "turn on the pc", "power"),
+        default=False,
+    ),
+    ToolSpec(
+        "sleep_pc",
+        SLEEP_PC,
+        {},
+        (),
+        risk="destructive",
+        area="session",
         keywords=(
-            "wake the pc",
             "sleep the pc",
             "pc to sleep",
             "put the pc",
@@ -367,6 +376,17 @@ def known_appids():
     ids = {r["appid"] for r in index.get("installed", [])}
     ids.update(int(a) for a in index.get("owned", {}))
     return ids
+
+
+def _outcome(r):
+    """A dispatch Result as a tool result. Success: a receipt. Refusal: the
+    reason under `error`, plus `busy` when something was already running."""
+    if r.ok:
+        return {"ok": True, "detail": r.detail}
+    out = {"ok": False, "error": r.detail}
+    if r.earcon == "busy":
+        out["busy"] = True
+    return out
 
 
 def impls(ctx: ToolContext):
@@ -392,16 +412,21 @@ def impls(ctx: ToolContext):
                 "error": "that game is owned but not "
                 "installed - installing needs the controller",
             }
-        r = dispatch.play_game(appid)
-        return {"ok": r.ok, "detail": r.detail}
+        r = dispatch.play_game(appid, turn=ctx.turn())
+        return _outcome(r)
 
-    @bind
+    @bind.destructive
     def quit_game(args):
         appid = int(args.get("appid", 0))
         if refused := _unknown("quit_game", appid):
             return refused
-        r = dispatch.quit_game(appid)
-        return {"ok": r.ok, "detail": r.detail}
+        title = library.installed_name(appid) or "the game"
+        return Plan(
+            ("quit_game", appid),
+            f"Quit {title}?",
+            lambda: _outcome(dispatch.quit_game(appid, turn=ctx.turn())),
+            f"quit {title}",
+        )
 
     @bind
     def install_game(args):
@@ -427,7 +452,7 @@ def impls(ctx: ToolContext):
                             operation = operations.track_steam_install(
                                 appid,
                                 title,
-                                turn=dispatch.utterance.turn,
+                                turn=ctx.turn(),
                                 verified=bool(r.get("verified")),
                             )
                             return {**r, "operation_id": operation["id"]}
@@ -445,9 +470,9 @@ def impls(ctx: ToolContext):
         # With no session, nav starts one and the page comes up with it; the
         # receipt has to say so rather than claim the page is on the TV now.
         starting = not sessionlock.active()
-        r = dispatch.nav("details", appid)
+        r = dispatch.nav("details", appid, turn=ctx.turn())
         if not r.ok:
-            return {"ok": False, "error": r.detail}
+            return _outcome(r)
         if starting:
             return {
                 "ok": True,
@@ -469,13 +494,13 @@ def impls(ctx: ToolContext):
             appid = int(appid or 0)
             if refused := _unknown("nav", appid):
                 return refused
-            r = dispatch.nav("details", appid)
+            r = dispatch.nav("details", appid, turn=ctx.turn())
         elif target == "store_page":
             # No catalog check: a store page is for a game they do NOT own.
             appid = int(appid or 0)
             if appid <= 0:
                 return {"ok": False, "error": "I need the game's store appid"}
-            r = dispatch.nav("store", appid)
+            r = dispatch.nav("store", appid, turn=ctx.turn())
         elif target == "collection":
             # Grammar mishears land here: resolve fuzzily, and on
             # a miss hand back the real names for the model to act on.
@@ -503,7 +528,7 @@ def impls(ctx: ToolContext):
                     else "which collection?",
                     "collections": [r["name"] for r in rows],
                 }
-            r = dispatch.nav("collection", cid)
+            r = dispatch.nav("collection", cid, turn=ctx.turn())
         elif target in ("dlc", "community_hub", "workshop", "verify_files"):
             # Any Steam appid: these pages exist for games the user does not
             # own too, and a DLC list is one way to put a purchase on the TV.
@@ -513,10 +538,10 @@ def impls(ctx: ToolContext):
             kind = {"community_hub": "hub", "verify_files": "validate"}.get(
                 target, target
             )
-            r = dispatch.nav(kind, appid)
+            r = dispatch.nav(kind, appid, turn=ctx.turn())
         elif target == "news":
             appid = int(appid or 0)
-            r = dispatch.nav("news", appid if appid > 0 else None)
+            r = dispatch.nav("news", appid if appid > 0 else None, turn=ctx.turn())
         elif target == "search":
             query = str(args.get("query") or "").strip()
             if not query:
@@ -529,7 +554,7 @@ def impls(ctx: ToolContext):
                 url = STORE_SEARCH + urllib.parse.quote_plus(words)
             if not words:
                 return {"ok": False, "error": "those search words cannot be encoded"}
-            r = dispatch.nav("url", url)
+            r = dispatch.nav("url", url, turn=ctx.turn())
         elif target == "web":
             url = str(args.get("url") or "").strip()
             if not gamepc.NAV_URL_RE.fullmatch(url):
@@ -538,7 +563,7 @@ def impls(ctx: ToolContext):
                     "error": "web opens store.steampowered.com or "
                     "steamcommunity.com pages only, as a plain https URL",
                 }
-            r = dispatch.nav("url", url)
+            r = dispatch.nav("url", url, turn=ctx.turn())
         elif target in (
             "downloads",
             "library",
@@ -548,10 +573,10 @@ def impls(ctx: ToolContext):
             "screenshots",
             "wishlist",
         ):
-            r = dispatch.nav(target)
+            r = dispatch.nav(target, turn=ctx.turn())
         else:
             return {"ok": False, "error": f"unknown nav target {target}"}
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def session(args):
@@ -561,10 +586,10 @@ def impls(ctx: ToolContext):
         elif action == "end_session":
             r = dispatch.end_session()
         elif action == "start_session":
-            r = dispatch.start_session()
+            r = dispatch.start_session(turn=ctx.turn())
         else:
             return {"ok": False, "error": f"unknown action {action}"}
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def volume(args):
@@ -581,7 +606,7 @@ def impls(ctx: ToolContext):
             r = dispatch.mute_toggle()
         else:
             return {"ok": False, "error": f"unknown action {action}"}
-        return {"ok": r.ok, "detail": r.detail}
+        return _outcome(r)
 
     @bind
     def stop_listening(args):
@@ -709,34 +734,43 @@ def impls(ctx: ToolContext):
 
     @bind
     def display(args):
-        r = dispatch.display(str(args.get("target") or ""))
-        return {"ok": r.ok, "detail": r.detail}
+        r = dispatch.display(str(args.get("target") or ""), turn=ctx.turn())
+        return _outcome(r)
 
     @bind
-    def pc_power(args):
-        action = str(args.get("action") or "")
-        if action not in ("wake", "sleep"):
-            return {"ok": False, "error": "action must be wake or sleep"}
-        if action == "sleep" and sessionlock.active():
+    def wake_pc(args):
+        if dry := ctx.preview("wake the PC"):
+            return dry
+        from slopstation import couch
+
+        try:
+            couch.wol()
+        except Exception as e:
+            return {"ok": False, "error": f"couldn't reach the PC ({e})"}
+        return {"ok": True, "detail": "wake packet sent - give it a minute"}
+
+    @bind.destructive
+    def sleep_pc(args):
+        if sessionlock.active():
             return {
                 "ok": False,
                 "error": "a session is live - end it first, or the TV goes dark mid-game",
             }
-        if dry := ctx.preview(f"{action} the PC"):
-            return dry
-        try:
-            if action == "wake":
-                from slopstation import couch
 
-                couch.wol()
-                return {"ok": True, "detail": "wake packet sent - give it a minute"}
-            out = gamepc.sleep(dispatch.utterance.turn)
-        except Exception as e:
-            return {"ok": False, "error": f"couldn't reach the PC ({e})"}
-        if out == "OK":
-            return {"ok": True, "detail": "the PC is going to sleep"}
-        if out.startswith("BUSY"):
-            return {"ok": False, "error": "the PC refused: a session or a game is live"}
-        return {"ok": False, "error": f"the PC answered {out}"}
+        def sleep():
+            try:
+                out = gamepc.sleep(ctx.turn())
+            except Exception as e:
+                return {"ok": False, "error": f"couldn't reach the PC ({e})"}
+            if out == "OK":
+                return {"ok": True, "detail": "the PC is going to sleep"}
+            if out.startswith("BUSY"):
+                return {
+                    "ok": False,
+                    "error": "the PC refused: a session or a game is live",
+                }
+            return {"ok": False, "error": f"the PC answered {out}"}
+
+        return Plan(("sleep_pc",), "Put the PC to sleep?", sleep, "sleep the PC")
 
     return bind.impls()

@@ -17,13 +17,12 @@ from urllib.parse import urlsplit
 from slopstation import config, events
 
 INTERVAL_S = 60
+# Sentry takes the interval in whole minutes; 0 is refused.
+assert INTERVAL_S >= 60 and INTERVAL_S % 60 == 0
 TIMEOUT_S = 5
 
-# Sentry upserts the monitor from this on the first check-in. Two consecutive
-# misses at a 1-minute interval page ~4 min after a lane dies, which is fast
-# enough to matter and survives one network blip.
 MONITOR_CONFIG = {
-    "schedule": {"type": "interval", "value": 1, "unit": "minute"},
+    "schedule": {"type": "interval", "value": INTERVAL_S // 60, "unit": "minute"},
     "checkin_margin": 2,
     "max_runtime": 1,
     "timezone": "UTC",

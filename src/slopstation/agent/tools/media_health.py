@@ -2,8 +2,8 @@
 
 import time
 
-from slopstation import events
 from slopstation.agent.tools.media_clients import MediaError, _clean_text
+from slopstation.agent.tools.monitor import ChangeOnly, Monitor
 
 # Servarr history eventTypes that mean a grab did not become a file.
 FAILURE_EVENTS = frozenset(("downloadFailed", "importFailed", "importBlocked"))
@@ -57,7 +57,7 @@ def _queue_detail(row):
     return _clean_text("; ".join(message for message in messages if message))
 
 
-class MediaHealthMonitor:
+class MediaHealthMonitor(Monitor):
     """Report Radarr/Sonarr trouble nobody is sitting in front of.
 
     Polls rather than taking webhooks: a notification connection lives only in
@@ -66,6 +66,8 @@ class MediaHealthMonitor:
     """
 
     PAGE_SIZE = 50
+
+    THREAD_NAME = "media-health-monitor"
 
     def __init__(
         self,
@@ -87,12 +89,9 @@ class MediaHealthMonitor:
         self._issues = {}
         self._history_id = {}
         self._stalled = {}
-        self._last_failure = {}
+        self._failures = ChangeOnly()
         self._idle_since = {}
         self._reaped = {}
-
-    def start(self):
-        events.Ticker("media-health-monitor", self.poll_s, self.reconcile_once).start()
 
     def reconcile_once(self):
         for client in self.clients:
@@ -100,14 +99,11 @@ class MediaHealthMonitor:
                 self._health(client)
                 self._history(client)
                 self._queue(client)
-                self._last_failure[client.name] = None
+                self._failures.cleared(client.name)
             except Exception as e:
                 detail = _clean_text(e)
-                # Unchanged failures stay silent; an unreachable app would
-                # otherwise be one line per poll until someone noticed.
-                if detail != self._last_failure.get(client.name):
+                if self._failures.changed(client.name, detail):
                     self.log.error("media_watch_failed", app=client.name, err=detail)
-                    self._last_failure[client.name] = detail
 
     def _health(self, client):
         rows = client.get("health")

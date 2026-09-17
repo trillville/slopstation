@@ -4,6 +4,7 @@ import functools
 import json
 import os
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -88,3 +89,36 @@ class CapturingLog(logbook.Logger):
 
     def find(self, event):
         return [r for r in self.records if r["event"] == event]
+
+
+def toolkit_impls(dispatch, log, **services):
+    """Every callable tool for the given services, keyed by name."""
+    from slopstation.agent.llm.assistant import Toolkit
+
+    return Toolkit(dispatch, log, **services).impls
+
+
+def fake_dispatch(turn="aa0001", asked="", dry_run=False):
+    """The two attributes of Dispatch a tool reads: dry_run and the utterance.
+    turn=None is no utterance, which the confirmation gate refuses."""
+    utterance = None if turn is None else types.SimpleNamespace(turn=turn, asked=asked)
+    return types.SimpleNamespace(dry_run=dry_run, utterance=utterance)
+
+
+def sonarr_episode(
+    id, season, *, number=None, has_file=None, monitored=None, aired=None, file_id=None
+):
+    """One Sonarr episode row with only the keys given. The code reads the
+    absence of airDateUtc and monitored, so the helper must not fill them."""
+    row = {"id": id, "seasonNumber": season}
+    if number is not None:
+        row["episodeNumber"] = number
+    if has_file is not None:
+        row["hasFile"] = has_file
+    if monitored is not None:
+        row["monitored"] = monitored
+    if aired is not None:
+        row["airDateUtc"] = aired
+    if file_id is not None:
+        row["episodeFileId"] = file_id
+    return row

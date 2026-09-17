@@ -3,13 +3,18 @@
 import contextlib
 import dataclasses
 import io
+import json
+import shutil
 import threading
 import time
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 import helpers
 from slopstation.agent.speech import announce
-from slopstation.agent.tools import operations, operations_monitors
+from slopstation.agent.tools import media, operations, operations_monitors
 
 
 def wait_for(predicate, timeout=2):
@@ -34,7 +39,7 @@ class FakeSteam:
 
 
 WAITING = {
-    "complete": False,
+    "state": operations.RUNNING,
     "progress": {
         "phase": "waiting_for_match",
         "episodes": 80,
@@ -49,7 +54,7 @@ WAITING = {
 class FakeMedia:
     result: dict = dataclasses.field(
         default_factory=lambda: {
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"percent": 20},
             "detail": "1 of 5 aired episodes are ready",
         }
@@ -75,7 +80,7 @@ class FakeMedia:
     def observe(self, operation):
         if self.error:
             raise self.error
-        return dict(self.result)
+        return media.Observation(**self.result)
 
     def search_available(self, operation):
         return self.search_available_now
@@ -268,7 +273,7 @@ def test_media_monitor_observes_a_series_acquisition(log):
     assert not terminal
     fake_media.error = None
     fake_media.result = {
-        "complete": True,
+        "state": operations.SUCCEEDED,
         "progress": {"percent": 100},
         "detail": "5 of 5 aired episodes are ready",
     }
@@ -289,13 +294,13 @@ def test_media_monitor_notifies_once_per_phase(log):
     monitor = operations_monitors.MediaMonitor(store, fake_media, log)
     phase_op = _movie(store, "51", "Arrival", 329865, 9)
     fake_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "searching"},
         "detail": "Radarr is searching",
     }
     monitor.reconcile_once()
     fake_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "waiting_for_match"},
         "detail": "no acceptable release yet",
     }
@@ -304,7 +309,7 @@ def test_media_monitor_notifies_once_per_phase(log):
     assert store.pending_notifications()[0]["key"] == "waiting_for_match"
     assert "search_retry_pending" not in store.get(phase_op["id"])["metadata"]
     fake_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "downloading", "percent": 2},
         "detail": "download is 2% complete",
     }
@@ -329,7 +334,7 @@ def test_search_retry_backs_off_then_gives_up(log):
     retry_media = FakeMedia(
         search_available_now=False,
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "waiting_for_match"},
             "detail": "no acceptable release yet",
         },
@@ -385,7 +390,7 @@ def test_failed_search_retry_backs_off_longer(log):
     )
     retry_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "waiting_for_match"},
             "detail": "no acceptable release yet",
         },
@@ -419,7 +424,7 @@ def test_a_retry_waits_for_the_pending_search(log):
     )
     pending_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "searching"},
             "detail": "Sonarr is still populating episode metadata",
         }
@@ -508,7 +513,7 @@ def test_waiting_series_is_abandoned_after_a_day(log):
     assert len(heads_up) == 1 and heads_up[0]["key"] == "waiting_for_match"
     assert "11" in heads_up[0]["summary"]
     give_media.result = {
-        "complete": False,
+        "state": operations.RUNNING,
         "progress": {"phase": "downloading", "total_episodes": 91},
         "detail": "download is active",
     }
@@ -532,7 +537,7 @@ def test_unaired_season_waits_indefinitely(log):
     store = operations.OperationStore(log)
     give_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {
                 "phase": "waiting_for_match",
                 "episodes": 0,
@@ -568,7 +573,7 @@ def test_empty_movie_wait_fails_silently(log):
     store = operations.OperationStore(log)
     give_media = FakeMedia(
         result={
-            "complete": False,
+            "state": operations.RUNNING,
             "progress": {"phase": "waiting_for_match", "percent": 0},
             "detail": "no acceptable movie release is available yet",
         },
@@ -610,8 +615,7 @@ def test_unmonitored_request_is_canceled(log):
     )
     canceled_media = FakeMedia(
         result={
-            "complete": False,
-            "canceled": True,
+            "state": operations.CANCELED,
             "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
             "detail": "requested episodes are unmonitored",
         }
@@ -634,6 +638,7 @@ def announcer_with_a_ducker(log, monkeypatch, order, follow_up):
     voice = dict(helpers.CONFIG["voice"])
     voice["followUpAfterAnnounce"] = follow_up
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    ann.start()
     store = operations.OperationStore(log, on_terminal=ann.submit)
     monkeypatch.setattr(ann, "store", store)
     monkeypatch.setattr(announce, "synth", lambda *a, **kw: b"speech")
@@ -719,6 +724,7 @@ def test_a_follow_up_that_opens_no_session_gives_the_room_back(log, monkeypatch)
 def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
     voice = dict(helpers.CONFIG["voice"])
     ann = announce.Announcer(voice, {"deepgramApiKey": "x" * 40}, log)
+    ann.start()
     store = operations.OperationStore(
         log, on_terminal=ann.submit, on_notification=ann.submit_notification
     )
@@ -761,8 +767,7 @@ def test_media_monitor_reports_a_failed_search_as_failed(log):
     monitor = operations_monitors.MediaMonitor(store, fake_media, log)
     op = _movie(store, "61", "Arrival", 329865, 9, promise="search")
     fake_media.result = {
-        "complete": True,
-        "failed": True,
+        "state": operations.FAILED,
         "progress": {"phase": "search_failed"},
         "detail": "Radarr search failed",
     }
@@ -771,3 +776,95 @@ def test_media_monitor_reports_a_failed_search_as_failed(log):
     assert row["state"] == operations.FAILED
     assert row["summary"] == "Radarr's search for Arrival failed."
     assert len(terminal) == 1
+
+
+def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):
+    """A raise inside reconcile_once is one log line; polling continues, and
+    stop() ends the thread."""
+    from slopstation.agent.tools.monitor import Monitor
+
+    class Flaky(Monitor):
+        THREAD_NAME = "flaky-monitor"
+
+        def __init__(self):
+            self.log, self.poll_s, self.polls = log, 0.01, 0
+            self.polled = threading.Event()
+
+        def reconcile_once(self):
+            self.polls += 1
+            if self.polls == 1:
+                raise RuntimeError("authority offline")
+            self.polled.set()
+
+    monitor = Flaky()
+    monitor.start()
+    assert monitor.polled.wait(2), "the poll after the failure never ran"
+    monitor.stop()
+    monitor.ticker.join(2)
+    assert not monitor.ticker.is_alive()
+    (failed,) = log.find("operation_monitor_failed")
+    assert failed["err"] == "authority offline"
+
+
+def test_a_persisted_ledger_round_trips_untouched(log):
+    """The ledger outlives every deploy. Reads and no-ops leave its bytes
+    alone; a write keeps every field it does not own, including unknown keys
+    and states from a newer build. The fixture is synthetic; a redacted copy of
+    the real file should replace it."""
+    fixture = Path(__file__).parent / "fixtures" / "operations.json"
+    target = operations.operations_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(fixture, target)
+    before = target.read_bytes()
+    store = operations.OperationStore(log)
+
+    ids = {r["id"] for r in store.all()}
+    assert ids == {"op-steam-old", "op-movie", "op-series", "op-paused"}
+    active, total_active = store.for_assistant("active")
+    assert (
+        {r["id"] for r in active}
+        == {"op-steam-old", "op-series"}
+        == set(r["id"] for r in store.active())
+    )
+    assert total_active == 2
+    recent, total = store.for_assistant("recent", limit=10)
+    assert {r["id"] for r in recent} == ids and total == 4
+    assert [r["id"] for r in store.pending_announcements()] == ["op-movie"]
+    assert [n["key"] for n in store.pending_notifications()] == ["downloading"]
+    assert next(r for r in recent if r["id"] == "op-series")["scope"] == {
+        "seasons": [2],
+        "scope_label": "season 2",
+        "promise": "acquire",
+    }
+    assert store.update_metadata("op-series", {}) is not None  # no change, no write
+    assert target.read_bytes() == before
+
+    store.update_metadata("op-steam-old", {"note": "seen"})
+    after = {r["id"]: r for r in json.loads(target.read_text(encoding="utf-8"))}
+    assert after["op-steam-old"]["metadata"] == {"note": "seen"}
+    assert after["op-steam-old"]["legacy_note"] == "kept"
+    assert after["op-steam-old"]["progress"]["bytes_done"] == 512
+    assert after["op-paused"]["state"] == "PAUSED"
+    assert after["op-series"]["metadata"]["search_retry_after"] == 1757824800
+    assert after["op-movie"]["announcement_pending"] is True
+    assert len(after["op-series"]["notifications"]) == 2
+
+
+def test_a_corrupt_ledger_is_refused_and_left_alone(log):
+    """A truncated operations.json (a crash mid-write) is refused at
+    construction and left as it is for a person; the doctor's operations row
+    names it."""
+    target = operations.operations_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('[{"id": "op-1", "state": "RUNNING"', encoding="utf-8")
+    before = target.read_bytes()
+    with pytest.raises(ValueError, match="operations.json is not valid JSON"):
+        operations.OperationStore(log)
+    target.write_text('{"not": "a list"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="not a list of operations"):
+        operations.OperationStore(log)
+    target.write_bytes(before)
+    assert target.read_bytes() == before
+    # Absent is not corrupt: a fresh box starts with an empty ledger.
+    target.unlink()
+    assert operations.OperationStore(log).all() == []

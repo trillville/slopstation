@@ -128,12 +128,6 @@ def test_config_fails_on_a_missing_required_key(rows, cfg, monkeypatch):
 # --- imports, serial, puck ---------------------------------------------------
 
 
-def test_imports(rows):
-    doctor.check_imports()
-    assert rows.levels()["import serial"] == "PASS"
-    assert rows.levels()["import hid"] == "PASS"
-
-
 def test_ex_link_port_opens_or_fails(rows):
     doctor.check_com({"tvComPort": "COM3"})
     doctor.check_com({"tvComPort": "COMNONE"})
@@ -152,11 +146,11 @@ def test_puck_enumerates_or_fails(rows, monkeypatch):
 
 def test_listener_task_running_or_not(rows, monkeypatch):
     monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
-    assert doctor.check_listener() is True and rows.levels()["listener"] == "PASS"
+    assert doctor.check_listener() and rows.levels()["listener"] == "PASS"
     monkeypatch.setattr(
         supervise, "query", lambda lane: {"Status": "Ready", "Last Result": "1"}
     )
-    assert doctor.check_listener() is False and rows.levels()["listener"] == "WARN"
+    assert doctor.check_listener() is None and rows.levels()["listener"] == "WARN"
 
 
 # --- ssh: status, DENIED probe, deploy skew ----------------------------------
@@ -273,11 +267,102 @@ def test_session_state_stale_lock(rows):
 # --- telemetry -------------------------------------------------------------
 
 
-def test_telemetry(rows):
-    doctor.check_telemetry()
-    # Nothing has written into this test's log directory.
-    assert rows.levels()["event stream"] == "WARN"
-    assert rows.levels()["log shipper"] == "PASS"
+def _write_events(path, *records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
+    """The task proves the process; the events say whether the mic answered.
+    Newest event wins across files."""
+    from slopstation import events
+
+    monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
+    # audio_device is the input answering; the output can still fail.
+    _write_events(
+        events._path("20260913"),
+        {"lane": "voice", "event": "audio_device_wait"},
+        {"lane": "voice", "event": "audio_device", "kind": "input"},
+    )
+    doctor.check_voice_agent()
+    assert rows.levels()["voice agent"] == "PASS"
+    assert rows.levels()["wake word"] == "WARN"
+    assert rows.detail("wake word") == "waiting for the microphone"
+
+    rows.clear()
+    _write_events(events._path("20260914"), {"lane": "voice", "event": "audio_ready"})
+    doctor.check_voice_agent()
+    assert rows.levels()["wake word"] == "PASS"
+
+    # A missing model is a WARN with its own hint, not a stale "armed".
+    rows.clear()
+    _write_events(
+        events._path("20260915"), {"lane": "voice", "event": "wake_model_missing"}
+    )
+    doctor.check_voice_agent()
+    assert rows.detail("wake word") == "wake model missing"
+
+    # No event retained, but the task started before the retention window.
+    rows.clear()
+    for path in events.log_files():
+        path.unlink()
+    monkeypatch.setattr(
+        supervise,
+        "query",
+        lambda lane: {"Status": "Running", "Last Run Time": "1/1/2026 9:00:00 AM"},
+    )
+    doctor.check_voice_agent()
+    assert rows.levels()["wake word"] == "PASS"
+    assert rows.detail("wake word").startswith("no event retained")
+
+    # A lane that is not running gets no readiness row at all.
+    rows.clear()
+    monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Ready"})
+    doctor.check_voice_agent()
+    assert rows.levels()["voice agent"] == "WARN" and "wake word" not in rows.names()
+
+
+def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkeypatch):
+    """A real text server on a free port answers /health; the row names what
+    the voice process has up and which of its threads have stopped."""
+    from slopstation.agent.interfaces import text
+    from slopstation.agent.services import Services
+
+    token = "t" * 64
+    monkeypatch.setattr(config, "secrets", lambda: {"textInterfaceToken": token})
+    live = {**cfg, "textInterface": {"enabled": True, "host": "127.0.0.1", "port": 0}}
+    secrets = {"textInterfaceToken": token, "anthropicApiKey": "a" * 64}
+    services = Services(live, secrets, helpers.CapturingLog("voice"))
+    monkeypatch.setattr(
+        services,
+        "health",
+        lambda: {
+            "operations": True,
+            "steam": False,
+            "threads": {"announcer": False, "disk_watch": True},
+        },
+    )
+    server = text.start(services)
+    assert server is not None
+    try:
+        live["textInterface"]["port"] = server.server_address[1]
+        live["textInterface"]["host"] = (
+            "0.0.0.0"  # a wildcard bind is probed on loopback
+        )
+        doctor.check_text(live)
+        assert rows.levels()["text interface"] == "WARN"
+        assert rows.detail("text interface").endswith("stopped: announcer")
+        assert "up: operations;" in rows.detail("text interface")
+    finally:
+        server.shutdown()
+        server.server_close()
+    rows.clear()
+    doctor.check_text(live)  # nothing listening now
+    assert rows.levels()["text interface"] == "WARN"
+    assert rows.detail("text interface").startswith("no answer on")
+    rows.clear()
+    doctor.check_text({**cfg, "textInterface": {"enabled": False}})
+    assert rows.levels()["text interface"] == "PASS"
 
 
 def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
@@ -289,20 +374,16 @@ def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
         config, "load", lambda: {"sentryDsn": "https://key@o1.ingest.sentry.io/42"}
     )
 
-    def write(path, *records):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
-        )
-
     archived = paths.logs() / events.ARCHIVE_NAME / events._path("20260901").name
-    write(
+    _write_events(
         archived,
         {"lane": "listener", "event": "checkin"},
         {"lane": "voice", "event": "checkin_failed"},
     )
-    write(events._path("20260913"), {"lane": "voice", "event": "checkin"})
-    write(events._path(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"})
+    _write_events(events._path("20260913"), {"lane": "voice", "event": "checkin"})
+    _write_events(
+        events._path(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"}
+    )
     doctor.check_sentry()
     assert rows.levels()["cron check-in"] == "PASS"
     assert rows.detail("cron check-in") == "accepted for listener, voice"

@@ -6,7 +6,12 @@ from typing import Any
 
 from slopstation.agent.llm import prompts, toolsets
 from slopstation.agent.llm.confirm import ConfirmGate
-from slopstation.agent.llm.registry import AREAS, Registry, ToolContext
+from slopstation.agent.llm.registry import (
+    AREAS,
+    Registry,
+    ToolContext,
+    utterance_snapshot,
+)
 
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry
@@ -92,6 +97,7 @@ class Tools:
 
     registry = REGISTRY
     log: Any = None
+    dispatch: Any = None  # utterance pinned per call; None reads dispatch live
     impls: dict
     loaded: list
 
@@ -101,12 +107,10 @@ class Tools:
         return REGISTRY.anthropic_tools(self.loaded)
 
     def call(self, name, args):
-        """Run one loaded tool. Unloaded is refused even when offered: the
-        search step is the pause before a destructive tool, so it has to be
-        real. A raising tool becomes an error dict, never a broken turn (an
-        Anthropic history with a tool_use and no tool_result fails every
-        later request of that session). Every call is recorded here, so no
-        lane can forget to."""
+        """Run one loaded tool. An unloaded tool is refused even when offered:
+        the prompt promises it is found first. A raising tool becomes an error
+        dict, because an Anthropic history with a tool_use and no tool_result
+        fails every later request. Every call is recorded here."""
         fn = self.impls.get(name)
         if fn is None:
             return {"ok": False, "error": f"there is no tool called {name}"}
@@ -116,7 +120,8 @@ class Tools:
                 "error": f"{name} is not loaded - call find_tools for it first",
             }
         try:
-            out = fn(args)
+            with utterance_snapshot(self.dispatch):
+                out = fn(args)
         except MediaError as e:
             # The media services' errors are written for the user: "that
             # series is not in the library", "Radarr returned HTTP 503".
@@ -132,10 +137,6 @@ class Tools:
             }
         record_tool_call(name, args, out, self.log)
         return out
-
-    def function_schemas(self, log=None):
-        """Pipecat schemas for the loaded tools, in loaded order."""
-        return _pipecat_schemas(self, log or self.log)
 
 
 class Toolkit(Tools):
@@ -161,6 +162,7 @@ class Toolkit(Tools):
         on_load=None,
         gate=None,
     ):
+        self.dispatch = dispatch
         self.log = log
         self.on_load = on_load
         self.ctx = ToolContext(
@@ -229,28 +231,6 @@ def as_tools(tools, log=None):
     return StaticTools(tools, log) if isinstance(tools, dict) else tools
 
 
-def tool_impls(
-    dispatch,
-    log,
-    operations=None,
-    on_stop_listening=None,
-    voice=None,
-    steam=None,
-    media=None,
-):
-    """Every callable implementation for the supplied services, as a dict.
-    The Toolkit is the conversation-shaped view of the same thing."""
-    return Toolkit(
-        dispatch,
-        log,
-        operations=operations,
-        on_stop_listening=on_stop_listening,
-        voice=voice,
-        steam=steam,
-        media=media,
-    ).impls
-
-
 def game_title(appid):
     """The title behind an appid for a spoken phrase: installed name, owned
     name, or "that game" when the catalog has neither. Never an id aloud."""
@@ -273,74 +253,6 @@ def record_tool_call(name, args, out, log=None):
     if log:
         ok = out.get("ok") if isinstance(out, dict) else None
         log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
-
-
-def function_schemas(impls, log):
-    """Pipecat schemas for a bare impls dict (tests, the REPL); a Toolkit
-    renders its own through `function_schemas()`."""
-    return _pipecat_schemas(as_tools(impls, log), log)
-
-
-def _pipecat_schemas(tools, log):
-    """Pipecat schemas whose handlers run `tools.call` in a worker thread and
-    turn the result into speech: an acknowledgment is spoken as-is with no
-    second model turn, and end_turn closes the turn to a closing mic."""
-    import asyncio
-
-    from pipecat.adapters.schemas.function_schema import FunctionSchema
-    from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
-
-    def wrap(name):
-        async def handler(params):
-            # `call` never raises and records the call itself. The await does
-            # not lose the OTel context (contextvars are per-task), so the
-            # span still parents onto Pipecat's llm span.
-            out = await asyncio.to_thread(tools.call, name, dict(params.arguments))
-            acknowledgment = (
-                out.get("acknowledgment") if isinstance(out, dict) else None
-            )
-            end_turn = isinstance(out, dict) and bool(out.get("end_turn"))
-            if end_turn:
-                # The session ends on this call: no goodbye to a closing mic.
-                await params.result_callback(
-                    out, properties=FunctionCallResultProperties(run_llm=False)
-                )
-            elif acknowledgment:
-
-                async def speak():
-                    await params.pipeline_worker.queue_frame(
-                        TTSSpeakFrame(str(acknowledgment))
-                    )
-
-                properties = FunctionCallResultProperties(
-                    run_llm=False, on_context_updated=speak
-                )
-                await params.result_callback(out, properties=properties)
-            else:
-                await params.result_callback(out)
-
-        return handler
-
-    return [
-        FunctionSchema(
-            name=spec.name,
-            description=spec.description,
-            properties=spec.properties,
-            required=list(spec.required),
-            handler=wrap(spec.name),
-        )
-        for spec in REGISTRY.select(list(tools.loaded))
-    ]
-
-
-# `names` filters to the tools present in a given impls set, so a renderer
-# can't offer a tool that isn't callable; None renders every spec.
-def anthropic_tools(names=None):
-    return REGISTRY.anthropic_tools(names)
-
-
-def openai_tools(names=None):
-    return REGISTRY.openai_tools(names)
 
 
 def _user_location(voice):

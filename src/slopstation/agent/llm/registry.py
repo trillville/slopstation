@@ -11,6 +11,8 @@ destructive tool cannot skip the gate."""
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -104,9 +106,36 @@ class Plan:
     identifies the question, so a different target is a different ask."""
 
     scope: tuple
-    ask: str
+    ask: str  # spoken as-is; "" hands the turn back to the model
     act: Callable[[], dict]
     preview: str
+    confirm: str = ""  # the literal a text lane shows instead of `ask`
+
+
+# The utterance a running tool was called under. The grammar gate replaces
+# dispatch.utterance with each transcript while a tool may still be running on
+# a worker thread, so a tool reads this pin, not the live value. None outside a
+# call (REPL, tests).
+_UTTERANCE: contextvars.ContextVar[tuple[str | None, str] | None] = (
+    contextvars.ContextVar("utterance", default=None)
+)
+
+
+@contextlib.contextmanager
+def utterance_snapshot(dispatch):
+    """Pin dispatch.utterance for the tool about to run. With no dispatch (a
+    bare tools dict) nothing is pinned."""
+    if dispatch is None:
+        yield
+        return
+    live = getattr(dispatch, "utterance", None)
+    token = _UTTERANCE.set(
+        (getattr(live, "turn", None), getattr(live, "asked", None) or "")
+    )
+    try:
+        yield
+    finally:
+        _UTTERANCE.reset(token)
 
 
 @dataclass
@@ -126,9 +155,19 @@ class ToolContext:
     toolkit: Any = None
 
     def turn(self) -> str | None:
-        """The utterance's turn id, or None when there is no utterance: the
-        gate then fails closed."""
+        """Turn id of the utterance this tool runs under. None means no
+        utterance, and the confirmation gate refuses."""
+        pinned = _UTTERANCE.get()
+        if pinned is not None:
+            return pinned[0]
         return getattr(getattr(self.dispatch, "utterance", None), "turn", None)
+
+    def asked(self) -> str:
+        """Words of the utterance this tool runs under, or ""."""
+        pinned = _UTTERANCE.get()
+        if pinned is not None:
+            return pinned[1]
+        return getattr(getattr(self.dispatch, "utterance", None), "asked", None) or ""
 
     def preview(self, action: str) -> dict | None:
         """On a dry run, the answer a mutation gives instead of acting; None
@@ -217,7 +256,15 @@ class Bindings:
                 return plan
             if dry := ctx.preview(plan.preview):
                 return dry
-            return ctx.confirm(name, plan.scope, {"acknowledgment": plan.ask}, plan.act)
+            if plan.ask:
+                ask = {"acknowledgment": plan.ask}
+            else:
+                ask = {
+                    "confirm": plan.confirm,
+                    "error": "not run yet: read this request back to the user in "
+                    "plain words, and call again unchanged once they say yes",
+                }
+            return ctx.confirm(name, plan.scope, ask, plan.act)
 
         run.__name__ = name
         self._add(run, gated=True)
