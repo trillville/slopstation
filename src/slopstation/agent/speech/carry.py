@@ -1,11 +1,9 @@
-"""What a follow-up session keeps from the last one: the recent turns, the
-tools find_tools loaded, and the confirmation gate's open questions."""
+"""What a follow-up session keeps from the last one: recent turns, loaded
+tools, and open confirmation questions."""
 
 import time
 from typing import Any
 
-# Cross-session context: the last turns, and the tools find_tools loaded,
-# so a follow-up session keeps what the last one found.
 CARRY: dict[str, Any] = {"messages": [], "loaded": [], "gate": None, "t": 0.0}
 
 
@@ -20,8 +18,8 @@ def _trim_carry(messages):
 
 
 def load(window_s):
-    """(messages, loaded tools, gate) from the last session when it ended
-    within `window_s` seconds, else empty ones and no gate."""
+    """(messages, loaded tools, gate) if the last session ended within
+    `window_s`, else empty."""
     if time.time() - CARRY["t"] >= window_s:
         return [], [], None
     return list(CARRY["messages"]), list(CARRY["loaded"]), CARRY["gate"]
