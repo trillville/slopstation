@@ -430,6 +430,11 @@ def test_voice_library_and_deals_rows(rows):
     assert "voice deals" not in rows.names()
 
     rows.clear()
+    statefile.write(steamstore.deals_file(), {})
+    doctor.check_voice_library()
+    assert rows.levels()["voice deals"] == "PASS"
+
+    rows.clear()
     library.library_file().write_text("{half", encoding="utf-8")
     doctor.check_voice_library()
     assert rows.detail("voice library").startswith("unreadable")

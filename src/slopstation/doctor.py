@@ -680,7 +680,7 @@ def check_voice_library():
                 "store sync failing, or the agent is down (see 'voice agent')",
             )
         else:
-            report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
+            report(PASS, "voice deals", f"refreshed {deals_h:.0f}h ago")
 
 
 def check_voice_config(cfg):
