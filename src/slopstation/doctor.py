@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 from slopstation import config, events, haptics, paths, sessionlock, supervise
-from slopstation.agent.tools import media_proton, operations
+from slopstation.agent.tools import library, media_proton, operations, steamstore
 from slopstation.agent.tools.media_clients import ArrClient
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -643,45 +643,44 @@ def check_venv(cfg):
 
 
 def check_voice_library():
-    lib = paths.state() / "library.json"
     try:
-        data = json.loads(lib.read_text(encoding="utf-8"))
-        age_h = (time.time() - lib.stat().st_mtime) / 3600
-        report(
-            PASS,
-            "voice library",
-            f"{len(data.get('installed', []))} installed / "
-            f"{len(data.get('owned', []))} owned, refreshed {age_h:.0f}h ago",
-        )
-    except OSError:
-        report(
-            WARN,
-            "voice library",
-            "no index yet",
-            "fills itself on the agent's first run (PC awake for installed)",
-        )
-    except Exception as e:
+        summary = library.index_summary()
+    except (OSError, ValueError) as e:
         report(
             WARN,
             "voice library",
             f"unreadable ({e})",
             "delete state\\library.json; the agent rebuilds it",
         )
+    else:
+        if summary is None:
+            report(
+                WARN,
+                "voice library",
+                "no index yet",
+                "fills itself on the agent's first run (PC awake for installed)",
+            )
+        else:
+            installed, owned, age_h = summary
+            report(
+                PASS,
+                "voice library",
+                f"{installed} installed / {owned} owned, refreshed {age_h:.0f}h ago",
+            )
 
     # Deals precompute: the agent refreshes ~6h, so stale means the store sync
     # is failing. WARN past 24h; absent is silent (fills on first sync).
-    deals = paths.state() / "deals.json"
-    if deals.exists():
-        age_h = (time.time() - deals.stat().st_mtime) / 3600
-        if age_h > 24:
+    deals_h = steamstore.deals_age_h()
+    if deals_h is not None:
+        if deals_h > 24:
             report(
                 WARN,
                 "voice deals",
-                f"stale ({age_h:.0f}h)",
+                f"stale ({deals_h:.0f}h)",
                 "store sync failing, or the agent is down (see 'voice agent')",
             )
         else:
-            report(PASS, "voice deals", f"refreshed {age_h:.0f}h ago")
+            report(PASS, "voice deals", f"refreshed {deals_h:.0f}h ago")
 
 
 def check_voice_config(cfg):
@@ -1024,20 +1023,9 @@ def check_remote(cfg):
 
 
 def check_operations():
-    ledger = operations.operations_file()
-    if not ledger.exists():
-        report(PASS, "operations", "no operations recorded")
-        return
     try:
-        rows = json.loads(ledger.read_text(encoding="utf-8"))
-        active = [o for o in rows if o.get("state") in operations.ACTIVE]
-        unknown = [o for o in active if o.get("state") == operations.UNKNOWN]
-        pending = [o for o in rows if o.get("announcement_pending")]
-        note = (
-            f"{len(rows)} recorded, {len(active)} active, "
-            f"{len(unknown)} unknown, {len(pending)} pending announcement"
-        )
-    except Exception as e:
+        summary = operations.ledger_summary()
+    except ValueError as e:
         report(
             WARN,
             "operations",
@@ -1046,9 +1034,16 @@ def check_operations():
             "Slopstation correlation will be lost",
         )
         return
+    if summary is None:
+        report(PASS, "operations", "no operations recorded")
+        return
+    note = (
+        f"{summary['recorded']} recorded, {summary['active']} active, "
+        f"{summary['unknown']} unknown, {summary['pending']} pending announcement"
+    )
     # The agent probe is outside the parse: its failure is not a bad ledger.
     try:
-        paused = active and not supervise.running("voice")
+        paused = summary["active"] and not supervise.running("voice")
     except Exception as e:
         report(
             WARN,

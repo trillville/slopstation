@@ -419,6 +419,36 @@ def test_operations_in_an_unknown_state_with_the_agent_down(rows, lanes_down):
     assert rows.levels()["operations"] == "WARN"
 
 
+def test_voice_library_and_deals_rows(rows):
+    """Absent index, unreadable index, fresh index; stale deals."""
+    import os
+
+    from slopstation.agent.tools import library, steamstore
+
+    doctor.check_voice_library()
+    assert rows.detail("voice library") == "no index yet"
+    assert "voice deals" not in rows.names()
+
+    rows.clear()
+    statefile.write(steamstore.deals_file(), {})
+    doctor.check_voice_library()
+    assert rows.levels()["voice deals"] == "PASS"
+
+    rows.clear()
+    library.library_file().write_text("{half", encoding="utf-8")
+    doctor.check_voice_library()
+    assert rows.detail("voice library").startswith("unreadable")
+
+    rows.clear()
+    statefile.write(library.library_file(), {"installed": [{}], "owned": [{}, {}]})
+    statefile.write(steamstore.deals_file(), {})
+    old = time.time() - 30 * 3600
+    os.utime(steamstore.deals_file(), (old, old))
+    doctor.check_voice_library()
+    assert rows.detail("voice library").startswith("1 installed / 2 owned")
+    assert rows.levels()["voice deals"] == "WARN"
+
+
 def test_voice_without_a_voice_section(rows):
     doctor.check_voice({})
     assert rows.levels()["voice config"] == "WARN"

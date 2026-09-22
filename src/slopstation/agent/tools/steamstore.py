@@ -27,6 +27,14 @@ def deals_file():
 DEALS_MAX_AGE_S = 6 * 3600  # prices move at sale boundaries
 
 
+def deals_age_h() -> float | None:
+    """Hours since the deals snapshot was written, or None before the first."""
+    try:
+        return (time.time() - deals_file().stat().st_mtime) / 3600
+    except FileNotFoundError:
+        return None
+
+
 # per-game how-long-to-beat, {fuzzy_key: {main, extra, complete}}, forever
 def hltb_cache_file():
     return paths.state("hltb-cache.json")
