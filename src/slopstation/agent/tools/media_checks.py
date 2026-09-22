@@ -423,6 +423,26 @@ def _check_qbittorrent(report, client, media_cfg):
         if auth_bypass
         else "no localhost or subnet bypass",
     )
+    # Set by hand in qBittorrent and held only in its own qBittorrent.ini, so
+    # a rebuilt client comes back without it and nothing else would say so.
+    patterns = {
+        part.strip().casefold()
+        for part in str(preferences.get("excluded_file_names", ""))
+        .replace(",", "\n")
+        .split("\n")
+        if part.strip()
+    }
+    if not preferences.get("excluded_file_names_enabled"):
+        detail = "disabled - a fake release's program downloads to the drive"
+    elif "*.exe" not in patterns:
+        detail = "enabled but does not cover *.exe"
+    else:
+        detail = ""
+    report.add(
+        "FAIL" if detail else "PASS",
+        "qBittorrent excluded file names",
+        detail or f"{len(patterns)} patterns, *.exe among them",
+    )
     category_names = {str(name).casefold() for name in categories}
     missing = [name for name in ("radarr", "sonarr") if name not in category_names]
     report.add(

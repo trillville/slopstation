@@ -66,6 +66,8 @@ Run qBittorrent as a native Windows application.
   bypasses.
 - Set the save path to `<MEDIA_ROOT>\torrents`.
 - Create the `radarr` and `sonarr` categories.
+- Under Downloads, enable **Excluded file names** and list at least `*.exe`.
+  See [Fake releases](#fake-releases).
 - Set `media.qbittorrentNetworkInterface` in `config.json` to qBittorrent's
   exact interface name.
 - Move Windows' dynamic port range below Proton's forwarded ports, as
@@ -179,6 +181,28 @@ whichever comes first:
 
 Keep the `radarr` and `sonarr` categories after import. Test cleanup with a
 small movie and episode, and confirm the imported files remain.
+
+## Fake releases
+
+Public indexers carry releases whose only "video" is a Windows program. They
+appear for a show days before the episode airs and often outnumber the real
+release for the first hours after it does.
+
+Two things stop them, and both are needed:
+
+- qBittorrent's **Excluded file names** (enabled, at least `*.exe`) keeps the
+  program off the media drive. The media doctor has a row for it, because the
+  setting lives only in qBittorrent's own `qBittorrent.ini` and a rebuilt
+  client comes back without it.
+- The health monitor blocklists the grab and removes it from the client so the
+  app takes its next candidate. `media_queue_reaped` carries `reason`:
+  `executable` when the app itself refused the program, `empty` when the
+  filter had already removed it and the download finished with nothing.
+
+Without the second, a filtered fake leaves a download the app calls complete
+and cannot import. That queue entry makes the app treat the episode as
+handled, so it never grabs the real release, and the episode stays missing
+until someone clears the entry by hand.
 
 ## Proton forwarded port
 
