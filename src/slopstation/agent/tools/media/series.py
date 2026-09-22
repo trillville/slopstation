@@ -665,6 +665,42 @@ class _Series(_Queue):
             metadata_ready=metadata_ready,
         )
 
+    def season_counts(self, series_id):
+        """Per season of a Sonarr series: episodes held, aired but missing,
+        and not yet aired, and whether any is monitored."""
+        episodes = self.sonarr.get("episode", {"seriesId": series_id}) or []
+        now = datetime.datetime.now(datetime.UTC)
+        seasons: dict[int, dict] = {}
+        for e in episodes:
+            if not isinstance(e, dict):
+                continue
+            s = seasons.setdefault(
+                int(e.get("seasonNumber", 0) or 0),
+                {
+                    "season": e.get("seasonNumber"),
+                    "held": 0,
+                    "missing": 0,
+                    "upcoming": 0,
+                    "monitored": False,
+                },
+            )
+            air = _parse_time(str(e.get("airDateUtc") or "").replace("Z", "+00:00"))
+            aired = air is not None and air <= now
+            if e.get("hasFile"):
+                s["held"] += 1
+            elif aired:
+                s["missing"] += 1
+            else:
+                s["upcoming"] += 1
+            s["monitored"] = s["monitored"] or bool(e.get("monitored"))
+        return [seasons[k] for k in sorted(seasons)]
+
+    def episode_id(self, series_id, season, episode):
+        """Sonarr's id for one episode of a series, or None when it has no row."""
+        rows = self.sonarr.get("episode", {"seriesId": series_id}) or []
+        ids, _ = self._episode_ids_for(rows, [(int(season), int(episode))])
+        return ids[0] if ids else None
+
     def episodes_in_seasons(self, tvdb_id, seasons):
         """Resolve a deletion's episode scope while Sonarr still has its rows."""
         series = self._library_row("series", int(tvdb_id))
