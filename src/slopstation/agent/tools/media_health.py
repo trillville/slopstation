@@ -57,6 +57,18 @@ def _queue_detail(row):
     return _clean_text("; ".join(message for message in messages if message))
 
 
+def _empty_completion(row):
+    """A download the client calls finished having transferred nothing: every
+    file in it was deselected, which is qBittorrent's excluded-file-names
+    filter removing a fake release whose only "video" is a program. The app
+    never sees the executable, so it reports no eligible files instead of the
+    executable verdict, and the grab sits in the queue forever. Complete and
+    empty is never a real release, so it needs no grace period."""
+    if _clean_text(row.get("status"), 30).lower() != "completed":
+        return False
+    return not float(row.get("size", 0) or 0) and not float(row.get("sizeleft", 0) or 0)
+
+
 class MediaHealthMonitor(Monitor):
     """Report Radarr/Sonarr trouble nobody is sitting in front of.
 
@@ -289,6 +301,8 @@ class MediaHealthMonitor(Monitor):
                 continue
             if any(EXECUTABLE_BLOCK in m.casefold() for m in _queue_messages(row)):
                 reason, first = "executable", now
+            elif _empty_completion(row):
+                reason, first = "empty", now
             else:
                 # Only a grab the client holds and should be moving. Paused,
                 # held by a delay profile, or the client being away is not

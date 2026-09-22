@@ -763,6 +763,48 @@ def test_health_watch_reaps_a_grab_that_never_starts():
     assert not off_sonarr.deletes and off_log.find("media_queue_stalled")
 
 
+def test_health_watch_reaps_a_download_that_completed_empty():
+    """qBittorrent's excluded-file-names filter deselects the executable in a
+    fake release, so the download finishes having transferred nothing and the
+    app reports no eligible files rather than the executable verdict. Final on
+    sight, like the executable verdict; a real completed grab still waits."""
+    clock = [1000.0]
+    empty = {
+        "id": 1,
+        "downloadId": "EMPTY",
+        "episodeId": 435,
+        "title": "Show.S18E07.1080p.WEB.h264-FAKE.exe",
+        "status": "completed",
+        "size": 0.0,
+        "sizeleft": 0.0,
+        "trackedDownloadStatus": "warning",
+        "trackedDownloadState": "importPending",
+        "statusMessages": [
+            {"messages": ["No files found are eligible for import in /data/torrents"]}
+        ],
+    }
+    importing = {
+        "id": 2,
+        "downloadId": "REAL",
+        "episodeId": 436,
+        "status": "completed",
+        "size": 100.0,
+        "sizeleft": 0.0,
+    }
+    sonarr = FakeArr("Sonarr", queue={"records": [empty, importing]})
+    log = CapturingLog("voice")
+    watch = media_health.MediaHealthMonitor(
+        (sonarr,), log, stall_grace_s=1800, now=lambda: clock[0]
+    )
+    watch.reconcile_once()
+    blocklist = {"removeFromClient": "true", "blocklist": "true"}
+    assert sonarr.deletes == [("queue/1", blocklist)]
+    reaped = log.find("media_queue_reaped")
+    assert [(r["download"], r["reason"], r["idle_s"]) for r in reaped] == [
+        ("EMPTY", "empty", 0)
+    ]
+
+
 def test_health_watch_reports_a_dead_app_once():
     class DeadArr:
         name = "Sonarr"
@@ -1906,6 +1948,8 @@ HEALTHY_QBIT_PREFERENCES = {
     "max_ratio_act": 0,
     "bypass_local_auth": False,
     "bypass_auth_subnet_whitelist_enabled": False,
+    "excluded_file_names_enabled": True,
+    "excluded_file_names": "*.exe\n*.scr\n*.bat",
 }
 
 
@@ -2029,6 +2073,7 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
         upnp=True,
         share_limits_mode="MatchAll",
         listen_port=1234,
+        excluded_file_names_enabled=False,
     )
     broken = _doctor(monkeypatch, tmp_path, broken_preferences, dht_nodes=0)
     assert not broken["ok"]
@@ -2046,5 +2091,9 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
     )
     assert any(
         row["name"] == "Proton port synchronization" and row["level"] == "FAIL"
+        for row in broken["checks"]
+    )
+    assert any(
+        row["name"] == "qBittorrent excluded file names" and row["level"] == "FAIL"
         for row in broken["checks"]
     )
