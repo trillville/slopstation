@@ -25,7 +25,7 @@ GB = 1024**3
 def media_root() -> Path | None:
     """MEDIA_ROOT from media/.env, as the disk watch reads it. None on a
     checkout that is not the K15."""
-    from slopstation.agent.tools.media import _media_root
+    from slopstation.agent.tools.media.config import _media_root
 
     root = _media_root(paths.HOME / "media" / ".env")
     return Path(root) if root else None
