@@ -54,6 +54,19 @@ def load() -> dict:
     return statefile.load(library_file(), {})
 
 
+def index_summary() -> tuple[int, int, float] | None:
+    """(installed, owned, hours since written) for the doctor, or None before
+    the first sync. ValueError when the file cannot be read."""
+    path = library_file()
+    if not path.exists():
+        return None
+    data = statefile.load_strict(path, {})
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} is not an index")
+    age_h = (time.time() - path.stat().st_mtime) / 3600
+    return len(data.get("installed", [])), len(data.get("owned", [])), age_h
+
+
 def installed_name(appid: int) -> str | None:
     """Installed title for an appid, or None."""
     for r in load().get("installed", []):

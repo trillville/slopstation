@@ -139,10 +139,7 @@ class OperationStore:
             self._load()
 
     def _load(self) -> list[OperationRow]:
-        rows = statefile.load_strict(self.path, [])
-        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
-            raise ValueError(f"{self.path.name} is not a list of operations")
-        return rows
+        return _read(self.path)
 
     def _save(self, rows: list[OperationRow]) -> None:
         statefile.write(self.path, rows)
@@ -639,9 +636,34 @@ def record_deleted(store, rows, result=None, episodes=None):
     return result
 
 
+def _read(path) -> list[OperationRow]:
+    """The ledger's rows. ValueError when the file cannot be read or is not a
+    list of rows; an absent file is an empty ledger."""
+    rows = statefile.load_strict(path, [])
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        raise ValueError(f"{path.name} is not a list of operations")
+    return rows
+
+
+def ledger_summary() -> dict | None:
+    """Row counts for the doctor, or None when nothing was ever recorded.
+    ValueError when the file cannot be read."""
+    path = operations_file()
+    if not path.exists():
+        return None
+    rows = _read(path)
+    active = [r for r in rows if r.get("state") in ACTIVE]
+    return {
+        "recorded": len(rows),
+        "active": len(active),
+        "unknown": sum(r.get("state") == UNKNOWN for r in active),
+        "pending": sum(bool(r.get("announcement_pending")) for r in rows),
+    }
+
+
 def owned_seasons() -> dict:
     """series id -> seasons an active series operation owns; None means the
-    whole series. An unreadable ledger owns nothing, so a reader over- reports,
+    whole series. An unreadable ledger owns nothing, so a reader over-reports,
     which is the safe direction."""
     owned: dict = {}
     rows = statefile.load(operations_file(), [])
