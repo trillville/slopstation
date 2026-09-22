@@ -1,37 +1,17 @@
 """Build and run one Pipecat voice session."""
 
-import time
-from typing import Any
-
 from slopstation import config, logbook
-from slopstation.agent.speech import keyterms, tool_schemas
+from slopstation.agent.speech import carry, keyterms, tool_schemas
 from slopstation.agent.telemetry import sentry, traces
 from slopstation.agent.tools import library, titles
 
 log = logbook.logger("voice")
 
 
-# Cross-session context: the last turns, and the tools find_tools loaded,
-# so a follow-up session keeps what the last one found.
-CARRY: dict[str, Any] = {"messages": [], "loaded": [], "gate": None, "t": 0.0}
-
-
-def _trim_carry(messages):
-    """Keep only complete tool exchanges beginning with a user message."""
-    msgs = list(messages)
-    while msgs and msgs[0].get("role") != "user":
-        msgs.pop(0)
-    if msgs and msgs[-1].get("tool_calls"):
-        msgs.pop()
-    return msgs
-
-
 def busy_stage(voice, log, toolkit, gate=None):
-    """The busy tone, between the model and the speech, or None when the
-    config turns it off. A tool call still out after busyAfterMs gets one
-    acknowledgment per turn: the tool's own phrase from its spec, else
-    busyPhrase, else the busy earcon. busyEnabled false, or busyAfterMs 0,
-    is off."""
+    """The busy tone stage, or None when off. A tool call still running after
+    busyAfterMs gets one phrase per turn: the tool's own, else busyPhrase, else
+    the earcon."""
     if not voice.get("busyEnabled", True):
         return None
     after_ms = int(voice.get("busyAfterMs", 800) or 0)
@@ -72,8 +52,8 @@ def _make_llm(voice, secrets, system_text):
             OpenAIResponsesReasoningConfig,
         )
 
-        # reasoning must be the typed config, not a dict: pipecat accepts
-        # anything at construction, then calls .model_dump() at inference.
+        # A typed config, not a dict: pipecat calls .model_dump() on it at
+        # inference.
         return OpenAIResponsesHttpLLMService(
             api_key=secrets["openaiApiKey"],
             settings=OpenAIResponsesHttpLLMService.Settings(
@@ -99,8 +79,8 @@ def _make_llm(voice, secrets, system_text):
 
 
 class _PipecatErrors:
-    """Pipecat logs its own errors to loguru; a transport write failure pushes
-    no frame, so a dead speaker otherwise reads as a clean session."""
+    """Counts pipecat's logged errors. A failed speaker write pushes no frame,
+    so without this a dead speaker looks like a clean session."""
 
     OUTPUT = "pipecat.transports.base_output"
 
@@ -175,15 +155,62 @@ class Session:
         self.audio_failed = False  # the speaker stopped taking frames
 
     async def run(self):
-        from pipecat.frames.frames import (
-            BotSpeakingFrame,
-            InterimTranscriptionFrame,
-            ProposedUserStartedSpeakingFrame,
-            TranscriptionFrame,
-            UserStartedSpeakingFrame,
-        )
-        from pipecat.pipeline.pipeline import Pipeline
-        from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+        from pipecat.workers.runner import WorkerRunner
+
+        transport, feeder, gate, stages = self._build_stages()
+        worker = self._build_worker(stages)
+
+        @worker.event_handler("on_idle_timeout")
+        async def _on_idle(worker):
+            # Nothing emits frames mid-turn or while a command runs, so a busy
+            # session is not idle.
+            if gate.is_busy():
+                log("idle_deferred", reason="busy")
+                return
+            log("session_idle_timeout")
+            await worker.cancel(reason="idle")
+
+        # Pipecat swallows setup errors; without this a failed build looks like
+        # a clean close.
+        started = False
+
+        @worker.event_handler("on_pipeline_started")
+        async def _on_started(worker, frame):
+            nonlocal started
+            started = True
+
+        runner = WorkerRunner(handle_sigint=False)
+        # Handed over live: the feeder stops it at StartFrame, so speech during
+        # the Flux connect is kept. The chime deadline counts from the wake, so
+        # it is disarmed here.
+        if self.capture is not None:
+            self.capture.disarm_deadline()
+        feeder.capture = self.capture
+        errors = _PipecatErrors()
+        try:
+            with errors:
+                await runner.add_workers(worker)
+                await runner.run()
+                if not started:
+                    raise RuntimeError(
+                        "pipeline setup failed before StartFrame - "
+                        "the underlying error is console-only"
+                    )
+        finally:
+            # Pipecat 1.8.1 never frees its PyAudio handle; without this one
+            # leaks per wake.
+            pa = getattr(transport, "_pyaudio", None)
+            if pa is not None:
+                try:
+                    pa.terminate()
+                except Exception as e:
+                    log.warn("pyaudio_terminate_failed", err=str(e))
+        self.audio_failed = errors.output > 0
+        self._save_and_carry()
+
+    def _build_stages(self):
+        """Mic through the grammar gate, then the LLM lane or the speaker.
+        Returns (transport, feeder, gate, stages)."""
         from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
         from pipecat.transports.local.audio import (
             LocalAudioTransport,
@@ -191,7 +218,6 @@ class Session:
         )
         from pipecat.turns.user_turn_processor import UserTurnProcessor
         from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
-        from pipecat.workers.runner import WorkerRunner
 
         from slopstation.agent.llm.assistant import PROVIDER_KEY
         from slopstation.agent.speech.audio import wake_phrase as _wake_phrase
@@ -237,14 +263,14 @@ class Session:
                 ),
                 numerals=True,
                 keyterm=terms,
-                # Flux's cap on a turn after speech stops; unset is its own 5 s.
+                # Flux ends a turn this long after speech stops; default 5 s.
                 eot_timeout_ms=(
                     int(voice["eotTimeoutMs"]) if voice.get("eotTimeoutMs") else None
                 ),
             ),
         )
 
-        # Floor 0 (a config from before the key) measures and never mutes.
+        # Floor 0 measures but never mutes.
         loud = (lambda: self.room.loud) if self.room is not None else None
         level = RoomLevel(
             floor_db=float(voice.get("chatterFloorDb", 0) or 0), log=log, loud=loud
@@ -268,18 +294,14 @@ class Session:
             assistant_enabled=assistant_live,
             wake_word=wake_phrase.split()[-1],  # "jarvis" - the strip anchor
             ack=self.ack,  # wake chime, if still unplayed
-            # The duck runs off-thread; read it per turn, not at build.
+            # Read per turn: the duck lands off-thread.
             loud=loud,
             level=level,
             addressed=self.capture is None,  # a follow-up open: no wake word
         )
 
         feeder = PrerollFeeder(log)
-        # Flux only PROPOSES turn edges since pipecat 1.8, and its stop
-        # proposal is a queued ControlFrame - resolved downstream of a gate
-        # whose queue blocks on dispatch, a stale stop can land after the next
-        # turn's start. enable_interruptions=True cuts the answer on talk-over;
-        # False lets it play through.
+        # Talking over the answer cuts it off.
         turns = UserTurnProcessor(
             user_turn_strategies=ExternalUserTurnStrategies(enable_interruptions=True)
         )
@@ -288,10 +310,21 @@ class Session:
             stages += self._assistant_stages(transport, dispatcher, gate)
         else:
             stages += [transport.output()]
+        return transport, feeder, gate, stages
 
-        # enable_metrics is what populates token counts and time to first
-        # byte in the spans;
-        # enable_tracing belongs on PipelineWorker, not PipelineTask.
+    def _build_worker(self, stages):
+        """The Pipecat worker over `stages`: tracing, and the idle clock."""
+        from pipecat.frames.frames import (
+            BotSpeakingFrame,
+            InterimTranscriptionFrame,
+            ProposedUserStartedSpeakingFrame,
+            TranscriptionFrame,
+            UserStartedSpeakingFrame,
+        )
+        from pipecat.pipeline.pipeline import Pipeline
+        from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+
+        # Metrics fill token counts and time to first byte in the spans.
         tracing_on = sentry.is_on()
         worker = PipelineWorker(
             Pipeline(stages),
@@ -303,14 +336,11 @@ class Session:
             enable_rtvi=False,
             enable_tracing=tracing_on,
             enable_turn_tracking=tracing_on,
-            # Pipecat's conversation id IS our session id: a Sentry
-            # Conversation and the JSONL lines around it join on this value.
+            # Our session id, so a Sentry conversation joins the event log.
             conversation_id=sentry.conversation_id() if tracing_on else None,
             additional_span_attributes=sentry.span_attributes() if tracing_on else None,
-            idle_timeout_secs=voice["holdWindowS"],
-            # The real start frame comes from the turns resolver; the proposal
-            # is Flux's own push and resets the clock even if that wiring
-            # moves.
+            idle_timeout_secs=self.voice["holdWindowS"],
+            # Any of these resets the idle clock.
             idle_timeout_frames=(
                 TranscriptionFrame,
                 InterimTranscriptionFrame,
@@ -318,63 +348,9 @@ class Session:
                 ProposedUserStartedSpeakingFrame,
                 BotSpeakingFrame,
             ),
-            cancel_on_idle_timeout=False,  # we decide - see the handler
+            cancel_on_idle_timeout=False,  # the handler decides
         )
-
-        @worker.event_handler("on_idle_timeout")
-        async def _on_idle(worker):
-            # Flux emits no frame mid-turn and dispatch pushes nothing while
-            # it blocks, so the idle clock can expire mid-utterance or mid-ssh.
-            if gate.is_busy():
-                log("idle_deferred", reason="busy")
-                return
-            log("session_idle_timeout")
-            await worker.cancel(reason="idle")
-
-        # A setup exception (device open, Flux connect - both run in setup
-        # under 1.8) is swallowed by the runner's gather(return_exceptions);
-        # without this flag a failed build reads as a clean instant close and
-        # session_crashed never fires.
-        started = False
-
-        @worker.event_handler("on_pipeline_started")
-        async def _on_started(worker, frame):
-            nonlocal started
-            started = True
-
-        runner = WorkerRunner(handle_sigint=False)
-        # Handed over LIVE, stopped by the feeder at StartFrame: 1.8 runs the
-        # Flux connect during setup, before StartFrame starts the mic, so a
-        # capture stopped here would lose that window (0.3-1.5 s of speech).
-        # The can't-tell chime deadline must not ride into that extra window -
-        # it counts from the wake, and a one-breath command is still mid-word
-        # at 1.5 s.
-        if self.capture is not None:
-            self.capture.disarm_deadline()
-        feeder.capture = self.capture
-        errors = _PipecatErrors()
-        try:
-            with errors:
-                await runner.add_workers(worker)
-                await runner.run()
-                if not started:
-                    raise RuntimeError(
-                        "pipeline setup failed before StartFrame - "
-                        "the underlying error is console-only"
-                    )
-        finally:
-            # pipecat (still in 1.8.1) never terminates the PyAudio handle it
-            # creates and exposes no public cleanup; a fresh transport per wake
-            # would leak one each time. Guarded so an upstream rename logs, not
-            # crashes.
-            pa = getattr(transport, "_pyaudio", None)
-            if pa is not None:
-                try:
-                    pa.terminate()
-                except Exception as e:
-                    log.warn("pyaudio_terminate_failed", err=str(e))
-        self.audio_failed = errors.output > 0
-        self._save_and_carry()
+        return worker
 
     def _assistant_stages(self, transport, dispatcher, gate):
         """The LLM lane: carried turns, tools, provider LLM, and TTS."""
@@ -392,27 +368,20 @@ class Session:
         )
 
         voice, secrets = self.voice, self.secrets
-        carrying = time.time() - CARRY["t"] < voice["followupCarryS"]
-        carry = list(CARRY["messages"]) if carrying else []
-        # Native (provider-executed) tools ride custom_tools. Only the OpenAI
-        # adapter has that passthrough (AdapterType still has no ANTHROPIC in
-        # 1.8.1), so the knob is a no-op under the anthropic provider.
+        messages, loaded, carried_gate = carry.load(voice["followupCarryS"])
+        # Provider-run tools (web search) work only with OpenAI in pipecat
+        # 1.8.1.
         native = server_tools(voice, "openai") if self.provider == "openai" else []
 
         def tools_schema():
             assert self.toolkit is not None
             return ToolsSchema(
-                # -> one tool_call event per call
                 standard_tools=tool_schemas.pipecat_schemas(self.toolkit, log),
                 custom_tools={AdapterType.OPENAI: native} if native else None,
             )
 
-        # Built after the gate so its request_stop can ride here. When
-        # find_tools loads more, the context's tool list is replaced; Pipecat
-        # re-reads it on the next inference and registers the new handlers.
-        # on_load runs on the tool's worker thread (asyncio.to_thread), not
-        # the loop: set_tools is one attribute assignment, so that is safe,
-        # and the loop only reads the list after the tool result lands.
+        # Built after the gate, for request_stop. on_load runs on the tool's
+        # thread; replacing the tool list is one assignment, so it is safe.
         self.toolkit = self.services.toolkit(
             dispatcher,
             on_stop_listening=gate.request_stop,
@@ -421,19 +390,15 @@ class Session:
                 if self.context is not None
                 else None
             ),
-            # A follow-up keeps the previous session's asks armed: a "yes" to
-            # a question the last session ended on lands here, inside the
-            # gate's own lifetime.
-            gate=CARRY["gate"] if carrying else None,
+            # A follow-up keeps the last session's open questions, so a late
+            # yes still confirms.
+            gate=carried_gate,
         )
-        if carrying:
-            self.toolkit.load(CARRY["loaded"])
-        self.context = LLMContext(messages=carry, tools=tools_schema())
-        # Strategies passed explicitly so the aggregator does not build its
-        # default per-session smart-turn ONNX model; turn resolution itself
-        # happens upstream in the turns resolver (see run()), so these only
-        # adopt already-real frames. enable_interruptions matches the
-        # resolver's.
+        if loaded:
+            self.toolkit.load(loaded)
+        self.context = LLMContext(messages=messages, tools=tools_schema())
+        # Passed so the aggregator skips its own turn model; turns are resolved
+        # upstream.
         user_agg, asst_agg = LLMContextAggregatorPair(
             self.context,
             user_params=LLMUserAggregatorParams(
@@ -446,9 +411,8 @@ class Session:
             voice, secrets, system_instruction(self.cfg, offered=self.toolkit.offered)
         )
         if native:
-            # Pipecat (still in 1.8.1) has no handling for provider-executed
-            # tools: a web_search never reaches the context, so the model
-            # cannot tell that it searched.
+            # Pipecat 1.8.1 does not record provider-run searches; without this
+            # they are invisible.
             from slopstation.agent.llm import llm_audit
 
             if llm_audit.install(llm, log, spans=sentry, context=self.context):
@@ -467,12 +431,9 @@ class Session:
         return stages + [_make_tts(voice, secrets), transport.output(), asst_agg]
 
     def _save_and_carry(self):
-        """Dump the transcript and retain the last complete turns."""
+        """Save the transcript and carry the last turns."""
         if self.context is None:
             return
         msgs = list(self.context.messages)
         traces.save("voice", msgs, {"provider": self.provider, "dry_run": self.dry_run})
-        CARRY["messages"] = _trim_carry(msgs[-8:])
-        CARRY["loaded"] = list(self.toolkit.loaded) if self.toolkit else []
-        CARRY["gate"] = self.toolkit.ctx.gate if self.toolkit else None
-        CARRY["t"] = time.time()
+        carry.save(msgs, self.toolkit)
