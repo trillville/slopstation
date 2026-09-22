@@ -6,6 +6,7 @@ a stable tool list is a stable cache prefix."""
 from slopstation.agent.llm.toolsets import (
     house,
     media,
+    media_browse,
     media_ops,
     passthrough,
     rig,
@@ -23,6 +24,7 @@ ALL = (
     steam_client,
     house,
     media,
+    media_browse,
     media_ops,
     torrents,
     storage,
