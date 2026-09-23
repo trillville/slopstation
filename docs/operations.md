@@ -166,17 +166,17 @@ Under `state\`:
 .venv\Scripts\slopstation-text "what is downloading?"
 
 # tracked Steam and media work
-.venv\Scripts\python -m slopstation.agent.tools.operations list --active
-.venv\Scripts\python -m slopstation.agent.tools.operations show <operation-id>
-.venv\Scripts\python -m slopstation.agent.tools.operations reconcile
-.venv\Scripts\python -m slopstation.agent.tools.operations abandon <operation-id> --execute
+.venv\Scripts\python -m slopstation.agent.operations list --active
+.venv\Scripts\python -m slopstation.agent.operations show <operation-id>
+.venv\Scripts\python -m slopstation.agent.operations reconcile
+.venv\Scripts\python -m slopstation.agent.operations abandon <operation-id> --execute
 
 # the gaming PC, from the mini PC
 ssh <sshHost> status
 ssh <sshHost> version
 
 # the game catalog, and the two audio checks
-.venv\Scripts\python -m slopstation.agent.tools.library refresh   # --owned, --meta [N]
+.venv\Scripts\python -m slopstation.agent.steam.library refresh   # --owned, --meta [N]
 .venv\Scripts\python -m slopstation.agent.voice --devices         # list audio devices
 .venv\Scripts\python -m slopstation.agent.voice --announce-test   # speak one bulletin
 

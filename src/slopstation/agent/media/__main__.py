@@ -1,22 +1,22 @@
-"""python -m slopstation.agent.tools.media: check the media stack, Proton's port
+"""python -m slopstation.agent.media: check the media stack, Proton's port
 and the Servarr apps' updates."""
 
 import argparse
 import json
 
 from slopstation import config, logbook, paths
-from slopstation.agent.tools.media.config import servarr_clients
-from slopstation.agent.tools.media_checks import media_doctor
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
     _qbit_from_config,
 )
-from slopstation.agent.tools.media_proton import (
+from slopstation.agent.media.config import servarr_clients
+from slopstation.agent.media.doctor import media_doctor
+from slopstation.agent.media.proton import (
     ProtonPortMonitor,
     read_proton_port_state,
 )
-from slopstation.agent.tools.media_updates import available_update, update_app
+from slopstation.agent.media.updates import available_update, update_app
 
 
 def _servarr_clients(cfg, secrets):

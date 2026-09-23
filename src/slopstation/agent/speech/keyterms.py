@@ -1,7 +1,7 @@
 """Build the title and genre vocabulary supplied to Flux."""
 
 from slopstation import logbook
-from slopstation.agent.tools import library, titles
+from slopstation.agent.steam import library, titles
 
 log = logbook.logger("voice")
 

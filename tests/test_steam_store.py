@@ -8,7 +8,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation import config, statefile
-from slopstation.agent.tools import library, steamstore
+from slopstation.agent.steam import library, store
 
 # appid -> (name, discount_pct, final_cents, formatted). The fake GetItems
 # echoes back whatever appids the caller asked for.
@@ -27,7 +27,7 @@ KEYED = {"steamApiKey": "X" * 40, "steamId64": "7656119"}
 
 @dataclasses.dataclass
 class FakeStore:
-    """steamstore._get answering canned JSON. Every /search/results query is
+    """store._get answering canned JSON. Every /search/results query is
     kept for the tag assertions."""
 
     search_params: list = dataclasses.field(default_factory=list)
@@ -126,33 +126,33 @@ class FakeStore:
 
 
 @pytest.fixture
-def store(monkeypatch):
+def fake_store(monkeypatch):
     """Mock store requests and remove Steam credentials."""
     fake = FakeStore()
-    monkeypatch.setattr(steamstore, "_get", fake)
+    monkeypatch.setattr(store, "_get", fake)
     monkeypatch.setattr(config, "secrets", lambda: {})
     return fake
 
 
 @pytest.fixture
-def keyed(store, monkeypatch):
+def keyed(fake_store, monkeypatch):
     """The same store with a Steam key and id on file."""
     monkeypatch.setattr(config, "secrets", lambda: dict(KEYED))
-    return store
+    return fake_store
 
 
-def test_specials_are_parsed_and_filtered(store):
+def test_specials_are_parsed_and_filtered(fake_store):
     # NOT_GAMES filtered, cents -> dollars
-    sp = steamstore.fetch_featured("specials")
+    sp = store.fetch_featured("specials")
     assert [s["appid"] for s in sp] == [1, 2], sp
     assert sp[0] == {"appid": 1, "name": "Special A", "discount": 25, "final": 14.99}, (
         sp[0]
     )
 
 
-def test_store_items_price_in_batches(store):
+def test_store_items_price_in_batches(fake_store):
     # name/price/discount, missing appids simply absent
-    items = steamstore.store_items([10, 11, 999])
+    items = store.store_items([10, 11, 999])
     assert set(items) == {10, 11}, items
     assert items[10] == {
         "name": "Wish One",
@@ -163,27 +163,27 @@ def test_store_items_price_in_batches(store):
     # ...and chunks past the 100-per-batch cap: id 12 sits at position 120, so
     # it only prices if a second batch was fetched.
     big = [10] + list(range(900000, 900119)) + [12]
-    assert set(steamstore.store_items(big)) == {10, 12}, "the >100 tail was dropped"
+    assert set(store.store_items(big)) == {10, 12}, "the >100 tail was dropped"
 
 
-def test_trending_ranks_with_names(store):
+def test_trending_ranks_with_names(fake_store):
     # rank + name via GetItems
-    tr = steamstore.fetch_trending()
+    tr = store.fetch_trending()
     assert tr[0] == {"appid": 100, "rank": 1, "name": "Trend A"}, tr[0]
     assert tr[1]["rank"] == 2
 
 
-def test_store_search_prices_deduped_capsules(store):
+def test_store_search_prices_deduped_capsules(fake_store):
     # appids from capsule attrs (deduped) -> priced
-    rows = steamstore.fetch_store_search(term="anything")
+    rows = store.fetch_store_search(term="anything")
     assert [r["appid"] for r in rows] == [200, 201], rows
     # Filter by the GetItems price, not the search-page price.
-    clipped = steamstore.fetch_store_search(term="anything", max_price=20)
+    clipped = store.fetch_store_search(term="anything", max_price=20)
     assert [r["appid"] for r in clipped] == [200], clipped  # 201 is $25 -> out
 
 
-def test_reviews_summary_and_snippets(store):
-    rv = steamstore.fetch_reviews(1)
+def test_reviews_summary_and_snippets(fake_store):
+    rv = store.fetch_reviews(1)
     assert (
         rv["desc"] == "Very Positive"
         and rv["positive_pct"] == 90
@@ -192,46 +192,44 @@ def test_reviews_summary_and_snippets(store):
     assert rv["snippets"] == ["great", "good"], rv  # the "" one dropped
 
 
-def test_news_prefers_patchnotes(store):
+def test_news_prefers_patchnotes(fake_store):
     # patchnotes preferred, fallback to any
-    assert steamstore.fetch_news(1)[0]["title"] == "Patch 1"
+    assert store.fetch_news(1)[0]["title"] == "Patch 1"
 
 
-def test_tag_map_is_keyed_and_cached(store, monkeypatch):
+def test_tag_map_is_keyed_and_cached(fake_store, monkeypatch):
     # A missing key disables the tag map.
-    assert steamstore._tag_map() == {}
+    assert store._tag_map() == {}
     monkeypatch.setattr(config, "secrets", lambda: dict(KEYED))
-    tmap = steamstore._tag_map()
+    tmap = store._tag_map()
     assert tmap.get("roguelike") == 1716 and tmap.get("co-op") == 3843, tmap
-    assert steamstore.tagmap_file().exists()  # cached to disk
+    assert store.tagmap_file().exists()  # cached to disk
 
 
 def test_search_tags_match_loosely(keyed):
     # Tag matching ignores punctuation and case both ways ("Rogue-like"/"Co op"
     # vs Steam's "Roguelike"/"Co-op"); an exact lookup would drop the tag and
     # silently widen the search.
-    steamstore.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
+    store.fetch_store_search(term="x", tags=["Rogue-like", "CO OP"])
     assert keyed.search_params[-1].get("tags") == "1716,3843", keyed.search_params[-1]
-    steamstore.fetch_store_search(term="x", tags=["Not A Real Tag"])
+    store.fetch_store_search(term="x", tags=["Not A Real Tag"])
     assert "tags" not in keyed.search_params[-1], "unknown tags must drop, not 404"
 
 
-def test_hltb_fails_soft_then_hits_the_cache(store, monkeypatch):
+def test_hltb_fails_soft_then_hits_the_cache(fake_store, monkeypatch):
     # A None sys.modules entry makes the import raise, so this stays offline
     # even where howlongtobeatpy is installed.
     monkeypatch.setitem(sys.modules, "howlongtobeatpy", None)
-    assert steamstore.fetch_hltb("Some Game With No Lib") is None
-    statefile.write(
-        steamstore.hltb_cache_file(), {library.fuzzy_key("Hades"): {"main": 21}}
-    )
-    assert steamstore.fetch_hltb("hades") == {"main": 21}  # cache hit, no import
+    assert store.fetch_hltb("Some Game With No Lib") is None
+    statefile.write(store.hltb_cache_file(), {library.fuzzy_key("Hades"): {"main": 21}})
+    assert store.fetch_hltb("hades") == {"main": 21}  # cache hit, no import
 
 
 def test_refresh_deals_writes_the_file_list_games_reads(keyed, monkeypatch):
     log = CapturingLog("library")
-    monkeypatch.setattr(steamstore, "log", log)
-    steamstore.refresh_deals()
-    deals = steamstore.load_deals()
+    monkeypatch.setattr(store, "log", log)
+    store.refresh_deals()
+    deals = store.load_deals()
     assert "deals_synced" in log.events(), log.events()
     assert deals["specials"][0]["appid"] == 1
     # 75% then 50%; 11 (0%) dropped
@@ -241,5 +239,5 @@ def test_refresh_deals_writes_the_file_list_games_reads(keyed, monkeypatch):
 
 def test_recently_played_needs_a_key(keyed):
     # parsed 2-week hours
-    rec = steamstore.fetch_recently_played()
+    rec = store.fetch_recently_played()
     assert rec == [{"appid": 55, "name": "Recent X", "hours2w": 5.0}], rec

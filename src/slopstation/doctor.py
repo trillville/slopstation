@@ -16,8 +16,10 @@ import urllib.parse
 import urllib.request
 
 from slopstation import config, events, haptics, paths, sessionlock, supervise
-from slopstation.agent.tools import library, media_proton, operations, steamstore
-from slopstation.agent.tools.media_clients import ArrClient
+from slopstation.agent import operations
+from slopstation.agent.media import proton
+from slopstation.agent.media.clients import ArrClient
+from slopstation.agent.steam import library, store
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 # An episode aired this long ago, still monitored and still missing, is not
@@ -501,12 +503,12 @@ def check_session_state():
 def _steam_mint_probe(days):
     """Can the refresh token actually mint? Returns a report() tuple.
 
-    Shells `steam_session token` (exit 0 = mint works) in this interpreter,
+    Shells `steam.session token` (exit 0 = mint works) in this interpreter,
     which is the venv doctor itself runs in. No answer (offline) = PASS.
     """
     try:
         p = subprocess.run(
-            [sys.executable, "-m", "slopstation.agent.tools.steam_session", "token"],
+            [sys.executable, "-m", "slopstation.agent.steam.session", "token"],
             capture_output=True,
             text=True,
             timeout=45,
@@ -530,7 +532,7 @@ def _steam_mint_probe(days):
         "steam session",
         f"enrolled but CANNOT mint - {why[-1][:120] if why else 'unknown'}",
         "install-by-voice falls back to opening the game's page; "
-        "re-run python -m slopstation.agent.tools.steam_session enroll",
+        "re-run python -m slopstation.agent.steam.session enroll",
     )
 
 
@@ -639,7 +641,7 @@ def check_voice_library():
 
     # Deals precompute: the agent refreshes ~6h, so stale means the store sync
     # is failing. WARN past 24h; absent is silent (fills on first sync).
-    deals_h = steamstore.deals_age_h()
+    deals_h = store.deals_age_h()
     if deals_h is not None:
         if deals_h > 24:
             report(
@@ -682,26 +684,26 @@ def check_voice_config(cfg):
 def check_steam_session():
     # Account session (install-by-voice). Speaks up only when a token is
     # present but unusable or near expiry; absent is silent.
-    from slopstation.agent.tools import steam_session
+    from slopstation.agent.steam import session
 
     tok = config.secrets().get("steamRefreshToken")
     if not config.real_key(tok):
         return
-    exp = steam_session._jwt_exp(tok)  # 0 when unreadable
+    exp = session._jwt_exp(tok)  # 0 when unreadable
     days = (exp - time.time()) / 86400 if exp else -1
     if days < 0:
         report(
             WARN,
             "steam session",
             "refresh token unreadable or expired",
-            "re-run python -m slopstation.agent.tools.steam_session enroll",
+            "re-run python -m slopstation.agent.steam.session enroll",
         )
     elif days < 14:
         report(
             WARN,
             "steam session",
             f"token expires in {days:.0f} days",
-            "re-scan soon: python -m slopstation.agent.tools.steam_session enroll",
+            "re-scan soon: python -m slopstation.agent.steam.session enroll",
         )
     else:
         # An unexpired web-audience token may still be unable to mint
@@ -784,11 +786,11 @@ def check_port_reservations():
     """Windows reserves blocks of its dynamic port range for Hyper-V and WSL,
     and nothing can bind inside one. While that range reaches Proton's
     forwarded ports, any boot can take qBittorrent's port. WARN-only."""
-    ranges = media_proton.dynamic_port_ranges()
+    ranges = proton.dynamic_port_ranges()
     reaching = [
         f"{protocol.upper()} {first}-{last}"
         for protocol, (first, last) in sorted(ranges.items())
-        if last >= media_proton.PROTON_PORT_FLOOR
+        if last >= proton.PROTON_PORT_FLOOR
     ]
     hint = "move it below 40000: see 'Proton forwarded port' in media\\README.md"
     if len(ranges) < 2:

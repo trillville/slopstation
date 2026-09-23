@@ -11,16 +11,8 @@ import pytest
 
 import helpers
 from helpers import CapturingLog, FakeArr
-from slopstation.agent.tools import (
-    disk_health,
-    media,
-    media_checks,
-    media_clients,
-    media_health,
-    media_proton,
-    media_updates,
-    operations,
-)
+from slopstation.agent import media, operations
+from slopstation.agent.media import clients, disk, doctor, health, proton, updates
 
 UTC = datetime.UTC
 
@@ -35,7 +27,7 @@ def test_arr_client_sends_the_key_and_encodes_the_body():
         calls.append((method, url, headers, body, timeout))
         return {"ok": True}
 
-    client = media_clients.ArrClient(
+    client = clients.ArrClient(
         "Radarr", "http://127.0.0.1:7878/", "secret-key", transport=transport
     )
     assert client.get("movie/lookup", {"term": "Dune 2021"}) == {"ok": True}
@@ -46,11 +38,11 @@ def test_arr_client_sends_the_key_and_encodes_the_body():
     }
     assert json.loads(calls[1][3]) == {"name": "MoviesSearch", "movieIds": [7]}
     # Every call takes the LAN timeout except the indexer fan-out.
-    client.get("release", {"episodeId": 9}, timeout=media_clients.SEARCH_TIMEOUT_S)
+    client.get("release", {"episodeId": 9}, timeout=clients.SEARCH_TIMEOUT_S)
     assert [c[4] for c in calls] == [
-        media_clients.HTTP_TIMEOUT_S,
-        media_clients.HTTP_TIMEOUT_S,
-        media_clients.SEARCH_TIMEOUT_S,
+        clients.HTTP_TIMEOUT_S,
+        clients.HTTP_TIMEOUT_S,
+        clients.SEARCH_TIMEOUT_S,
     ]
 
 
@@ -74,11 +66,11 @@ class FakeQbitWeb:
         self.calls.append((method, url, headers, body, timeout))
         path = urllib.parse.urlsplit(url).path
         if not self.alive:
-            raise media_clients.MediaError("qBittorrent is unreachable")
+            raise clients.MediaError("qBittorrent is unreachable")
         if path.endswith("/auth/login"):
             return {"Set-Cookie": "QBT_SID_8080=session-1; HttpOnly; path=/"}, b""
         if headers.get("Cookie") == "QBT_SID_8080=expired":
-            raise media_clients.QbittorrentAuthError("expired session")
+            raise clients.QbittorrentAuthError("expired session")
         assert headers["Cookie"] == "QBT_SID_8080=session-1"
         if path.endswith("/app/version"):
             return {}, b"v5.2.3"
@@ -114,7 +106,7 @@ def qbit_web():
 
 @pytest.fixture
 def qbit(qbit_web):
-    return media_clients.QbittorrentClient(
+    return clients.QbittorrentClient(
         "http://127.0.0.1:8080",
         "admin",
         "a-long-qbit-password",
@@ -158,7 +150,7 @@ def test_qbittorrent_client_logs_in_once_and_sets_the_port(qbit, qbit_web, monke
     assert qbit_web.count("/app/setPreferences") == 1
     qbit.set_listen_port(33125)
     assert qbit_web.count("/app/setPreferences") == 1
-    with pytest.raises(media_clients.MediaError):
+    with pytest.raises(clients.MediaError):
         qbit.set_listen_port(0)
     monkeypatch.setattr(qbit, "sid", "expired")
     assert qbit.preferences()["listen_port"] == 33125
@@ -184,7 +176,7 @@ def test_qbittorrent_rebind_resolves_the_adapter_by_name(qbit, qbit_web):
         {"current_network_interface": ""},
         {"current_network_interface": "iftype53_2"},
     ]
-    with pytest.raises(media_clients.MediaError, match="no network interface"):
+    with pytest.raises(clients.MediaError, match="no network interface"):
         qbit.rebind_interface("Ethernet")
 
 
@@ -219,25 +211,22 @@ def proton_log(tmp_path):
 
 
 def test_proton_log_parsing(proton_log, tmp_path):
-    source = media_proton.read_proton_port_state(proton_log, now=PROTON_NOW)
+    source = proton.read_proton_port_state(proton_log, now=PROTON_NOW)
     assert source["state"] == "active" and source["port"] == 39733
     assert (
-        media_proton.read_proton_port_state(tmp_path / "missing.txt", now=PROTON_NOW)[
-            "state"
-        ]
+        proton.read_proton_port_state(tmp_path / "missing.txt", now=PROTON_NOW)["state"]
         == "missing"
     )
     proton_log.write_text("not a Proton status line", encoding="utf-8")
     assert (
-        media_proton.read_proton_port_state(proton_log, now=PROTON_NOW)["state"]
-        == "unknown"
+        proton.read_proton_port_state(proton_log, now=PROTON_NOW)["state"] == "unknown"
     )
     proton_backup = tmp_path / "client-logs.1.txt"
     proton_backup.write_text(
         proton_event("2026-08-30T04:12:03.000Z", "SleepingUntilRefresh", 40123),
         encoding="utf-8",
     )
-    rotated = media_proton.read_proton_port_state(
+    rotated = proton.read_proton_port_state(
         proton_log, now=datetime.datetime(2026, 8, 30, 4, 12, 4, tzinfo=UTC)
     )
     assert rotated["state"] == "active" and rotated["port"] == 40123
@@ -245,7 +234,7 @@ def test_proton_log_parsing(proton_log, tmp_path):
 
 def test_proton_monitor_syncs_a_fresh_mapping(proton_log, qbit, qbit_web, monkeypatch):
     qbit_web.preferences["listen_port"] = 33125
-    proton_monitor = media_proton.ProtonPortMonitor(
+    proton_monitor = proton.ProtonPortMonitor(
         qbit, CapturingLog("voice"), path=proton_log, now=PROTON_NOW
     )
     synced = proton_monitor.reconcile_once()
@@ -258,7 +247,7 @@ def test_proton_monitor_syncs_a_fresh_mapping(proton_log, qbit, qbit_web, monkey
     monkeypatch.setattr(
         proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 12, 0, tzinfo=UTC)
     )
-    with pytest.raises(media_clients.MediaError, match="stale"):
+    with pytest.raises(clients.MediaError, match="stale"):
         proton_monitor.reconcile_once()
     proton_log.write_text(
         proton_event("2026-08-30T04:12:01.000Z", "Starting"), encoding="utf-8"
@@ -273,7 +262,7 @@ def test_proton_reconnect_rebinds_even_when_the_port_is_unchanged(
     proton_log, qbit, qbit_web, monkeypatch
 ):
     log = CapturingLog("voice")
-    proton_monitor = media_proton.ProtonPortMonitor(
+    proton_monitor = proton.ProtonPortMonitor(
         qbit, log, path=proton_log, now=PROTON_NOW, interface="ProTUN"
     )
     proton_monitor.reconcile_once()
@@ -306,8 +295,8 @@ def test_dead_peers_rebind_then_restart_then_report(
     """The self-healing loop: zero DHT nodes with downloads waiting gets a
     rebind after PEERS_DEAD_S, a restart after another, one error after a
     third, then silence until the nodes come back."""
-    monkeypatch.setattr(media_proton, "PROTON_LOG_MAX_AGE_S", 10**6)
-    monkeypatch.setattr(media_proton, "reserved_port_range", lambda port: None)
+    monkeypatch.setattr(proton, "PROTON_LOG_MAX_AGE_S", 10**6)
+    monkeypatch.setattr(proton, "reserved_port_range", lambda port: None)
     log = CapturingLog("voice")
     launched = []
 
@@ -323,7 +312,7 @@ def test_dead_peers_rebind_then_restart_then_report(
         return Process()
 
     qbit_web.dht_nodes = 0
-    proton_monitor = media_proton.ProtonPortMonitor(
+    proton_monitor = proton.ProtonPortMonitor(
         qbit,
         log,
         path=proton_log,
@@ -368,7 +357,7 @@ def test_dead_peers_rebind_then_restart_then_report(
     # Nothing waiting on peers is nothing to heal.
     log2 = CapturingLog("voice")
     qbit_web.torrents = []
-    idle = media_proton.ProtonPortMonitor(
+    idle = proton.ProtonPortMonitor(
         qbit, log2, path=proton_log, now=PROTON_NOW, interface="ProTUN"
     )
     for seconds in (0, 300, 600, 900):
@@ -395,28 +384,28 @@ def test_reserved_port_range_skips_administered_exclusions(monkeypatch):
     """What netsh prints on the K15. A reserved block refuses a bind; an
     administered exclusion does not, so only the first counts."""
     monkeypatch.setattr(
-        media_proton,
+        proton,
         "_netsh",
         lambda *args: EXCLUDED_UDP if "protocol=udp" in args else "",
     )
-    assert media_proton.reserved_port_range(64671) == "UDP 64670-64769"
-    assert media_proton.reserved_port_range(50010) is None
-    assert media_proton.reserved_port_range(41007) is None
+    assert proton.reserved_port_range(64671) == "UDP 64670-64769"
+    assert proton.reserved_port_range(50010) is None
+    assert proton.reserved_port_range(41007) is None
 
 
 def test_a_windows_reserved_port_names_the_cause_instead_of_restarting(
     proton_log, qbit, qbit_web, monkeypatch
 ):
-    monkeypatch.setattr(media_proton, "PROTON_LOG_MAX_AGE_S", 10**6)
+    monkeypatch.setattr(proton, "PROTON_LOG_MAX_AGE_S", 10**6)
     monkeypatch.setattr(
-        media_proton,
+        proton,
         "reserved_port_range",
         lambda port: "UDP 39700-39799" if port == 39733 else None,
     )
     log = CapturingLog("voice")
     launched = []
     qbit_web.dht_nodes = 0
-    proton_monitor = media_proton.ProtonPortMonitor(
+    proton_monitor = proton.ProtonPortMonitor(
         qbit,
         log,
         path=proton_log,
@@ -485,7 +474,7 @@ def test_health_watch_reports_transitions_once():
         },
     )
     watch_log = CapturingLog("voice")
-    watch = media_health.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
+    watch = health.MediaHealthMonitor((watch_radarr, watch_sonarr), watch_log)
 
     watch.reconcile_once()
     issue = watch_log.find("media_health_issue")
@@ -580,7 +569,7 @@ def test_health_watch_reaps_a_grab_that_never_starts():
         queue={"records": [dead, magnet, moving, done, paused, held, away]},
     )
     reap_log = CapturingLog("voice")
-    watch = media_health.MediaHealthMonitor(
+    watch = health.MediaHealthMonitor(
         (reap_sonarr,), reap_log, stall_grace_s=1800, now=lambda: clock[0]
     )
     watch.reconcile_once()
@@ -613,7 +602,7 @@ def test_health_watch_reaps_a_grab_that_never_starts():
     # Off means off; the stall is still reported.
     off_sonarr = FakeArr("Sonarr", queue={"records": [dict(dead)]})
     off_log = CapturingLog("voice")
-    off = media_health.MediaHealthMonitor(
+    off = health.MediaHealthMonitor(
         (off_sonarr,), off_log, stall_grace_s=0, now=lambda: clock[0]
     )
     off.reconcile_once()
@@ -652,7 +641,7 @@ def test_health_watch_reaps_a_download_that_completed_empty():
     }
     sonarr = FakeArr("Sonarr", queue={"records": [empty, importing]})
     log = CapturingLog("voice")
-    watch = media_health.MediaHealthMonitor(
+    watch = health.MediaHealthMonitor(
         (sonarr,), log, stall_grace_s=1800, now=lambda: clock[0]
     )
     watch.reconcile_once()
@@ -678,7 +667,7 @@ class FakeLedger:
 def test_unattributed_grabs_are_reported_per_download():
     grab_sonarr = FakeArr("Sonarr")
     watch_log = CapturingLog("voice")
-    grabs = media_health.MediaHealthMonitor(
+    grabs = health.MediaHealthMonitor(
         (grab_sonarr,),
         watch_log,
         operations=FakeLedger([{"authority": "sonarr", "external_ref": "3"}]),
@@ -723,7 +712,7 @@ def test_unattributed_grabs_are_reported_per_download():
 def test_no_ledger_means_no_attribution():
     grab_sonarr = FakeArr("Sonarr")
     watch_log = CapturingLog("voice")
-    blind = media_health.MediaHealthMonitor((grab_sonarr,), watch_log)
+    blind = health.MediaHealthMonitor((grab_sonarr,), watch_log)
     blind.reconcile_once()
     grab_sonarr.history["records"].append(
         {
@@ -755,33 +744,31 @@ def test_disk_watch_reports_crossings(monkeypatch):
             raise table[mount]
         return table[mount]
 
-    monkeypatch.setattr(disk_health.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(disk.shutil, "disk_usage", disk_usage)
     disk_log = CapturingLog("voice")
-    disk = disk_health.DiskHealthMonitor(
-        ("M:", "C:"), disk_log, free_warn_bytes=250 * GB
-    )
-    disk.reconcile_once()
+    watch = disk.DiskHealthMonitor(("M:", "C:"), disk_log, free_warn_bytes=250 * GB)
+    watch.reconcile_once()
     low = disk_log.find("disk_space_low")
     # The roomy volume is silent; only the one below the threshold reports.
     assert len(low) == 1 and low[0]["mount"] == "M:"
     assert low[0]["free_gb"] == 100.0 and low[0]["pct_free"] == 10.0
     assert low[0]["level"] == "warn"
-    disk.reconcile_once()
+    watch.reconcile_once()
     # A full disk stays full: the crossing is the news, not the state.
     assert len(disk_log.find("disk_space_low")) == 1
 
     table["M:"] = Usage(1000 * GB, 600 * GB)
-    disk.reconcile_once()
+    watch.reconcile_once()
     assert len(disk_log.find("disk_space_cleared")) == 1
     table["M:"] = Usage(1000 * GB, 100 * GB)
-    disk.reconcile_once()
+    watch.reconcile_once()
     # Cleared re-arms, or a drive that oscillates would report once ever.
     assert len(disk_log.find("disk_space_low")) == 2
 
     disk_log.records.clear()
     table["M:"] = OSError("the device is not ready")
-    disk.reconcile_once()
-    disk.reconcile_once()
+    watch.reconcile_once()
+    watch.reconcile_once()
     # An unplugged enclosure is one line, not one line per poll.
     failed = disk_log.find("disk_watch_failed")
     assert len(failed) == 1 and failed[0]["mount"] == "M:"
@@ -985,15 +972,11 @@ def _doctor(monkeypatch, tmp_path, qbit_preferences, dht_nodes=120):
         proton_event("2026-08-30T05:00:00.000Z", "SleepingUntilRefresh", 33125),
         encoding="utf-8",
     )
-    monkeypatch.setattr(media_clients, "_http_transport", doctor_arr_transport)
-    monkeypatch.setattr(media_clients, "_qbit_http_transport", doctor_qbit_transport)
-    monkeypatch.setattr(
-        media_checks, "_compose_services", lambda media_dir: compose_rows
-    )
-    monkeypatch.setattr(
-        media_proton, "default_proton_log_path", lambda: doctor_proton_log
-    )
-    return media_checks.media_doctor(
+    monkeypatch.setattr(clients, "_http_transport", doctor_arr_transport)
+    monkeypatch.setattr(clients, "_qbit_http_transport", doctor_qbit_transport)
+    monkeypatch.setattr(doctor, "_compose_services", lambda media_dir: compose_rows)
+    monkeypatch.setattr(proton, "default_proton_log_path", lambda: doctor_proton_log)
+    return doctor.media_doctor(
         doctor_cfg,
         DOCTOR_SECRETS,
         now=datetime.datetime(2026, 8, 30, 5, 0, 5, tzinfo=UTC),
@@ -1001,16 +984,16 @@ def _doctor(monkeypatch, tmp_path, qbit_preferences, dht_nodes=120):
 
 
 def test_media_doctor_passes_a_healthy_stack(monkeypatch, tmp_path):
-    doctor = _doctor(monkeypatch, tmp_path, dict(HEALTHY_QBIT_PREFERENCES))
-    assert doctor["ok"]
-    assert [row["level"] for row in doctor["checks"]].count("WARN") == 0
+    result = _doctor(monkeypatch, tmp_path, dict(HEALTHY_QBIT_PREFERENCES))
+    assert result["ok"]
+    assert [row["level"] for row in result["checks"]].count("WARN") == 0
     assert any(
         row["name"] == "qBittorrent share-limit action" and row["level"] == "PASS"
-        for row in doctor["checks"]
+        for row in result["checks"]
     )
     assert any(
         row["name"] == "Proton port synchronization" and row["level"] == "PASS"
-        for row in doctor["checks"]
+        for row in result["checks"]
     )
 
 
@@ -1068,7 +1051,7 @@ class FakeServarr:
         assert endpoint == "system/status"
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         if status is None:
-            raise media_clients.MediaError("media service is unreachable")
+            raise clients.MediaError("media service is unreachable")
         return status
 
 
@@ -1086,13 +1069,13 @@ def test_available_update_names_a_newer_release_only():
         },
         {"version": "6.3.0.10514", "latest": False, "installed": True},
     ]
-    assert media_updates.available_update(FakeServarr([RADARR_6_3], releases)) == {
+    assert updates.available_update(FakeServarr([RADARR_6_3], releases)) == {
         "installed": "6.3.0.10514",
         "latest": "6.4.4.10685",
         "released": "2026-09-16",
     }
     current = [dict(releases[0], installed=True)]
-    assert media_updates.available_update(FakeServarr([RADARR_6_4], current)) is None
+    assert updates.available_update(FakeServarr([RADARR_6_4], current)) is None
 
 
 class FakeDocker:
@@ -1113,7 +1096,7 @@ def _media_dir(tmp_path):
 def test_update_recreates_one_container_and_waits_for_the_app(tmp_path):
     docker = FakeDocker()
     app = FakeServarr([RADARR_6_3, None, None, RADARR_6_4])
-    result = media_updates.update_app(
+    result = updates.update_app(
         app, _media_dir(tmp_path), run=docker, now=lambda: 0, sleep=lambda s: None
     )
     assert docker.commands == [["pull", "radarr"], ["up", "-d", "radarr"]]
@@ -1125,13 +1108,13 @@ def test_update_recreates_one_container_and_waits_for_the_app(tmp_path):
 
 
 def test_update_fails_on_a_refused_pull_or_an_app_that_never_returns(tmp_path):
-    with pytest.raises(media_clients.MediaError, match="denied"):
-        media_updates.update_app(
+    with pytest.raises(clients.MediaError, match="denied"):
+        updates.update_app(
             FakeServarr([RADARR_6_3]), _media_dir(tmp_path), run=FakeDocker(1)
         )
     clock = iter(range(0, 1000, 60))
-    with pytest.raises(media_clients.MediaError, match="did not answer"):
-        media_updates.update_app(
+    with pytest.raises(clients.MediaError, match="did not answer"):
+        updates.update_app(
             FakeServarr([RADARR_6_3, None]),
             _media_dir(tmp_path),
             run=FakeDocker(),
@@ -1142,7 +1125,7 @@ def test_update_fails_on_a_refused_pull_or_an_app_that_never_returns(tmp_path):
 
 def _night_watch(apps, update, hour=4):
     log = CapturingLog()
-    watch = media_updates.MediaUpdateMonitor(
+    watch = updates.MediaUpdateMonitor(
         apps,
         log,
         "media",
@@ -1180,7 +1163,7 @@ def test_update_watch_applies_minors_overnight_and_holds_majors():
 
 def test_update_watch_waits_out_an_import_and_tells_a_failed_update_from_a_skip():
     def update(client, media_dir):
-        raise media_clients.MediaError("pull access denied")
+        raise clients.MediaError("pull access denied")
 
     importing = _offered(
         "Radarr", "6.3.0", "6.4.4", [{"trackedDownloadState": "importing"}]

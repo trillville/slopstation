@@ -5,11 +5,8 @@ import datetime
 import pytest
 
 from helpers import SERVICE_CFG, CapturingLog, FakeArr, sonarr_episode
-from slopstation.agent.tools import (
-    media,
-    media_clients,
-    operations,
-)
+from slopstation.agent import media, operations
+from slopstation.agent.media import clients
 
 UTC = datetime.UTC
 
@@ -106,7 +103,7 @@ def test_library_reports_holdings_per_season(svc):
         {"season": 1, "have": 1, "aired": 2},
         {"season": 2, "have": 1, "aired": 1},
     ]
-    with pytest.raises(media_clients.MediaError):
+    with pytest.raises(clients.MediaError):
         svc.library("album", 1)
 
 
@@ -228,7 +225,7 @@ def test_cancel_counts_a_search_that_starts_before_the_recall_lands(svc, monkeyp
 
     def refuse(endpoint, params=None):
         if endpoint == "command/2":
-            raise media_clients.MediaError("returned HTTP 409 for /api/v3/command/2")
+            raise clients.MediaError("returned HTTP 409 for /api/v3/command/2")
         svc.sonarr.deletes.append((endpoint, params))
 
     monkeypatch.setattr(svc.sonarr, "delete", refuse)
@@ -236,10 +233,10 @@ def test_cancel_counts_a_search_that_starts_before_the_recall_lands(svc, monkeyp
     assert result["searches_canceled"] == 1 and result["searches_running"] == 1
 
     def fail(endpoint, params=None):
-        raise media_clients.MediaError("returned HTTP 500 for /api/v3/command/1")
+        raise clients.MediaError("returned HTTP 500 for /api/v3/command/1")
 
     monkeypatch.setattr(svc.sonarr, "delete", fail)
-    with pytest.raises(media_clients.MediaError, match="HTTP 500"):
+    with pytest.raises(clients.MediaError, match="HTTP 500"):
         svc.cancel_request(operation)
 
 
@@ -442,7 +439,7 @@ def test_request_series_monitors_only_the_asked_seasons(svc):
         "percent": 0,
         "phase": "waiting_for_match",
     }
-    with pytest.raises(media_clients.MediaError):
+    with pytest.raises(clients.MediaError):
         svc.request_series(81189, seasons=[0])
 
     # A retry after the season search above is one SeasonSearch per season.
@@ -633,9 +630,9 @@ def test_request_episodes_touches_only_those_episodes(svc):
     observation = svc.observe(operation)
     assert observation.progress["total_episodes"] == 2
     assert observation.state != operations.SUCCEEDED
-    with pytest.raises(media_clients.MediaError, match="S04E99"):
+    with pytest.raises(clients.MediaError, match="S04E99"):
         svc.request_series(75805, episodes=[{"season": 4, "episode": 99}])
-    with pytest.raises(media_clients.MediaError, match="not both"):
+    with pytest.raises(clients.MediaError, match="not both"):
         svc.request_series(75805, seasons=[4], episodes=[{"season": 4, "episode": 13}])
 
 
@@ -915,7 +912,7 @@ def test_delete_series_is_scoped_to_seasons(svc):
         "queue/720",
         "episodefile/810",
     ]
-    with pytest.raises(media_clients.MediaError):
+    with pytest.raises(clients.MediaError):
         svc.delete_series(393189)
     removed_all = svc.delete_series(393189, all_seasons=True)
     assert removed_all["all_seasons"]

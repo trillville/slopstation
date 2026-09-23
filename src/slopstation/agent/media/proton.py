@@ -9,13 +9,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
     _clean_text,
     _parse_time,
 )
-from slopstation.agent.tools.monitor import ChangeOnly, Monitor
+from slopstation.agent.monitor import ChangeOnly, Monitor
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
 PROTON_INACTIVE_STATUSES = {"DestroyPortMappingCommunication", "Stopped", "Error"}

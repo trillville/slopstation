@@ -93,9 +93,11 @@ Then read `src/slopstation/couch.py` for the launch,
 | `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Device interfaces for the TV, controller, and gaming PC |
 | `src/slopstation/agent/voice.py` | Run the voice service |
 | `src/slopstation/agent/speech/` | Wake word, audio, and fixed voice commands |
-| `src/slopstation/agent/llm/` | Assistant prompts and model providers |
+| `src/slopstation/agent/llm/` | The assistant: its prompt, model providers, tool registry, and toolsets |
 | `src/slopstation/agent/dispatch.py` | Actions shared by voice and text commands |
-| `src/slopstation/agent/tools/` | Steam, media, operation, and TV tools |
+| `src/slopstation/agent/steam/` | The game library, the Steam store, and the account session |
+| `src/slopstation/agent/media/` | Radarr, Sonarr, qBittorrent, Proton, and the media drive |
+| `src/slopstation/agent/operations/` | The ledger of tracked Steam and media work, and its monitors |
 | `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
 | `gaming-pc/` | Gaming-PC scripts, the SSH command allowlist, and the installer |
 | `media/` | Optional media stack and its setup guide |

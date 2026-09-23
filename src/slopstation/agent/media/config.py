@@ -3,22 +3,22 @@
 from pathlib import Path
 
 from slopstation import config, paths
-from slopstation.agent.tools.disk_health import (
-    DISK_POLL_S,
-    FREE_WARN_BYTES,
-    DiskHealthMonitor,
-)
-from slopstation.agent.tools.media.service import MediaService
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     ArrClient,
     MediaConfigurationError,
     _qbit_from_config,
 )
-from slopstation.agent.tools.media_health import HEALTH_POLL_S, MediaHealthMonitor
-from slopstation.agent.tools.media_proton import (
+from slopstation.agent.media.disk import (
+    DISK_POLL_S,
+    FREE_WARN_BYTES,
+    DiskHealthMonitor,
+)
+from slopstation.agent.media.health import HEALTH_POLL_S, MediaHealthMonitor
+from slopstation.agent.media.proton import (
     ProtonPortMonitor,
 )
-from slopstation.agent.tools.media_updates import MediaUpdateMonitor
+from slopstation.agent.media.service import MediaService
+from slopstation.agent.media.updates import MediaUpdateMonitor
 
 
 def _media_cfg(cfg, flag=None, default=True):

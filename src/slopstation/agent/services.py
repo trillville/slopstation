@@ -29,14 +29,12 @@ class Services:
         speaks. `duck` is the room volume control; the caller builds it because
         a bulletin can arrive before the first wake."""
         cfg, secrets, log = self.cfg, self.secrets, self.log
+        from slopstation.agent import media
+        from slopstation.agent import operations as operations_mod
         from slopstation.agent.interfaces import mcp, text
-        from slopstation.agent.tools import (
-            library,
-            media,
-            operations_monitors,
-            steam_session,
-        )
-        from slopstation.agent.tools import operations as operations_mod
+        from slopstation.agent.operations.monitors import MediaMonitor, SteamMonitor
+        from slopstation.agent.steam import library
+        from slopstation.agent.steam.session import SteamSession
 
         # Refreshes the catalog on its own clock; never blocks wake detection.
         ticker = events.Ticker("library-sync", library.SYNC_S, library.periodic_sync())
@@ -56,7 +54,7 @@ class Services:
         # token, install_game falls back to the controller. Never fatal.
         account = self._optional(
             "steam_session",
-            steam_session.SteamSession,
+            SteamSession,
             secrets,
             log,
             machine_name=cfg.get("steamMachineName"),
@@ -76,15 +74,13 @@ class Services:
             log(
                 "lane_disabled",
                 what="steam_session",
-                reason="no refresh token - run steam_session enroll",
+                reason="no refresh token - run steam.session enroll",
             )
 
         if self.steam is not None and self.operations is not None:
             self._monitor(
                 "operation_monitor",
-                lambda: operations_monitors.SteamMonitor(
-                    self.operations, self.steam, log
-                ),
+                lambda: SteamMonitor(self.operations, self.steam, log),
                 live_only=True,
             )
 
@@ -95,9 +91,7 @@ class Services:
             poll_s = cfg["media"].get("pollS", operations_mod.POLL_S)
             self._monitor(
                 "media_operation_monitor",
-                lambda: operations_monitors.MediaMonitor(
-                    self.operations, self.media, log, poll_s=poll_s
-                ),
+                lambda: MediaMonitor(self.operations, self.media, log, poll_s=poll_s),
                 live_only=True,
             )
         # Writes the listening port into a live qBittorrent; a dry run must not

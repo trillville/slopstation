@@ -8,7 +8,7 @@ import pytest
 from helpers import CapturingLog, fake_dispatch
 from slopstation import paths
 from slopstation.agent.llm import assistant
-from slopstation.agent.tools import storage
+from slopstation.agent.media import storage
 
 GB = 1024**3
 
@@ -42,7 +42,7 @@ class Arr:
 
     def get(self, endpoint, params=None):
         if self.down:
-            from slopstation.agent.tools.media_clients import MediaError
+            from slopstation.agent.media.clients import MediaError
 
             raise MediaError(f"{self.name} is unreachable")
         if endpoint == "movie":
@@ -74,7 +74,7 @@ class Qbit:
 
 @pytest.fixture
 def rig(root):
-    from slopstation.agent.tools import media as media_mod
+    from slopstation.agent import media as media_mod
 
     log = CapturingLog("voice")
     dispatch = fake_dispatch("aa0001")

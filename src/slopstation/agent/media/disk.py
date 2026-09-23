@@ -2,8 +2,8 @@
 
 import shutil
 
-from slopstation.agent.tools.media_clients import _clean_text
-from slopstation.agent.tools.monitor import ChangeOnly, Monitor
+from slopstation.agent.media.clients import _clean_text
+from slopstation.agent.monitor import ChangeOnly, Monitor
 
 DISK_POLL_S = 300
 # One 2160p remux is ~70 GB, so a threshold below that reports a volume that

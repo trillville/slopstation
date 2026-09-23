@@ -7,7 +7,7 @@ import pytest
 
 from slopstation import config, gamepc, sessionlock, statefile
 from slopstation.agent.llm import assistant
-from slopstation.agent.tools import library, steamstore
+from slopstation.agent.steam import library, store
 
 INSTALLED, OWNED, UNOWNED = 892970, 413150, 1478500
 INDEX = {
@@ -124,17 +124,15 @@ def rig(catalog, log, monkeypatch):
 
 def test_game_details_gathers_the_new_facets(rig, monkeypatch):
     tk, _, _, _ = rig
-    monkeypatch.setattr(steamstore, "fetch_appdetails", lambda a: {"dlc": [1, 2]})
+    monkeypatch.setattr(store, "fetch_appdetails", lambda a: {"dlc": [1, 2]})
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_dlc",
         lambda d: [{"appid": 1, "name": "Pack", "final": "$4.99", "discount": 0}],
     )
+    monkeypatch.setattr(store, "fetch_requirements", lambda d: {"minimum": "8 GB RAM"})
     monkeypatch.setattr(
-        steamstore, "fetch_requirements", lambda d: {"minimum": "8 GB RAM"}
-    )
-    monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_release",
         lambda d: {
             "date": "2 Feb, 2021",
@@ -143,9 +141,9 @@ def test_game_details_gathers_the_new_facets(rig, monkeypatch):
             "publishers": [],
         },
     )
-    monkeypatch.setattr(steamstore, "fetch_players_now", lambda a: 12345)
+    monkeypatch.setattr(store, "fetch_players_now", lambda a: 12345)
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_achievements",
         lambda a: {
             "total": 10,
@@ -171,7 +169,7 @@ def test_game_details_gathers_the_new_facets(rig, monkeypatch):
     assert out["achievements"]["percent"] == 40 and out["tags"] == ["Survival", "Co-op"]
     # A facet that fails is logged and left out, not a broken turn.
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_players_now",
         lambda a: (_ for _ in ()).throw(RuntimeError("down")),
     )
@@ -190,7 +188,7 @@ def test_list_games_reads_the_owned_sources_and_the_wishlist(rig, monkeypatch):
     updated = tk.call("list_games", {"source": "recently_updated"})
     assert updated["count"] == 1 and updated["games"][0]["updated"]
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_wishlist",
         lambda sid: [
             {
@@ -237,7 +235,7 @@ def test_search_library_playtime_and_friends(rig, monkeypatch):
     assert tk.call("playtime", {})["total_hours"] == 12.0
     assert not tk.call("playtime", {"period": "decade"})["ok"]
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_friends",
         lambda: [
             {
@@ -258,14 +256,14 @@ def test_search_library_playtime_and_friends(rig, monkeypatch):
     )
     fr = tk.call("friends", {})
     assert fr["count"] == 2 and fr["online"] == 1 and fr["friends"][0]["name"] == "Bo"
-    monkeypatch.setattr(steamstore, "fetch_friends", lambda: None)
+    monkeypatch.setattr(store, "fetch_friends", lambda: None)
     assert "steamApiKey" in tk.call("friends", {})["error"]
 
 
 def test_achievements_new_releases_and_wishlist_edit(rig, monkeypatch):
     tk, dispatch, steam, _ = rig
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_achievements",
         lambda a: {
             "total": 10,
@@ -279,10 +277,10 @@ def test_achievements_new_releases_and_wishlist_edit(rig, monkeypatch):
     ach = tk.call("my_achievements", {"appid": INSTALLED})
     assert ach["ok"] and ach["name"] == "Valheim" and ach["unlocked"] == 4
     assert not tk.call("my_achievements", {"appid": UNOWNED})["ok"], "owned games only"
-    monkeypatch.setattr(steamstore, "fetch_achievements", lambda a: None)
+    monkeypatch.setattr(store, "fetch_achievements", lambda a: None)
     assert not tk.call("my_achievements", {"appid": INSTALLED})["ok"]
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_featured",
         lambda s: [{"appid": 5, "name": "Fresh", "discount": 0, "final": 19.99}],
     )
@@ -538,16 +536,16 @@ def test_store_helpers_parse_steams_shapes(monkeypatch):
             }
         raise AssertionError(url)
 
-    monkeypatch.setattr(steamstore, "_get", fake_get)
+    monkeypatch.setattr(store, "_get", fake_get)
     monkeypatch.setattr(library, "steam_creds", lambda: ("K", "7656119"))
-    data = steamstore.fetch_appdetails(1)
-    assert steamstore.fetch_dlc(data) == [
+    data = store.fetch_appdetails(1)
+    assert store.fetch_dlc(data) == [
         {"appid": 2, "name": "DLC Two", "final": "$4.99", "discount": 0, "price": 499}
     ]
-    assert steamstore.fetch_requirements(data) == {"minimum": "Memory: 8 GB"}
-    assert steamstore.fetch_release(data)["developers"] == ["Dev"]
-    assert steamstore.fetch_players_now(1) == 777
-    ach = steamstore.fetch_achievements(1)
+    assert store.fetch_requirements(data) == {"minimum": "Memory: 8 GB"}
+    assert store.fetch_release(data)["developers"] == ["Dev"]
+    assert store.fetch_players_now(1) == 777
+    ach = store.fetch_achievements(1)
     assert ach["total"] == 2 and ach["unlocked"] == 1 and ach["percent"] == 50
     assert (
         ach["recent"][0]["name"] == "First" and ach["recent"][0]["global_pct"] == 80.5
@@ -555,14 +553,12 @@ def test_store_helpers_parse_steams_shapes(monkeypatch):
     assert (
         ach["next_up"][0]["name"] == "Second" and ach["next_up"][0]["unlocked"] is None
     )
-    friends = steamstore.fetch_friends()
+    friends = store.fetch_friends()
     assert [f["name"] for f in friends] == ["Amy", "Zed"] and friends[0][
         "playing"
     ] == "Hades"
     assert friends[1]["state"] == "offline" and friends[1]["last_seen"]
-    wl = steamstore.fetch_wishlist("7656119")
+    wl = store.fetch_wishlist("7656119")
     assert [w["appid"] for w in wl] == [3, 2] and wl[1]["name"] == "DLC Two"
     monkeypatch.setattr(library, "steam_creds", lambda: None)
-    assert (
-        steamstore.fetch_achievements(1) is None and steamstore.fetch_friends() is None
-    )
+    assert store.fetch_achievements(1) is None and store.fetch_friends() is None

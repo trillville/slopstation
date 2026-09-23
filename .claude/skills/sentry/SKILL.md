@@ -200,7 +200,7 @@ them together with the heartbeat count:
   `install_queued` `install_failed` — the account session. The lane means
   **hand-run**, like `manual` does for `exlink.py`: the agent passes its own
   logger in, so a voice-driven session files these under `lane:voice` and only
-  `python -m slopstation.agent.tools.steam_session …` at the console lands on
+  `python -m slopstation.agent.steam.session …` at the console lands on
   `lane:steam`.
   Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter —

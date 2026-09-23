@@ -48,5 +48,5 @@ def test_the_chord_lane_imports_nothing_from_the_agent():
 
 def test_the_rule_would_catch_a_crossing(tmp_path):
     bad = tmp_path / "x.py"
-    bad.write_text("def f():\n    from slopstation.agent.tools import library\n")
+    bad.write_text("def f():\n    from slopstation.agent.steam import library\n")
     assert any(m.startswith("slopstation.agent") for m in _imports(bad))

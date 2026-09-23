@@ -272,7 +272,7 @@ def test_the_prompt_maps_the_areas_from_the_offered_set():
 
 def test_busy_phrases_come_from_the_spec_with_the_game_named(toolkit, monkeypatch):
     from slopstation.agent.speech import session
-    from slopstation.agent.tools import library
+    from slopstation.agent.steam import library
 
     assert toolkit.busy_phrase("download_status", {}) == "checking Steam"
     assert toolkit.busy_phrase("find_tools", {"query": "x"}) == "one moment"

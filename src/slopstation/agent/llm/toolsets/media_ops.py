@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 
+from slopstation.agent import operations as operations_mod
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.tools import operations as operations_mod
-from slopstation.agent.tools.media_clients import KINDS
+from slopstation.agent.media.clients import KINDS
 
 KIND = {"type": "string", "enum": ["movie", "series"]}
 CATALOG_ID = {

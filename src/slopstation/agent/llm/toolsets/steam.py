@@ -7,7 +7,7 @@ from typing import Any
 from slopstation import config
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, ToolContext, ToolSpec
-from slopstation.agent.tools import library, steamstore
+from slopstation.agent.steam import library, store
 
 GET_GAME_DETAILS = """\
 Details for one appid: tags/description/score from the catalog, plus any
@@ -271,7 +271,7 @@ SPECS = [
         "new_releases",
         NEW_RELEASES,
         {
-            "section": {"type": "string", "enum": list(steamstore.FEATURED_SECTIONS)},
+            "section": {"type": "string", "enum": list(store.FEATURED_SECTIONS)},
             **paging.properties(),
         },
         (),
@@ -336,30 +336,30 @@ def impls(ctx: ToolContext):
         want = (args.get("facets") or []) if store_on else []
         tasks = {}
         if "price" in want:
-            tasks["price"] = lambda: steamstore.store_items([appid]).get(appid)
+            tasks["price"] = lambda: store.store_items([appid]).get(appid)
         if "reviews" in want:
-            tasks["reviews"] = lambda: steamstore.fetch_reviews(appid)
+            tasks["reviews"] = lambda: store.fetch_reviews(appid)
         if "news" in want:
-            tasks["news"] = lambda: steamstore.fetch_news(appid)
+            tasks["news"] = lambda: store.fetch_news(appid)
         if "achievements" in want:
-            tasks["achievements"] = lambda: steamstore.fetch_achievements(appid)
+            tasks["achievements"] = lambda: store.fetch_achievements(appid)
         if "players_now" in want:
-            tasks["players_now"] = lambda: steamstore.fetch_players_now(appid)
+            tasks["players_now"] = lambda: store.fetch_players_now(appid)
         details = {"dlc", "requirements", "release"} & set(want)
         if details:
 
             def from_details():
-                data = steamstore.fetch_appdetails(appid)
+                data = store.fetch_appdetails(appid)
                 out: dict[str, Any] = {}
                 if data is None:
                     # One store call failed; do not let each facet retry it.
                     return out
                 if "dlc" in details:
-                    out["dlc"] = steamstore.fetch_dlc(data)
+                    out["dlc"] = store.fetch_dlc(data)
                 if "requirements" in details:
-                    out["requirements"] = steamstore.fetch_requirements(data)
+                    out["requirements"] = store.fetch_requirements(data)
                 if "release" in details:
-                    out["release"] = steamstore.fetch_release(data)
+                    out["release"] = store.fetch_release(data)
                 return out
 
             tasks["_details"] = from_details
@@ -383,9 +383,9 @@ def impls(ctx: ToolContext):
         if want and not name:
             # hltb needs a name, and nameless facet payloads let the model
             # misattribute results across titles.
-            name = (steamstore.store_items([appid]).get(appid) or {}).get("name")
+            name = (store.store_items([appid]).get(appid) or {}).get("name")
         if "hltb" in want and name:
-            facets["hltb"] = steamstore.fetch_hltb(name)
+            facets["hltb"] = store.fetch_hltb(name)
         if not (meta or name or any(v not in (None, [], {}) for v in facets.values())):
             return {"ok": False, "error": "unknown appid"}
         return {
@@ -426,7 +426,7 @@ def impls(ctx: ToolContext):
         wishlist are live calls; the owned sources read the catalog."""
         source = args.get("source")
         if source == "wishlist_on_sale":
-            rows = steamstore.load_deals().get("wishlist_on_sale")
+            rows = store.load_deals().get("wishlist_on_sale")
             if rows is None:
                 # Two causes, indistinguishable here: no steamId64
                 # (refresh_deals never writes the key), or no sync yet.
@@ -442,15 +442,15 @@ def impls(ctx: ToolContext):
                     "ok": False,
                     "error": "steamId64 isn't set, so the wishlist can't be read",
                 }
-            rows = steamstore.fetch_wishlist(steamid)
+            rows = store.fetch_wishlist(steamid)
             if rows is None:
                 return {"ok": False, "error": "couldn't reach the Steam store just now"}
         elif source == "specials":
-            rows = steamstore.load_deals().get("specials", [])
+            rows = store.load_deals().get("specials", [])
         elif source == "trending":
-            rows = steamstore.fetch_trending()
+            rows = store.fetch_trending()
         elif source == "recently_played":
-            rows = steamstore.fetch_recently_played()
+            rows = store.fetch_recently_played()
         elif source in ("unplayed", "most_played", "recently_updated"):
             rows = _owned_rows()
             if source == "unplayed":
@@ -473,7 +473,7 @@ def impls(ctx: ToolContext):
         tags = args.get("tags") or []
         if not term and not tags:
             return {"ok": False, "error": "search needs a term or a genre tag"}
-        rows = steamstore.fetch_store_search(
+        rows = store.fetch_store_search(
             term=term,
             tags=tags,
             max_price=args.get("max_price"),
@@ -536,7 +536,7 @@ def impls(ctx: ToolContext):
         appid = int(args.get("appid", 0))
         if str(appid) not in library.load().get("owned", {}):
             return {"ok": False, "error": "achievements are read for owned games only"}
-        out = steamstore.fetch_achievements(appid)
+        out = store.fetch_achievements(appid)
         if out is None:
             return {
                 "ok": False,
@@ -576,7 +576,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def friends(args):
-        rows = steamstore.fetch_friends()
+        rows = store.fetch_friends()
         if rows is None:
             return {
                 "ok": False,
@@ -588,12 +588,12 @@ def impls(ctx: ToolContext):
     @bind
     def new_releases(args):
         section = str(args.get("section") or "new_releases")
-        if section not in steamstore.FEATURED_SECTIONS:
+        if section not in store.FEATURED_SECTIONS:
             return {
                 "ok": False,
-                "error": f"section must be one of {', '.join(steamstore.FEATURED_SECTIONS)}",
+                "error": f"section must be one of {', '.join(store.FEATURED_SECTIONS)}",
             }
-        rows = steamstore.fetch_featured(section)
+        rows = store.fetch_featured(section)
         if rows is None:
             return {"ok": False, "error": "couldn't reach the Steam store just now"}
         return paging.page(rows, args, "games", section=section)

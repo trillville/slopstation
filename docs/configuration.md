@@ -75,7 +75,7 @@ mean the soundbar changed.
 | `deepgramApiKey` | speech to text and text to speech | no voice |
 | `anthropicApiKey`, `openaiApiKey` | the assistant, per `assistantProvider` | fixed voice commands still work; the assistant does not |
 | `steamApiKey`, `steamId64` | library enrichment | a thinner catalog |
-| `steamRefreshToken` | installing by voice and download status; written by `python -m slopstation.agent.tools.steam_session enroll` | those verbs unavailable |
+| `steamRefreshToken` | installing by voice and download status; written by `python -m slopstation.agent.steam.session enroll` | those verbs unavailable |
 | `radarrApiKey`, `sonarrApiKey`, `prowlarrApiKey`, `qbittorrentPassword` | media requests, the media doctor, Proton port sync | media disabled |
 | `textInterfaceToken`, `remoteInterfaceToken` | the text and MCP interfaces | the interface does not start |
 

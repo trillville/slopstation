@@ -9,9 +9,9 @@ import datetime
 import subprocess
 import time
 
-from slopstation.agent.tools.media_checks import compose_command
-from slopstation.agent.tools.media_clients import MediaError, _clean_text
-from slopstation.agent.tools.monitor import ChangeOnly, Monitor
+from slopstation.agent.media.clients import MediaError, _clean_text
+from slopstation.agent.media.doctor import compose_command
+from slopstation.agent.monitor import ChangeOnly, Monitor
 
 # A pull is a few hundred MB; the restart takes seconds.
 COMPOSE_TIMEOUT_S = 600

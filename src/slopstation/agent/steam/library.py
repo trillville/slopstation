@@ -1,13 +1,13 @@
 """Build the game-library index from the gaming PC and Steam APIs.
 
 Installed games, collections, owned games, playtime, and metadata are stored
-in state/library.json. Live store data is handled by steamstore.py. ``sync()``
+in state/library.json. Live store data is handled by store.py. ``sync()``
 runs at startup, after each voice session, and periodically while the service
 is running.
 
 CLI:
-    python -m slopstation.agent.tools.library sync
-    python -m slopstation.agent.tools.library refresh [--owned] [--meta [N]]
+    python -m slopstation.agent.steam.library sync
+    python -m slopstation.agent.steam.library refresh [--owned] [--meta [N]]
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ def refresh_owned() -> int:
     return 0
 
 
-# --- shared by the catalog and steamstore -------------------------------------
+# --- shared by the catalog and the store --------------------------------------
 NOT_GAMES = {228980}  # Steamworks Common Redistributables
 
 
@@ -269,11 +269,11 @@ def sync() -> bool | None:
         installed = refresh() == 0
         if installed:
             refresh_collections()
-        from slopstation.agent.tools import steamstore
+        from slopstation.agent.steam import store
 
-        d_age = _iso_age(steamstore.load_deals(), "refreshed")
-        if d_age is None or d_age > steamstore.DEALS_MAX_AGE_S:
-            steamstore.refresh_deals()
+        d_age = _iso_age(store.load_deals(), "refreshed")
+        if d_age is None or d_age > store.DEALS_MAX_AGE_S:
+            store.refresh_deals()
         if steam_creds():
             age = _iso_age(load(), "ownedRefreshed")
             if age is None or age > OWNED_MAX_AGE_S:
@@ -365,7 +365,7 @@ def catalog_lines() -> list[str]:
 
 def usage() -> int:
     print(
-        "usage: python -m slopstation.agent.tools.library sync | refresh [--owned] "
+        "usage: python -m slopstation.agent.steam.library sync | refresh [--owned] "
         "[--meta [N]]"
     )
     return 2

@@ -34,8 +34,8 @@ from slopstation.agent.speech.grammar_gate import GrammarMatcher
 from slopstation.agent.speech.level import dbfs
 from slopstation.agent.speech.preroll import WakeAck
 from slopstation.agent.speech.session import Session
+from slopstation.agent.steam import library
 from slopstation.agent.telemetry import sentry
-from slopstation.agent.tools import library
 from slopstation.tv import Tv
 
 log = logbook.logger("voice")

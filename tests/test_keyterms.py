@@ -4,7 +4,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation.agent.speech import keyterms
-from slopstation.agent.tools import library, titles
+from slopstation.agent.steam import library, titles
 
 VOICE = {"keytermCount": 40}
 

@@ -6,9 +6,10 @@ import types
 import pytest
 
 from helpers import SERVICE_CFG, CapturingLog, fake_dispatch, sonarr_episode
+from slopstation.agent import media, operations
 from slopstation.agent.llm import assistant
-from slopstation.agent.tools import media, operations, operations_monitors
-from slopstation.agent.tools.media_clients import MediaError
+from slopstation.agent.media.clients import MediaError
+from slopstation.agent.operations.__main__ import main as operations_cli
 
 NOW = datetime.datetime.now(datetime.UTC)
 
@@ -1132,7 +1133,7 @@ def test_abandon_episode_operation_does_not_delete_the_series(
     _, store, _ = tracked
     operation = breaking_bad(store, {"episode_ids": [101]}, work_id="release:101")
     monkeypatch.setattr(media, "from_config", lambda *args, **kwargs: svc)
-    assert operations_monitors.main(["abandon", operation["id"], "--execute"]) == 0
+    assert operations_cli(["abandon", operation["id"], "--execute"]) == 0
     assert ("episodefile/1001", None) in sonarr.deletes
     assert not any(path == "series/5" for path, _ in sonarr.deletes)
     assert sonarr.puts[0] == (

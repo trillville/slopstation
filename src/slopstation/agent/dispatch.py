@@ -11,7 +11,7 @@ import sys
 from typing import NamedTuple
 
 from slopstation import events, gamepc, sessionlock
-from slopstation.agent.tools import library
+from slopstation.agent.steam import library
 from slopstation.tv import Tv
 
 COUCH = [sys.executable, "-m", "slopstation.couch"]

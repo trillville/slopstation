@@ -4,7 +4,7 @@ import json
 import subprocess
 
 from slopstation import config, paths
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     ArrClient,
     MediaConfigurationError,
     MediaError,
@@ -12,7 +12,7 @@ from slopstation.agent.tools.media_clients import (
     _kind,
     _qbit_from_config,
 )
-from slopstation.agent.tools.media_proton import read_proton_port_state
+from slopstation.agent.media.proton import read_proton_port_state
 
 
 class DoctorReport:

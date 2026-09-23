@@ -12,7 +12,7 @@ from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
 from slopstation.agent.llm import assistant, backends, confirm, prompts
 from slopstation.agent.speech import tool_schemas
-from slopstation.agent.tools import library, steamstore
+from slopstation.agent.steam import library, store
 
 CFG_MIN = {
     "tvComPort": "COMX",
@@ -902,7 +902,7 @@ def test_nav_resolves_a_collection_by_name_and_lists_them_on_a_miss(
 
 def test_list_games_routes_each_source_to_its_fetcher(monkeypatch, impls):
     monkeypatch.setattr(
-        steamstore,
+        store,
         "load_deals",
         lambda: {
             "specials": [{"appid": 1, "name": "S"}],
@@ -910,10 +910,10 @@ def test_list_games_routes_each_source_to_its_fetcher(monkeypatch, impls):
         },
     )
     monkeypatch.setattr(
-        steamstore, "fetch_trending", lambda: [{"appid": 3, "name": "T", "rank": 1}]
+        store, "fetch_trending", lambda: [{"appid": 3, "name": "T", "rank": 1}]
     )
     monkeypatch.setattr(
-        steamstore,
+        store,
         "fetch_recently_played",
         lambda: [{"appid": 4, "name": "R", "hours2w": 2.0}],
     )
@@ -929,12 +929,12 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
     # hltb for a game with no catalog name resolves the name from the store.
     hltb_calls = []
     monkeypatch.setattr(
-        steamstore,
+        store,
         "store_items",
         lambda a: {a[0]: {"name": "Some Unowned Game"}},
     )
     monkeypatch.setattr(
-        steamstore, "fetch_hltb", lambda name: hltb_calls.append(name) or {"main": 20}
+        store, "fetch_hltb", lambda name: hltb_calls.append(name) or {"main": 20}
     )
     r = impls["get_game_details"]({"appid": 424242, "facets": ["hltb"]})
     assert (
@@ -944,9 +944,7 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
     ), r
     # Every facet ask resolves a missing name, not just hltb: nameless review
     # payloads made the model match results to titles from memory.
-    monkeypatch.setattr(
-        steamstore, "fetch_reviews", lambda a: {"desc": "Very Positive"}
-    )
+    monkeypatch.setattr(store, "fetch_reviews", lambda a: {"desc": "Very Positive"})
     r = impls["get_game_details"]({"appid": 424242, "facets": ["reviews"]})
     assert r["ok"] and r["name"] == "Some Unowned Game", r
 

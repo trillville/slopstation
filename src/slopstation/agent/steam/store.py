@@ -11,7 +11,7 @@ import re
 import time
 
 from slopstation import config, logbook, paths, statefile
-from slopstation.agent.tools import library
+from slopstation.agent.steam import library
 
 log = logbook.logger("library")
 
