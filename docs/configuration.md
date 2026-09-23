@@ -76,7 +76,7 @@ mean the soundbar changed.
 | `anthropicApiKey`, `openaiApiKey` | the assistant, per `assistantProvider` | fixed voice commands still work; the assistant does not |
 | `steamApiKey`, `steamId64` | library enrichment | a thinner catalog |
 | `steamRefreshToken` | installing by voice and download status; written by `python -m slopstation.agent.steam.session enroll` | those verbs unavailable |
-| `radarrApiKey`, `sonarrApiKey`, `prowlarrApiKey`, `qbittorrentPassword` | media requests, the media doctor, Proton port sync | media disabled |
+| `radarrApiKey`, `sonarrApiKey`, `prowlarrApiKey`, `qbittorrentPassword` | media requests, the doctor's media rows, Proton port sync | media disabled |
 | `textInterfaceToken`, `remoteInterfaceToken` | the text and MCP interfaces | the interface does not start |
 
 The doctor's `voice keys` row names each missing key and the lane it
@@ -111,6 +111,7 @@ Everything else on the PC is a convention rather than a setting:
 | `SLOPSTATION_HOME` | the directory holding `config.json`, `secrets.json`, `state\` and `logs\`; default is the checkout |
 | `SLOPSTATION_URL`, `SLOPSTATION_TOKEN` | the text client's endpoint and token when it talks to another machine |
 | `SLOPSTATION_ENV` | the `env` attribute on every event. The test suite sets `env` to `test` so a test can never look like an outage |
+| `SLOPSTATION_ANNOTATE` | set by the k15 deploy job: the doctor also prints each WARN and FAIL row as a GitHub Actions annotation |
 | `SLOPSTATION_TEST_AUDIO`, `SLOPSTATION_TEST_HAS` | opt the test suite into real audio devices; override what the machine is detected to have |
 
 ## Repository settings

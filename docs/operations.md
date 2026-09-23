@@ -13,7 +13,8 @@ independent jobs run on the self-hosted runners:
   checkout. It waits up to two hours for a live session to end, fast-forwards
   the checkout to the commit, restarts the lanes (installing changed pins
   first), starts the media stack if enabled, and runs the doctor. Its exit
-  code is the doctor's failure count.
+  code is the doctor's failure count, and each WARN and FAIL row is also an
+  annotation on the run.
 - **Gaming PC.** `gaming-pc\Deploy.ps1 -WaitMinutes 120` from the runner's
   checkout copies the script set into `C:\CouchGaming`, stamps `build-id`,
   and runs `Doctor.ps1`. It never writes `config.psd1`.
@@ -89,8 +90,10 @@ the controller launch chain, not every optional feature.
   Ex-Link port, the controller, both lanes, SSH to the gaming PC and the
   dispatcher's answer, deploy skew between the two machines (`ssh <sshHost>
   version` against the checkout), VirtualHere and its firewall rule, session
-  state, the voice library and keys, the Steam session, and media when
-  enabled.
+  state, the voice library and keys, the Steam session, and, when media is
+  enabled, the whole stack: the containers, Radarr, Sonarr and Prowlarr
+  through their APIs, qBittorrent's settings, Proton's forwarded port,
+  Windows' port reservations, and monitored episodes nothing is chasing.
 - Gaming PC: `C:\CouchGaming\Doctor.ps1`. The loaded config, the deployed
   files, each scheduled task against its definition, sshd and the mini-PC-only
   firewall rule, the key file's ACL, the NIC's wake settings, VirtualHere and

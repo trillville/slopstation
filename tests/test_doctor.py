@@ -11,7 +11,6 @@ import serial
 
 import helpers
 from slopstation import config, doctor, gamepc, paths, sessionlock, statefile, supervise
-from slopstation.agent.media import clients, proton
 
 
 class _Serial:
@@ -82,31 +81,11 @@ def cfg(monkeypatch):
 
 
 @pytest.fixture
-def media_cfg(cfg):
-    """The example config with the media lane on - a deep copy, since the
-    tests delete keys from it."""
-    media_cfg = json.loads(json.dumps(cfg))
-    media_cfg["media"]["enabled"] = True
-    return media_cfg
-
-
-@pytest.fixture
 def lanes_down(monkeypatch):
     """Both lane tasks registered but not running."""
     monkeypatch.setattr(
         supervise, "query", lambda lane: {"Status": "Ready", "Last Result": "1"}
     )
-
-
-@pytest.fixture
-def media_up(monkeypatch):
-    """Both *arr keys in secrets.json and every sidecar answering its port."""
-    monkeypatch.setattr(
-        config,
-        "secrets",
-        lambda: {"radarrApiKey": "r" * 32, "sonarrApiKey": "s" * 32},
-    )
-    monkeypatch.setattr(doctor, "_tcp_reachable", lambda url, timeout=1: True)
 
 
 # --- config --------------------------------------------------------------
@@ -452,137 +431,29 @@ def test_voice_without_a_voice_section(rows):
     assert rows.levels()["voice config"] == "WARN"
 
 
-# --- media -----------------------------------------------------------------
+# --- output in the deploy job ---------------------------------------------
 
 
-def test_media_fully_configured(rows, media_cfg, media_up):
-    doctor.check_media(media_cfg)
-    lv = rows.levels()
-    assert lv["media config"] == "PASS"
-    assert lv["media keys"] == "PASS"
-    assert lv["media services"] == "PASS"
+def test_in_the_deploy_job_a_problem_row_is_also_an_annotation(monkeypatch, capsys):
+    """cd.yml sets SLOPSTATION_ANNOTATE for the k15 job. Anywhere else the
+    doctor prints its rows and nothing more."""
+    monkeypatch.setattr(doctor, "_counts", dict.fromkeys(doctor._counts, 0))
+    monkeypatch.delenv("SLOPSTATION_ANNOTATE", raising=False)
+    doctor.report(doctor.WARN, "media config", "missing keys")
+    assert capsys.readouterr().out == "[WARN] media config: missing keys\n"
 
-
-def test_media_names_the_unconfigured_service(rows, media_cfg, media_up):
-    del media_cfg["media"]["prowlarrUrl"]
-    doctor.check_media(media_cfg)
-    lv = rows.levels()
-    assert lv["media config"] == "WARN"
-    assert lv["media services"] == "WARN"
-    assert "unconfigured: Prowlarr" in rows.detail("media services")
-
-
-def test_port_reservations_warn_while_the_dynamic_range_reaches_proton(
-    rows, media_cfg, media_up, monkeypatch
-):
-    """Windows reserves ports only inside its dynamic range, so the row
-    passes once that range ends below Proton's forwarded ports."""
-    media_cfg["media"]["protonPortSync"] = True
-    start = {"value": 58000, "count": 7536}
-
-    def netsh(*args):
-        return (
-            f"Protocol {args[-1]} Dynamic Port Range\n"
-            "---------------------------------\n"
-            f"Start Port      : {start['value']}\n"
-            f"Number of Ports : {start['count']}\n"
-        )
-
-    monkeypatch.setattr(proton, "_netsh", netsh)
-    doctor.check_media(media_cfg)
-    assert rows.levels()["port reservations"] == "WARN"
-    assert "UDP 58000-65535" in rows.detail("port reservations")
-    rows.clear()
-    start.update(value=21000, count=11000)
-    doctor.check_media(media_cfg)
-    assert rows.levels()["port reservations"] == "PASS"
-
-
-# --- monitored-and-missing outside active work ---------------------------
-
-
-def _wanted_missing():
-    """Sonarr's wanted/missing page: four monitored episodes, one per case
-    the row tells apart."""
-    old_aired = time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30 * 86400)
+    monkeypatch.setenv("SLOPSTATION_ANNOTATE", "1")
+    doctor.report(doctor.PASS, "venv", "ok")
+    doctor.report(doctor.WARN, "media config", "missing keys", "see the example")
+    doctor.report(doctor.FAIL, "ssh dispatch", "no answer")
+    assert capsys.readouterr().out.splitlines() == [
+        "[PASS] venv: ok",
+        "[WARN] media config: missing keys  -> see the example",
+        "::warning title=media config::missing keys  -> see the example",
+        "[FAIL] ssh dispatch: no answer",
+        "::error title=ssh dispatch::no answer",
+    ]
+    # The runner's escaping: %, CR and LF anywhere; : and , in the title too.
+    assert doctor.annotation(doctor.WARN, "a: b, c", "50%\r\nmore") == (
+        "::warning title=a%3A b%2C c::50%25%0D%0Amore"
     )
-    fresh_aired = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    return {
-        "records": [
-            # Owned by the Andor operation the tests record: not drift.
-            {
-                "seriesId": 7,
-                "seasonNumber": 1,
-                "airDateUtc": old_aired,
-                "series": {"title": "Andor"},
-            },
-            # Aired tonight: still in flight, not drift.
-            {
-                "seriesId": 3,
-                "seasonNumber": 18,
-                "airDateUtc": fresh_aired,
-                "series": {"title": "Sunny"},
-            },
-            # Aired years ago, nothing chasing it: the surprise-download hole.
-            {
-                "seriesId": 3,
-                "seasonNumber": 1,
-                "airDateUtc": old_aired,
-                "series": {"title": "Sunny"},
-            },
-            {
-                "seriesId": 3,
-                "seasonNumber": 2,
-                "airDateUtc": old_aired,
-                "series": {"title": "Sunny"},
-            },
-        ]
-    }
-
-
-def _series_op(external_ref, seasons):
-    return {
-        "kind": "series_acquisition",
-        "state": "RUNNING",
-        "external_ref": external_ref,
-        "metadata": {"seasons": seasons},
-    }
-
-
-@pytest.fixture
-def sonarr_wanted(monkeypatch, media_up):
-    monkeypatch.setattr(
-        clients.ArrClient,
-        "get",
-        lambda self, endpoint, params=None: _wanted_missing(),
-    )
-
-
-def test_media_monitoring_flags_episodes_nobody_is_chasing(
-    rows, media_cfg, sonarr_wanted
-):
-    statefile.write(paths.state() / "operations.json", [_series_op("7", [1])])
-    doctor.check_media_monitoring(media_cfg)
-    assert rows.levels()["media monitoring"] == "WARN"
-    detail = rows.detail("media monitoring")
-    assert "2 episode(s)" in detail and "Sunny (2)" in detail, detail
-
-
-def test_media_monitoring_whole_series_operation_owns_every_season(
-    rows, media_cfg, sonarr_wanted
-):
-    # A whole-series operation (seasons: null) accounts for every season of
-    # it, so with both series owned nothing is left armed.
-    statefile.write(
-        paths.state() / "operations.json",
-        [_series_op("7", [1]), _series_op("3", None)],
-    )
-    doctor.check_media_monitoring(media_cfg)
-    assert rows.levels()["media monitoring"] == "PASS"
-
-
-def test_media_monitoring_without_a_sonarr_key(rows, media_cfg, monkeypatch):
-    monkeypatch.setattr(config, "secrets", lambda: {})
-    doctor.check_media_monitoring(media_cfg)
-    assert rows.levels()["media monitoring"] == "WARN"
