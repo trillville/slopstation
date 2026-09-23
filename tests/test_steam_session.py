@@ -10,7 +10,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation import paths
-from slopstation.agent.tools import steam_session as ss
+from slopstation.agent.steam import session as ss
 
 STEAMID = "76561190000"
 TOKEN_SECRET = "REFRESH_TOKEN_SECRET_VALUE_123"

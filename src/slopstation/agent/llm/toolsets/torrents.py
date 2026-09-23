@@ -15,7 +15,7 @@ from typing import Any
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.llm.toolsets.media_browse import _gb
-from slopstation.agent.tools import media_proton
+from slopstation.agent.media import proton
 
 HASH_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
 STATES = {
@@ -823,9 +823,9 @@ def impls(ctx: ToolContext):
             log.error("tool_error", tool="vpn_status", err=str(e))
             return {"ok": False, "error": str(e)}
         try:
-            proton = media_proton.read_proton_port_state()
+            forwarded = proton.read_proton_port_state()
         except Exception as e:
-            proton = {"state": "unreadable", "detail": str(e)}
+            forwarded = {"state": "unreadable", "detail": str(e)}
         listen = int(prefs.get("listen_port", 0) or 0)
         return {
             "ok": True,
@@ -833,9 +833,10 @@ def impls(ctx: ToolContext):
             or prefs.get("current_network_interface"),
             "bound_address": prefs.get("current_interface_address"),
             "listen_port": listen,
-            "proton": proton,
+            "proton": forwarded,
             # "active" means Proton holds a forwarded port.
-            "ports_agree": proton["state"] == "active" and proton["port"] == listen,
+            "ports_agree": forwarded["state"] == "active"
+            and forwarded["port"] == listen,
         }
 
     @bind

@@ -2,8 +2,8 @@
 
 import time
 
-from slopstation.agent.tools.media_clients import MediaError, _clean_text
-from slopstation.agent.tools.monitor import ChangeOnly, Monitor
+from slopstation.agent.media.clients import MediaError, _clean_text
+from slopstation.agent.monitor import ChangeOnly, Monitor
 
 # Servarr history eventTypes that mean a grab did not become a file.
 FAILURE_EVENTS = frozenset(("downloadFailed", "importFailed", "importBlocked"))

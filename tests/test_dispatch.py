@@ -7,7 +7,7 @@ import pytest
 from helpers import CapturingLog, seed_lock
 from slopstation import gamepc, sessionlock, tv
 from slopstation.agent import dispatch as dp
-from slopstation.agent.tools import library
+from slopstation.agent.steam import library
 
 CFG = {
     "tvIp": "192.0.2.1",

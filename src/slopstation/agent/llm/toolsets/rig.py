@@ -6,7 +6,7 @@ import urllib.parse
 
 from slopstation import gamepc, sessionlock
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.tools import library, titles
+from slopstation.agent.steam import library, titles
 
 STORE_SEARCH = "https://store.steampowered.com/search/?term="
 

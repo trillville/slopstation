@@ -2,8 +2,8 @@
 
 from slopstation import config, logbook
 from slopstation.agent.speech import carry, keyterms, tool_schemas
+from slopstation.agent.steam import library, titles
 from slopstation.agent.telemetry import sentry, traces
-from slopstation.agent.tools import library, titles
 
 log = logbook.logger("voice")
 

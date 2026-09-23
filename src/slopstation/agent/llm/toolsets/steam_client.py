@@ -9,7 +9,7 @@ whether or not anything happened.
 from __future__ import annotations
 
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.tools import library
+from slopstation.agent.steam import library
 
 DOWNLOAD_STATUS = """\
 Steam's own download queue on the PC: each changing game with its percent,

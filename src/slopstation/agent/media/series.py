@@ -3,14 +3,14 @@
 import datetime
 from typing import Any
 
-from slopstation.agent.tools.media.core import Observation
-from slopstation.agent.tools.media.queue import _Queue
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaError,
     _clean_text,
     _parse_time,
 )
-from slopstation.agent.tools.operations import (
+from slopstation.agent.media.core import Observation
+from slopstation.agent.media.queue import _Queue
+from slopstation.agent.operations import (
     CANCELED,
     FAILED,
     RUNNING,

@@ -13,8 +13,10 @@ from typing import Any
 import pytest
 
 import helpers
+from slopstation.agent import media, operations
+from slopstation.agent.operations import monitors
+from slopstation.agent.operations.__main__ import main as operations_cli
 from slopstation.agent.speech import announce
-from slopstation.agent.tools import media, operations, operations_monitors
 
 
 def wait_for(predicate, timeout=2):
@@ -167,10 +169,8 @@ def test_steam_monitor_needs_install_proof(log, monkeypatch):
     operation, _ = _stardew(store)
     steam = FakeSteam()
     installed = set()
-    monkeypatch.setattr(
-        operations_monitors, "_fully_installed_appids", lambda: installed
-    )
-    monitor = operations_monitors.SteamMonitor(store, steam, log)
+    monkeypatch.setattr(monitors, "_fully_installed_appids", lambda: installed)
+    monitor = monitors.SteamMonitor(store, steam, log)
     steam.downloads = [
         {
             "appid": 413150,
@@ -259,7 +259,7 @@ def test_media_monitor_observes_a_series_acquisition(log):
     assert reused["id"] == media_op["id"]
     assert reused["metadata"]["preset"] == "2160p"
     fake_media = FakeMedia()
-    monitor = operations_monitors.MediaMonitor(store, fake_media, log)
+    monitor = monitors.MediaMonitor(store, fake_media, log)
     assert monitor.reconcile_once() == 1
     assert store.get(media_op["id"])["progress"]["percent"] == 20
     assert store.get(media_op["id"])["metadata"]["search_pending"]
@@ -291,7 +291,7 @@ def test_media_monitor_observes_a_series_acquisition(log):
 def test_media_monitor_notifies_once_per_phase(log):
     store = operations.OperationStore(log)
     fake_media = FakeMedia()
-    monitor = operations_monitors.MediaMonitor(store, fake_media, log)
+    monitor = monitors.MediaMonitor(store, fake_media, log)
     phase_op = _movie(store, "51", "Arrival", 329865, 9)
     fake_media.result = {
         "state": operations.RUNNING,
@@ -339,7 +339,7 @@ def test_search_retry_backs_off_then_gives_up(log):
             "detail": "no acceptable release yet",
         },
     )
-    retry_monitor = operations_monitors.MediaMonitor(store, retry_media, log)
+    retry_monitor = monitors.MediaMonitor(store, retry_media, log)
     retry_monitor.reconcile_once(now=1000)
     scheduled = store.get(retry_op["id"])
     assert scheduled["metadata"]["search_retry_pending"]
@@ -347,9 +347,9 @@ def test_search_retry_backs_off_then_gives_up(log):
     assert not retry_media.retries
 
     retry_media.search_available_now = True
-    operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1299)
+    monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1299)
     assert not retry_media.retries
-    operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1300)
+    monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=1300)
     retried = store.get(retry_op["id"])
     assert retry_media.retries == [retry_op["id"]]
     assert retried["metadata"]["search_retry_count"] == 1
@@ -396,7 +396,7 @@ def test_failed_search_retry_backs_off_longer(log):
         },
         retry_error=RuntimeError("search submit failed"),
     )
-    operations_monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=2000)
+    monitors.MediaMonitor(store, retry_media, log).reconcile_once(now=2000)
     failed = store.get(failed_op["id"])
     assert failed["state"] == operations.UNKNOWN
     assert failed["metadata"]["search_retry_count"] == 1
@@ -429,7 +429,7 @@ def test_a_retry_waits_for_the_pending_search(log):
             "detail": "Sonarr is still populating episode metadata",
         }
     )
-    monitor = operations_monitors.MediaMonitor(store, pending_media, log)
+    monitor = monitors.MediaMonitor(store, pending_media, log)
     monitor.reconcile_once(now=3000)
     assert not pending_media.retries
     assert store.get(pending_op["id"])["metadata"]["search_pending"]
@@ -467,11 +467,9 @@ def test_abandoning_a_pending_episode_request_keeps_the_series(log, monkeypatch)
             deletions.append((tvdb_id, kwargs))
             return {"ok": True, "detail": "deleted 1 selected episode"}
 
-    monkeypatch.setattr(
-        operations_monitors.media, "from_config", lambda *a, **kw: FakeService()
-    )
+    monkeypatch.setattr(media, "from_config", lambda *a, **kw: FakeService())
     with contextlib.redirect_stdout(io.StringIO()):
-        assert operations_monitors.main(["abandon", pending_op["id"], "--execute"]) == 0
+        assert operations_cli(["abandon", pending_op["id"], "--execute"]) == 0
     assert len(deletions) == 1
     tvdb_id, kwargs = deletions[0]
     assert tvdb_id == 75805
@@ -491,7 +489,7 @@ def test_waiting_series_is_abandoned_after_a_day(log):
         "Rick and Morty",
         metadata={"catalog_id": 275274, "seasons": None},
     )
-    give_monitor = operations_monitors.MediaMonitor(store, give_media, log)
+    give_monitor = monitors.MediaMonitor(store, give_media, log)
     give_monitor.reconcile_once(now=5000)
     assert store.get(give_op["id"])["metadata"]["waiting_since"] == 5000
     assert not give_media.abandoned
@@ -546,7 +544,7 @@ def test_unaired_season_waits_indefinitely(log):
         "Andor",
         metadata={"catalog_id": 393189, "seasons": [2]},
     )
-    give_monitor = operations_monitors.MediaMonitor(store, give_media, log)
+    give_monitor = monitors.MediaMonitor(store, give_media, log)
     give_monitor.reconcile_once(now=8000)
     give_monitor.reconcile_once(now=8000 + 48 * 3600)
     fresh = store.get(unaired["id"])
@@ -578,7 +576,7 @@ def test_empty_movie_wait_fails_silently(log):
         "Obscure Film",
         metadata={"catalog_id": 999},
     )
-    give_monitor = operations_monitors.MediaMonitor(store, give_media, log)
+    give_monitor = monitors.MediaMonitor(store, give_media, log)
     give_monitor.reconcile_once(now=9000)
     store.update_metadata(
         empty["id"],
@@ -735,7 +733,7 @@ def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
 def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):
     """A raise inside reconcile_once is one log line; polling continues, and
     stop() ends the thread."""
-    from slopstation.agent.tools.monitor import Monitor
+    from slopstation.agent.monitor import Monitor
 
     class Flaky(Monitor):
         THREAD_NAME = "flaky-monitor"

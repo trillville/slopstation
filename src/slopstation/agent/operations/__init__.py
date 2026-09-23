@@ -1,4 +1,8 @@
-"""Persist and correlate work performed by external services."""
+"""The operation ledger: persist and correlate work performed by external
+services.
+
+`monitors` reconciles the open rows with Steam, Radarr and Sonarr, and
+`python -m slopstation.agent.operations` lists or settles them by hand."""
 
 import time
 import uuid
@@ -641,9 +645,3 @@ def owned_seasons() -> dict:
         else:
             owned.setdefault(key, set()).update(int(n) for n in seasons)
     return owned
-
-
-if __name__ == "__main__":
-    from slopstation.agent.tools.operations_monitors import main
-
-    raise SystemExit(main())

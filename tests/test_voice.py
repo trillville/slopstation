@@ -11,15 +11,11 @@ import pytest
 import helpers
 from helpers import CapturingLog
 from slopstation import checkin, config, events, gamepc, logbook
-from slopstation.agent import voice
+from slopstation.agent import media, operations, voice
+from slopstation.agent.operations import monitors
 from slopstation.agent.speech import announce
+from slopstation.agent.steam import session as steam_session
 from slopstation.agent.telemetry import sentry
-from slopstation.agent.tools import (
-    media,
-    operations,
-    operations_monitors,
-    steam_session,
-)
 
 REAL_KEY = "k" * 40
 SECRETS = {"deepgramApiKey": REAL_KEY, "anthropicApiKey": REAL_KEY}
@@ -230,8 +226,8 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(sentry, "setup", lambda cfg, log: False)
     monkeypatch.setattr(announce, "Announcer", FakeAnnouncer)
     monkeypatch.setattr(operations, "OperationStore", FakeOperationStore)
-    monkeypatch.setattr(operations_monitors, "SteamMonitor", FakeSteamMonitor)
-    monkeypatch.setattr(operations_monitors, "MediaMonitor", FakeMediaMonitor)
+    monkeypatch.setattr(monitors, "SteamMonitor", FakeSteamMonitor)
+    monkeypatch.setattr(monitors, "MediaMonitor", FakeMediaMonitor)
     monkeypatch.setattr(
         media,
         "from_config",

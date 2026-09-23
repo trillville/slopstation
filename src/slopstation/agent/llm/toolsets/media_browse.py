@@ -13,7 +13,7 @@ from slopstation.agent.llm.toolsets.media_ops import (
     KIND,
     _spec,
 )
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     KINDS,
     SEARCH_TIMEOUT_S,
     MediaError,

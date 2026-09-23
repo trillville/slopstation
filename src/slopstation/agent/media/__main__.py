@@ -1,16 +1,16 @@
-"""python -m slopstation.agent.tools.media: check the media stack and Proton's port."""
+"""python -m slopstation.agent.media: check the media stack and Proton's port."""
 
 import argparse
 import json
 
 from slopstation import config, logbook
-from slopstation.agent.tools.media_checks import media_doctor
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
     _qbit_from_config,
 )
-from slopstation.agent.tools.media_proton import (
+from slopstation.agent.media.doctor import media_doctor
+from slopstation.agent.media.proton import (
     ProtonPortMonitor,
     read_proton_port_state,
 )

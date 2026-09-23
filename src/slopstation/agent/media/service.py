@@ -2,13 +2,13 @@
 
 import json
 
-from slopstation.agent.tools.media.movies import _Movies
-from slopstation.agent.tools.media.series import _Series
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaError,
     _clean_text,
     _kind,
 )
+from slopstation.agent.media.movies import _Movies
+from slopstation.agent.media.series import _Series
 
 
 class MediaService(_Series, _Movies):

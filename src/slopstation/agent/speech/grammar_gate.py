@@ -24,8 +24,8 @@ from rapidfuzz import fuzz
 from slopstation import events
 from slopstation.agent.dispatch import Result
 from slopstation.agent.speech import earcons
+from slopstation.agent.steam import titles
 from slopstation.agent.telemetry import genai
-from slopstation.agent.tools import titles
 
 GRAMMAR = Path(__file__).resolve().parents[1] / "grammar.yaml"
 

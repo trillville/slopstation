@@ -14,9 +14,10 @@ import json
 import re
 from typing import Any
 
+from slopstation.agent import operations as operations_mod
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.tools import apidocs, library, steam_session
-from slopstation.agent.tools import operations as operations_mod
+from slopstation.agent.media import apidocs
+from slopstation.agent.steam import library, session
 
 METHODS = ("GET", "POST", "PUT", "DELETE")
 # Status text the media clients raise for an answered-and-refused request.
@@ -541,7 +542,7 @@ def impls(ctx: ToolContext):
         }
         if r.status_code >= 400:
             raise HttpFailure(r.status_code, envelope)
-        if steam_session.refused(envelope["eresult"]):
+        if session.refused(envelope["eresult"]):
             # A 200 with a failing X-eresult is Steam saying no, the same
             # way the session's own calls read it.
             raise HttpFailure(

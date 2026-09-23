@@ -26,7 +26,7 @@ def package_modules():
 
 
 def modname(path):
-    """src/slopstation/agent/tools/library.py -> slopstation.agent.tools.library"""
+    """src/slopstation/agent/steam/library.py -> slopstation.agent.steam.library"""
     rel = path.relative_to(PACKAGE.parent).with_suffix("")
     parts = rel.parts[:-1] if rel.name == "__init__" else rel.parts
     return ".".join(parts)

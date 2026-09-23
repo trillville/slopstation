@@ -5,7 +5,7 @@ import types
 import pytest
 
 from slopstation.agent.llm import assistant
-from slopstation.agent.tools import media_proton
+from slopstation.agent.media import proton
 
 LINKED = "a" * 40  # Radarr is waiting on this one
 ORPHAN = "b" * 40  # completed, nobody asked for it
@@ -378,7 +378,7 @@ def test_seeding_orphans_vpn_and_log(rig, monkeypatch):
     orphans = tk.call("orphan_torrents", {})
     assert orphans["ok"] and [t["hash"] for t in orphans["torrents"]] == [ORPHAN]
     monkeypatch.setattr(
-        media_proton,
+        proton,
         "read_proton_port_state",
         lambda path=None, now=None: {"status": "ok", "port": 51820, "state": "active"},
     )
@@ -389,13 +389,13 @@ def test_seeding_orphans_vpn_and_log(rig, monkeypatch):
     # A stale Proton reading never agrees, and an unreadable log is an answer.
     qbit.prefs["listen_port"] = 51820
     monkeypatch.setattr(
-        media_proton,
+        proton,
         "read_proton_port_state",
         lambda path=None, now=None: {"status": "ok", "port": 51820, "state": "stale"},
     )
     assert tk.call("vpn_status", {})["ports_agree"] is False
     monkeypatch.setattr(
-        media_proton,
+        proton,
         "read_proton_port_state",
         lambda path=None, now=None: (_ for _ in ()).throw(
             RuntimeError("log unreadable")

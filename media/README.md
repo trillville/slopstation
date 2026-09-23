@@ -141,7 +141,7 @@ indexers, then set `enabled` to `true`.
 Validate the installation:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.tools.media doctor
+.venv\Scripts\python -m slopstation.agent.media doctor
 ```
 
 Configure Docker Desktop, Proton, and qBittorrent to start at login. Compose
@@ -215,8 +215,8 @@ Proton writes its active port to:
 Check and apply the port once:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.tools.media proton-port
-.venv\Scripts\python -m slopstation.agent.tools.media sync-proton-port --execute
+.venv\Scripts\python -m slopstation.agent.media proton-port
+.venv\Scripts\python -m slopstation.agent.media sync-proton-port --execute
 ```
 
 Confirm that Proton and qBittorrent show the same port. Then set
@@ -232,7 +232,7 @@ then reports once and waits. Restarting by hand still works. For manual
 recovery of the port:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.tools.media set-qbit-port <active-port> --execute
+.venv\Scripts\python -m slopstation.agent.media set-qbit-port <active-port> --execute
 ```
 
 Windows reserves blocks of ports for Hyper-V and WSL networking (Docker
@@ -259,8 +259,8 @@ do. `netsh int ipv4 show excludedportrange protocol=udp` lists the reservations.
 Start diagnosis with:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.tools.media doctor
-.venv\Scripts\python -m slopstation.agent.tools.operations list --active
+.venv\Scripts\python -m slopstation.agent.media doctor
+.venv\Scripts\python -m slopstation.agent.operations list --active
 docker compose --project-directory media --env-file media\.env ps
 ```
 

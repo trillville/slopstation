@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from slopstation.agent.tools import library
+from slopstation.agent.steam import library
 
 
 @pytest.fixture

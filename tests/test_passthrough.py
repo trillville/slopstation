@@ -10,7 +10,7 @@ from helpers import fake_dispatch
 from slopstation import paths
 from slopstation.agent.llm import assistant, confirm
 from slopstation.agent.llm.toolsets import passthrough
-from slopstation.agent.tools import apidocs
+from slopstation.agent.media import apidocs
 
 
 class FakeClient:
@@ -101,7 +101,7 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
 def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
     """A passthrough write is recorded only in the ledger: one row per write,
     terminal at once, never announced. A read leaves no row."""
-    from slopstation.agent.tools import operations
+    from slopstation.agent import operations
 
     _, dispatch, media = live
     store = operations.OperationStore(log)
@@ -258,7 +258,7 @@ def test_steam_api_injects_the_right_credential(live, monkeypatch):
     )
     monkeypatch.setitem(__import__("sys").modules, "requests", fake_requests)
     monkeypatch.setattr(
-        "slopstation.agent.tools.library.steam_creds", lambda: ("KEY123", "7656119")
+        "slopstation.agent.steam.library.steam_creds", lambda: ("KEY123", "7656119")
     )
     out = tk.call(
         "steam_api",

@@ -1,7 +1,7 @@
 """Tools for movies and series: lookup, requests, and deletion."""
 
+from slopstation.agent import operations as operations_mod
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.tools import operations as operations_mod
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five

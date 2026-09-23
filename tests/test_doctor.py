@@ -11,7 +11,7 @@ import serial
 
 import helpers
 from slopstation import config, doctor, gamepc, paths, sessionlock, statefile, supervise
-from slopstation.agent.tools import media_clients, media_proton
+from slopstation.agent.media import clients, proton
 
 
 class _Serial:
@@ -421,14 +421,14 @@ def test_voice_library_and_deals_rows(rows):
     """Absent index, unreadable index, fresh index; stale deals."""
     import os
 
-    from slopstation.agent.tools import library, steamstore
+    from slopstation.agent.steam import library, store
 
     doctor.check_voice_library()
     assert rows.detail("voice library") == "no index yet"
     assert "voice deals" not in rows.names()
 
     rows.clear()
-    statefile.write(steamstore.deals_file(), {})
+    statefile.write(store.deals_file(), {})
     doctor.check_voice_library()
     assert rows.levels()["voice deals"] == "PASS"
 
@@ -439,9 +439,9 @@ def test_voice_library_and_deals_rows(rows):
 
     rows.clear()
     statefile.write(library.library_file(), {"installed": [{}], "owned": [{}, {}]})
-    statefile.write(steamstore.deals_file(), {})
+    statefile.write(store.deals_file(), {})
     old = time.time() - 30 * 3600
-    os.utime(steamstore.deals_file(), (old, old))
+    os.utime(store.deals_file(), (old, old))
     doctor.check_voice_library()
     assert rows.detail("voice library").startswith("1 installed / 2 owned")
     assert rows.levels()["voice deals"] == "WARN"
@@ -488,7 +488,7 @@ def test_port_reservations_warn_while_the_dynamic_range_reaches_proton(
             f"Number of Ports : {start['count']}\n"
         )
 
-    monkeypatch.setattr(media_proton, "_netsh", netsh)
+    monkeypatch.setattr(proton, "_netsh", netsh)
     doctor.check_media(media_cfg)
     assert rows.levels()["port reservations"] == "WARN"
     assert "UDP 58000-65535" in rows.detail("port reservations")
@@ -553,7 +553,7 @@ def _series_op(external_ref, seasons):
 @pytest.fixture
 def sonarr_wanted(monkeypatch, media_up):
     monkeypatch.setattr(
-        media_clients.ArrClient,
+        clients.ArrClient,
         "get",
         lambda self, endpoint, params=None: _wanted_missing(),
     )

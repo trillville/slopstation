@@ -154,7 +154,7 @@ class SteamSession:
         just before it expires. Raises if there is no refresh token."""
         if not config.real_key(self._refresh):
             raise RuntimeError(
-                "no Steam refresh token - run: python -m slopstation.agent.tools.steam_session enroll"
+                "no Steam refresh token - run: python -m slopstation.agent.steam.session enroll"
             )
         if self._access and time.time() < self._access_exp - 120:
             return self._access
@@ -525,7 +525,7 @@ class SteamSession:
         """QR login under the WebBrowser platform, then persist the refresh
         token to secrets.json; the mobile Steam app scans the printed QR.
 
-            python -m slopstation.agent.tools.steam_session enroll
+            python -m slopstation.agent.steam.session enroll
 
         Re-run only when the token dies: password change, "deauthorize all
         devices", or ~200 days."""
@@ -614,7 +614,7 @@ def _cli(argv):
         return s.enroll()
     if not s.available():
         print(
-            "no Steam session - set steamId64 and run: python -m slopstation.agent.tools.steam_session enroll"
+            "no Steam session - set steamId64 and run: python -m slopstation.agent.steam.session enroll"
         )
         return 1
     if cmd == "token":
@@ -632,7 +632,7 @@ def _cli(argv):
         print(json.dumps(s.install(int(argv[1])), indent=2))
         return 0
     print(
-        "usage: python -m slopstation.agent.tools.steam_session enroll | token "
+        "usage: python -m slopstation.agent.steam.session enroll | token "
         "| install <appid>"
     )
     return 2

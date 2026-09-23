@@ -3,7 +3,7 @@
 import dataclasses
 from typing import Any
 
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
     _clean_text,

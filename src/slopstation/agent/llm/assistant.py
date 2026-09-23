@@ -11,11 +11,11 @@ from slopstation.agent.llm.registry import (
     ToolContext,
     utterance_snapshot,
 )
+from slopstation.agent.media.clients import MediaError
+from slopstation.agent.steam import library
 
 # tool spans; the module self-gates: REPL/bench are no-ops
 from slopstation.agent.telemetry import sentry
-from slopstation.agent.tools import library
-from slopstation.agent.tools.media_clients import MediaError
 
 # Every tool the assistant can ever offer, in the order the model sees them.
 # A tool's description is its whole interface: the rules about a tool live

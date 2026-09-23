@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from slopstation import paths
-from slopstation.agent.tools.disk_health import FREE_WARN_BYTES
+from slopstation.agent.media.disk import FREE_WARN_BYTES
 
 # The three folders Compose mounts under /data. Deleting one of them, or the
 # root, is never a tidy-up.
@@ -25,7 +25,7 @@ GB = 1024**3
 def media_root() -> Path | None:
     """MEDIA_ROOT from media/.env, as the disk watch reads it. None on a
     checkout that is not the K15."""
-    from slopstation.agent.tools.media.config import _media_root
+    from slopstation.agent.media.config import _media_root
 
     root = _media_root(paths.HOME / "media" / ".env")
     return Path(root) if root else None

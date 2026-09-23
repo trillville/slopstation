@@ -8,7 +8,7 @@ import pytest
 
 from helpers import CapturingLog
 from slopstation import config
-from slopstation.agent.tools import library, steamstore
+from slopstation.agent.steam import library, store
 
 KEYLESS = {"steamApiKey": "dg_...", "steamId64": ""}
 KEYED = {"steamApiKey": "X" * 40, "steamId64": "7656119"}
@@ -43,8 +43,8 @@ def sync_env(monkeypatch):
     monkeypatch.setattr(library, "refresh_collections", lambda: hit("collections"))
     monkeypatch.setattr(library, "refresh_owned", lambda: hit("owned"))
     monkeypatch.setattr(library, "refresh_meta", lambda appids, limit=200: hit("meta"))
-    monkeypatch.setattr(steamstore, "refresh_deals", lambda: hit("deals"))
-    monkeypatch.setattr(steamstore, "load_deals", lambda: state["deals"])
+    monkeypatch.setattr(store, "refresh_deals", lambda: hit("deals"))
+    monkeypatch.setattr(store, "load_deals", lambda: state["deals"])
     monkeypatch.setattr(library, "load", lambda: state["index"])
     monkeypatch.setattr(library, "load_meta", lambda: state["meta_cache"])
     monkeypatch.setattr(library, "_sync_lock", threading.Lock())

@@ -1,9 +1,9 @@
 """The download queue and the commands Radarr and Sonarr run."""
 
-from slopstation.agent.tools.media.core import _Core
-from slopstation.agent.tools.media_clients import (
+from slopstation.agent.media.clients import (
     MediaError,
 )
+from slopstation.agent.media.core import _Core
 
 
 def _command(client, command_id):

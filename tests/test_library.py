@@ -4,7 +4,7 @@ import subprocess
 
 import helpers
 from slopstation.agent.speech.grammar_gate import GrammarMatcher
-from slopstation.agent.tools import library, titles
+from slopstation.agent.steam import library, titles
 
 DISPATCH = helpers.REPO / "gaming-pc" / "Dispatch.ps1"
 VOICE_CFG = {"inputs": {"apple tv": "hdmi1"}}
