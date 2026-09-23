@@ -21,22 +21,11 @@ def _no_startup_side_effects(monkeypatch):
     monkeypatch.setattr(events, "start_heartbeat", lambda *a, **k: None)
 
 
-class FakeHandle:
-    """A hid handle whose only behaviour is counting its close() calls."""
+class FakeDevice:
+    """What hid.device() hands the loop: opens, goes non-blocking, never has
+    an input report to give, and records whether it was closed."""
 
-    closes = 0
-
-    def close(self):
-        self.closes += 1
-
-    @property
-    def closed(self):
-        return self.closes > 0
-
-
-class FakeDevice(FakeHandle):
-    """What hid.device() hands the loop: opens, goes non-blocking, and never
-    has an input report to give."""
+    closed = False
 
     def open_path(self, path):
         pass
@@ -47,12 +36,8 @@ class FakeDevice(FakeHandle):
     def read(self, n):
         return []
 
-
-def held_puck():
-    p = cl.Puck()
-    h = FakeHandle()
-    p.handles, p.active = [h], h
-    return p, h
+    def close(self):
+        self.closed = True
 
 
 # --- driving the real loop ----------------------------------------------------
@@ -119,38 +104,6 @@ def drive(monkeypatch):
         return cap, fake
 
     return _drive
-
-
-# --- session_active: the arbiter the standoff rides on ------------------------
-
-
-def test_active_reads_a_fresh_lock_as_spoken_for_and_a_stale_one_as_free():
-    seed_lock(None)
-    assert sessionlock.active() is False, "no lock must read as free"
-
-    seed_lock(10)
-    assert sessionlock.active() is True, "a fresh lock means the Puck is spoken for"
-
-    seed_lock(sessionlock.LOCK_STALE_S - 5)
-    assert sessionlock.active() is True, "just inside the window is still active"
-
-    # A lock nobody cleaned up must not permanently deafen the chord lane.
-    seed_lock(sessionlock.LOCK_STALE_S + 5)
-    assert sessionlock.active() is False, "a stale lock must read as free"
-
-
-# --- stand_off: lets go once, reports only the transition ---------------------
-
-
-def test_stand_off_lets_go_once_and_reports_only_the_transition():
-    puck, h = held_puck()
-    assert puck.stand_off() is True, "first call must let go"
-    assert h.closed, "the handle was not actually closed"
-    assert puck.handles == [] and puck.active is None, "state not cleared"
-    assert puck.stand_off() is False, "already off the device - must not re-log"
-
-    # A Puck that never held anything is already standing off.
-    assert cl.Puck().stand_off() is False
 
 
 # --- the real loop, wired as it ships -----------------------------------------

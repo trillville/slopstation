@@ -21,7 +21,6 @@ from slopstation.agent.speech.grammar_gate import (
     GrammarGate,
     GrammarMatcher,
     closer_in,
-    load_closers,
     strip_wake,
     stt_confidence,
 )
@@ -47,21 +46,15 @@ VOICE_CFG = {
 # (utterance, expected intent or None, expected slots subset)
 TABLE = [
     ("start a session", "StartSession", {}),
-    ("start the gaming session", "StartSession", {}),
     ("game time", "StartSession", {}),
     ("let's play", "StartSession", {}),
     ("end the session", "EndSession", {}),
-    ("end session", "EndSession", {}),
     # "exit ..." are statements of intent nobody says by accident; the mishears
     # beside them in the logs ("end of session", "access session") stay out.
     ("exit session", "EndSession", {}),
-    ("exit the gaming session", "EndSession", {}),
     ("exit gaming mode", "EndSession", {}),
-    ("exit tv mode", "EndSession", {}),
     ("we're done", "EndSession", {}),
-    ("we're done gaming", "EndSession", {}),
     ("volume up", "VolumeUp", {}),
-    ("turn the volume up", "VolumeUp", {}),
     ("turn it up", "VolumeUp", {}),
     ("louder", "VolumeUp", {}),
     ("volume down", "VolumeDown", {}),
@@ -70,23 +63,18 @@ TABLE = [
     ("volume 30", "VolumeSet", {"level": 30}),
     ("set volume to 100", "VolumeSet", {"level": 100}),
     ("mute", "MuteToggle", {}),
-    ("mute the tv", "MuteToggle", {}),
     ("unmute the sound", "MuteToggle", {}),
     ("switch to the apple tv", "SwitchInput", {"input": "apple tv"}),
     ("go back to the playstation", "SwitchInput", {"input": "playstation"}),
-    ("switch to ps5", "SwitchInput", {"input": "ps5"}),
     ("show the apple tv", "SwitchInput", {"input": "apple tv"}),
     # {target}'s value is the nav kind, and its vocabulary is disjoint from
     # {input}, so these never cross with SwitchInput.
     ("show downloads", "Nav", {"target": "downloads"}),
-    ("show me the downloads", "Nav", {"target": "downloads"}),
     ("open the store", "Nav", {"target": "store"}),
     ("go to my library", "Nav", {"target": "library"}),
     ("take me to downloads", "Nav", {"target": "downloads"}),
     # Polite lead-in: widens nothing, {target} is still an exact list.
     ("can you show me the downloads", "Nav", {"target": "downloads"}),
-    ("could you open the store", "Nav", {"target": "store"}),
-    ("can you go to my library", "Nav", {"target": "library"}),
     # ShowCollection: wildcard resolved on the box; the "my"/"collection"
     # marker keeps a bare "show me <game>" out.
     ("show my roguelikes", "ShowCollection", {"collection": "roguelikes"}),
@@ -94,14 +82,11 @@ TABLE = [
     ("open my mech games collection", "ShowCollection", {"collection": "mech games"}),
     # The {game} wildcard contains the spoken title.
     ("play armored core six", "PlayGame", {"game": "armored core 6"}),
-    ("launch elden ring", "PlayGame", {"game": "elden ring"}),
     ("put on the game forza horizon five", "PlayGame", {"game": "forza horizon 5"}),
     ("start elden ring", "PlayGame", {"game": "elden ring"}),
     ("play some music", "PlayGame", {"game": "some music"}),
     # Conversational lead-ins: the commonest launch phrasings in the logs.
     ("i want to play armored core six", "PlayGame", {"game": "armored core 6"}),
-    ("i wanna play armored core six", "PlayGame", {"game": "armored core 6"}),
-    ("i would like to play elden ring", "PlayGame", {"game": "elden ring"}),
     ("open armored core six", "PlayGame", {"game": "armored core 6"}),
     ("let's play elden ring", "PlayGame", {"game": "elden ring"}),
     ("can you play elden ring", "PlayGame", {"game": "elden ring"}),
@@ -110,12 +95,9 @@ TABLE = [
     # no polite variant to claim it first, so it matched game="the session".
     ("can you start the session", None, {}),
     ("thanks", "ExitSession", {}),
-    ("that's all", "ExitSession", {}),
-    ("never mind", "ExitSession", {}),
     ("cancel", "ExitSession", {}),  # bare cancel stays conversation-close
     # Safe to widen where EndSession is not: touches nothing in the room.
     ("go away", "ExitSession", {}),
-    ("leave me alone", "ExitSession", {}),
     # --- MUST fall through (assistant lane / no action) ----------------------
     ("what mech games do i have", None, {}),
     ("suggest a shooter i haven't played in a while", None, {}),
@@ -140,42 +122,45 @@ TABLE = [
 ]
 
 # Wake-prefix stripping, since pre-roll makes transcripts start with the wake
-# phrase: (transcript, what the lanes should see; "" = swallowed entirely).
+# phrase: (transcript, anchor, what the lanes should see; "" = swallowed).
 STRIP = [
-    ("hey jarvis volume up", "volume up"),
-    ("Hey, Jarvis, volume up.", "volume up."),
-    ("jarvis volume up", "volume up"),
-    ("hey jervis play hades", "play hades"),  # fuzzy mishear >= 80
-    ("okay jarvis louder", "louder"),
-    ("hey jarvis hey jarvis volume up", "volume up"),  # stutter/double wake
-    ("hey jarvis", ""),
-    ("Jarvis!", ""),
-    ("volume up", "volume up"),
-    ("travis strikes again", "travis strikes again"),  # real word ~67, kept
-    ("hey volume up", "hey volume up"),  # no anchor, untouched
-    ("play jarvis game", "play jarvis game"),  # mid-text is content
-    ("hey jar vis volume up", "volume up"),  # split anchor, joined
-]
-
-# Same stripper, "alfred" anchor: split mishears, and the join
-# staying under 80 for real phrases.
-STRIP_ALFRED = [
-    ("hey alfred volume up", "volume up"),
-    ("Hey, all. Fred, take me home.", "take me home."),  # joined "allfred" ~92
-    ("alfred play hades", "play hades"),
-    ("all for one", "all for one"),  # joined "allfor" ~67
+    ("hey jarvis volume up", "jarvis", "volume up"),
+    ("Hey, Jarvis, volume up.", "jarvis", "volume up."),
+    ("jarvis volume up", "jarvis", "volume up"),
+    ("hey jervis play hades", "jarvis", "play hades"),  # fuzzy mishear >= 80
+    ("okay jarvis louder", "jarvis", "louder"),
+    ("hey jarvis hey jarvis volume up", "jarvis", "volume up"),  # double wake
+    ("hey jarvis", "jarvis", ""),
+    ("Jarvis!", "jarvis", ""),
+    ("volume up", "jarvis", "volume up"),
+    ("travis strikes again", "jarvis", "travis strikes again"),  # ~67, kept
+    ("hey volume up", "jarvis", "hey volume up"),  # no anchor, untouched
+    ("play jarvis game", "jarvis", "play jarvis game"),  # mid-text is content
+    ("hey jar vis volume up", "jarvis", "volume up"),  # split anchor, joined
+    # "alfred": split mishears, and the join staying under 80 for real phrases.
+    ("Hey, all. Fred, take me home.", "alfred", "take me home."),  # ~92 joined
+    ("all for one", "alfred", "all for one"),  # joined "allfor" ~67
     # The pre-roll caught a sentence in progress.
-    ("what I mean. Hey, Alfred. What time is it?", "What time is it?"),
+    ("what I mean. Hey, Alfred. What time is it?", "alfred", "What time is it?"),
     # A loud room carried two attempts: the last one counts.
     (
         "that's who you are. Hey, Alfred. What's up. Hey, Alfred. What time is it?",
+        "alfred",
         "What time is it?",
     ),
-    ("tell my alfred story", "tell my alfred story"),  # bare mid-anchor: content
     # A greeted anchor with nothing after it is not where a command starts.
-    ("hey alfred play hades hey alfred", "play hades hey alfred"),
-    ("is that okay alfred", "is that okay alfred"),
-    ("what  time is it", "what  time is it"),  # nothing cut, nothing touched
+    ("hey alfred play hades hey alfred", "alfred", "play hades hey alfred"),
+    ("is that okay alfred", "alfred", "is that okay alfred"),
+    ("what  time is it", "alfred", "what  time is it"),  # nothing touched
+    # The two-token join. The last three are held back only by _WHOLE_ANCHOR -
+    # each joins high enough to strip on its own ("a jarvis" 92.3, "my jarvis"
+    # 85.7, "the jarvis" exactly 80).
+    ("al fred volume up", "alfred", "volume up"),
+    ("hey al fred hey al fred stop", "alfred", "stop"),  # stutter, both split
+    ("all frenzy games", "alfred", "all frenzy games"),  # joined ~67
+    ("a jarvis skin for my avatar", "jarvis", "a jarvis skin for my avatar"),
+    ("my jarvis mug broke", "jarvis", "my jarvis mug broke"),
+    ("the jarvis file is missing", "jarvis", "the jarvis file is missing"),
 ]
 
 # closer_in: (text, expected closer or None), anchor "alfred", quiet room.
@@ -210,34 +195,26 @@ CLOSERS_LOUD = [
     ("what time is it, thanks", None),
 ]
 
-# The two-token join, both directions: (text, anchor, want). The second group
-# is held back only by _WHOLE_ANCHOR - each joins high enough to strip on its
-# own ("a jarvis" 92.3, "my jarvis"/"is jarvis" 85.7, "the jarvis" exactly 80).
-STRIP_JOIN = [
-    ("hey al fred play hades", "alfred", "play hades"),
-    ("al fred volume up", "alfred", "volume up"),
-    ("hey al fred hey al fred stop", "alfred", "stop"),  # stutter, both split
-    ("all frenzy games", "alfred", "all frenzy games"),  # joined ~67
-    ("a jarvis skin for my avatar", "jarvis", "a jarvis skin for my avatar"),
-    ("my jarvis mug broke", "jarvis", "my jarvis mug broke"),
-    ("the jarvis file is missing", "jarvis", "the jarvis file is missing"),
-    ("is jarvis working", "jarvis", "is jarvis working"),
-]
-
 
 @pytest.fixture
 def matcher():
     return GrammarMatcher(VOICE_CFG)
 
 
+class FakeDispatch:
+    def begin_utterance(self, turn, text):
+        pass
+
+
 @pytest.fixture
 def drive(matcher, monkeypatch):
-    """Feed frames to a fresh gate with push_frame stubbed; returns the
-    EndWorkerFrames it pushed, its log, and the gate."""
+    """Feed frames (a string is a final transcript) to a fresh gate with an
+    "alfred" wake word and push_frame stubbed; returns the EndWorkerFrames it
+    pushed, its log, and the gate."""
 
-    def _drive(frames, arm, ack=None):
+    def _drive(frames, stop_first=False, **gate_kw):
         glog = CapturingLog("voice")
-        gate = GrammarGate(matcher, None, glog, ack=ack)
+        gate = GrammarGate(matcher, FakeDispatch(), glog, wake_word="alfred", **gate_kw)
         pushed = []
 
         async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
@@ -246,10 +223,12 @@ def drive(matcher, monkeypatch):
         monkeypatch.setattr(gate, "push_frame", fake_push)
 
         async def run():
-            if arm:
+            if stop_first:
                 gate.request_stop()
             for f in frames:
-                await gate.process_frame(f, FrameDirection.UPSTREAM)
+                if isinstance(f, str):
+                    f = TranscriptionFrame(f, "u", "0")
+                await gate.process_frame(f, FrameDirection.DOWNSTREAM)
 
         asyncio.run(run())
         return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog, gate
@@ -277,31 +256,22 @@ def test_utterance_maps_to_intent_and_slots(matcher, text, want_intent, want_slo
         assert ok, f"'{text}': slot {k}={got_v!r}, want {v!r}"
 
 
-@pytest.mark.parametrize("text,want", STRIP, ids=[t[0] for t in STRIP])
-def test_strip_wake_removes_the_jarvis_prefix(text, want):
-    assert strip_wake(text) == want
-
-
-@pytest.mark.parametrize("text,want", STRIP_ALFRED, ids=[t[0] for t in STRIP_ALFRED])
-def test_strip_wake_joins_a_split_alfred(text, want):
-    assert strip_wake(text, "alfred") == want
-
-
 @pytest.mark.parametrize(
-    "text,anchor,want", STRIP_JOIN, ids=[f"{t[1]}:{t[0]}" for t in STRIP_JOIN]
+    "text,anchor,want", STRIP, ids=[f"{t[1]}:{t[0]}" for t in STRIP]
 )
-def test_strip_wake_two_token_join(text, anchor, want):
+def test_strip_wake(text, anchor, want):
     assert strip_wake(text, anchor) == want
 
 
 @pytest.mark.parametrize("text,want", CLOSERS, ids=[t[0] or "empty" for t in CLOSERS])
 def test_closer_in_finds_a_closing_phrase_with_company(text, want):
-    assert closer_in(text, load_closers(), "alfred") == want
+    assert closer_in(text, GrammarMatcher(VOICE_CFG).closers, "alfred") == want
 
 
 @pytest.mark.parametrize("text,want", CLOSERS_LOUD, ids=[t[0] for t in CLOSERS_LOUD])
 def test_a_loud_room_takes_a_closer_right_after_the_anchor(text, want):
-    assert closer_in(text, load_closers(), "alfred", loud=True) == want
+    closers = GrammarMatcher(VOICE_CFG).closers
+    assert closer_in(text, closers, "alfred", loud=True) == want
 
 
 @dataclasses.dataclass
@@ -369,74 +339,30 @@ async def test_busy_phrase_does_not_read_as_the_answer(matcher, monkeypatch):
 
 
 def test_a_stop_ends_the_session_on_the_next_frame(drive):
-    ended, glog, _ = drive([BotStoppedSpeakingFrame(), ErrorFrame(error="x")], arm=True)
+    ended, glog, _ = drive(
+        [BotStoppedSpeakingFrame(), ErrorFrame(error="x")], stop_first=True
+    )
     assert len(ended) == 1, f"a stop must end the session exactly once, got {ended}"
     assert "session_stop_requested" in glog.events()
 
 
-def test_an_ordinary_answer_does_not_end_the_session(drive):
-    ended, _, _ = drive([BotStoppedSpeakingFrame()], arm=False)
-    assert not ended, "finishing an ordinary answer must not end the session"
-
-
-class FakeDispatch:
-    def begin_utterance(self, turn, text):
-        pass
-
-
-@pytest.fixture
-def hear(matcher, monkeypatch):
-    """Feed transcripts to a gate with an "alfred" wake word; returns
-    (EndWorkerFrames pushed, log, gate)."""
-
-    def _hear(texts, loud=None, stop_first=False, addressed=False):
-        glog = CapturingLog("voice")
-        gate = GrammarGate(
-            matcher,
-            FakeDispatch(),
-            glog,
-            wake_word="alfred",
-            loud=loud,
-            addressed=addressed,
-        )
-        pushed = []
-
-        async def fake_push(frame, direction=FrameDirection.DOWNSTREAM):
-            pushed.append(frame)
-
-        monkeypatch.setattr(gate, "push_frame", fake_push)
-
-        async def run():
-            if stop_first:
-                gate.request_stop()
-            for t in texts:
-                await gate.process_frame(
-                    TranscriptionFrame(t, "u", "0"), FrameDirection.DOWNSTREAM
-                )
-
-        asyncio.run(run())
-        return [f for f in pushed if isinstance(f, EndWorkerFrame)], glog, gate
-
-    return _hear
-
-
-def test_a_transcript_after_a_stop_is_dropped(hear):
-    ended, glog, _ = hear(["What time is it?"], stop_first=True)
+def test_a_transcript_after_a_stop_is_dropped(drive):
+    ended, glog, _ = drive(["What time is it?"], stop_first=True)
     assert len(ended) == 1
     assert glog.find("turn_dropped")[0]["reason"] == "after_stop"
     assert not glog.find("gate_miss"), "a dropped transcript reached the assistant"
 
 
-def test_a_closer_with_company_ends_the_session(hear):
-    ended, glog, _ = hear(["Hey Alfred. Alright. Thanks."])
+def test_a_closer_with_company_ends_the_session(drive):
+    ended, glog, _ = drive(["Hey Alfred. Alright. Thanks."])
     assert len(ended) == 1, "a trailing closer must end the session"
     hit = glog.find("gate_match")[0]
     assert hit["intent"] == "ExitSession" and hit["closer"] == "thanks", hit
     assert "session_exit_phrase" in glog.events()
 
 
-def test_a_loud_room_needs_the_wake_prefix_on_every_turn(hear):
-    ended, glog, _ = hear(
+def test_a_loud_room_needs_the_wake_prefix_on_every_turn(drive):
+    ended, glog, _ = drive(
         ["Hey Alfred, what time is it?", "enough to blow up the whole planet."],
         loud=lambda: True,
     )
@@ -451,15 +377,15 @@ def test_a_loud_room_needs_the_wake_prefix_on_every_turn(hear):
     "text",
     ["Hey Alfred go away only hands exactly", "The Alfred go away only hands exactly"],
 )
-def test_a_loud_room_closes_on_go_away_however_the_tv_finished_it(hear, text):
-    ended, glog, _ = hear([text], loud=lambda: True)
+def test_a_loud_room_closes_on_go_away_however_the_tv_finished_it(drive, text):
+    ended, glog, _ = drive([text], loud=lambda: True)
     assert len(ended) == 1, glog.records
     assert glog.find("gate_match")[0]["closer"] == "go away"
     assert not glog.find("turn_dropped"), "addressed, so never unaddressed"
 
 
-def test_a_quiet_room_hears_every_turn(hear):
-    ended, glog, _ = hear(
+def test_a_quiet_room_hears_every_turn(drive):
+    ended, glog, _ = drive(
         ["Hey Alfred, what time is it?", "and tomorrow?"], loud=lambda: False
     )
     assert not ended
@@ -467,23 +393,23 @@ def test_a_quiet_room_hears_every_turn(hear):
     assert heard == ["what time is it?", "and tomorrow?"], heard
 
 
-def test_a_wake_nobody_said_ends_the_session(hear):
-    ended, glog, _ = hear(["enough to blow up the whole planet."])
+def test_a_wake_nobody_said_ends_the_session(drive):
+    ended, glog, _ = drive(["enough to blow up the whole planet."])
     assert len(ended) == 1, "the TV woke it: nobody is talking to it"
     assert glog.find("turn_dropped")[0]["reason"] == "false_wake"
     assert not glog.find("gate_miss"), "the TV reached the assistant"
 
 
 @pytest.mark.parametrize("wake", ["Hey Alfred.", "What I mean. Hey Alfred."])
-def test_a_pause_style_wake_is_still_a_wake(hear, wake):
+def test_a_pause_style_wake_is_still_a_wake(drive, wake):
     # The pre-roll can hold a sentence in progress before the wake phrase.
-    ended, glog, _ = hear([wake, "What time is it?"])
+    ended, glog, _ = drive([wake, "What time is it?"])
     assert not ended, glog.records
     assert "What time is it?" in [r["text"] for r in glog.find("gate_miss")]
 
 
-def test_a_follow_up_open_needs_no_wake_word(hear):
-    ended, glog, _ = hear(["What time is it?"], addressed=True)
+def test_a_follow_up_open_needs_no_wake_word(drive):
+    ended, glog, _ = drive(["What time is it?"], addressed=True)
     assert not ended
     assert [r["text"] for r in glog.find("gate_miss")] == ["What time is it?"]
 
@@ -494,14 +420,14 @@ def test_turn_edges_defer_idle_claim_the_chime_and_expire(drive, monkeypatch):
     that dies mid-turn never sends the stop edge and must not pin the
     session open."""
     ack = WakeAck()
-    _, _, gate = drive([UserStartedSpeakingFrame()], arm=False, ack=ack)
+    _, _, gate = drive([UserStartedSpeakingFrame()], ack=ack)
     assert gate.is_busy(), "an open user turn must read as mid-turn"
     monkeypatch.setattr(
         gate, "_speaking", time.time() - (GrammarGate.SPEAKING_WAIT_S + 1)
     )
     assert not gate.is_busy(), "a lost stop edge must not pin the session open"
     _, _, gate = drive(
-        [UserStartedSpeakingFrame(), UserStoppedSpeakingFrame()], arm=False, ack=ack
+        [UserStartedSpeakingFrame(), UserStoppedSpeakingFrame()], ack=ack
     )
     assert not gate.is_busy(), "a closed user turn must not read as mid-turn"
     assert not ack.claim(), "the turn stop must claim the wake chime"

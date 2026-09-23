@@ -66,12 +66,6 @@ def tv_command(name: str, **fields) -> None:
         pass  # Device logs the failure; launch readiness handles the outcome.
 
 
-def restore_tv() -> None:
-    """Put the TV back the way a finished session leaves it."""
-    cfg = config.current()
-    tv_command("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
-
-
 def finish_session(restore: bool, exit_reason: str | None = None) -> bool:
     """Teardown only while we own the session, then let the next launch acquire it."""
 
@@ -83,7 +77,8 @@ def finish_session(restore: bool, exit_reason: str | None = None) -> bool:
             except Exception:
                 pass
         if restore:
-            restore_tv()
+            cfg = config.current()
+            tv_command("power_off" if cfg["tvOffWhenDone"] else cfg["tvIdleCmd"])
 
     return sessionlock.release(teardown)
 
@@ -115,8 +110,8 @@ def wol() -> None:
     log("wol_sent", addrs=sent)
 
 
-def wait_port(timeout: float = PORT_WAIT_S) -> bool:
-    end = time.time() + timeout
+def wait_port() -> bool:
+    end = time.time() + PORT_WAIT_S
     while time.time() < end:
         raise_if_cancelled()
         try:
@@ -147,7 +142,7 @@ class TvEvidence:
 
     def poll(self) -> None:
         """Poll the TV, retry power when off, and stop after repeated errors."""
-        if self.ip is None or not self.undecided():
+        if not self.undecided():
             return
         self.last = tv.Tv({"tvIp": self.ip}, log).power_state(timeout=0.5, raw=True)
         if self.last == "on":

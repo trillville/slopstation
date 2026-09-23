@@ -379,7 +379,7 @@ class Session:
         def tools_schema():
             assert self.toolkit is not None
             return ToolsSchema(
-                standard_tools=tool_schemas.pipecat_schemas(self.toolkit, log),
+                standard_tools=tool_schemas.pipecat_schemas(self.toolkit),
                 custom_tools={AdapterType.OPENAI: native} if native else None,
             )
 

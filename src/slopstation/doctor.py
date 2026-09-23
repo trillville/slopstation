@@ -59,20 +59,6 @@ def check_config():
     return cfg
 
 
-def check_imports():
-    for mod in ("serial", "hid"):
-        try:
-            __import__(mod)
-            report(PASS, f"import {mod}", "ok")
-        except Exception as e:
-            report(
-                FAIL,
-                f"import {mod}",
-                str(e),
-                "pip install -e .[dev] -c constraints.txt",
-            )
-
-
 def check_com(cfg):
     if not cfg:
         return
@@ -169,7 +155,7 @@ def check_listener():
 def check_haptics():
     """Only called when the listener is stopped. Needs the controller awake."""
     try:
-        dev, _ = haptics.open_streaming_interface(haptics.streams_input_reports)
+        dev = haptics.open_streaming_interface()
         why = "no live 0x42 interface"
     except Exception as e:
         dev, why = None, str(e)
@@ -182,7 +168,7 @@ def check_haptics():
         )
         return
     try:
-        haptics.chirp(dev, 0)
+        haptics.chirp(dev)
         report(
             PASS,
             "haptics",
@@ -280,20 +266,12 @@ def check_ssh():
     try:
         pcbuild = gamepc.version()
     except subprocess.CalledProcessError as e:
-        if "DENIED" in (e.stdout or ""):
-            report(
-                WARN,
-                "deploy skew",
-                "PC's Dispatch predates the version verb",
-                "run gaming-pc\\Deploy.ps1 on the PC to ship the current set",
-            )
-        else:
-            report(
-                WARN,
-                "deploy skew",
-                f"version answered {e.stdout!r}",
-                "check Dispatch.ps1 on the PC",
-            )
+        report(
+            WARN,
+            "deploy skew",
+            f"version answered {e.stdout!r}",
+            "check Dispatch.ps1 on the PC",
+        )
         return
     except Exception as e:
         report(WARN, "deploy skew", f"could not query ({e})", "")
@@ -580,16 +558,7 @@ def check_voice(cfg):
 
 
 def check_voice_keys():
-    try:
-        secrets = config.secrets()
-    except Exception as e:
-        report(
-            WARN,
-            "voice secrets",
-            f"unreadable ({e})",
-            "recreate from secrets.example.json",
-        )
-        secrets = {}
+    secrets = config.secrets()
     lanes = {
         "deepgramApiKey": "STT+TTS",
         "anthropicApiKey": "assistant",
@@ -712,42 +681,32 @@ def check_voice_config(cfg):
 
 def check_steam_session():
     # Account session (install-by-voice). Speaks up only when a token is
-    # present but unusable or near expiry; absent is silent. Stdlib only.
-    secrets = config.secrets()
-    tok = secrets.get("steamRefreshToken")
-    if config.real_key(tok):
-        try:
-            import base64
+    # present but unusable or near expiry; absent is silent.
+    from slopstation.agent.tools import steam_session
 
-            payload = tok.split(".")[1]
-            payload += "=" * (-len(payload) % 4)
-            exp = int(json.loads(base64.urlsafe_b64decode(payload)).get("exp", 0))
-            days = (exp - time.time()) / 86400 if exp else -1
-            if days < 0:
-                report(
-                    WARN,
-                    "steam session",
-                    "refresh token unreadable or expired",
-                    "re-run python -m slopstation.agent.tools.steam_session enroll",
-                )
-            elif days < 14:
-                report(
-                    WARN,
-                    "steam session",
-                    f"token expires in {days:.0f} days",
-                    "re-scan soon: python -m slopstation.agent.tools.steam_session enroll",
-                )
-            else:
-                # An unexpired web-audience token may still be unable to mint
-                # the client token this feature needs.
-                report(*_steam_mint_probe(days))
-        except Exception as e:
-            report(
-                WARN,
-                "steam session",
-                f"token unreadable ({e})",
-                "re-run python -m slopstation.agent.tools.steam_session enroll",
-            )
+    tok = config.secrets().get("steamRefreshToken")
+    if not config.real_key(tok):
+        return
+    exp = steam_session._jwt_exp(tok)  # 0 when unreadable
+    days = (exp - time.time()) / 86400 if exp else -1
+    if days < 0:
+        report(
+            WARN,
+            "steam session",
+            "refresh token unreadable or expired",
+            "re-run python -m slopstation.agent.tools.steam_session enroll",
+        )
+    elif days < 14:
+        report(
+            WARN,
+            "steam session",
+            f"token expires in {days:.0f} days",
+            "re-scan soon: python -m slopstation.agent.tools.steam_session enroll",
+        )
+    else:
+        # An unexpired web-audience token may still be unable to mint
+        # the client token this feature needs.
+        report(*_steam_mint_probe(days))
 
 
 def _tcp_reachable(url, timeout=1):
@@ -758,7 +717,7 @@ def _tcp_reachable(url, timeout=1):
 
 
 def check_media(cfg):
-    media = cfg.get("media") if isinstance(cfg, dict) else None
+    media = cfg.get("media")
     if not isinstance(media, dict) or not media.get("enabled"):
         report(PASS, "media", "disabled")
         return
@@ -858,7 +817,7 @@ def check_media_monitoring(cfg):
     """Monitored-and-missing episodes no active operation owns. Sonarr never
     searches for these, but RSS grabs any NEW upload that matches one - which
     is how an unrequested release arrives. WARN-only."""
-    media = cfg.get("media") if isinstance(cfg, dict) else None
+    media = cfg.get("media")
     if (
         not isinstance(media, dict)
         or not media.get("enabled")
@@ -933,7 +892,7 @@ def check_media_monitoring(cfg):
 
 def check_text(cfg):
     """The text interface's /health: what the voice process has up. WARN-only."""
-    text = cfg.get("textInterface") if isinstance(cfg, dict) else None
+    text = cfg.get("textInterface")
     if not isinstance(text, dict) or not text.get("enabled"):
         report(PASS, "text interface", "disabled")
         return
@@ -977,7 +936,7 @@ def check_text(cfg):
 
 def check_remote(cfg):
     """The phone lane: MCP wrapper + the tunnel that publishes it. WARN-only."""
-    remote = cfg.get("remoteInterface") if isinstance(cfg, dict) else None
+    remote = cfg.get("remoteInterface")
     if not isinstance(remote, dict) or not remote.get("enabled"):
         report(PASS, "remote interface", "disabled")
         return
@@ -1146,7 +1105,7 @@ def _latest_events(names):
     return latest
 
 
-def check_sentry():
+def check_sentry(cfg):
     """The DSN, and whether each lane's cron check-in is landing.
 
     A rejected check-in is the failure worth naming: every Sentry plan
@@ -1155,11 +1114,7 @@ def check_sentry():
     that never started."""
     from slopstation import checkin
 
-    try:
-        dsn = config.load().get("sentryDsn")
-    except Exception:
-        dsn = None
-    parsed = checkin.parse_dsn(dsn)
+    parsed = checkin.parse_dsn((cfg or {}).get("sentryDsn"))
     if parsed is None:
         report(
             WARN,
@@ -1192,7 +1147,7 @@ def check_sentry():
         )
 
 
-def check_telemetry():
+def check_telemetry(cfg):
     """Event stream written, and anything shipping it? WARN-only."""
 
     today = events.log_file(time.strftime("%Y%m%d"))  # local date, like events
@@ -1239,7 +1194,7 @@ def check_telemetry():
         "Start-Service otelcol-contrib - nothing reaches Sentry meanwhile",
         "events are local-only; see otelcol/config.yaml.example",
     )
-    check_sentry()
+    check_sentry(cfg)
     # SMART needs Administrator for raw device access, so it is a service and
     # not part of any lane; a rebuilt K15 lacks it until someone registers it.
     _service_row(
@@ -1253,7 +1208,6 @@ def check_telemetry():
 def main():
     """Every row, in chain order. Exit code = number of FAILs."""
     cfg = check_config()
-    check_imports()
     check_com(cfg)
     puck_ok = check_puck()
     listener_running = check_listener()
@@ -1263,7 +1217,7 @@ def main():
     check_wol(cfg)
     check_virtualhere()
     check_session_state()
-    check_telemetry()
+    check_telemetry(cfg)
     check_voice(cfg)
     print(f"\n{_counts[PASS]} pass, {_counts[WARN]} warn, {_counts[FAIL]} fail")
     return _counts[FAIL]

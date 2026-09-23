@@ -9,7 +9,7 @@ import json
 import sys
 import time
 
-from slopstation import config, logbook, paths, statefile
+from slopstation import config, events, logbook, paths, statefile
 
 API = "https://api.steampowered.com"
 LOGIN = "https://login.steampowered.com"  # the transfer-login host
@@ -576,9 +576,7 @@ class SteamSession:
         value is a credential - never log it."""
         path = paths.secrets_file()
         try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except OSError:  # no file yet - a fresh rig
-            data = {}
+            data = events.load_secrets(path)  # {} when there is no file yet
         except ValueError:
             # A present-but-unparseable secrets.json aborts: proceeding with {}
             # would os.replace the whole file with just this token.

@@ -100,50 +100,14 @@ class FakeOperationStore:
         return []
 
 
-class FakeSteamMonitor:
-    made = []
-
-    def __init__(self, store, steam, log):
-        self.steam = steam
-        self.poll_s = 30
-        self.started = False
-        self.stopped = False
-        FakeSteamMonitor.made.append(self)
-
-    def start(self):
-        self.started = True
-        return threading.Thread(name="fake-monitor")  # never run
-
-    def stop(self):
-        self.stopped = True
-
-
-class FakeMediaMonitor:
-    KINDS = {"movie_acquisition", "series_acquisition"}
-    made = []
-
-    def __init__(self, store, service, log, poll_s=30):
-        self.poll_s = poll_s
-        self.started = False
-        self.stopped = False
-        FakeMediaMonitor.made.append(self)
-
-    def start(self):
-        self.started = True
-        return threading.Thread(name="fake-monitor")  # never run
-
-    def stop(self):
-        self.stopped = True
-
-
-class FakeProtonPortMonitor:
-    made = []
+class FakeMonitor:
+    made: list = []
 
     def __init__(self, poll_s=30):
         self.poll_s = poll_s
         self.started = False
         self.stopped = False
-        FakeProtonPortMonitor.made.append(self)
+        type(self).made.append(self)
 
     def start(self):
         self.started = True
@@ -151,6 +115,21 @@ class FakeProtonPortMonitor:
 
     def stop(self):
         self.stopped = True
+
+
+class FakeSteamMonitor(FakeMonitor):
+    def __init__(self, store, steam, log):
+        super().__init__()
+        self.steam = steam
+
+
+class FakeMediaMonitor(FakeMonitor):
+    def __init__(self, store, service, log, poll_s=30):
+        super().__init__(poll_s)
+
+
+class FakeProtonPortMonitor(FakeMonitor):
+    pass
 
 
 class FakeSteam:

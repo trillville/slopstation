@@ -75,7 +75,8 @@ deploy goes red with a diagnosis, and someone does the step by hand.
   checkout means re-running `Setup-K15-Tasks.ps1`. The gaming PC's tasks are
   re-registered by `gaming-pc\Install.ps1`, run elevated from a checkout.
 - **Runtime pieces on the PC.** `vhui64.exe` and the two DisplayMagician
-  shortcuts. `Deploy.ps1` warns when they are missing and never touches them.
+  shortcuts. `Doctor.ps1` fails when they are missing; `Deploy.ps1` never
+  touches them.
 
 ## Doctors
 
@@ -84,7 +85,7 @@ mini-PC doctor also emits a haptic chirp when the controller listener is idle.
 Voice and media warnings do not make its exit code nonzero; `0 fail` verifies
 the controller launch chain, not every optional feature.
 
-- Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, imports, the
+- Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, the
   Ex-Link port, the controller, both lanes, SSH to the gaming PC and the
   dispatcher's answer, deploy skew between the two machines (`ssh <sshHost>
   version` against the checkout), VirtualHere and its firewall rule, session

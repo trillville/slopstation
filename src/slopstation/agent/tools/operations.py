@@ -21,20 +21,6 @@ FAILED = "FAILED"
 CANCELED = "CANCELED"
 ACTIVE = {QUEUED, RUNNING, UNKNOWN}
 TERMINAL = {SUCCEEDED, FAILED, CANCELED}
-STATES = ACTIVE | TERMINAL
-
-# progress["phase"] values, in the order an acquisition moves through them. The
-# two search phases belong to a search-only promise.
-PHASES = (
-    "searching",
-    "waiting_for_match",
-    "grabbed",
-    "downloading",
-    "importing",
-    "ready",
-    "searched",
-    "search_failed",
-)
 
 
 # Keys track() copies from a MediaService._submission result into the row's
@@ -78,8 +64,11 @@ class OperationRow(TypedDict, total=False):
     authority: str
     external_ref: str
     title: str
-    state: str  # STATES, or one a newer build wrote
-    progress: dict[str, Any]  # "phase" in PHASES, plus what the server said
+    state: str  # ACTIVE or TERMINAL, or one a newer build wrote
+    # What the server said, plus "phase": searching, waiting_for_match,
+    # grabbed, downloading, importing, ready in the order an acquisition moves
+    # through them; a search-only promise ends in searched or search_failed.
+    progress: dict[str, Any]
     detail: str
     created: int
     updated: int
@@ -136,17 +125,11 @@ class OperationStore:
         # A ledger that cannot be read is refused here and the file left as it
         # is.
         with statefile.guard(self.path):
-            self._load()
-
-    def _load(self) -> list[OperationRow]:
-        return _read(self.path)
-
-    def _save(self, rows: list[OperationRow]) -> None:
-        statefile.write(self.path, rows)
+            _read(self.path)
 
     def all(self) -> list[OperationRow]:
         with statefile.guard(self.path):
-            return [r.copy() for r in self._load()]
+            return [r.copy() for r in _read(self.path)]
 
     def recent(self, limit=10) -> list[OperationRow]:
         rows = self.all()
@@ -168,7 +151,7 @@ class OperationStore:
     ) -> OperationRow | None:
         now = int(time.time())
         with statefile.guard(self.path):
-            rows = self._load()
+            rows = _read(self.path)
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
                 return None
@@ -178,7 +161,7 @@ class OperationStore:
                 metadata.pop(key, None)
             if metadata != row.get("metadata", {}):
                 row.update({"metadata": metadata, "updated": now})
-                self._save(rows)
+                statefile.write(self.path, rows)
             return row.copy()
 
     def track_external(
@@ -199,14 +182,12 @@ class OperationStore:
         Requests and Steam installs retain their resource identity. A manual
         grab, search or import supplies its release or command identity.
         """
-        if state not in ACTIVE:
-            raise ValueError(f"new operation state must be active, got {state}")
         external_ref = str(external_ref)
         now = int(time.time())
         reused: OperationRow | None = None
         previous = None
         with statefile.guard(self.path):
-            rows = self._load()
+            rows = _read(self.path)
             existing = next(
                 (
                     r
@@ -230,7 +211,7 @@ class OperationStore:
                     existing.update(updates)
                     if observed:
                         existing["last_observed"] = now
-                    self._save(rows)
+                    statefile.write(self.path, rows)
                 reused = existing.copy()
             else:
                 created: OperationRow = {
@@ -255,7 +236,7 @@ class OperationStore:
                 if work_id is not None:
                     created["work_id"] = work_id
                 rows.append(created)
-                self._save(rows)
+                statefile.write(self.path, rows)
         if reused is not None:
             if previous is not None:
                 self.log(
@@ -265,10 +246,8 @@ class OperationStore:
                     state=state,
                     progress=reused.get("progress", {}),
                     detail=reused["detail"],
-                    changed=True,
                 )
             return reused
-        assert created is not None
         self.log(
             "operation_created",
             operation=created["id"],
@@ -300,15 +279,10 @@ class OperationStore:
         self, operation_id, state, progress=None, detail="", summary=None, announce=True
     ) -> OperationRow | None:
         """Persist one authority observation and fire on the first terminal edge."""
-        if state not in STATES:
-            raise ValueError(f"unknown operation state {state}")
         now = int(time.time())
         terminal: OperationRow | None = None
-        changed = False
-        previous = None
-        out: OperationRow | None = None
         with statefile.guard(self.path):
-            rows = self._load()
+            rows = _read(self.path)
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
                 return None
@@ -341,7 +315,7 @@ class OperationStore:
                 )
                 if announce:
                     terminal = row.copy()
-            self._save(rows)
+            statefile.write(self.path, rows)
             out = row.copy()
         if changed:
             self.log(
@@ -351,7 +325,6 @@ class OperationStore:
                 state=state,
                 progress=progress,
                 detail=detail,
-                changed=True,
             )
         if terminal is not None and self.on_terminal is not None:
             try:
@@ -372,7 +345,7 @@ class OperationStore:
     def notify(self, operation_id, key, summary) -> Notification | None:
         now = int(time.time())
         with statefile.guard(self.path):
-            rows = self._load()
+            rows = _read(self.path)
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
                 return None
@@ -389,7 +362,7 @@ class OperationStore:
             }
             notifications.append(notification)
             row.update({"notifications": notifications, "updated": now})
-            self._save(rows)
+            statefile.write(self.path, rows)
         self.log("operation_notification", operation=operation_id, key=key)
         if self.on_notification is not None:
             try:
@@ -411,7 +384,7 @@ class OperationStore:
     def mark_notification_delivered(self, operation_id, key) -> bool:
         now = int(time.time())
         with statefile.guard(self.path):
-            rows = self._load()
+            rows = _read(self.path)
             row = next((r for r in rows if r.get("id") == operation_id), None)
             if row is None:
                 return False
@@ -422,13 +395,13 @@ class OperationStore:
                     changed = True
             if changed:
                 row["updated"] = now
-                self._save(rows)
+                statefile.write(self.path, rows)
             return changed
 
     def mark_delivered(self, operation_id) -> bool:
         now = int(time.time())
         with statefile.guard(self.path):
-            rows = self._load()
+            rows = _read(self.path)
             for row in rows:
                 if row.get("id") == operation_id:
                     row.update(
@@ -438,7 +411,7 @@ class OperationStore:
                             "updated": now,
                         }
                     )
-                    self._save(rows)
+                    statefile.write(self.path, rows)
                     return True
         return False
 
@@ -577,34 +550,23 @@ def covered_by_delete(
 def record_canceled(store, operation, detail):
     """Close one operation the user asked to stop. Delivered on the spot:
     they are in the conversation that cancelled it."""
-    if store is None:
-        return None
-    row = store.observe(
-        operation["id"], CANCELED, operation.get("progress", {}), detail
-    )
+    store.observe(operation["id"], CANCELED, operation.get("progress", {}), detail)
     store.mark_delivered(operation["id"])
-    return row
 
 
-def record_deleted(store, rows, result=None, episodes=None):
+def record_deleted(store, rows, result, episodes=None):
     """Close the operations a completed delete covered, so the ledger stops
     announcing work whose files are gone. Called after the delete returns:
     the mutation already happened, and these rows describe it. `episodes`
     is the delete's own (season, episode) scope, for a request whose ids
     Sonarr has not named yet."""
     for operation in rows:
-        store.observe(
-            operation["id"],
-            CANCELED,
-            operation.get("progress", {}),
-            "the media request was deleted cleanly",
-        )
-        store.mark_delivered(operation["id"])
-    if rows and result is not None:
+        record_canceled(store, operation, "the media request was deleted cleanly")
+    if rows:
         result["operations_canceled"] = [row["id"] for row in rows]
     # A partial delete trims what it took from the requests it did not cover;
     # what is left keeps its own completion rule.
-    if store is not None and result and "episode_ids" in result:
+    if store is not None and "episode_ids" in result:
         deleted = set(result["episode_ids"])
         seasons = {int(n) for n in result.get("seasons") or []}
         deleted_pairs = _pairs(episodes)
@@ -621,7 +583,9 @@ def record_deleted(store, rows, result=None, episodes=None):
             # The ids are the scope once Sonarr has named them, the pairs
             # until then; a request holding both is trimmed on both.
             if not (ids_left if ids else pairs_left):
-                record_deleted(store, [operation])
+                record_canceled(
+                    store, operation, "the media request was deleted cleanly"
+                )
                 continue
             update: dict[str, Any] = {}
             if ids:

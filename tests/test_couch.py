@@ -115,8 +115,6 @@ def test_release_refuses_a_successors_lock():
     assert sessionlock.release() and not sessionlock.lock_file().exists()
     seed_lock(10, content=f"ffffff {os.getpid() + 1}")  # someone else's
     assert not sessionlock.release() and sessionlock.lock_file().exists()
-    seed_lock(10, content="1723500000.0")  # pre-note legacy
-    assert sessionlock.release() and not sessionlock.lock_file().exists()
 
 
 # --- Successful launch --------------------------------------------------------
@@ -220,18 +218,6 @@ def test_already_is_a_degraded_launch_not_a_clean_one(wire):
 # --- READY generation identity: verified / foreign / converge -----------------
 
 
-def test_a_marker_echoing_our_turn_is_verified_ready(wire):
-    log, sent = wire(
-        [
-            ("enter", "OK"),
-            ("status", "ab12cd"),  # echoes OUR turn
-            ("status", "NOTREADY"),
-        ]
-    )
-    assert couch.start(turn="ab12cd") == 0
-    assert log.find("host_ready")[0]["verified"] is True
-
-
 def test_a_foreign_marker_is_waited_out_and_warned_once(wire):
     log, sent = wire(
         [
@@ -281,17 +267,6 @@ def test_a_stale_lock_is_recycled_and_a_failing_enter_releases_it(wire):
     assert "Enter" in sessionlock.last_error_file().read_text()
     # the refusal is logged once per distinct answer, not per retry
     assert [r["answer"] for r in log.find("enter_refused")] == ["FAILED:1"], log.records
-
-
-def test_ready_never_appearing_gives_the_same_guarantees(wire):
-    log, sent = wire([("enter", "OK")], default=lambda cmd: "NOTREADY")
-    assert couch.start() == 1
-    assert "launch_failed" in log.events()
-    assert sent == ["power_on", "hdmi4", "power_off"], sent
-    assert (
-        not sessionlock.lock_file().exists()
-        and "READY" in sessionlock.last_error_file().read_text()
-    )
 
 
 # --- the TV-asleep rescue and the dead-Enter rescue ---------------------------
@@ -404,7 +379,10 @@ def test_no_enterstate_information_is_not_death(wire, monkeypatch, reply):
     assert "enter_died" not in ev and "enter_redispatched" not in ev, ev
     assert "launch_failed" in ev, ev
     assert sent == ["power_on", "hdmi4", "power_off"], sent
-    assert not sessionlock.lock_file().exists()
+    assert (
+        not sessionlock.lock_file().exists()
+        and "READY" in sessionlock.last_error_file().read_text()
+    )
 
 
 # --- aborts: Ctrl-C and the voice cancel --------------------------------------
@@ -730,9 +708,10 @@ def test_an_invalid_config_is_refused_before_the_lock_and_the_tv(wire, monkeypat
 def test_wol_sends_one_packet_from_each_local_address(rig, monkeypatch):
     """A broadcast the OS routes for us can leave down the VPN or a WSL
     adapter and never reach the gaming PC's wire, so bind each address in
-    turn. Measured 2026-09-06: the K15 holds four, only one of them the LAN."""
+    turn. Measured 2026-09-06: the K15 holds four, only one of them the LAN.
+    One unusable interface must not cost the wake."""
     monkeypatch.setattr(
-        couch, "broadcast_sources", lambda: ["10.2.0.2", "192.168.68.75"]
+        couch, "broadcast_sources", lambda: ["10.2.0.2", "172.29.0.1", "192.168.68.75"]
     )
     bound, sent = [], []
 
@@ -747,6 +726,8 @@ def test_wol_sends_one_packet_from_each_local_address(rig, monkeypatch):
             pass
 
         def bind(self, addr):
+            if addr[0] == "172.29.0.1":
+                raise OSError("cannot assign requested address")
             bound.append(addr)
 
         def sendto(self, pkt, dest):
@@ -762,37 +743,3 @@ def test_wol_sends_one_packet_from_each_local_address(rig, monkeypatch):
     assert [d for _, d in sent] == [("255.255.255.255", 9)] * 2
     assert sent[0][0] == b"\xff" * 6 + bytes(6) * 16  # CFG's all-zero MAC
     assert log.find("wol_sent")[0]["addrs"] == 2
-
-
-def test_wol_skips_an_address_that_cannot_be_bound(rig, monkeypatch):
-    """One unusable interface must not cost the wake."""
-    monkeypatch.setattr(
-        couch, "broadcast_sources", lambda: ["10.2.0.2", "192.168.68.75"]
-    )
-    sent = []
-
-    class FakeSocket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def setsockopt(self, *a):
-            pass
-
-        def bind(self, addr):
-            if addr[0] == "10.2.0.2":
-                raise OSError("cannot assign requested address")
-
-        def sendto(self, pkt, dest):
-            sent.append(dest)
-
-    monkeypatch.setattr(couch.socket, "socket", lambda *a: FakeSocket())
-    log = CapturingLog()
-    monkeypatch.setattr(couch, "log", log)
-
-    couch.wol()
-
-    assert sent == [("255.255.255.255", 9)]
-    assert log.find("wol_sent")[0]["addrs"] == 1

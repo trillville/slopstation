@@ -144,7 +144,6 @@ PYTHON = {
     "operation_monitor_failed": {"err"},
     "operation_notification": {"key", "operation"},
     "operation_observed": {
-        "changed",
         "detail",
         "operation",
         "previous",

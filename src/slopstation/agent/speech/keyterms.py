@@ -127,30 +127,16 @@ GENERIC_TERMS = frozenset(
 )
 
 
-def _dedupe(terms):
-    seen, out = set(), []
-    for t in terms:
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
-
-
-def query_keyterms(limit=QUERY_TERM_SLOTS):
+def query_keyterms():
     """The words used to ask ABOUT games, in the form Flux emits them: every
     term goes through spoken_form, never SteamSpy's punctuation ('rogue-like',
     'souls-like', 'co-op')."""
-    return [
-        t
-        for t in _dedupe(titles.spoken_form(x) for x in library.query_terms())
-        if t not in GENERIC_TERMS
-    ][:limit]
+    spoken = dict.fromkeys(titles.spoken_form(x) for x in library.query_terms())
+    return [t for t in spoken if t and t not in GENERIC_TERMS][:QUERY_TERM_SLOTS]
 
 
-def load_titles(count, rows=None):
+def load_titles(count, rows):
     """Installed titles by recency, spelled as Steam writes them."""
-    if rows is None:
-        rows = library.load().get("installed", [])
     rows = sorted(rows, key=lambda r: r.get("lastPlayed", 0), reverse=True)
     return [
         r["name"]
@@ -189,7 +175,7 @@ def stt_keyterms(voice, wake_phrase, index=None):
     ]
     terms += query_keyterms()
 
-    out = _dedupe(terms)
+    out = [t for t in dict.fromkeys(terms) if t]
     if len(out) > MAX_KEYTERMS:
         log.warn(
             "keyterms_capped",

@@ -164,8 +164,13 @@ _k32.CloseHandle.restype = wintypes.BOOL
 _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 
 
-def _kill_on_close_job() -> int:
-    """A job object whose processes all die when its last handle closes."""
+def _die_together() -> None:
+    """Put THIS process in a kill-on-close job, so the lane and the interpreter
+    the venv launcher spawns for it die with it. The job's processes all die
+    when its last handle closes, and this process never closes its handle.
+    Ending the task is TerminateProcess on the wrapper, which closes its
+    handles and so the job; the scheduler itself left the lane running beside
+    its replacement."""
     job = _k32.CreateJobObjectW(None, None)
     if not job:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -174,24 +179,8 @@ def _kill_on_close_job() -> int:
     ok = _k32.SetInformationJobObject(
         job, _JOB_EXTENDED_LIMITS, ctypes.byref(limits), ctypes.sizeof(limits)
     )
-    if not ok:
+    if not ok or not _k32.AssignProcessToJobObject(job, _k32.GetCurrentProcess()):
         raise ctypes.WinError(ctypes.get_last_error())
-    return job
-
-
-_job = None  # the wrapper's handle: held for its lifetime, never closed
-
-
-def _die_together() -> None:
-    """Put THIS process in a kill-on-close job, so the lane and the interpreter
-    the venv launcher spawns for it die with it. Ending the task is
-    TerminateProcess on the wrapper, which closes its handles and so the job;
-    the scheduler itself left the lane running beside its replacement."""
-    global _job
-    job = _kill_on_close_job()
-    if not _k32.AssignProcessToJobObject(job, _k32.GetCurrentProcess()):
-        raise ctypes.WinError(ctypes.get_last_error())
-    _job = job
 
 
 # --- the wrapper the tasks run --------------------------------------------------
@@ -320,7 +309,3 @@ def start() -> int:
             print(f"[start] {name}: {e}")
             return 1
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(lane_main())

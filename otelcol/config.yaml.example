@@ -17,8 +17,8 @@ extensions:
 receivers:
   filelog/events:
     include:
-      # Set this to events.LOG_DIR using forward slashes:
-      #   .venv\Scripts\python -c "from slopstation import events; print(events.LOG_DIR)"
+      # Set this to paths.logs() using forward slashes:
+      #   .venv\Scripts\python -c "from slopstation import paths; print(paths.logs())"
       - C:/slopstation/logs/k15-*.jsonl
     start_at: beginning
     storage: file_storage
@@ -62,7 +62,8 @@ processors:
 exporters:
   otlphttp/sentry:
     # EDIT ME, both lines: Sentry project settings > Client Keys (DSN) >
-    # This collector exports logs only, so configure logs_endpoint.
+    # OpenTelemetry (OTLP) prints them ready to paste. This collector exports
+    # logs only, so configure logs_endpoint.
     logs_endpoint: https://oORGID.ingest.us.sentry.io/api/PROJECTID/integration/otlp/v1/logs
     headers:
       x-sentry-auth: "sentry sentry_key=PUBLICKEY"

@@ -110,7 +110,7 @@ Everything else on the PC is a convention rather than a setting:
 |---|---|
 | `SLOPSTATION_HOME` | the directory holding `config.json`, `secrets.json`, `state\` and `logs\`; default is the checkout |
 | `SLOPSTATION_URL`, `SLOPSTATION_TOKEN` | the text client's endpoint and token when it talks to another machine |
-| `SLOPSTATION_ENV`, `SLOPSTATION_SERVICE` | the `env` and `service` attributes on every event. The test suite sets `env` to `test` so a test can never look like an outage |
+| `SLOPSTATION_ENV` | the `env` attribute on every event. The test suite sets `env` to `test` so a test can never look like an outage |
 | `SLOPSTATION_TEST_AUDIO`, `SLOPSTATION_TEST_HAS` | opt the test suite into real audio devices; override what the machine is detected to have |
 
 ## Repository settings

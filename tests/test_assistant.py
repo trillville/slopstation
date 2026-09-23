@@ -730,7 +730,7 @@ def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
     tools = assistant.as_tools(
         {"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log
     )
-    schema = tool_schemas.pipecat_schemas(tools, log)[0]
+    schema = tool_schemas.pipecat_schemas(tools)[0]
 
     class Params:
         arguments = {}
@@ -757,7 +757,7 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
         },
         log,
     )
-    receipt_schema = tool_schemas.pipecat_schemas(tools, log)[0]
+    receipt_schema = tool_schemas.pipecat_schemas(tools)[0]
 
     class ReceiptWorker:
         async def queue_frame(self, frame):
@@ -800,7 +800,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
         },
         tlog,
     )
-    schemas = tool_schemas.pipecat_schemas(tools, tlog)
+    schemas = tool_schemas.pipecat_schemas(tools)
 
     answered = []
 
