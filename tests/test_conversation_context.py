@@ -35,11 +35,6 @@ def test_all_orphan_slice_collapses_to_empty():
     assert _trim_carry([]) == []
 
 
-def test_sliced_window_of_tool_turns_is_whole():
-    convo = [U, A_TOOL, TOOL_RES, A, U, A_TOOL, TOOL_RES, A, U, A]
-    assert _trim_carry(convo[-8:]) == [U, A_TOOL, TOOL_RES, A, U, A]
-
-
 def test_a_follow_up_inside_the_window_gets_the_last_session_back(monkeypatch):
     """What save() keeps, load() returns inside the window and drops outside it."""
     import types

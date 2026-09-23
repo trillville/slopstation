@@ -285,12 +285,12 @@ def main():
     services = Services(cfg, secrets, log, args.dry_run)
     services.start(stt_live, duck)
     try:
-        return wake_loop(args, cfg, secrets, matcher, stt_live, duck, services)
+        return wake_loop(args, cfg, matcher, stt_live, duck, services)
     finally:
         services.stop()
 
 
-def wake_loop(args, cfg, secrets, matcher, stt_live, duck, services):
+def wake_loop(args, cfg, matcher, stt_live, duck, services):
     """Open the microphone and run sessions until the process ends."""
     voice = cfg["voice"]
     announcer = services.announcer

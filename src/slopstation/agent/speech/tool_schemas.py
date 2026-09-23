@@ -2,7 +2,7 @@
 adapter over Tools.call. The text lane calls Tools directly."""
 
 
-def pipecat_schemas(tools, log):
+def pipecat_schemas(tools):
     """Pipecat schemas whose handlers run `tools.call` on a worker thread. An
     acknowledgment is spoken as-is with no second model turn; end_turn closes
     the turn without a reply."""
