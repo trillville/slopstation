@@ -98,11 +98,14 @@ def disk_usage(root: Path, folders: bool = True) -> dict:
     return out
 
 
-def largest_items(root: Path, under: str = "", limit: int = 10) -> list[dict]:
-    """The biggest immediate children of <root>/<under>, folders measured
-    whole. `under` is one of the top folders or a path below one."""
+def largest_items(root: Path, under: str = "") -> list[dict] | None:
+    """Every immediate child of <root>/<under>, biggest first, folders
+    measured whole. `under` is one of the top folders or a path below one.
+    None when `under` escapes the root."""
     base = _inside(root, under) if under else root
-    if base is None or not base.is_dir():
+    if base is None:
+        return None
+    if not base.is_dir():
         return []
     rows: list[dict[str, Any]] = []
     try:
@@ -129,7 +132,7 @@ def largest_items(root: Path, under: str = "", limit: int = 10) -> list[dict]:
         )
     # By bytes, not the rounded figure: two small items must still order.
     rows.sort(key=lambda r: -r["bytes"])
-    return rows[: max(1, min(int(limit), 50))]
+    return rows
 
 
 def _inside(root: Path, rel: str) -> Path | None:

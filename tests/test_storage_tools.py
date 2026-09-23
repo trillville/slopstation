@@ -109,6 +109,7 @@ def test_disk_usage_and_largest_items(rig, root):
         and top["items"][0]["name"] == "Dune (2021)"
         and top["items"][0]["folder"]
     )
+    assert top["count"] == 2 and top["next_offset"] == 1, "the rest is one more page"
     everything = tk.call("largest_items", {})
     assert [i["name"] for i in everything["items"]] == ["Movies", "torrents", "TV"]
     assert not tk.call("largest_items", {"under": "../../etc"})["ok"]

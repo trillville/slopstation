@@ -215,6 +215,10 @@ def test_health_names_what_is_up_behind_the_token(cfg, log, fake_backend):
         with pytest.raises(urllib.error.HTTPError) as denied:
             urllib.request.urlopen(url, timeout=5)
         assert denied.value.code == 401
+        odd = urllib.request.Request(url, headers={"Authorization": "Bearer ü"})
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(odd, timeout=5)
+        assert denied.value.code == 401, "non-ASCII header was not answered"
         request = urllib.request.Request(
             url, headers={"Authorization": f"Bearer {TOKEN}"}
         )

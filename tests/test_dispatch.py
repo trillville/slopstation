@@ -324,6 +324,9 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     assert log.find("session_dispatched")[-1]["nav"] == ["wishlist"]
     r = d.nav("details", 400)
     assert r.ok and spawned[-1][-5:] == ["--nav", "details", "400", "--turn", "4c1d0e"]
+    # The tool's pinned turn wins over the utterance's, as in play_game.
+    assert d.nav("friends", turn="9f2c1a").ok
+    assert spawned[-1][-2:] == ["--turn", "9f2c1a"], spawned[-1]
     # A URL off the allowlist is still refused before anything starts.
     m = len(spawned)
     assert not d.nav("url", "https://evil.example/steam").ok and len(spawned) == m
