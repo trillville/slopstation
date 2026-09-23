@@ -17,7 +17,7 @@ from slopstation.agent.media.clients import (
     KINDS,
     SEARCH_TIMEOUT_S,
     MediaError,
-    _parse_time,
+    parse_time,
 )
 from slopstation.agent.media.units import gigabytes
 
@@ -779,7 +779,7 @@ def impls(ctx: ToolContext):
                 # still ahead means it is down now.
                 now = datetime.datetime.now(datetime.UTC)
                 for s in media.prowlarr.get("indexerstatus") or []:
-                    till = _parse_time(s.get("disabledTill"))
+                    till = parse_time(s.get("disabledTill"))
                     out["indexers"].append(
                         {
                             "indexer": names.get(int(s.get("indexerId", 0) or 0)),

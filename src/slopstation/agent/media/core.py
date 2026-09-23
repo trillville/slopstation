@@ -6,8 +6,8 @@ from typing import Any
 from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
-    _clean_text,
-    _kind,
+    clean_text,
+    kind_spec,
 )
 
 
@@ -37,11 +37,11 @@ class _Core:
         self.qbit = qbit
 
     def _client(self, kind):
-        return getattr(self, _kind(kind)["authority"])
+        return getattr(self, kind_spec(kind)["authority"])
 
     def _library_row(self, kind, catalog_id):
         """The service's own record for a catalog id, or None if it holds none."""
-        spec = _kind(kind)
+        spec = kind_spec(kind)
         client = self._client(kind)
         return self._existing(
             client.get(spec["resource"], {spec["id_key"]: catalog_id}),
@@ -52,7 +52,7 @@ class _Core:
 
     def _catalog_title(self, kind, catalog_id):
         """The catalogue's own title for an id, or None if it names nothing."""
-        spec = _kind(kind)
+        spec = kind_spec(kind)
         client = self._client(kind)
         try:
             if kind == "movie":
@@ -63,11 +63,11 @@ class _Core:
             match = self._existing(rows, spec["id_key"], catalog_id, client.name)
         except MediaError:
             return None
-        return None if match is None else _clean_text(match.get("title"))
+        return None if match is None else clean_text(match.get("title"))
 
     def _profile(self, kind, preset):
         preset = str(preset or "default").lower()
-        mapping = self.cfg.get(_kind(kind)["presets_key"], {})
+        mapping = self.cfg.get(kind_spec(kind)["presets_key"], {})
         if preset not in mapping:
             allowed = ", ".join(sorted(mapping)) or "none"
             raise MediaConfigurationError(
@@ -160,7 +160,7 @@ class _Core:
         out: dict = {
             "ok": True,
             "kind": f"{kind}_acquisition",
-            "authority": _kind(kind)["authority"],
+            "authority": kind_spec(kind)["authority"],
             "external_ref": str(external_ref),
             "title": title,
             "catalog_id": catalog_id,

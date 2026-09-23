@@ -5,8 +5,8 @@ from typing import Any
 
 from slopstation.agent.media.clients import (
     MediaError,
-    _clean_text,
-    _parse_time,
+    clean_text,
+    parse_time,
 )
 from slopstation.agent.media.core import Observation
 from slopstation.agent.media.queue import _Queue
@@ -149,7 +149,7 @@ class _Series(_Queue):
                 continue
             if monitored_only and not episode.get("monitored"):
                 continue
-            aired = _parse_time(episode.get("airDateUtc"))
+            aired = parse_time(episode.get("airDateUtc"))
             if aired is None or aired > now:
                 continue
             targets.append(episode)
@@ -377,7 +377,7 @@ class _Series(_Queue):
         if existing is not None:
             series = dict(existing)
             series_id = int(series["id"])
-            title = _clean_text(series.get("title")) or f"TVDB {tvdb_id}"
+            title = clean_text(series.get("title")) or f"TVDB {tvdb_id}"
             try:
                 profile_changed = int(series.get("qualityProfileId", 0)) != profile_id
             except (TypeError, ValueError):
@@ -452,7 +452,7 @@ class _Series(_Queue):
                 self.sonarr.post("series", payload), "Sonarr", "created series"
             )
             series_id = int(series["id"])
-            title = _clean_text(series.get("title")) or f"TVDB {tvdb_id}"
+            title = clean_text(series.get("title")) or f"TVDB {tvdb_id}"
             baseline_episode_files = None
             # The season scope is written by `_apply_series_monitoring` once
             # Sonarr has finished adding the series; writing it here would
@@ -640,7 +640,7 @@ class _Series(_Queue):
                     "monitored": False,
                 },
             )
-            air = _parse_time(e.get("airDateUtc"))
+            air = parse_time(e.get("airDateUtc"))
             aired = air is not None and air <= now
             if e.get("hasFile"):
                 s["held"] += 1
@@ -704,7 +704,7 @@ class _Series(_Queue):
                 "detail": "the series was not managed by Sonarr",
             }
         series_id = int(series["id"])
-        title = _clean_text(series.get("title")) or f"TVDB {tvdb_id}"
+        title = clean_text(series.get("title")) or f"TVDB {tvdb_id}"
         self._cancel_commands(self.sonarr, command_ids)
         if all_seasons:
             queued = self._queue_records(self.sonarr, "seriesId", series_id)

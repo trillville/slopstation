@@ -6,7 +6,7 @@ from slopstation import config, paths
 from slopstation.agent.media.clients import (
     ArrClient,
     MediaConfigurationError,
-    _qbit_from_config,
+    qbit_from_config,
 )
 from slopstation.agent.media.disk import (
     DISK_POLL_S,
@@ -90,7 +90,7 @@ def proton_port_monitor_from_config(cfg, secrets, log):
         "protonPortSync",
         "proton_port_sync",
         lambda media_cfg: ProtonPortMonitor(
-            _qbit_from_config(media_cfg, secrets),
+            qbit_from_config(media_cfg, secrets),
             log,
             poll_s=_positive(media_cfg, "pollS", 30),
             interface=str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN")),
@@ -205,7 +205,7 @@ def from_config(cfg, secrets, log):
     else:
         log("lane_disabled", what="prowlarr_tools", reason="prowlarrApiKey missing")
     try:
-        qbit = _qbit_from_config(media_cfg, secrets)
+        qbit = qbit_from_config(media_cfg, secrets)
     except MediaConfigurationError as e:
         log("lane_disabled", what="torrent_tools", reason=str(e))
     return MediaService(media_cfg, log, radarr, sonarr, prowlarr=prowlarr, qbit=qbit)

@@ -2,7 +2,7 @@
 
 import time
 
-from slopstation.agent.media.clients import MediaError, _clean_text
+from slopstation.agent.media.clients import MediaError, clean_text
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
 # Servarr history eventTypes that mean a grab did not become a file.
@@ -30,13 +30,13 @@ def _history_id(row):
 
 def _data_field(row, name, limit=160):
     data = row.get("data")
-    return _clean_text(data.get(name) if isinstance(data, dict) else None, limit)
+    return clean_text(data.get(name) if isinstance(data, dict) else None, limit)
 
 
 def _collapse(entries, row, row_id, entry):
     """One entry per download: a season pack grabs or fails once per episode
     and is one line to a human. `records` keeps the fan-out visible."""
-    key = _clean_text(row.get("downloadId"), 60) or str(row_id)
+    key = clean_text(row.get("downloadId"), 60) or str(row_id)
     if key in entries:
         entries[key]["records"] += 1
     else:
@@ -47,14 +47,14 @@ def _queue_messages(row):
     for entry in row.get("statusMessages") or ():
         if isinstance(entry, dict):
             for message in entry.get("messages") or ():
-                yield _clean_text(message, 80)
+                yield clean_text(message, 80)
 
 
 def _queue_detail(row):
     messages = list(_queue_messages(row))
     if not messages:
-        messages.append(_clean_text(row.get("errorMessage"), 80))
-    return _clean_text("; ".join(message for message in messages if message))
+        messages.append(clean_text(row.get("errorMessage"), 80))
+    return clean_text("; ".join(message for message in messages if message))
 
 
 def _empty_completion(row):
@@ -64,7 +64,7 @@ def _empty_completion(row):
     never sees the executable, so it reports no eligible files instead of the
     executable verdict, and the grab sits in the queue forever. Complete and
     empty is never a real release, so it needs no grace period."""
-    if _clean_text(row.get("status"), 30).lower() != "completed":
+    if clean_text(row.get("status"), 30).lower() != "completed":
         return False
     return not float(row.get("size", 0) or 0) and not float(row.get("sizeleft", 0) or 0)
 
@@ -113,7 +113,7 @@ class MediaHealthMonitor(Monitor):
                 self._queue(client)
                 self._failures.cleared(client.name)
             except Exception as e:
-                detail = _clean_text(e)
+                detail = clean_text(e)
                 if self._failures.changed(client.name, detail):
                     self.log.error("media_watch_failed", app=client.name, err=detail)
 
@@ -125,11 +125,11 @@ class MediaHealthMonitor(Monitor):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            source = _clean_text(row.get("source"), 60)
+            source = clean_text(row.get("source"), 60)
             if source and source not in current:
                 current[source] = (
-                    _clean_text(row.get("type"), 20).lower(),
-                    _clean_text(row.get("message")),
+                    clean_text(row.get("type"), 20).lower(),
+                    clean_text(row.get("message")),
                 )
         seen = self._issues.get(client.name)
         for source, (kind, detail) in sorted(current.items()):
@@ -178,15 +178,15 @@ class MediaHealthMonitor(Monitor):
             # history still holds would make every restart look like an outage.
             if watermark is None or row_id <= watermark:
                 continue
-            kind = _clean_text(row.get("eventType"), 40)
+            kind = clean_text(row.get("eventType"), 40)
             if kind == GRAB_EVENT:
                 _collapse(
                     grabs,
                     row,
                     row_id,
                     {
-                        "ref": _clean_text(row.get(GRAB_REF.get(client.name, "")), 20),
-                        "title": _clean_text(row.get("sourceTitle"), 120),
+                        "ref": clean_text(row.get(GRAB_REF.get(client.name, "")), 20),
+                        "title": clean_text(row.get("sourceTitle"), 120),
                         "indexer": _data_field(row, "indexer", 60),
                     },
                 )
@@ -197,7 +197,7 @@ class MediaHealthMonitor(Monitor):
                     row_id,
                     {
                         "kind": kind,
-                        "title": _clean_text(row.get("sourceTitle"), 120),
+                        "title": clean_text(row.get("sourceTitle"), 120),
                         "err": _data_field(row, "message"),
                     },
                 )
@@ -236,9 +236,9 @@ class MediaHealthMonitor(Monitor):
         for operation in self.operations.active():
             if not isinstance(operation, dict):
                 continue
-            if _clean_text(operation.get("authority"), 20).casefold() != authority:
+            if clean_text(operation.get("authority"), 20).casefold() != authority:
                 continue
-            ref = _clean_text(operation.get("external_ref"), 20)
+            ref = clean_text(operation.get("external_ref"), 20)
             if ref:
                 owned.add(ref)
         return {
@@ -256,16 +256,16 @@ class MediaHealthMonitor(Monitor):
         for row in records:
             if not isinstance(row, dict):
                 continue
-            status = _clean_text(row.get("trackedDownloadStatus"), 20).lower()
+            status = clean_text(row.get("trackedDownloadStatus"), 20).lower()
             if status not in ("warning", "error"):
                 continue
             # A season pack is one queue record per episode. Keying on the
             # download collapses it to the one line a human would act on.
-            key = _clean_text(row.get("downloadId") or row.get("id"), 60)
+            key = clean_text(row.get("downloadId") or row.get("id"), 60)
             if key and key not in current:
                 current[key] = (
                     status,
-                    _clean_text(row.get("title"), 120),
+                    clean_text(row.get("title"), 120),
                     _queue_detail(row),
                 )
         seen = self._stalled.get(client.name) or {}
@@ -296,7 +296,7 @@ class MediaHealthMonitor(Monitor):
         for row in records:
             if not isinstance(row, dict):
                 continue
-            key = _clean_text(row.get("downloadId") or row.get("id"), 60)
+            key = clean_text(row.get("downloadId") or row.get("id"), 60)
             if not key:
                 continue
             if any(EXECUTABLE_BLOCK in m.casefold() for m in _queue_messages(row)):
@@ -307,7 +307,7 @@ class MediaHealthMonitor(Monitor):
                 # Only a grab the client holds and should be moving. Paused,
                 # held by a delay profile, or the client being away is not
                 # dead.
-                if _clean_text(row.get("status"), 30).lower() not in REAPABLE:
+                if clean_text(row.get("status"), 30).lower() not in REAPABLE:
                     continue
                 size = float(row.get("size", 0) or 0)
                 left = float(row.get("sizeleft", 0) or 0)
@@ -320,7 +320,7 @@ class MediaHealthMonitor(Monitor):
                     continue
                 reason = "idle"
             target = str(row.get("episodeId") or row.get("movieId") or key)
-            title = _clean_text(row.get("title"), 120)
+            title = clean_text(row.get("title"), 120)
             count = reaped.get(target, 0)
             if count >= REAP_LIMIT:
                 if count == REAP_LIMIT:
@@ -342,7 +342,7 @@ class MediaHealthMonitor(Monitor):
                     "media_queue_reap_failed",
                     app=client.name,
                     download=key,
-                    err=_clean_text(e),
+                    err=clean_text(e),
                 )
                 continue
             reaped[target] = count + 1

@@ -4,8 +4,8 @@ import json
 
 from slopstation.agent.media.clients import (
     MediaError,
-    _clean_text,
-    _kind,
+    clean_text,
+    kind_spec,
 )
 from slopstation.agent.media.movies import _Movies
 from slopstation.agent.media.series import _Series
@@ -15,10 +15,10 @@ class MediaService(_Series, _Movies):
     """Resolve policy names and submit/observe concrete media requests."""
 
     def find(self, kind, query):
-        query = _clean_text(query)
+        query = clean_text(query)
         if not query:
             raise MediaError("media lookup needs a title")
-        spec = _kind(kind)
+        spec = kind_spec(kind)
         client = self._client(kind)
         rows = client.get(f"{spec['resource']}/lookup", {"term": query})
         if not isinstance(rows, list):
@@ -34,7 +34,7 @@ class MediaService(_Series, _Movies):
                 year = int(row.get("year", 0))
             except (TypeError, ValueError):
                 continue
-            title = _clean_text(row.get("title"))
+            title = clean_text(row.get("title"))
             if catalog_id <= 0 or not title:
                 continue
             out.append(
@@ -42,7 +42,7 @@ class MediaService(_Series, _Movies):
                     public_key: catalog_id,
                     "title": title,
                     "year": year,
-                    "status": _clean_text(row.get("status"), 40),
+                    "status": clean_text(row.get("status"), 40),
                 }
             )
             if len(out) == 5:
@@ -70,7 +70,7 @@ class MediaService(_Series, _Movies):
                 "kind": kind,
                 "catalog_id": catalog_id,
                 "in_library": True,
-                "title": _clean_text(row.get("title")) or f"TMDB {catalog_id}",
+                "title": clean_text(row.get("title")) or f"TMDB {catalog_id}",
                 "year": row.get("year"),
                 "available": bool(row.get("hasFile")),
             }
@@ -87,7 +87,7 @@ class MediaService(_Series, _Movies):
             "kind": kind,
             "catalog_id": catalog_id,
             "in_library": True,
-            "title": _clean_text(series.get("title")) or f"TVDB {catalog_id}",
+            "title": clean_text(series.get("title")) or f"TVDB {catalog_id}",
             "year": series.get("year"),
             "seasons": [seasons[number] for number in sorted(seasons)],
         }
@@ -223,7 +223,7 @@ class MediaService(_Series, _Movies):
         to what the release covers."""
         row = self._held(kind, catalog_id)
         client = self._client(kind)
-        title = _clean_text(row.get("title")) or f"{kind} {catalog_id}"
+        title = clean_text(row.get("title")) or f"{kind} {catalog_id}"
         scope, baselines = self._scoped(kind, row, season, episode)
         try:
             client.post("release", {"guid": str(guid), "indexerId": int(indexer_id)})
@@ -254,7 +254,7 @@ class MediaService(_Series, _Movies):
         one episode. What it promises is the search: the operation ends when
         the app's search has run and anything it took has imported."""
         row = self._held(kind, catalog_id)
-        title = _clean_text(row.get("title")) or f"{kind} {catalog_id}"
+        title = clean_text(row.get("title")) or f"{kind} {catalog_id}"
         if kind == "series" and season is not None:
             scope, baselines = self._scoped(kind, row, season, episode)
             # A season is searched as a season (season packs count); one
@@ -343,13 +343,13 @@ class MediaService(_Series, _Movies):
         files are for."""
         parent = candidates["parent"] or {}
         client = self._client(kind)
-        spec = _kind(kind)
+        spec = kind_spec(kind)
         row = self._one(
             client.get(f"{spec['resource']}/{int(parent['id'])}"),
             client.name,
             spec["resource"],
         )
-        title = _clean_text(row.get("title")) or f"{kind} {parent['id']}"
+        title = clean_text(row.get("title")) or f"{kind} {parent['id']}"
         scope: dict = {}
         if kind == "series":
             scope["episode_ids"] = sorted(
