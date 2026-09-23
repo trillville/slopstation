@@ -953,6 +953,14 @@ def test_delete_season_cancels_a_request_still_waiting_for_its_episode_ids(
     assert store.get(other_season["id"])["state"] == operations.RUNNING
 
 
+def test_delete_media_of_something_not_held_answers_without_asking(tracked):
+    """library() has no year for an id the app does not hold; the tool must
+    still reach its nothing-on-disk path instead of raising."""
+    tk, _, _ = tracked
+    out = tk.call("delete_media", {"kind": "movie", "catalog_id": 999})
+    assert out["ok"] and out["removed"] is False, out
+
+
 def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig, monkeypatch):
     tk, _, _ = rig
     _, _, sonarr, _ = stack
