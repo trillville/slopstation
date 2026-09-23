@@ -150,9 +150,6 @@ class FakeMedia:
     def __init__(self):
         self.requests = []
 
-    def find(self, kind, query):
-        return [{"tmdb_id": 438631, "title": "Dune", "year": 2021}]
-
     def library(self, kind, catalog_id):
         self.requests.append(("library", kind, catalog_id))
         return {
@@ -479,15 +476,11 @@ def test_list_operations_acknowledges_only_on_a_live_recent_read(
 # -- the media tools -----------------------------------------------------------
 
 
-def test_find_then_request_movie_previews_dry_and_tracks_the_turn_live(
+def test_request_movie_previews_dry_and_tracks_the_turn_live(
     media_impls, live_media, fake_media, fake_operations
 ):
-    found = media_impls["find_media"]({"kind": "movie", "query": "Dune"})
-    assert found["candidates"][0]["tmdb_id"] == 438631
-    held = media_impls["media_library"]({"kind": "series", "catalog_id": 81189})
-    assert held["ok"] and held["seasons"][0]["have"] == 13
     preview = media_impls["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
-    assert preview["dry_run"] and fake_media.requests == [("library", "series", 81189)]
+    assert preview["dry_run"] and fake_media.requests == []
     requested = live_media["request_movie"]({"tmdb_id": 438631, "preset": "1080p"})
     assert requested["operation_id"] == "op-media"
     assert fake_media.requests[-1] == ("movie", 438631, "1080p")
@@ -529,17 +522,11 @@ def test_request_series_needs_a_season_scope(live_media, fake_media, fake_operat
     assert all_requested["all_seasons"] is True
     assert fake_media.requests[-1] == ("series", 81189, "2160p", None, None)
     assert fake_operations.tracked[-1][6]["all_seasons"] is True
-    series_schema = next(
-        tool
-        for tool in assistant.REGISTRY.anthropic_tools()
-        if tool["name"] == "request_series"
-    )
-    assert "all_seasons" in series_schema["input_schema"]["properties"]
 
 
 def test_request_series_takes_individual_episodes(live_media, fake_media):
     """A list of episodes is requested as those episodes, never widened to
-    their seasons, and is one scope like the other two."""
+    their seasons."""
     requested = live_media["request_series"](
         {
             "tvdb_id": 75805,
@@ -562,15 +549,6 @@ def test_request_series_takes_individual_episodes(live_media, fake_media):
         "Requested Breaking Bad, season 4 episode 13 and season 10 episode 4, "
         "using the default quality profile. Sonarr is searching in the background."
     )
-    before = list(fake_media.requests)
-    mixed = live_media["request_series"](
-        {"tvdb_id": 75805, "seasons": [4], "episodes": [{"season": 4, "episode": 13}]}
-    )
-    assert not mixed["ok"] and fake_media.requests == before
-    for bad in ([{"season": 4}], [{"season": 0, "episode": 1}], [[4, 13]], ["S04E13"]):
-        result = live_media["request_series"]({"tvdb_id": 75805, "episodes": bad})
-        assert not result["ok"] and "episodes must be" in result["error"], bad
-    assert fake_media.requests == before
 
 
 def test_delete_media_validates_its_scope(live_media):

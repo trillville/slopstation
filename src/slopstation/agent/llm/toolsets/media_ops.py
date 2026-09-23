@@ -220,45 +220,8 @@ SPECS = [
 ]
 
 
-def _num(value, missing=-1):
-    """An integer field, with 0 kept as 0: `or -1` would lose season zero,
-    the specials."""
-    return missing if value is None else int(value)
-
-
-def _library_row(media, kind, catalog_id):
-    """(row, None) for a title in the library, or (None, error dict)."""
-    try:
-        catalog_id = int(catalog_id)
-    except (TypeError, ValueError):
-        return None, {"ok": False, "error": "catalog_id must be an integer"}
-    if catalog_id <= 0:
-        return None, {"ok": False, "error": "catalog_id must be positive"}
-    row = media._library_row(kind, catalog_id)
-    if row is None:
-        return None, {
-            "ok": False,
-            "error": f"that {kind} is not in the library - request it first",
-        }
-    return row, None
-
-
-def _kind(args):
-    """(kind, None) for movie or series, or (None, error dict)."""
-    kind = str(args.get("kind") or "")
-    if kind not in KINDS:
-        return None, {"ok": False, "error": "kind must be movie or series"}
-    return kind, None
-
-
 def impls(ctx: ToolContext):
     media, operations = ctx.media, ctx.operations
-
-    def _client(kind):
-        return media._client(kind)
-
-    def _row(kind, catalog_id):
-        return _library_row(media, kind, catalog_id)
 
     bind = Bindings(ctx, SPECS)
 
@@ -267,9 +230,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def grab_release(args):
-        kind, err = _kind(args)
-        if err:
-            return err
+        kind = str(args.get("kind"))
         guid = str(args.get("guid") or "").strip()
         try:
             catalog_id = int(args.get("catalog_id"))
@@ -291,9 +252,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def retry_search(args):
-        kind, err = _kind(args)
-        if err:
-            return err
+        kind = str(args.get("kind"))
         try:
             catalog_id = int(args.get("catalog_id"))
             season = None if args.get("season") is None else int(args["season"])
@@ -373,12 +332,8 @@ def impls(ctx: ToolContext):
 
     @bind
     def set_monitored(args):
-        kind, err = _kind(args)
-        if err:
-            return err
-        row, err = _row(kind, args.get("catalog_id"))
-        if err:
-            return err
+        kind = str(args.get("kind"))
+        row = media._held(kind, int(args["catalog_id"]))
         monitored = args.get("monitored")
         if not isinstance(monitored, bool):
             return {"ok": False, "error": "monitored must be true or false"}
@@ -404,11 +359,11 @@ def impls(ctx: ToolContext):
         else:
             wanted = {int(s) for s in seasons}
             for s in updated.get("seasons") or []:
-                if _num(s.get("seasonNumber")) in wanted:
+                if s.get("seasonNumber") in wanted:
                     s["monitored"] = monitored
             if monitored:
                 updated["monitored"] = True
-        _client(kind).put(f"{KINDS[kind]['resource']}/{row['id']}", updated)
+        media._client(kind).put(f"{KINDS[kind]['resource']}/{row['id']}", updated)
         return {
             "ok": True,
             "title": row.get("title"),
@@ -418,37 +373,26 @@ def impls(ctx: ToolContext):
 
     @bind
     def set_quality_profile(args):
-        kind, err = _kind(args)
-        if err:
-            return err
-        row, err = _row(kind, args.get("catalog_id"))
-        if err:
-            return err
+        kind = str(args.get("kind"))
+        row = media._held(kind, int(args["catalog_id"]))
         preset = str(args.get("preset") or "")
         profile_id, profile_name = media._profile(kind, preset)
         if dry := ctx.preview(f"set profile {profile_name} on {row.get('title')}"):
             return dry
-        if int(row.get("qualityProfileId", 0) or 0) == profile_id:
-            return {
-                "ok": True,
-                "title": row.get("title"),
-                "profile": profile_name,
-                "changed": False,
-            }
-        updated = dict(row, qualityProfileId=profile_id)
-        _client(kind).put(f"{KINDS[kind]['resource']}/{row['id']}", updated)
+        changed = int(row.get("qualityProfileId", 0) or 0) != profile_id
+        if changed:
+            updated = dict(row, qualityProfileId=profile_id)
+            media._client(kind).put(f"{KINDS[kind]['resource']}/{row['id']}", updated)
         return {
             "ok": True,
             "title": row.get("title"),
             "profile": profile_name,
-            "changed": True,
+            "changed": changed,
         }
 
     @bind.destructive
     def resolve_queue_item(args):
-        kind, err = _kind(args)
-        if err:
-            return err
+        kind = str(args.get("kind"))
         try:
             queue_id = int(args.get("queue_id"))
         except (TypeError, ValueError):
@@ -458,7 +402,7 @@ def impls(ctx: ToolContext):
         # Marking a release failed makes the app remove the download itself
         # (its default) and grab another, so blocklist erases data too.
         destructive = remove or blocklist
-        client = _client(kind)
+        client = media._client(kind)
         include = "includeMovie" if kind == "movie" else "includeSeries"
         queue = (
             client.get("queue", {"page": 1, "pageSize": 1000, include: "true"}) or {}
@@ -513,9 +457,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def manual_import(args):
-        kind, err = _kind(args)
-        if err:
-            return err
+        kind = str(args.get("kind"))
         download_id = str(args.get("download_id") or "").strip()
         if not download_id:
             return {"ok": False, "error": "pass the download id from import_queue"}
