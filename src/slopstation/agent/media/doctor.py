@@ -1,9 +1,19 @@
-"""Diagnostic checks for media services and Proton port forwarding."""
+"""The doctor's media rows: the config, the containers, Radarr, Sonarr,
+Prowlarr, qBittorrent, Proton's forwarded port, Windows' port reservations,
+and monitored episodes nothing is chasing.
+
+`slopstation-doctor` runs check() as its media section. Read-only: nothing
+here changes a service. A row is PASS or WARN, never FAIL: the stack is
+optional, and only the chord chain may fail the doctor and, with it, a deploy.
+"""
 
 import json
 import subprocess
+import time
 
 from slopstation import config, paths
+from slopstation.agent import operations
+from slopstation.agent.media import proton
 from slopstation.agent.media.clients import (
     ArrClient,
     MediaConfigurationError,
@@ -12,23 +22,70 @@ from slopstation.agent.media.clients import (
     _kind,
     _qbit_from_config,
 )
-from slopstation.agent.media.proton import read_proton_port_state
+
+PASS, WARN = "PASS", "WARN"
+REQUIRED = (
+    "radarrUrl",
+    "sonarrUrl",
+    "prowlarrUrl",
+    "qbittorrentUrl",
+    "movieRoot",
+    "seriesRoot",
+    "moviePresets",
+    "seriesPresets",
+)
+CONTAINERS = ("flaresolverr", "prowlarr", "radarr", "sonarr", "homarr", "glances")
+START_MEDIA = "run media\\Start-Media.ps1"
+# An episode aired this long ago, still monitored and still missing, is not
+# in flight: nothing searches for it, so it is armed for an RSS grab forever.
+MONITOR_STALE_DAYS = 7
 
 
-class DoctorReport:
-    def __init__(self):
-        self.checks = []
+def check(cfg, secrets, report, now=None):
+    """Every media row, through report(level, name, detail, hint)."""
+    media_cfg = cfg.get("media")
+    if not isinstance(media_cfg, dict) or not media_cfg.get("enabled"):
+        report(PASS, "media", "disabled")
+        return
 
-    def add(self, level, name, detail):
-        self.checks.append(
-            {"level": level, "name": name, "detail": _clean_text(detail, 240)}
+    def line(level, name, detail, hint=""):
+        # A detail can carry what a service answered: one printable line.
+        report(level, name, _clean_text(detail, 240), hint)
+
+    _check_config(line, media_cfg)
+    _check_containers(line)
+    answering = {}
+    for name, kind, url_key in (
+        ("Radarr", "movie", "radarrUrl"),
+        ("Sonarr", "series", "sonarrUrl"),
+    ):
+        client = _arr_client(line, name, media_cfg.get(url_key, ""), secrets)
+        if client is not None and _check_arr(line, kind, client, media_cfg):
+            answering[name] = client
+    prowlarr = _arr_client(
+        line, "Prowlarr", media_cfg.get("prowlarrUrl", ""), secrets, api_version="v1"
+    )
+    if prowlarr is not None:
+        _check_prowlarr(line, prowlarr, media_cfg)
+    preferences = _check_qbittorrent(line, media_cfg, secrets)
+    if media_cfg.get("protonPortSync"):
+        if preferences is not None:
+            _check_proton_port_sync(line, preferences, now=now)
+        _check_port_reservations(line)
+    _check_monitoring(line, answering.get("Sonarr"))
+
+
+def _check_config(report, media_cfg):
+    missing = [key for key in REQUIRED if not media_cfg.get(key)]
+    if missing:
+        report(
+            WARN,
+            "media config",
+            f"missing keys: {missing}",
+            "compare the media block with config.example.json",
         )
-
-    def result(self):
-        return {
-            "ok": not any(row["level"] == "FAIL" for row in self.checks),
-            "checks": list(self.checks),
-        }
+    else:
+        report(PASS, "media config", "topology, roots, and presets present")
 
 
 def _compose_services(media_dir):
@@ -74,6 +131,42 @@ def _compose_services(media_dir):
     return rows
 
 
+def _check_containers(report):
+    try:
+        rows = _compose_services(paths.HOME / "media")
+    except MediaError as e:
+        report(WARN, "Docker media containers", str(e), START_MEDIA)
+        return
+    states = {
+        str(entry.get("Service", entry.get("service", ""))).casefold(): entry
+        for entry in rows
+    }
+    bad = []
+    for name in CONTAINERS:
+        entry = states.get(name) or {}
+        state = str(entry.get("State", entry.get("state", "")))
+        health = str(entry.get("Health", entry.get("health", "")))
+        if (
+            not entry
+            or state.casefold() != "running"
+            or health.casefold() not in ("", "healthy")
+        ):
+            bad.append(name)
+    if bad:
+        report(
+            WARN,
+            "Docker media containers",
+            "not ready: " + ", ".join(bad),
+            START_MEDIA,
+        )
+    else:
+        report(
+            PASS,
+            "Docker media containers",
+            "FlareSolverr, Prowlarr, Radarr, Sonarr, Homarr, and Glances are running",
+        )
+
+
 def _row_field(row, *names):
     wanted = {name.casefold() for name in names}
     for field in row.get("fields") or []:
@@ -97,6 +190,29 @@ def _enabled_rows(rows):
     ]
 
 
+def _arr_client(report, name, url, secrets, api_version="v3"):
+    """The client for one Servarr app, or None after a row saying why not."""
+    key = f"{name.lower()}ApiKey"
+    if not config.real_key(secrets.get(key)):
+        report(
+            WARN,
+            f"{name} API",
+            f"{key} is missing",
+            f"copy it from {name} > Settings > General into secrets.json",
+        )
+        return None
+    try:
+        return ArrClient(name, url, secrets[key], api_version=api_version)
+    except MediaConfigurationError as e:
+        report(
+            WARN,
+            f"{name} API",
+            str(e),
+            "compare the media block with config.example.json",
+        )
+        return None
+
+
 def _check_service_reachable(report, client):
     """Status then health - the preamble every Servarr app shares. False means
     the API never answered, so the caller's deeper checks would only restate
@@ -106,13 +222,13 @@ def _check_service_reachable(report, client):
         status = client.get("system/status")
         if not isinstance(status, dict):
             raise MediaError(f"{label} returned invalid status")
-        report.add(
-            "PASS",
+        report(
+            PASS,
             f"{label} API",
             f"reachable, version {_clean_text(status.get('version'), 40)}",
         )
     except MediaError as e:
-        report.add("FAIL", f"{label} API", str(e))
+        report(WARN, f"{label} API", str(e), START_MEDIA)
         return False
 
     try:
@@ -122,25 +238,27 @@ def _check_service_reachable(report, client):
         if health:
             sources = sorted(
                 {
-                    _clean_text(row.get("source"), 40)
-                    for row in health
-                    if isinstance(row, dict) and row.get("source")
+                    _clean_text(entry.get("source"), 40)
+                    for entry in health
+                    if isinstance(entry, dict) and entry.get("source")
                 }
             )
             detail = f"{len(health)} warning(s)"
             if sources:
                 detail += ": " + ", ".join(sources[:5])
-            report.add("WARN", f"{label} health", detail)
+            report(WARN, f"{label} health", detail)
         else:
-            report.add("PASS", f"{label} health", "no health warnings")
+            report(PASS, f"{label} health", "no health warnings")
     except MediaError as e:
-        report.add("FAIL", f"{label} health", str(e))
+        report(WARN, f"{label} health", str(e))
     return True
 
 
 def _check_arr(report, kind, client, media_cfg):
+    """Radarr's or Sonarr's library policy, indexers and download client.
+    False when the API did not answer."""
     if not _check_service_reachable(report, client):
-        return
+        return False
     label = client.name
     spec = _kind(kind)
     root_key, presets_key = spec["root_key"], spec["presets_key"]
@@ -154,35 +272,35 @@ def _check_arr(report, kind, client, media_cfg):
         # Roots compare case-folded and without a trailing separator -
         # Servarr echoes the path back in either form.
         normalized = {
-            str(row.get("path", "")).rstrip("/\\").casefold()
-            for row in roots
-            if isinstance(row, dict)
+            str(entry.get("path", "")).rstrip("/\\").casefold()
+            for entry in roots
+            if isinstance(entry, dict)
         }
         root_exists = bool(wanted_root) and (
             wanted_root.rstrip("/\\").casefold() in normalized
         )
         available = {
-            str(row.get("name", "")).casefold()
-            for row in profiles
-            if isinstance(row, dict)
+            str(entry.get("name", "")).casefold()
+            for entry in profiles
+            if isinstance(entry, dict)
         }
         missing = [name for name in wanted if str(name).casefold() not in available]
-        report.add(
-            "PASS" if root_exists else "FAIL",
+        report(
+            PASS if root_exists else WARN,
             f"{label} root",
             wanted_root
             if root_exists
             else f"configured root {wanted_root or '(missing)'} does not exist",
         )
-        report.add(
-            "FAIL" if missing else "PASS",
+        report(
+            WARN if missing else PASS,
             f"{label} quality profiles",
             "missing: " + ", ".join(missing)
             if missing
             else f"all {len(wanted)} configured profile(s) exist",
         )
     except MediaError as e:
-        report.add("FAIL", f"{label} library policy", str(e))
+        report(WARN, f"{label} library policy", str(e))
 
     try:
         indexers = client.get("indexer")
@@ -190,45 +308,45 @@ def _check_arr(report, kind, client, media_cfg):
             raise MediaError(f"{label} returned invalid indexers")
         enabled = _enabled_rows(indexers)
         if enabled:
-            report.add(
-                "PASS", f"{label} indexers", f"{len(enabled)} enabled indexer(s)"
-            )
+            report(PASS, f"{label} indexers", f"{len(enabled)} enabled indexer(s)")
         else:
-            report.add("FAIL", f"{label} indexers", "no enabled indexers")
+            report(WARN, f"{label} indexers", "no enabled indexers")
     except MediaError as e:
-        report.add("FAIL", f"{label} indexers", str(e))
+        report(WARN, f"{label} indexers", str(e))
 
     try:
         clients = client.get("downloadclient")
         if not isinstance(clients, list):
             raise MediaError(f"{label} returned invalid download clients")
         qbittorrent = [
-            row
-            for row in _enabled_rows(clients)
-            if str(row.get("implementation", "")).casefold() == "qbittorrent"
+            entry
+            for entry in _enabled_rows(clients)
+            if str(entry.get("implementation", "")).casefold() == "qbittorrent"
         ]
         expected_category = spec["authority"]
         if not qbittorrent:
-            report.add(
-                "FAIL",
+            report(
+                WARN,
                 f"{label} qBittorrent client",
                 "no enabled qBittorrent download client",
             )
         else:
             category_field = spec["category_field"]
             categories = {
-                _clean_text(_row_field(row, category_field, "category"), 80).casefold()
-                for row in qbittorrent
+                _clean_text(
+                    _row_field(entry, category_field, "category"), 80
+                ).casefold()
+                for entry in qbittorrent
             }
             if expected_category in categories:
-                report.add(
-                    "PASS",
+                report(
+                    PASS,
                     f"{label} qBittorrent client",
                     f"enabled with {expected_category} category",
                 )
             else:
-                report.add(
-                    "FAIL",
+                report(
+                    WARN,
                     f"{label} qBittorrent client",
                     f"expected category {expected_category}",
                 )
@@ -237,28 +355,29 @@ def _check_arr(report, kind, client, media_cfg):
             raise MediaError(f"{label} returned invalid download handling")
         handling = bool(completed.get("enableCompletedDownloadHandling"))
         removal = bool(qbittorrent) and all(
-            row.get("removeCompletedDownloads") for row in qbittorrent
+            entry.get("removeCompletedDownloads") for entry in qbittorrent
         )
         if not handling:
-            report.add(
-                "FAIL",
+            report(
+                WARN,
                 f"{label} completed-download handling",
                 "completed-download handling is disabled",
             )
         elif removal:
-            report.add(
-                "PASS",
+            report(
+                PASS,
                 f"{label} completed-download removal",
                 "enabled after import and seed-goal completion",
             )
         elif qbittorrent:
-            report.add(
-                "WARN",
+            report(
+                WARN,
                 f"{label} completed-download removal",
                 "handling is enabled, but Remove Completed Downloads is disabled on qBittorrent",
             )
     except MediaError as e:
-        report.add("FAIL", f"{label} download client", str(e))
+        report(WARN, f"{label} download client", str(e))
+    return True
 
 
 def _check_prowlarr(report, client, media_cfg):
@@ -266,86 +385,103 @@ def _check_prowlarr(report, client, media_cfg):
         return
 
     try:
-        rows = client.get("indexer")
-        if not isinstance(rows, list):
+        entries = client.get("indexer")
+        if not isinstance(entries, list):
             raise MediaError("Prowlarr returned invalid indexers")
         expected_names = media_cfg.get("managedIndexers") or []
         ratio = media_cfg.get("seedRatio")
         minutes = media_cfg.get("seedTimeMinutes")
         by_name = {
-            str(row.get("name", "")).casefold(): row
-            for row in rows
-            if isinstance(row, dict)
+            str(entry.get("name", "")).casefold(): entry
+            for entry in entries
+            if isinstance(entry, dict)
         }
         for name in expected_names:
-            row = by_name.get(str(name).casefold())
-            if row is None or row not in _enabled_rows([row]):
-                report.add("FAIL", f"Prowlarr indexer {name}", "missing or disabled")
+            entry = by_name.get(str(name).casefold())
+            if entry is None or entry not in _enabled_rows([entry]):
+                report(WARN, f"Prowlarr indexer {name}", "missing or disabled")
                 continue
-            actual_ratio = _row_field(row, "torrentBaseSettings.seedRatio", "seedRatio")
-            actual_time = _row_field(row, "torrentBaseSettings.seedTime", "seedTime")
+            actual_ratio = _row_field(
+                entry, "torrentBaseSettings.seedRatio", "seedRatio"
+            )
+            actual_time = _row_field(entry, "torrentBaseSettings.seedTime", "seedTime")
             if _number_matches(actual_ratio, ratio) and _number_matches(
                 actual_time, minutes
             ):
-                report.add(
-                    "PASS",
+                report(
+                    PASS,
                     f"Prowlarr indexer {name}",
                     f"ratio {ratio}, seed time {minutes} minutes",
                 )
             else:
-                report.add(
-                    "FAIL",
+                report(
+                    WARN,
                     f"Prowlarr indexer {name}",
                     f"expected ratio {ratio} and seed time {minutes} minutes",
                 )
         if not expected_names:
-            report.add(
-                "WARN", "Prowlarr managed indexers", "media.managedIndexers is empty"
-            )
+            report(WARN, "Prowlarr managed indexers", "media.managedIndexers is empty")
     except MediaError as e:
-        report.add("FAIL", "Prowlarr indexers", str(e))
+        report(WARN, "Prowlarr indexers", str(e))
 
     try:
-        rows = client.get("applications")
-        if not isinstance(rows, list):
+        entries = client.get("applications")
+        if not isinstance(entries, list):
             raise MediaError("Prowlarr returned invalid applications")
         for wanted in ("radarr", "sonarr"):
             matches = [
-                row
-                for row in rows
-                if isinstance(row, dict)
+                entry
+                for entry in entries
+                if isinstance(entry, dict)
                 and wanted
                 in (
-                    str(row.get("implementation", "")) + " " + str(row.get("name", ""))
+                    str(entry.get("implementation", ""))
+                    + " "
+                    + str(entry.get("name", ""))
                 ).casefold()
             ]
             if not matches:
-                report.add("FAIL", f"Prowlarr {wanted} sync", "application is missing")
+                report(WARN, f"Prowlarr {wanted} sync", "application is missing")
             elif any(
-                "full" in str(row.get("syncLevel", "")).casefold() for row in matches
+                "full" in str(entry.get("syncLevel", "")).casefold()
+                for entry in matches
             ):
-                report.add("PASS", f"Prowlarr {wanted} sync", "Full Sync")
+                report(PASS, f"Prowlarr {wanted} sync", "Full Sync")
             else:
-                report.add(
-                    "FAIL", f"Prowlarr {wanted} sync", "Full Sync is not enabled"
-                )
+                report(WARN, f"Prowlarr {wanted} sync", "Full Sync is not enabled")
     except MediaError as e:
-        report.add("FAIL", "Prowlarr applications", str(e))
+        report(WARN, "Prowlarr applications", str(e))
 
 
-def _check_qbittorrent(report, client, media_cfg):
+def _check_qbittorrent(report, media_cfg, secrets):
+    """qBittorrent's settings, or None when its API did not answer."""
+    try:
+        client = _qbit_from_config(media_cfg, secrets)
+    except MediaConfigurationError as e:
+        report(
+            WARN,
+            "qBittorrent API",
+            str(e),
+            "compare the media block with config.example.json",
+        )
+        return None
     try:
         version = client.version()
         preferences = client.preferences()
         categories = client.categories()
         dht_nodes = int(client.transfer_info().get("dht_nodes", 0) or 0)
     except MediaError as e:
-        report.add("FAIL", "qBittorrent API", str(e))
+        report(
+            WARN,
+            "qBittorrent API",
+            str(e),
+            "start qBittorrent; it runs natively, through Proton",
+        )
         return None
-    report.add("PASS", "qBittorrent API", f"reachable, version {version}")
+    report(PASS, "qBittorrent API", f"reachable, version {version}")
     dead = bool(preferences.get("dht", True)) and dht_nodes == 0
-    report.add(
-        "FAIL" if dead else "PASS",
+    report(
+        WARN if dead else PASS,
         "qBittorrent DHT",
         "0 nodes - the peer sockets are dead; restart qBittorrent"
         if dead
@@ -357,22 +493,22 @@ def _check_qbittorrent(report, client, media_cfg):
         for key in ("current_network_interface", "current_interface_name")
     ]
     if any(value.casefold() == expected_interface.casefold() for value in interfaces):
-        report.add("PASS", "qBittorrent interface", expected_interface)
+        report(PASS, "qBittorrent interface", expected_interface)
     else:
         actual = next((value for value in interfaces if value), "All interfaces")
-        report.add(
-            "FAIL",
+        report(
+            WARN,
             "qBittorrent interface",
             f"expected {expected_interface}; found {actual}",
         )
     address = str(preferences.get("current_interface_address", ""))
-    report.add(
-        "PASS" if not address else "WARN",
+    report(
+        PASS if not address else WARN,
         "qBittorrent optional IP",
         "All addresses" if not address else f"restricted to {address}",
     )
-    report.add(
-        "FAIL" if preferences.get("upnp") else "PASS",
+    report(
+        WARN if preferences.get("upnp") else PASS,
         "qBittorrent UPnP/NAT-PMP",
         "enabled" if preferences.get("upnp") else "disabled",
     )
@@ -380,36 +516,36 @@ def _check_qbittorrent(report, client, media_cfg):
         port = int(preferences.get("listen_port", 0) or 0)
     except (TypeError, ValueError):
         port = 0
-    report.add(
-        "PASS" if 1 <= port <= 65535 else "FAIL",
+    report(
+        PASS if 1 <= port <= 65535 else WARN,
         "qBittorrent listening port",
         str(port or "invalid"),
     )
     action = preferences.get("max_ratio_act")
-    report.add(
-        "PASS" if action == 0 else "FAIL",
+    report(
+        PASS if action == 0 else WARN,
         "qBittorrent share-limit action",
         "Stop" if action == 0 else "must be Stop, never Remove",
     )
     mode = preferences.get("share_limits_mode")
     if mode is None:
-        report.add(
-            "PASS",
+        report(
+            PASS,
             "qBittorrent share-limit mode",
             "legacy either-limit behavior (mode field unavailable)",
         )
     else:
         mode_name = str(mode)
-        report.add(
-            "PASS" if mode_name.casefold() == "matchany" else "FAIL",
+        report(
+            PASS if mode_name.casefold() == "matchany" else WARN,
             "qBittorrent share-limit mode",
             mode_name or "must be MatchAny (either limit)",
         )
     auth_bypass = preferences.get("bypass_local_auth") or preferences.get(
         "bypass_auth_subnet_whitelist_enabled"
     )
-    report.add(
-        "FAIL" if auth_bypass else "PASS",
+    report(
+        WARN if auth_bypass else PASS,
         "qBittorrent Web UI auth",
         "authentication bypass is enabled"
         if auth_bypass
@@ -430,15 +566,15 @@ def _check_qbittorrent(report, client, media_cfg):
         detail = "enabled but does not cover *.exe"
     else:
         detail = ""
-    report.add(
-        "FAIL" if detail else "PASS",
+    report(
+        WARN if detail else PASS,
         "qBittorrent excluded file names",
         detail or f"{len(patterns)} patterns, *.exe among them",
     )
     category_names = {str(name).casefold() for name in categories}
     missing = [name for name in ("radarr", "sonarr") if name not in category_names]
-    report.add(
-        "FAIL" if missing else "PASS",
+    report(
+        WARN if missing else PASS,
         "qBittorrent categories",
         "missing: " + ", ".join(missing)
         if missing
@@ -449,9 +585,9 @@ def _check_qbittorrent(report, client, media_cfg):
 
 def _check_proton_port_sync(report, preferences, now=None):
     try:
-        source = read_proton_port_state(now=now)
+        source = proton.read_proton_port_state(now=now)
     except MediaError as e:
-        report.add("FAIL", "Proton port synchronization", str(e))
+        report(WARN, "Proton port synchronization", str(e))
         return
     state = source["state"]
     if state == "active":
@@ -460,114 +596,119 @@ def _check_proton_port_sync(report, preferences, now=None):
         except (TypeError, ValueError):
             current = 0
         expected = source["port"]
-        level = "PASS" if current == expected else "FAIL"
+        level = PASS if current == expected else WARN
         detail = (
             f"active port {expected} matches qBittorrent"
             if current == expected
             else f"Proton active port {expected}; qBittorrent uses {current or 'invalid'}"
         )
     elif state == "inactive":
-        level, detail = "PASS", f"idle; Proton status is {source['status']}"
+        level, detail = PASS, f"idle; Proton status is {source['status']}"
     elif state == "transitional":
-        level = "WARN"
+        level = WARN
         detail = f"Proton status is {source['status']}; retry after connection settles"
     elif state == "stale":
-        level = "FAIL"
+        level = WARN
         detail = f"latest Proton state is {source['age_s']:.0f} seconds old"
     elif state == "missing":
-        level, detail = "FAIL", f"client log is missing: {source['path']}"
+        level, detail = WARN, f"client log is missing: {source['path']}"
     else:
-        level = "FAIL"
+        level = WARN
         detail = "client log contains no recognized port-forwarding state"
-    report.add(level, "Proton port synchronization", detail)
+    report(level, "Proton port synchronization", detail)
 
 
-def media_doctor(cfg, secrets, now=None):
-    """Read live configuration without changing any service."""
-    report = DoctorReport()
-    media_cfg = cfg.get("media")
-    if not isinstance(media_cfg, dict):
-        report.add("FAIL", "Slopstation media config", "media section is missing")
-        return report.result()
-    report.add(
-        "PASS" if media_cfg.get("enabled") else "FAIL",
-        "Slopstation media config",
-        "enabled" if media_cfg.get("enabled") else "media.enabled is false",
-    )
-
-    media_dir = paths.HOME / "media"
-    try:
-        rows = _compose_services(media_dir)
-        states = {
-            str(row.get("Service", row.get("service", ""))).casefold(): row
-            for row in rows
-        }
-        bad = []
-        for name in (
-            "flaresolverr",
-            "prowlarr",
-            "radarr",
-            "sonarr",
-            "homarr",
-            "glances",
-        ):
-            row = states.get(name)
-            state = str((row or {}).get("State", (row or {}).get("state", "")))
-            health = str((row or {}).get("Health", (row or {}).get("health", "")))
-            if (
-                row is None
-                or state.casefold() != "running"
-                or health.casefold() not in ("", "healthy")
-            ):
-                bad.append(name)
-        report.add(
-            "FAIL" if bad else "PASS",
-            "Docker media containers",
-            "not ready: " + ", ".join(bad)
-            if bad
-            else "FlareSolverr, Prowlarr, Radarr, Sonarr, Homarr, "
-            "and Glances are running",
+def _check_port_reservations(report):
+    """Windows reserves blocks of its dynamic port range for Hyper-V and WSL,
+    and nothing can bind inside one. While that range reaches Proton's
+    forwarded ports, any boot can take qBittorrent's port."""
+    ranges = proton.dynamic_port_ranges()
+    reaching = [
+        f"{protocol.upper()} {first}-{last}"
+        for protocol, (first, last) in sorted(ranges.items())
+        if last >= proton.PROTON_PORT_FLOOR
+    ]
+    hint = "move it below 40000: see 'Proton forwarded port' in media\\README.md"
+    if len(ranges) < 2:
+        report(
+            WARN,
+            "port reservations",
+            "netsh did not report the dynamic port ranges",
+            hint,
         )
-    except MediaError as e:
-        report.add("FAIL", "Docker media containers", str(e))
-
-    clients = {}
-    for name, key, url_key in (
-        ("Radarr", "radarrApiKey", "radarrUrl"),
-        ("Sonarr", "sonarrApiKey", "sonarrUrl"),
-    ):
-        if not config.real_key(secrets.get(key)):
-            report.add("FAIL", f"{name} API", f"{key} is missing")
-            continue
-        try:
-            clients[name] = ArrClient(name, media_cfg.get(url_key, ""), secrets[key])
-        except MediaConfigurationError as e:
-            report.add("FAIL", f"{name} API", str(e))
-    if "Radarr" in clients:
-        _check_arr(report, "movie", clients["Radarr"], media_cfg)
-    if "Sonarr" in clients:
-        _check_arr(report, "series", clients["Sonarr"], media_cfg)
-
-    if config.real_key(secrets.get("prowlarrApiKey")):
-        try:
-            prowlarr = ArrClient(
-                "Prowlarr",
-                media_cfg.get("prowlarrUrl", ""),
-                secrets["prowlarrApiKey"],
-                api_version="v1",
-            )
-            _check_prowlarr(report, prowlarr, media_cfg)
-        except MediaConfigurationError as e:
-            report.add("FAIL", "Prowlarr API", str(e))
+    elif reaching:
+        report(
+            WARN,
+            "port reservations",
+            f"dynamic range {', '.join(reaching)} reaches Proton's forwarded ports",
+            hint,
+        )
     else:
-        report.add("FAIL", "Prowlarr API", "prowlarrApiKey is missing")
-
-    try:
-        qbit_preferences = _check_qbittorrent(
-            report, _qbit_from_config(media_cfg, secrets), media_cfg
+        report(
+            PASS,
+            "port reservations",
+            "dynamic ranges end below Proton's forwarded ports",
         )
-        if media_cfg.get("protonPortSync") and qbit_preferences is not None:
-            _check_proton_port_sync(report, qbit_preferences, now=now)
-    except MediaConfigurationError as e:
-        report.add("FAIL", "qBittorrent API", str(e))
-    return report.result()
+
+
+def _check_monitoring(report, sonarr):
+    """Monitored-and-missing episodes no active operation owns. Sonarr never
+    searches for these, but RSS grabs any NEW upload that matches one - which
+    is how an unrequested release arrives."""
+    if sonarr is None:
+        report(
+            WARN,
+            "media monitoring",
+            "skipped: Sonarr did not answer",
+            "see the Sonarr rows above",
+        )
+        return
+    try:
+        page = sonarr.get(
+            "wanted/missing",
+            {
+                "pageSize": 500,
+                "sortKey": "airDateUtc",
+                "sortDirection": "descending",
+                "monitored": "true",
+                "includeSeries": "true",
+            },
+        )
+        records = page.get("records") if isinstance(page, dict) else None
+        if not isinstance(records, list):
+            raise ValueError("no records in the wanted/missing page")
+    except Exception as e:
+        report(WARN, "media monitoring", f"Sonarr did not answer ({e})")
+        return
+    # ISO-8601 UTC sorts lexicographically, so the cutoff needs no parse.
+    cutoff = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - MONITOR_STALE_DAYS * 86400)
+    )
+    owned = operations.owned_seasons()
+    drift: dict = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        aired = record.get("airDateUtc")
+        if not isinstance(aired, str) or aired >= cutoff:
+            continue  # unaired, or young enough to be in flight
+        scope = owned.get(str(record.get("seriesId")), ())
+        if scope is None or record.get("seasonNumber") in scope:
+            continue
+        title = (record.get("series") or {}).get("title") or "?"
+        drift[title] = drift.get(title, 0) + 1
+    if not drift:
+        report(
+            PASS, "media monitoring", "no stale monitored episodes outside active work"
+        )
+        return
+    listed = ", ".join(
+        f"{title} ({count})"
+        for title, count in sorted(drift.items(), key=lambda kv: -kv[1])[:4]
+    )
+    report(
+        WARN,
+        "media monitoring",
+        f"{sum(drift.values())} episode(s) armed with nobody chasing them: " + listed,
+        "unmonitor the scope you did not ask for; RSS can grab into it",
+    )

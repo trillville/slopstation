@@ -138,10 +138,11 @@ Copy the `media` section from `config.example.json` into `config.json`. Set its
 URLs, roots, profile mappings, qBittorrent username and interface, and managed
 indexers, then set `enabled` to `true`.
 
-Validate the installation:
+Validate the installation with the doctor. Its media rows check the
+containers, the three apps' settings, qBittorrent, and Proton's port:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.media doctor
+.venv\Scripts\slopstation-doctor
 ```
 
 Configure Docker Desktop, Proton, and qBittorrent to start at login. Compose
@@ -191,7 +192,7 @@ release for the first hours after it does.
 Two things stop them, and both are needed:
 
 - qBittorrent's **Excluded file names** (enabled, at least `*.exe`) keeps the
-  program off the media drive. The media doctor has a row for it, because the
+  program off the media drive. The doctor has a row for it, because the
   setting lives only in qBittorrent's own `qBittorrent.ini` and a rebuilt
   client comes back without it.
 - The health monitor blocklists the grab and removes it from the client so the
@@ -259,7 +260,7 @@ do. `netsh int ipv4 show excludedportrange protocol=udp` lists the reservations.
 Start diagnosis with:
 
 ```powershell
-.venv\Scripts\python -m slopstation.agent.media doctor
+.venv\Scripts\slopstation-doctor
 .venv\Scripts\python -m slopstation.agent.operations list --active
 docker compose --project-directory media --env-file media\.env ps
 ```

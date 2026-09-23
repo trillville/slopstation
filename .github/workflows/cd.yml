@@ -62,3 +62,6 @@ jobs:
           & "$env:SLOP_HOME\.venv\Scripts\python.exe" -m slopstation.deploy --sha $env:SHA --wait-minutes $env:WAIT_MINUTES
         env:
           SLOP_HOME: ${{ vars.K15_CHECKOUT }}
+          # The doctor's WARN and FAIL rows also become annotations on the
+          # run. Media rows only ever WARN, so this is where they show.
+          SLOPSTATION_ANNOTATE: "1"

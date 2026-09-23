@@ -1,11 +1,12 @@
 """K15 chain diagnosis: python -m slopstation.doctor
 
 Read-only except one haptic chirp, skipped when the chord listener is running
-(one process owns the Puck). Voice and telemetry rows are WARN-only; only the
-chord chain can FAIL. Exit code = number of FAILs.
+(one process owns the Puck). Voice, media and telemetry rows are WARN-only;
+only the chord chain can FAIL. Exit code = number of FAILs.
 """
 
 import json
+import os
 import pathlib
 import re
 import socket
@@ -17,23 +18,34 @@ import urllib.request
 
 from slopstation import config, events, haptics, paths, sessionlock, supervise
 from slopstation.agent import operations
-from slopstation.agent.media import proton
-from slopstation.agent.media.clients import ArrClient
+from slopstation.agent.media import doctor as media_doctor
 from slopstation.agent.steam import library, store
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
-# An episode aired this long ago, still monitored and still missing, is not
-# in flight: nothing searches for it, so it is armed for an RSS grab forever.
-MONITOR_STALE_DAYS = 7
 _counts = {PASS: 0, WARN: 0, FAIL: 0}
 
 
 def report(level, name, detail, hint=""):
     _counts[level] += 1
-    line = f"[{level}] {name}: {detail}"
     if hint and level != PASS:
-        line += f"  -> {hint}"
-    print(line, flush=True)
+        detail = f"{detail}  -> {hint}"
+    print(f"[{level}] {name}: {detail}", flush=True)
+    # The k15 deploy job sets this: a WARN or FAIL row is then also an
+    # annotation on the run, so a green deploy still shows what was found.
+    if level != PASS and os.environ.get("SLOPSTATION_ANNOTATE"):
+        print(annotation(level, name, detail), flush=True)
+
+
+def annotation(level, name, message):
+    """One row as a GitHub Actions workflow command, escaped the way the runner
+    reads it: %, CR and LF everywhere, and : and , in the title as well."""
+
+    def data(text):
+        return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+    title = data(name).replace(":", "%3A").replace(",", "%2C")
+    kind = "error" if level == FAIL else "warning"
+    return f"::{kind} title={title}::{data(message)}"
 
 
 def check_config():
@@ -552,7 +564,6 @@ def check_voice(cfg):
     check_voice_config(cfg)
     check_steam_session()
     check_media(cfg)
-    check_media_monitoring(cfg)
     check_text(cfg)
     check_remote(cfg)
     check_operations()
@@ -719,177 +730,8 @@ def _tcp_reachable(url, timeout=1):
 
 
 def check_media(cfg):
-    media = cfg.get("media")
-    if not isinstance(media, dict) or not media.get("enabled"):
-        report(PASS, "media", "disabled")
-        return
-    required = (
-        "radarrUrl",
-        "sonarrUrl",
-        "prowlarrUrl",
-        "qbittorrentUrl",
-        "movieRoot",
-        "seriesRoot",
-        "moviePresets",
-        "seriesPresets",
-    )
-    missing = [key for key in required if not media.get(key)]
-    if missing:
-        report(
-            WARN,
-            "media config",
-            f"missing keys: {missing}",
-            "compare the media block with config.example.json",
-        )
-    else:
-        report(PASS, "media config", "topology, roots, and presets present")
-    secrets = config.secrets()
-    absent = [
-        key
-        for key in ("radarrApiKey", "sonarrApiKey")
-        if not config.real_key(secrets.get(key))
-    ]
-    report(
-        WARN if absent else PASS,
-        "media keys",
-        f"missing: {', '.join(absent)}" if absent else "Radarr and Sonarr present",
-        "copy each API key from Settings > General into secrets.json",
-    )
-    reachable, down, unconfigured = [], [], []
-    for name, key in (
-        ("Prowlarr", "prowlarrUrl"),
-        ("Radarr", "radarrUrl"),
-        ("Sonarr", "sonarrUrl"),
-        ("qBittorrent", "qbittorrentUrl"),
-    ):
-        if not media.get(key):
-            unconfigured.append(name)
-            continue
-        try:
-            _tcp_reachable(media[key])
-            reachable.append(name)
-        except Exception:
-            down.append(name)
-    report(
-        WARN if down or unconfigured else PASS,
-        "media services",
-        f"reachable: {', '.join(reachable) or 'none'}"
-        + (f" | unreachable: {', '.join(down)}" if down else "")
-        + (f" | unconfigured: {', '.join(unconfigured)}" if unconfigured else ""),
-        "start media\\Start-Media.ps1 and native qBittorrent",
-    )
-    if media.get("protonPortSync"):
-        check_port_reservations()
-
-
-def check_port_reservations():
-    """Windows reserves blocks of its dynamic port range for Hyper-V and WSL,
-    and nothing can bind inside one. While that range reaches Proton's
-    forwarded ports, any boot can take qBittorrent's port. WARN-only."""
-    ranges = proton.dynamic_port_ranges()
-    reaching = [
-        f"{protocol.upper()} {first}-{last}"
-        for protocol, (first, last) in sorted(ranges.items())
-        if last >= proton.PROTON_PORT_FLOOR
-    ]
-    hint = "move it below 40000: see 'Proton forwarded port' in media\\README.md"
-    if len(ranges) < 2:
-        report(
-            WARN,
-            "port reservations",
-            "netsh did not report the dynamic port ranges",
-            hint,
-        )
-    elif reaching:
-        report(
-            WARN,
-            "port reservations",
-            f"dynamic range {', '.join(reaching)} reaches Proton's forwarded ports",
-            hint,
-        )
-    else:
-        report(
-            PASS,
-            "port reservations",
-            "dynamic ranges end below Proton's forwarded ports",
-        )
-
-
-def check_media_monitoring(cfg):
-    """Monitored-and-missing episodes no active operation owns. Sonarr never
-    searches for these, but RSS grabs any NEW upload that matches one - which
-    is how an unrequested release arrives. WARN-only."""
-    media = cfg.get("media")
-    if (
-        not isinstance(media, dict)
-        or not media.get("enabled")
-        or not media.get("sonarrUrl")
-    ):
-        report(PASS, "media monitoring", "disabled")
-        return
-    key = config.secrets().get("sonarrApiKey")
-    if not config.real_key(key):
-        report(
-            WARN,
-            "media monitoring",
-            "no Sonarr API key",
-            "copy it from Sonarr Settings > General into secrets.json",
-        )
-        return
-    try:
-        page = ArrClient("Sonarr", media["sonarrUrl"], key).get(
-            "wanted/missing",
-            {
-                "pageSize": 500,
-                "sortKey": "airDateUtc",
-                "sortDirection": "descending",
-                "monitored": "true",
-                "includeSeries": "true",
-            },
-        )
-        records = page.get("records") if isinstance(page, dict) else None
-        if not isinstance(records, list):
-            raise ValueError("no records in the wanted/missing page")
-    except Exception as e:
-        report(
-            WARN,
-            "media monitoring",
-            f"Sonarr did not answer ({e})",
-            "check the media services row above",
-        )
-        return
-    # ISO-8601 UTC sorts lexicographically, so the cutoff needs no parse.
-    cutoff = time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - MONITOR_STALE_DAYS * 86400)
-    )
-    owned = operations.owned_seasons()
-    drift: dict = {}
-    for row in records:
-        if not isinstance(row, dict):
-            continue
-        aired = row.get("airDateUtc")
-        if not isinstance(aired, str) or aired >= cutoff:
-            continue  # unaired, or young enough to be in flight
-        scope = owned.get(str(row.get("seriesId")), ())
-        if scope is None or row.get("seasonNumber") in scope:
-            continue
-        title = (row.get("series") or {}).get("title") or "?"
-        drift[title] = drift.get(title, 0) + 1
-    if not drift:
-        report(
-            PASS, "media monitoring", "no stale monitored episodes outside active work"
-        )
-        return
-    listed = ", ".join(
-        f"{title} ({count})"
-        for title, count in sorted(drift.items(), key=lambda kv: -kv[1])[:4]
-    )
-    report(
-        WARN,
-        "media monitoring",
-        f"{sum(drift.values())} episode(s) armed with nobody chasing them: " + listed,
-        "unmonitor the scope you did not ask for; RSS can grab into it",
-    )
+    """The media stack's rows, WARN-only: agent/media/doctor.py owns them."""
+    media_doctor.check(cfg, config.secrets(), report)
 
 
 def check_text(cfg):

@@ -1,4 +1,5 @@
-"""python -m slopstation.agent.media: check the media stack and Proton's port."""
+"""python -m slopstation.agent.media: read Proton's forwarded port and hold
+qBittorrent to it. The stack's checks are the doctor's media rows."""
 
 import argparse
 import json
@@ -9,7 +10,6 @@ from slopstation.agent.media.clients import (
     MediaError,
     _qbit_from_config,
 )
-from slopstation.agent.media.doctor import media_doctor
 from slopstation.agent.media.proton import (
     ProtonPortMonitor,
     read_proton_port_state,
@@ -18,11 +18,10 @@ from slopstation.agent.media.proton import (
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Check the media stack and Proton's port"
+        description="Read Proton's forwarded port and set qBittorrent's"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("doctor", "proton-port"):
-        sub.add_parser(name)
+    sub.add_parser("proton-port")
     proton_sync = sub.add_parser("sync-proton-port")
     proton_sync.add_argument("--execute", action="store_true")
     qbit_port = sub.add_parser("set-qbit-port")
@@ -34,11 +33,6 @@ def main(argv=None):
     cfg = config.current()
     secrets = config.secrets()
     try:
-        if args.command == "doctor":
-            result = media_doctor(cfg, secrets)
-            for check in result["checks"]:
-                print(f"{check['level']:<5} {check['name']} - {check['detail']}")
-            return 0 if result["ok"] else 1
         if args.command == "proton-port":
             result = read_proton_port_state()
             print(json.dumps(result, indent=2))
