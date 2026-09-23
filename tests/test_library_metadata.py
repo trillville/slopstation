@@ -60,4 +60,3 @@ def test_query_terms_ranks_the_vocabulary_by_frequency():
     terms = library.query_terms()
     assert terms[0] == "mechs", terms  # 3 games carry it
     assert {"action", "rpg", "roguelike"} <= set(terms), terms
-    assert library.query_terms(limit=1) == ["mechs"]

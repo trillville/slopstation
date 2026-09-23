@@ -131,7 +131,7 @@ def query_keyterms():
     """The words used to ask ABOUT games, in the form Flux emits them: every
     term goes through spoken_form, never SteamSpy's punctuation ('rogue-like',
     'souls-like', 'co-op')."""
-    spoken = dict.fromkeys(titles.spoken_form(x) for x in library.query_terms(None))
+    spoken = dict.fromkeys(titles.spoken_form(x) for x in library.query_terms())
     return [t for t in spoken if t and t not in GENERIC_TERMS][:QUERY_TERM_SLOTS]
 
 
@@ -155,7 +155,7 @@ HOUSE_TERMS = (
 )
 
 
-def stt_keyterms(voice, wake_phrase, catalog=None):
+def stt_keyterms(voice, wake_phrase, index=None):
     """Everything Flux is told to expect, in the form it will hear it:
     titles, collection names, tag/genre words.
 
@@ -163,12 +163,15 @@ def stt_keyterms(voice, wake_phrase, catalog=None):
     first because they carry every observed launch while collection names and
     query words carry none. Truncation is logged out loud - a silently short
     list reads as full coverage."""
-    catalog = catalog or library.Catalog.load()
+    if index is None:
+        index = library.load()
     terms = [wake_phrase, *HOUSE_TERMS]
-    for name in load_titles(voice["keytermCount"], catalog.installed):
+    for name in load_titles(voice["keytermCount"], index.get("installed", [])):
         terms += titles.keyterm_forms(name)
     terms += [
-        titles.spoken_form(c["name"]) for c in catalog.collections if c.get("name")
+        titles.spoken_form(c["name"])
+        for c in index.get("collections", [])
+        if c.get("name")
     ]
     terms += query_keyterms()
 

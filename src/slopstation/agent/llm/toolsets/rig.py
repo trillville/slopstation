@@ -6,7 +6,7 @@ import urllib.parse
 
 from slopstation import gamepc, sessionlock
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.tools import library
+from slopstation.agent.tools import library, titles
 
 STORE_SEARCH = "https://store.steampowered.com/search/?term="
 
@@ -280,10 +280,6 @@ SPECS = [
         keywords=("install", "download game", "not installed", "queue download"),
         busy="installing {game}",
     ),
-]
-
-
-SPECS += [
     ToolSpec(
         "tv_status",
         TV_STATUS,
@@ -441,32 +437,29 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "that game is already installed"}
         if dry := ctx.preview(f"start the download for appid {appid}"):
             return dry
-        if steam is not None and steam.available():
-            try:
-                r = steam.install(appid)
-                if r.get("ok"):
-                    if operations is not None:
-                        owned = library.load().get("owned", {}).get(str(appid), {})
-                        title = owned.get("name") or f"app {appid}"
-                        try:
-                            operation = operations.track_steam_install(
-                                appid,
-                                title,
-                                turn=ctx.turn(),
-                                verified=bool(r.get("verified")),
-                            )
-                            return {**r, "operation_id": operation["id"]}
-                        except Exception as e:
-                            # Submission already happened; tracking must not
-                            # turn a successful external action into a refusal.
-                            log.error("operation_track_failed", appid=appid, err=str(e))
-                    return r
-                log.warn("install_fallback", appid=appid, why=r.get("error"))
-            except Exception as e:
-                # available() proves the token is PRESENT, not that it still
-                # mints (a web-audience token never does). Fall
-                # through to the path that needs no credential.
-                log.error("install_error", appid=appid, err=str(e))
+        if steam is not None:
+            # install() never raises: a token that no longer mints (a
+            # web-audience token never does) comes back not ok, and falls
+            # through to the path that needs no credential.
+            r = steam.install(appid)
+            if r.get("ok"):
+                if operations is not None:
+                    owned = library.load().get("owned", {}).get(str(appid), {})
+                    title = owned.get("name") or f"app {appid}"
+                    try:
+                        operation = operations.track_steam_install(
+                            appid,
+                            title,
+                            turn=ctx.turn(),
+                            verified=bool(r.get("verified")),
+                        )
+                        return {**r, "operation_id": operation["id"]}
+                    except Exception as e:
+                        # Submission already happened; tracking must not
+                        # turn a successful external action into a refusal.
+                        log.error("operation_track_failed", appid=appid, err=str(e))
+                return r
+            log.warn("install_fallback", appid=appid, why=r.get("error"))
         # With no session, nav starts one and the page comes up with it; the
         # receipt has to say so rather than claim the page is on the TV now.
         starting = not sessionlock.active()
@@ -514,10 +507,8 @@ def impls(ctx: ToolContext):
             cid = None
             want = str(args.get("collection") or "").strip()
             if want:
-                from slopstation.agent.tools import titles
-
                 resolve = titles.build_collection_resolver(
-                    (voice or {}).get("fuzzyTitleThreshold", 87)
+                    (voice or {}).get("fuzzyTitleThreshold", 87), rows
                 )
                 cid, _ = resolve(want) if resolve else (None, None)
             if cid is None:
@@ -725,7 +716,7 @@ def impls(ctx: ToolContext):
             out["steam_drives"] = list(drives.values())
         except Exception as e:
             out["steam_drives_error"] = str(e)
-        if steam is not None and steam.available():
+        if steam is not None:
             try:
                 out["steam_online"] = steam.client_online()
             except Exception as e:

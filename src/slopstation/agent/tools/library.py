@@ -8,8 +8,6 @@ is running.
 CLI:
     python -m slopstation.agent.tools.library sync
     python -m slopstation.agent.tools.library refresh [--owned] [--meta [N]]
-    python -m slopstation.agent.tools.library show
-    python -m slopstation.agent.tools.library catalog
 """
 
 from __future__ import annotations
@@ -75,18 +73,6 @@ def installed_name(appid: int) -> str | None:
     return None
 
 
-class Catalog:
-    """A consistent library snapshot for one voice session."""
-
-    def __init__(self, index: dict) -> None:
-        self.installed = index.get("installed", [])
-        self.collections = index.get("collections", [])
-
-    @classmethod
-    def load(cls) -> Catalog:
-        return cls(load())
-
-
 def save(index: dict) -> None:
     statefile.write(library_file(), index)
 
@@ -105,17 +91,13 @@ def refresh() -> int:
     return 0
 
 
-def fetch_collections_ssh() -> list[dict]:
-    """Big Picture collections as [{name, id}]. Needs the PC awake."""
-    from slopstation import gamepc
-
-    return parse_games_json(gamepc.collections())
-
-
 def refresh_collections() -> int:
-    """Refresh collection names and IDs when the gaming PC is reachable."""
+    """Refresh the Big Picture collections, [{name, id}], when the gaming PC
+    is reachable."""
     try:
-        rows = fetch_collections_ssh()
+        from slopstation import gamepc
+
+        rows = parse_games_json(gamepc.collections())
     except Exception as e:
         log.warn("sync_skipped", layer="collections", err=str(e))
         return 1
@@ -321,14 +303,14 @@ def periodic_sync():
     return tick
 
 
-def query_terms(limit: int | None = 30) -> list[str]:
+def query_terms() -> list[str]:
     """Return tags and genres ranked by frequency."""
     counts: dict[str, int] = {}
     for m in load_meta().values():
         for term in (m.get("tags") or []) + (m.get("genres") or []):
             t = term.lower()
             counts[t] = counts.get(t, 0) + 1
-    return sorted(counts, key=lambda t: -counts[t])[:limit]
+    return sorted(counts, key=lambda t: -counts[t])
 
 
 def catalog_lines() -> list[str]:
@@ -337,17 +319,12 @@ def catalog_lines() -> list[str]:
     index = load()
     meta = load_meta()
     owned = {k: v for k, v in index.get("owned", {}).items() if int(k) not in NOT_GAMES}
-    # Map installed app IDs to their last update time.
-    installed_at = {
-        r["appid"]: r.get("updated", 0)
-        for r in index.get("installed", [])
-        if r["appid"] not in NOT_GAMES
-    }
-    rows = {
-        r["appid"]: r["name"]
-        for r in index.get("installed", [])
-        if r["appid"] not in NOT_GAMES
-    }
+    # Installed app IDs to their name and their last update time.
+    rows, installed_at = {}, {}
+    for r in index.get("installed", []):
+        if r["appid"] not in NOT_GAMES:
+            rows[r["appid"]] = r["name"]
+            installed_at[r["appid"]] = r.get("updated", 0)
     for appid, o in owned.items():
         rows.setdefault(int(appid), o.get("name") or f"app {appid}")
     # Playtest/beta stubs have no metadata and pollute recommendations.

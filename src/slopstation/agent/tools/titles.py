@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from slopstation.agent.tools import library
-
 _ROMAN = {
     "ii": "2",
     "iii": "3",
@@ -52,20 +50,11 @@ def _nosub(title: str) -> tuple[str, str]:
     return nosub, re.sub(r"\s+\d+$", "", nosub).strip()
 
 
-def variants(title: str) -> list[str]:
-    """Spoken-matchable forms of one raw title, most-specific first."""
-    out: list[str] = []
-    for v in (spoken_form(title), *_nosub(title)):
-        if v and v not in out:
-            out.append(v)
-    return out
-
-
 def keyterm_forms(title: str) -> list[str]:
     """STT keyterms for one title, most-specific first.
 
     Matched against what Flux EMITS, so spoken_form, not Steam's raw string
-    (which cost 11 of 12 launches). Unlike variants(), must cover the short
+    (which cost 11 of 12 launches). Unlike variant_map, must cover the short
     name a person says: a lone digit mid-title ends the name proper ('armored
     core 6 fires of rubicon' -> 'armored core 6'). One digit only, and the
     trailing-number strip is skipped when what remains still ends in a digit -
@@ -99,8 +88,8 @@ def variant_map(titles: list[str]) -> dict[str, str]:
             out[full] = t
     derived_claims: dict[str, set[str]] = {}
     for t in titles:
-        for v in variants(t)[1:]:
-            if v not in out:
+        for v in _nosub(t):
+            if v and v not in out:
                 derived_claims.setdefault(v, set()).add(t)
     for v, owners in derived_claims.items():
         if len(owners) == 1:
@@ -142,23 +131,17 @@ def _resolver_from(
     return resolve
 
 
-def build_resolver(
-    threshold: float, rows: list | None = None
-) -> Callable[[str], tuple] | None:
+def build_resolver(threshold: float, rows: list) -> Callable[[str], tuple] | None:
     """Build a spoken-title resolver for installed games."""
-    if rows is None:
-        rows = library.load().get("installed", [])
     return _resolver_from(
         {r["name"]: r["appid"] for r in rows if r.get("name")}, threshold
     )
 
 
 def build_collection_resolver(
-    threshold: float, rows: list | None = None
+    threshold: float, rows: list
 ) -> Callable[[str], tuple] | None:
     """Build a spoken-name resolver for Big Picture collections."""
-    if rows is None:
-        rows = library.load().get("collections", [])
     return _resolver_from(
         {r["name"]: r["id"] for r in rows if r.get("name") and r.get("id")}, threshold
     )
