@@ -597,6 +597,9 @@ def check_voice_keys():
     )
 
 
+WAKE_MODELS = pathlib.Path(__file__).parent / "agent" / "speech" / "models"
+
+
 def check_venv(cfg):
     if not supervise.SENTINEL.exists():
         report(
@@ -609,7 +612,7 @@ def check_venv(cfg):
     report(PASS, "venv", "bootstrapped (deps-ok sentinel present)")
     model = cfg["voice"].get("wakeModel", "")
     # Same resolution order as audio.py _resolve_model.
-    vendored = pathlib.Path(__file__).parent / "agent" / "models" / f"{model}.onnx"
+    vendored = WAKE_MODELS / f"{model}.onnx"
     pretrained = (
         pathlib.Path(
             sys.prefix, "Lib", "site-packages", "openwakeword", "resources", "models"
