@@ -118,19 +118,15 @@ def setup(cfg, log):
     """Configure Sentry and return whether traces are enabled."""
     global _on
     _on = False
-    try:
-        if not config.real_key(cfg.get("sentryDsn")):
-            log(
-                "lane_disabled",
-                what="sentry",
-                reason="sentryDsn not set in config.json",
-            )
-            return False
-        dsn = cfg["sentryDsn"]
-        return _trace(dsn, log) if _init(dsn, log) else False
-    except Exception as e:
-        log.error("sentry_setup_failed", err=repr(e))
+    if not config.real_key(cfg.get("sentryDsn")):
+        log(
+            "lane_disabled",
+            what="sentry",
+            reason="sentryDsn not set in config.json",
+        )
         return False
+    dsn = cfg["sentryDsn"]
+    return _trace(dsn, log) if _init(dsn, log) else False
 
 
 def capture(exc):
@@ -143,13 +139,12 @@ def capture(exc):
         pass
 
 
-def span_attributes(session=None, turn=None):
+def span_attributes():
     """Attributes for the conversation (root) span - the only one pipecat
     applies them to, and the only place its API takes ours. genai stamps the
     gen_ai spans underneath from the ids session_trace pinned."""
     ctx = events.current()
-    session = session or ctx.get("session")
-    turn = turn or ctx.get("turn")
+    session, turn = ctx.get("session"), ctx.get("turn")
     attrs = {
         "user.id": events.HOST,
         "env": events.ENV,
@@ -203,12 +198,6 @@ def session_trace():
             otel_context.detach(otel_token)
         except Exception:
             pass
-
-
-def set_turn(turn):
-    """Point the next spans at this utterance. Called where the turn id is
-    born; no-ops harmlessly when tracing is off."""
-    genai.set_turn(turn)
 
 
 def conversation_id():

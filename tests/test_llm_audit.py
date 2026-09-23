@@ -125,29 +125,16 @@ def test_only_done_counts_and_only_search_items():
                     types.SimpleNamespace(type="function_call", name="launch_game"),
                 ),
                 ev("response.output_item.done", types.SimpleNamespace(type="message")),
+                # A new search family member is recorded, not silently dropped.
+                ev("response.output_item.done", search_item("f", "file_search_call")),
             ]
         )
     )
     log = CapturingLog("audit")
     llm_audit.install(svc, log)
     drain(svc, stream=True)
-    hits = [r for r in log.records if r["event"] == "web_search"]
-    assert len(hits) == 1, f"expected one record, got {hits}"
-
-
-def test_a_new_search_family_member_is_recorded():
-    # A new search family member must be recorded, not silently dropped.
-    svc = FakeService(
-        FakeStream(
-            [ev("response.output_item.done", search_item("f", kind="file_search_call"))]
-        )
-    )
-    log = CapturingLog("audit")
-    llm_audit.install(svc, log)
-    drain(svc, stream=True)
-    assert [r["kind"] for r in log.records if r["event"] == "web_search"] == [
-        "file_search_call"
-    ]
+    hits = [r["kind"] for r in log.records if r["event"] == "web_search"]
+    assert hits == ["web_search_call", "file_search_call"], hits
 
 
 def test_the_model_is_told_on_the_next_turn(turn):

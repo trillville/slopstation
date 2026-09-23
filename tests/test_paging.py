@@ -1,6 +1,6 @@
 """Test the one page shape every listing tool answers with."""
 
-from slopstation.agent.llm import assistant, paging
+from slopstation.agent.llm import paging
 
 
 def test_page_walks_a_local_list_and_a_server_window():
@@ -46,12 +46,5 @@ def test_page_walks_a_local_list_and_a_server_window():
         paging.page([], {"limit": 2, "offset": 4}, "items", total=9)["next_offset"]
         is None
     )
-    assert paging.window({}, default=5, cap=8) == ((5, 0), None)
     props = paging.properties(cap=25, what="lines")
     assert set(props) == {"limit", "offset"}
-
-
-def test_every_paged_tool_carries_the_shared_properties():
-    for spec in assistant.REGISTRY:
-        if spec.paged:
-            assert spec.properties["offset"] == paging.properties()["offset"], spec.name

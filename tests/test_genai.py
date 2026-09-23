@@ -77,14 +77,6 @@ def test_never_clobbers():
     assert "gen_ai.input.messages" not in add
 
 
-def test_span_name_carries_the_model():
-    # Pipecat names every LLM span "llm", which collapses every model into one
-    # dashboard row.
-    assert genai.span_name(PIPECAT_LLM) == "chat claude-haiku-4-5"
-    assert genai.span_name({"gen_ai.operation.name": "stt"}) is None
-    assert genai.span_name({"gen_ai.operation.name": "chat"}) is None
-
-
 def test_conversation_stamp_lifetimes():
     # Pinned rather than read from events.current(): the reader is a batch
     # export thread with none of the calling context.
@@ -180,7 +172,7 @@ def test_end_to_end_through_a_real_provider(memory_exporter):
         with sentry.session_trace() as trace_id:
             assert events.current()["trace"] == trace_id
             # As grammar_gate does when an utterance arrives.
-            sentry.set_turn("9f2c1a")
+            genai.set_turn("9f2c1a")
 
             @sentry.agent("assistant")
             def turn():

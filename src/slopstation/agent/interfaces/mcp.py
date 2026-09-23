@@ -5,11 +5,9 @@ import json
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from slopstation import config
+from slopstation import config, text_client
 from slopstation.agent.llm.registry import AREAS
 
 MAX_BODY = 64 * 1024
@@ -73,7 +71,7 @@ class RemoteApplication:
     text interface owns sessions, tools, and the model."""
 
     def __init__(self, url, token, log):
-        self.url = url.rstrip("/") + "/v1/chat"
+        self.url = url
         self.token = token
         self.log = log
         self.lock = threading.Lock()
@@ -108,32 +106,10 @@ class RemoteApplication:
             return False
 
     def ask(self, message, session=None):
-        payload = {"message": message}
-        if session:
-            payload["session"] = session
-        request = urllib.request.Request(
-            self.url,
-            data=json.dumps(payload).encode("utf-8"),
-            method="POST",
-            headers={
-                "Authorization": "Bearer " + self.token,
-                "Content-Type": "application/json",
-            },
-        )
         started = time.monotonic()
-        try:
-            with urllib.request.urlopen(request, timeout=INNER_TIMEOUT_S) as response:
-                result = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            try:
-                detail = json.loads(e.read().decode("utf-8")).get("error")
-            except (ValueError, UnicodeDecodeError):
-                detail = f"HTTP {e.code}"
-            raise RuntimeError(str(detail)) from e
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-            raise RuntimeError("could not reach the text interface") from e
-        if not isinstance(result, dict) or not result.get("ok"):
-            raise RuntimeError("assistant request failed")
+        result = text_client.ask(
+            self.url, self.token, message, session, timeout=INNER_TIMEOUT_S
+        )
         session_id = str(result.get("session", ""))
         self.log(
             "remote_request",
@@ -306,7 +282,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
             return
         try:
             message = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        except ValueError:
             self._json(200, _error(None, -32700, "parse error"))
             return
         if isinstance(message, list):

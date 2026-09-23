@@ -40,7 +40,7 @@ class ConfirmGate:
 
     def confirmed(self, scope: tuple, turn: str | None) -> bool:
         self._prune()
-        asked_turn, asked_at = self._pending.get(scope, (None, 0.0))
+        asked_turn = self._pending.get(scope, (None, 0.0))[0]
         if asked_turn is None or asked_turn == turn or turn is None:
             self._pending[scope] = (turn, self._now())
             return False
@@ -49,7 +49,3 @@ class ConfirmGate:
     def done(self, scope: tuple) -> None:
         """The action succeeded: the ask is spent."""
         self._pending.pop(scope, None)
-
-    def pending(self, scope: tuple) -> bool:
-        self._prune()
-        return scope in self._pending

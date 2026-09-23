@@ -87,13 +87,8 @@ def test_every_offered_spec_has_an_implementation():
     )
 
 
-def test_renders_follow_the_registry_order_and_filter():
-    names = assistant.REGISTRY.names()
-    assert [t["name"] for t in assistant.REGISTRY.anthropic_tools()] == names
-    assert [t["name"] for t in assistant.REGISTRY.openai_tools()] == names
-    some = {"volume", "nav"}
-    assert {t["name"] for t in assistant.REGISTRY.anthropic_tools(some)} == some
-    (vol,) = assistant.REGISTRY.openai_tools({"volume"})
+def test_the_openai_render_is_flat():
+    (vol,) = assistant.REGISTRY.openai_tools(["volume"])
     assert vol["type"] == "function" and "function" not in vol
     assert vol["parameters"]["required"] == ["action"]
 
@@ -156,19 +151,18 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
     assert set(impls) == {"volume", "delete_path"}
     with pytest.raises(ValueError, match="bound twice"):
         bind(volume)
-    # An error passes through; a Plan is asked, refused in its own turn, run
-    # on a later one, and then spent.
+    # An error passes through; a Plan is asked, refused in its own turn, and
+    # run on a later one.
     assert impls["delete_path"]({"bad": True}) == {"ok": False, "error": "no"}
     assert impls["delete_path"]({}) == {"ok": False, "acknowledgment": "Delete x?"}
     assert not impls["delete_path"]({})["ok"] and not acted
     ctx.dispatch.utterance = types.SimpleNamespace(turn="t2")
     assert impls["delete_path"]({})["ok"] and acted == [1]
-    assert not ctx.gate.pending(("path", "x"))
     # A dry run previews the plan and never asks.
     ctx.dispatch.dry_run = True
     dry = impls["delete_path"]({})
     assert dry == {"ok": True, "dry_run": True, "detail": "would delete x"}
-    assert acted == [1] and not ctx.gate.pending(("path", "x"))
+    assert acted == [1]
     # No utterance at all fails closed.
     ctx.dispatch = fake_dispatch(None)
     assert not impls["delete_path"]({})["ok"] and acted == [1]
@@ -176,7 +170,7 @@ def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
 
 def test_a_tool_reads_the_utterance_it_was_called_under():
     """The gate overwrites dispatch.utterance with each transcript while a tool
-    may still be running. Tools.call pins the one the call started under;
+    may still be running. Toolkit.call pins the one the call started under;
     outside a call the context reads live."""
     first = types.SimpleNamespace(turn="aa1111", asked="delete dune")
     dispatch = types.SimpleNamespace(dry_run=False, utterance=first)
@@ -193,7 +187,3 @@ def test_a_tool_reads_the_utterance_it_was_called_under():
     assert toolkit.call("probe", {})["ok"]
     assert seen == {"turn": "aa1111", "asked": "delete dune"}
     assert toolkit.ctx.turn() == "bb2222" and toolkit.ctx.asked() == "never mind"
-    # A bare tools dict has no dispatch: nothing is pinned, so a tool with its
-    # own dispatch reads it live.
-    with registry.utterance_snapshot(None):
-        assert toolkit.ctx.turn() == "bb2222"

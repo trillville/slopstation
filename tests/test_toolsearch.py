@@ -84,27 +84,27 @@ def toolkit(log):
 def test_every_tool_is_found_by_its_own_summary_and_its_ask(toolkit):
     for spec in assistant.REGISTRY:
         summary = toolsearch.summary(spec)
-        hits = [s.name for s, _ in toolsearch.search(toolkit.registry, summary)]
+        hits = [s.name for s, _ in toolsearch.search(toolkit.registry, summary, set())]
         assert spec.name in hits, (
             f"{spec.name} not in top {toolsearch.TOP_N} for {summary!r}"
         )
     searchable = {s.name for s in assistant.REGISTRY if not s.default}
     assert set(ASKS) == searchable, "every searchable tool needs an ask in ASKS"
     for name, ask in ASKS.items():
-        hits = [s.name for s, _ in toolsearch.search(toolkit.registry, ask)]
+        hits = [s.name for s, _ in toolsearch.search(toolkit.registry, ask, set())]
         assert name in hits, f"{name} not found for {ask!r}: got {hits}"
 
 
 def test_search_is_deterministic_excludes_loaded_and_has_a_floor(toolkit):
-    a = toolsearch.search(toolkit.registry, "volume louder")
-    b = toolsearch.search(toolkit.registry, "volume louder")
+    a = toolsearch.search(toolkit.registry, "volume louder", set())
+    b = toolsearch.search(toolkit.registry, "volume louder", set())
     assert [s.name for s, _ in a] == [s.name for s, _ in b]
     assert a[0][0].name == "volume"
     assert "volume" not in {
         s.name for s, _ in toolsearch.search(toolkit.registry, "volume", {"volume"})
     }
-    assert toolsearch.search(toolkit.registry, "the of and") == []
-    assert toolsearch.search(toolkit.registry, "qzxv plonk") == []
+    assert toolsearch.search(toolkit.registry, "the of and", set()) == []
+    assert toolsearch.search(toolkit.registry, "qzxv plonk", set()) == []
 
 
 def test_find_tools_loads_matches_and_lists_areas_on_a_miss(toolkit, log):

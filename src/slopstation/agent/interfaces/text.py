@@ -50,7 +50,6 @@ class TextApplication:
     def __init__(self, services):
         self.services = services  # builds each session's tools; answers /health
         self.cfg, self.secrets, self.log = services.cfg, services.secrets, services.log
-        self.dry_run = services.dry_run
         self.voice = self.cfg["voice"]
         self.provider = self.voice["assistantProvider"]
         self.system_text = None  # built with the first session's offered set
@@ -119,7 +118,7 @@ class TextApplication:
             # Copied under the lock: a concurrent turn on this session appends
             # to the same list. The MCP adapter forwards to here, so its turns
             # trace too - remote_request carries the same turn id.
-            messages = list(getattr(session["backend"], "messages", ()))
+            messages = list(session["backend"].messages)
         finally:
             session["lock"].release()
         self.log(
@@ -189,7 +188,7 @@ class TextHandler(BaseHTTPRequestHandler):
             session_id = str(value.get("session") or uuid.uuid4().hex)
             result = self.server.app.turn(session_id, value.get("message", ""))
             self._json(200, result)
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
+        except ValueError as e:
             self._json(400, {"ok": False, "error": str(e)})
         except SessionBusy as e:
             # 503 with the reason: mcp.py surfaces an HTTP error's
