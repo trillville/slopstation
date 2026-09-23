@@ -28,11 +28,11 @@ class QbittorrentAuthError(MediaError):
     pass
 
 
-def _clean_text(value, limit=160):
+def clean_text(value, limit=160):
     return "".join(c for c in str(value or "").strip() if c.isprintable())[:limit]
 
 
-def _parse_time(value):
+def parse_time(value):
     """An ISO 8601 timestamp as a datetime, or None."""
     try:
         return datetime.datetime.fromisoformat(str(value))
@@ -65,7 +65,7 @@ KINDS = {
 }
 
 
-def _kind(kind):
+def kind_spec(kind):
     try:
         return KINDS[kind]
     except KeyError:
@@ -437,7 +437,7 @@ class QbittorrentClient:
         self._call("POST", "app/shutdown")
 
 
-def _qbit_from_config(media_cfg, secrets):
+def qbit_from_config(media_cfg, secrets):
     return QbittorrentClient(
         media_cfg.get("qbittorrentUrl", ""),
         media_cfg.get("qbittorrentUsername", ""),

@@ -9,7 +9,7 @@ import datetime
 import subprocess
 import time
 
-from slopstation.agent.media.clients import MediaError, _clean_text
+from slopstation.agent.media.clients import MediaError, clean_text
 from slopstation.agent.media.doctor import compose_command
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
@@ -37,7 +37,7 @@ def image_version(client):
     """The running image's version, e.g. 6.3.0.10514-ls314. It is also the
     image tag to pin to when rolling back."""
     status = _status(client)
-    return _clean_text(status.get("packageVersion") or status.get("version"), 40)
+    return clean_text(status.get("packageVersion") or status.get("version"), 40)
 
 
 def available_update(client):
@@ -53,9 +53,9 @@ def available_update(client):
     if latest is None or latest.get("installed"):
         return None
     return {
-        "installed": _clean_text(_status(client).get("version"), 40),
-        "latest": _clean_text(latest.get("version"), 40),
-        "released": _clean_text(latest.get("releaseDate"), 10),
+        "installed": clean_text(_status(client).get("version"), 40),
+        "latest": clean_text(latest.get("version"), 40),
+        "released": clean_text(latest.get("releaseDate"), 10),
     }
 
 
@@ -71,7 +71,7 @@ def _compose(run, media_dir, *args):
     except (OSError, subprocess.TimeoutExpired) as e:
         raise MediaError(f"docker compose {args[0]} failed: {e}") from e
     if done.returncode:
-        raise MediaError(_clean_text(done.stderr) or f"docker compose {args[0]} failed")
+        raise MediaError(clean_text(done.stderr) or f"docker compose {args[0]} failed")
 
 
 def update_app(
@@ -137,7 +137,7 @@ class MediaUpdateMonitor(Monitor):
                 # A check before any update did not answer, so nothing was
                 # tried. An app that is down is the health watch's to report.
                 self.log.warn(
-                    "media_update_skipped", app=client.name, err=_clean_text(e)
+                    "media_update_skipped", app=client.name, err=clean_text(e)
                 )
 
     def _update(self, client):
@@ -158,7 +158,7 @@ class MediaUpdateMonitor(Monitor):
         try:
             result = self.update(client, self.media_dir)
         except MediaError as e:
-            self.log.error("media_update_failed", app=client.name, err=_clean_text(e))
+            self.log.error("media_update_failed", app=client.name, err=clean_text(e))
             return
         # The same image twice: linuxserver has not built the release yet,
         # and tomorrow night tries again.
@@ -175,6 +175,6 @@ class MediaUpdateMonitor(Monitor):
         records = page.get("records") if isinstance(page, dict) else None
         return any(
             isinstance(row, dict)
-            and _clean_text(row.get("trackedDownloadState"), 30).lower() in IMPORTING
+            and clean_text(row.get("trackedDownloadState"), 30).lower() in IMPORTING
             for row in records or ()
         )

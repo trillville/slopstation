@@ -12,8 +12,8 @@ from typing import Any
 from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
-    _clean_text,
-    _parse_time,
+    clean_text,
+    parse_time,
 )
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
@@ -119,7 +119,7 @@ def read_proton_port_state(path=None, now=None):
         except OSError as e:
             raise MediaError("Proton client log is unreadable") from e
         for match in PROTON_STATUS_RE.finditer(text):
-            observed = _parse_time(match.group("timestamp"))
+            observed = parse_time(match.group("timestamp"))
             if observed is None or (latest and observed < latest["observed"]):
                 continue
             port_match = PROTON_PORT_RE.search(match.group("detail"))
@@ -262,7 +262,7 @@ class ProtonPortMonitor(Monitor):
                 raise MediaError("DHT is still empty after a restart")
         except MediaError as e:
             step = "rebind" if self._step == 1 else "restart"
-            self.log.error("qbit_heal_failed", step=step, err=_clean_text(e))
+            self.log.error("qbit_heal_failed", step=step, err=clean_text(e))
         return nodes
 
     def _recovered(self, nodes):
@@ -315,6 +315,6 @@ class ProtonPortMonitor(Monitor):
             self.reconcile_once()
             self._failures.cleared("qbittorrent")
         except Exception as e:
-            detail = _clean_text(e)
+            detail = clean_text(e)
             if self._failures.changed("qbittorrent", detail):
                 self.log.error("proton_port_sync_failed", err=detail)

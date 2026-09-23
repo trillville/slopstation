@@ -18,9 +18,9 @@ from slopstation.agent.media.clients import (
     ArrClient,
     MediaConfigurationError,
     MediaError,
-    _clean_text,
-    _kind,
-    _qbit_from_config,
+    clean_text,
+    kind_spec,
+    qbit_from_config,
 )
 
 PASS, WARN = "PASS", "WARN"
@@ -50,7 +50,7 @@ def check(cfg, secrets, report, now=None):
 
     def line(level, name, detail, hint=""):
         # A detail can carry what a service answered: one printable line.
-        report(level, name, _clean_text(detail, 240), hint)
+        report(level, name, clean_text(detail, 240), hint)
 
     _check_config(line, media_cfg)
     _check_containers(line)
@@ -114,7 +114,7 @@ def _compose_services(media_dir):
     except subprocess.TimeoutExpired as e:
         raise MediaError("Docker Compose status timed out") from e
     if completed.returncode:
-        detail = _clean_text(completed.stderr) or "Docker Compose status failed"
+        detail = clean_text(completed.stderr) or "Docker Compose status failed"
         raise MediaError(detail)
     text = completed.stdout.strip()
     if not text:
@@ -227,7 +227,7 @@ def _check_service_reachable(report, client):
         report(
             PASS,
             f"{label} API",
-            f"reachable, version {_clean_text(status.get('version'), 40)}",
+            f"reachable, version {clean_text(status.get('version'), 40)}",
         )
     except MediaError as e:
         report(WARN, f"{label} API", str(e), START_MEDIA)
@@ -240,7 +240,7 @@ def _check_service_reachable(report, client):
         if health:
             sources = sorted(
                 {
-                    _clean_text(entry.get("source"), 40)
+                    clean_text(entry.get("source"), 40)
                     for entry in health
                     if isinstance(entry, dict) and entry.get("source")
                 }
@@ -262,7 +262,7 @@ def _check_arr(report, kind, client, media_cfg):
     if not _check_service_reachable(report, client):
         return False
     label = client.name
-    spec = _kind(kind)
+    spec = kind_spec(kind)
     root_key, presets_key = spec["root_key"], spec["presets_key"]
     try:
         roots = client.get("rootfolder")
@@ -335,9 +335,7 @@ def _check_arr(report, kind, client, media_cfg):
         else:
             category_field = spec["category_field"]
             categories = {
-                _clean_text(
-                    _row_field(entry, category_field, "category"), 80
-                ).casefold()
+                clean_text(_row_field(entry, category_field, "category"), 80).casefold()
                 for entry in qbittorrent
             }
             if expected_category in categories:
@@ -458,7 +456,7 @@ def _check_prowlarr(report, client, media_cfg):
 def _check_qbittorrent(report, media_cfg, secrets):
     """qBittorrent's settings, or None when its API did not answer."""
     try:
-        client = _qbit_from_config(media_cfg, secrets)
+        client = qbit_from_config(media_cfg, secrets)
     except MediaConfigurationError as e:
         report(
             WARN,

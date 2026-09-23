@@ -2,7 +2,7 @@
 
 from slopstation.agent.media.clients import (
     MediaError,
-    _clean_text,
+    clean_text,
 )
 from slopstation.agent.media.core import Observation
 from slopstation.agent.media.queue import _Queue
@@ -29,7 +29,7 @@ class _Movies(_Queue):
         if existing is not None:
             movie = dict(existing)
             movie_id = int(movie["id"])
-            title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
+            title = clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
             try:
                 current_profile_id = int(movie.get("qualityProfileId", 0))
             except (TypeError, ValueError):
@@ -62,7 +62,7 @@ class _Movies(_Queue):
                 self.radarr.post("movie", payload), "Radarr", "created movie"
             )
             movie_id = int(movie["id"])
-            title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
+            title = clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
             baseline_file_id = None
         body = {"name": "MoviesSearch", "movieIds": [movie_id]}
         command_ids = [self._post_command(self.radarr, body)]
@@ -151,7 +151,7 @@ class _Movies(_Queue):
                 "detail": "the movie was not managed by Radarr",
             }
         movie_id = int(movie["id"])
-        title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
+        title = clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
         unmonitored = dict(movie)
         unmonitored["monitored"] = False
         self.radarr.put(f"movie/{movie_id}", unmonitored)

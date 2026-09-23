@@ -9,7 +9,7 @@ from slopstation import config, logbook, paths
 from slopstation.agent.media.clients import (
     MediaConfigurationError,
     MediaError,
-    _qbit_from_config,
+    qbit_from_config,
 )
 from slopstation.agent.media.config import servarr_clients
 from slopstation.agent.media.proton import (
@@ -91,7 +91,7 @@ def main(argv=None):
             media_cfg = cfg.get("media")
             if not isinstance(media_cfg, dict):
                 raise MediaConfigurationError("media configuration is missing")
-            qbit = _qbit_from_config(media_cfg, secrets)
+            qbit = qbit_from_config(media_cfg, secrets)
             if args.command == "set-qbit-port":
                 print(json.dumps(qbit.set_listen_port(args.port), indent=2))
                 return 0

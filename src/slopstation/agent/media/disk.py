@@ -2,7 +2,7 @@
 
 import shutil
 
-from slopstation.agent.media.clients import _clean_text
+from slopstation.agent.media.clients import clean_text
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
 DISK_POLL_S = 300
@@ -36,7 +36,7 @@ class DiskHealthMonitor(Monitor):
                 self._check(mount, shutil.disk_usage(mount))
                 self._failures.cleared(mount)
             except Exception as e:
-                detail = _clean_text(e)
+                detail = clean_text(e)
                 if self._failures.changed(mount, detail):
                     self.log.error("disk_watch_failed", mount=mount, err=detail)
 
