@@ -37,8 +37,8 @@ class Announcer:
         self.voice = voice_cfg
         self.secrets = secrets
         self.log = log
-        self.store: Any = None  # the OperationStore, attached by main()
-        self.duck: Any = None  # the session ducker, attached by main()
+        self.store: Any = None  # the OperationStore, attached by Services
+        self.duck: Any = None  # the session ducker, attached by Services
         self.session_active = threading.Event()
         self.abort = threading.Event()
         self.follow_up = threading.Event()
@@ -141,8 +141,6 @@ class Announcer:
     def _pending(self, kind, operation_id, key):
         """The queued item as the ledger holds it now, or None if already
         delivered."""
-        if self.store is None:
-            return None
         if kind == "terminal":
             rows = self.store.pending_announcements()
             return next((o for o in rows if o["id"] == operation_id), None)

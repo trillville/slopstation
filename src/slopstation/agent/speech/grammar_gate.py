@@ -80,7 +80,7 @@ def mentions_anchor(text: str, anchor: str) -> bool:
     return any(_anchor_len(toks, i, anchor) for i in range(len(toks)))
 
 
-def strip_wake(text: str, anchor: str = "jarvis") -> str:
+def strip_wake(text: str, anchor: str) -> str:
     """Remove the wake phrase ("hey jarvis", "jarvis", mishears like "jervis")
     from a transcript; the pre-roll buffer includes it. Fuzzy on the anchor
     word only, >=80 (mishears like "jervis" ~83; real words like "travis"
@@ -193,30 +193,24 @@ def stt_confidence(frame) -> float | None:
         return None
 
 
-def load_intents() -> Intents:
-    return Intents.from_dict(yaml.safe_load(GRAMMAR.read_text(encoding="utf-8")))
-
-
-def load_closers() -> list[str]:
-    """ExitSession's sentences, reused literally by closer_in - so that intent
-    stays plain phrases, no template syntax."""
-    data = yaml.safe_load(GRAMMAR.read_text(encoding="utf-8"))
-    return [
-        s
-        for block in data["intents"]["ExitSession"]["data"]
-        for s in block["sentences"]
-    ]
-
-
 class GrammarMatcher:
-    """Pure logic (no pipecat) so tests and bench/probe_stt reuse it.
-    Runtime slot lists: inputs from config, game titles from the library."""
+    """Pure logic (no pipecat) so tests and slopstation-voice-lab's probe_stt
+    reuse it. Runtime slot lists: inputs from config, game titles from the
+    library."""
 
     def __init__(self, voice_cfg: dict) -> None:
+        data = yaml.safe_load(GRAMMAR.read_text(encoding="utf-8"))
+        self.intents = Intents.from_dict(data)
+        # ExitSession's sentences, reused literally by closer_in - so that
+        # intent stays plain phrases, no template syntax.
+        self.closers = [
+            s
+            for block in data["intents"]["ExitSession"]["data"]
+            for s in block["sentences"]
+        ]
         # {game}/{collection} are wildcards - the fuzzy resolvers own those.
         # {input} and {target} are fixed runtime lists; {target}'s VALUE is
         # the nav kind (downloads/library/store), so no second mapping.
-        self.intents = load_intents()
         self.slot_lists: dict[str, SlotList] = {
             "input": TextSlotList.from_tuples(
                 (spoken, spoken) for spoken in voice_cfg["inputs"]
@@ -262,7 +256,6 @@ class GrammarGate(FrameProcessor):
         ack=None,
         resolve_collection=None,
         loud=None,
-        closers=None,
         level=None,
         addressed=False,
     ):
@@ -278,7 +271,6 @@ class GrammarGate(FrameProcessor):
         # callable, True while the duck did not land: every turn then needs
         # the wake prefix, or it is the TV. None = never strict.
         self.loud = loud
-        self.closers = closers if closers is not None else load_closers()
         self.level = level  # level.RoomLevel; None = unmeasured
         # The wake word was heard, or the mic opened on purpose (a follow-up).
         # Until then the first turn without it means the wake was the TV's.
@@ -540,7 +532,7 @@ class GrammarGate(FrameProcessor):
                     # as heard: the anchor the strip removed is what places it.
                     closer = closer_in(
                         original if loud else text,
-                        self.closers,
+                        self.matcher.closers,
                         self.wake_word,
                         loud=loud,
                     )
