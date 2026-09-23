@@ -332,6 +332,10 @@ the image back. Update it by hand:
 "No newer image to pull" means linuxserver has not built the release yet (it
 usually does within a day or two), or the tag is pinned.
 
+A Sentry log alert on `message:[media_update_held,media_update_failed]` is what
+tells you about either. It is set up in Sentry, not here: from Logs, run that
+query and save it as an alert.
+
 ## Pin container images
 
 The Compose file uses `:latest`. To replace those tags with the exact running
