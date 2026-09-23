@@ -14,8 +14,8 @@ from typing import Any
 
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.llm.toolsets.media_browse import _gb
 from slopstation.agent.media import proton
+from slopstation.agent.media.units import gigabytes
 
 HASH_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
 STATES = {
@@ -402,7 +402,7 @@ def _row(t, link):
         "owner": linked["authority"] if linked else None,
         "state": t.get("state"),
         "percent": round(100 * float(t.get("progress", 0) or 0)),
-        "size_gb": _gb(t.get("size")),
+        "size_gb": gigabytes(t.get("size")),
         "down_kbps": _kbps(t.get("dlspeed")),
         "up_kbps": _kbps(t.get("upspeed")),
         "eta_min": None
@@ -524,9 +524,9 @@ def impls(ctx: ToolContext):
             "media": link["title"] if link else None,
             "owner": link["authority"] if link else None,
             "save_path": props.get("save_path"),
-            "size_gb": _gb(props.get("total_size")),
-            "downloaded_gb": _gb(props.get("total_downloaded")),
-            "uploaded_gb": _gb(props.get("total_uploaded")),
+            "size_gb": gigabytes(props.get("total_size")),
+            "downloaded_gb": gigabytes(props.get("total_downloaded")),
+            "uploaded_gb": gigabytes(props.get("total_uploaded")),
             "ratio": round(float(props.get("share_ratio", 0) or 0), 2),
             "seeding_hours": round(int(props.get("seeding_time", 0) or 0) / 3600, 1),
             "seeds": props.get("seeds_total"),
@@ -547,7 +547,7 @@ def impls(ctx: ToolContext):
             "files": [
                 {
                     "name": f.get("name"),
-                    "gb": _gb(f.get("size")),
+                    "gb": gigabytes(f.get("size")),
                     "percent": round(100 * float(f.get("progress", 0) or 0)),
                     "priority": f.get("priority"),
                 }
@@ -634,7 +634,7 @@ def impls(ctx: ToolContext):
         if not rows:
             return {"ok": False, "error": "no torrent with that hash"}
         name = rows[0].get("name")
-        size_gb = _gb(rows[0].get("size"))
+        size_gb = gigabytes(rows[0].get("size"))
 
         def act():
             try:
@@ -674,14 +674,14 @@ def impls(ctx: ToolContext):
             "ok": True,
             "down_kbps": _kbps(info.get("dl_info_speed")),
             "up_kbps": _kbps(info.get("up_info_speed")),
-            "session_down_gb": _gb(info.get("dl_info_data")),
-            "session_up_gb": _gb(info.get("up_info_data")),
+            "session_down_gb": gigabytes(info.get("dl_info_data")),
+            "session_up_gb": gigabytes(info.get("up_info_data")),
             "down_limit_kbps": _kbps(info.get("dl_rate_limit")),
             "up_limit_kbps": _kbps(info.get("up_rate_limit")),
             "alternative_limits": alt,
             "connection": info.get("connection_status"),
             "dht_nodes": info.get("dht_nodes"),
-            "free_space_gb": _gb(state.get("free_space_on_disk"), 1)
+            "free_space_gb": gigabytes(state.get("free_space_on_disk"), 1)
             if state.get("free_space_on_disk") is not None
             else None,
             "queued_disk_jobs": state.get("queued_io_jobs"),
@@ -760,7 +760,7 @@ def impls(ctx: ToolContext):
                     k: row[k]
                     for k in ("hash", "name", "media", "ratio", "up_kbps", "size_gb")
                 },
-                "uploaded_gb": _gb(t.get("uploaded")),
+                "uploaded_gb": gigabytes(t.get("uploaded")),
                 "seeding_hours": round(int(t.get("seeding_time", 0) or 0) / 3600, 1),
                 "ratio_limit": words.get(ratio, ratio),
                 "time_limit_min": words.get(time_limit, time_limit),
@@ -778,7 +778,9 @@ def impls(ctx: ToolContext):
                 if prefs.get("max_seeding_time_enabled")
                 else None,
             },
-            total_uploaded_gb=_gb(sum(int(t.get("uploaded", 0) or 0) for t in rows)),
+            total_uploaded_gb=gigabytes(
+                sum(int(t.get("uploaded", 0) or 0) for t in rows)
+            ),
         )
         if out["ok"]:
             out["torrents"] = [shape(t) for t in out["torrents"]]
@@ -805,7 +807,7 @@ def impls(ctx: ToolContext):
                 {
                     "hash": t.get("hash"),
                     "name": t.get("name"),
-                    "size_gb": _gb(t.get("size")),
+                    "size_gb": gigabytes(t.get("size")),
                     "category": t.get("category"),
                     "completed": t.get("completion_on"),
                 }

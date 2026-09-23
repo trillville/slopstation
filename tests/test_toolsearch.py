@@ -259,6 +259,11 @@ def test_the_backends_render_the_loaded_set_on_every_request(monkeypatch, log):
         ),
     )
     assert o.turn("sys", "erase dune", tk2) == "Delete Dune?"
+    for call in calls:
+        for tool in call["tools"]:
+            assert tool["type"] == "function" and "function" not in tool
+            spec = assistant.REGISTRY.get(tool["name"])
+            assert tool["parameters"] == spec.anthropic()["input_schema"]
     names = [[t["name"] for t in c["tools"]] for c in calls]
     assert "delete_media" not in names[0] and "delete_media" in names[1], names
 

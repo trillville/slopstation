@@ -6,8 +6,8 @@ from pathlib import Path
 
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
-from slopstation.agent.llm.toolsets.media_browse import _gb
 from slopstation.agent.media import storage
+from slopstation.agent.media.units import gigabytes
 
 DISK_USAGE = """\
 Free and used space: the media volume and the checkout volume, and how much
@@ -217,8 +217,8 @@ def impls(ctx: ToolContext):
                         {
                             "app": client.name,
                             "path": row.get("path"),
-                            "free_gb": _gb(row.get("freeSpace"), 1),
-                            "total_gb": _gb(row.get("totalSpace"), 1),
+                            "free_gb": gigabytes(row.get("freeSpace"), 1),
+                            "total_gb": gigabytes(row.get("totalSpace"), 1),
                         }
                     )
             except Exception as e:
@@ -305,7 +305,7 @@ def impls(ctx: ToolContext):
 
         return Plan(
             ("path", str(resolved)),
-            f"Delete {rel} - {files} file(s), {_gb(size)} GB? That cannot be undone.",
+            f"Delete {rel} - {files} file(s), {gigabytes(size)} GB? That cannot be undone.",
             act,
             f"delete {rel}",
         )

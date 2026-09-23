@@ -87,12 +87,6 @@ def test_every_offered_spec_has_an_implementation():
     )
 
 
-def test_the_openai_render_is_flat():
-    (vol,) = assistant.REGISTRY.openai_tools(["volume"])
-    assert vol["type"] == "function" and "function" not in vol
-    assert vol["parameters"]["required"] == ["action"]
-
-
 def test_bindings_hold_spec_and_function_together_and_gate_the_destructive():
     ctx = registry.ToolContext(
         dispatch=types.SimpleNamespace(

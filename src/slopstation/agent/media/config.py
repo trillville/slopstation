@@ -18,6 +18,7 @@ from slopstation.agent.media.proton import (
     ProtonPortMonitor,
 )
 from slopstation.agent.media.service import MediaService
+from slopstation.agent.media.units import GB
 from slopstation.agent.media.updates import MediaUpdateMonitor
 
 
@@ -147,7 +148,7 @@ def _media_root(env_path):
 def disk_health_monitor_from_config(cfg, log):
     def build(media_cfg):
         poll_s = _positive(media_cfg, "diskPollS", DISK_POLL_S)
-        warn_gb = _positive(media_cfg, "diskFreeWarnGb", FREE_WARN_BYTES // 1024**3)
+        warn_gb = _positive(media_cfg, "diskFreeWarnGb", FREE_WARN_BYTES // GB)
         env_path = paths.HOME / "media" / ".env"
         root = _media_root(env_path)
         if not root:
@@ -161,7 +162,7 @@ def disk_health_monitor_from_config(cfg, log):
             {Path(root).anchor or root, Path(paths.HOME).anchor or str(paths.HOME)}
         )
         return DiskHealthMonitor(
-            mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * 1024**3)
+            mounts, log, poll_s=poll_s, free_warn_bytes=int(warn_gb * GB)
         )
 
     return _optional_monitor(cfg, log, "diskWatch", "disk_watch", build)

@@ -3,12 +3,13 @@
 import shutil
 
 from slopstation.agent.media.clients import clean_text
+from slopstation.agent.media.units import GB, gigabytes
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
 DISK_POLL_S = 300
 # One 2160p remux is ~70 GB, so a threshold below that reports a volume that
 # is already too full to take the next grab.
-FREE_WARN_BYTES = 250 * 1024**3
+FREE_WARN_BYTES = 250 * GB
 
 
 class DiskHealthMonitor(Monitor):
@@ -41,7 +42,7 @@ class DiskHealthMonitor(Monitor):
                     self.log.error("disk_watch_failed", mount=mount, err=detail)
 
     def _check(self, mount, usage):
-        free_gb = round(usage.free / 1024**3, 1)
+        free_gb = gigabytes(usage.free, 1)
         pct_free = round(100.0 * usage.free / usage.total, 1) if usage.total else 0.0
         if usage.free < self.free_warn_bytes:
             # No first-pass suppression: a volume already low at startup is
@@ -51,7 +52,7 @@ class DiskHealthMonitor(Monitor):
                     "disk_space_low",
                     mount=mount,
                     free_gb=free_gb,
-                    total_gb=round(usage.total / 1024**3, 1),
+                    total_gb=gigabytes(usage.total, 1),
                     pct_free=pct_free,
                 )
                 self._low.add(mount)
