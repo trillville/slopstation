@@ -143,7 +143,7 @@ def keyed(store, monkeypatch):
 
 def test_specials_are_parsed_and_filtered(store):
     # NOT_GAMES filtered, cents -> dollars
-    sp = steamstore.fetch_specials()
+    sp = steamstore.fetch_featured("specials")
     assert [s["appid"] for s in sp] == [1, 2], sp
     assert sp[0] == {"appid": 1, "name": "Special A", "discount": 25, "final": 14.99}, (
         sp[0]
@@ -164,12 +164,6 @@ def test_store_items_price_in_batches(store):
     # it only prices if a second batch was fetched.
     big = [10] + list(range(900000, 900119)) + [12]
     assert set(steamstore.store_items(big)) == {10, 12}, "the >100 tail was dropped"
-
-
-def test_wishlist_on_sale_is_discounted_best_first(store):
-    ws = steamstore.fetch_wishlist_on_sale("7656119")
-    assert [g["appid"] for g in ws] == [12, 10], ws  # 75% then 50%; 11 (0%) dropped
-    assert ws[0]["discount"] == 75
 
 
 def test_trending_ranks_with_names(store):
@@ -240,6 +234,7 @@ def test_refresh_deals_writes_the_file_list_games_reads(keyed, monkeypatch):
     deals = steamstore.load_deals()
     assert "deals_synced" in log.events(), log.events()
     assert deals["specials"][0]["appid"] == 1
+    # 75% then 50%; 11 (0%) dropped
     assert [g["appid"] for g in deals["wishlist_on_sale"]] == [12, 10], deals
     assert "refreshed" in deals
 

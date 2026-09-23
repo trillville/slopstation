@@ -216,7 +216,6 @@ PYTHON = {
     "clientcomm_refused": {"appid", "eresult", "what"},
     "diskspace_read_failed": {"authority", "err"},
     "download_index_failed": {"err"},
-    "download_switch_error": {"action", "err"},
     "downloads_switch_error": {"err"},
     "downloads_switched": {"enabled"},
     "file_index_failed": {"err"},

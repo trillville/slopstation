@@ -34,11 +34,9 @@ def test_library():
     assert rows, "no installed games found"
     keys = {"appid", "name", "state", "size", "lastPlayed", "updated"}
     assert all(keys <= set(r) for r in rows)
-    # The index lands under this test's runtime home (conftest).
-    library.save({"installed": rows})
 
     # Resolver: every installed game round-trips from its own spoken form...
-    resolve = titles.build_resolver(87)
+    resolve = titles.build_resolver(87, rows)
     for r in rows:
         appid, name = resolve(titles.spoken_form(r["name"]))
         assert appid == r["appid"], f"round-trip failed: {r['name']} -> {name}"

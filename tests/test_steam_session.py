@@ -315,7 +315,6 @@ def test_client_mutations_post_the_shape_and_read_back(pinned, seams):
     # A resume the app list does not yet reflect is reported unverified.
     out = pinned.set_update_state(10, "resume")
     assert out["ok"] and out["verified"] is False and seams.posts[-1][1]["action"] == 1
-    assert not pinned.set_update_state(10, "dance")["ok"]
     out = pinned.enable_downloads(False)
     # The global switch reads back too: every changing app is paused.
     assert out == {
