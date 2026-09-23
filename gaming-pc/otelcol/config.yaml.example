@@ -6,8 +6,9 @@
 # narrative, shipped as free text with the turn id in the filename.
 #
 # Clear-OldLogs moves both out of these globs after two days, which bounds the
-# backfill and the file count. Its own comment carries the per-file cost that
-# sized that window.
+# backfill and the file count. The collector tails every file its glob matches
+# at about 0.04% of a core each (110 finished files cost about 4.5%), which is
+# what sized that window.
 
 extensions:
   file_storage:

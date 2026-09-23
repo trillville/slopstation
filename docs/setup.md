@@ -119,7 +119,7 @@ Server. `Doctor.ps1` checks the three NIC wake settings a launch depends on.
 
    The first run creates `C:\CouchGaming\config.psd1` from
    `gaming-pc\config.example.psd1` and stops so you can check the values.
-   The second run deploys the scripts, registers the seven `CouchGaming`
+   The second run deploys the scripts, registers the eight `CouchGaming`
    scheduled tasks, allows SSH from the mini PC only, binds the mini PC's key to
    `Dispatch.ps1`, and ends with the doctor. Re-run it whenever a task or the
    rule needs correcting.
