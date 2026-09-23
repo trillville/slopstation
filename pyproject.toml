@@ -41,13 +41,13 @@ dev = [
 slopstation-lane = "slopstation.supervise:lane_main"
 slopstation-start = "slopstation.supervise:start"
 slopstation-doctor = "slopstation.doctor:main"
-slopstation-text = "slopstation.text_client:main"
+slopstation-text = "slopstation.agent.interfaces.text_client:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-slopstation = ["agent/grammar.yaml", "agent/models/*.onnx"]
+slopstation = ["agent/speech/grammar.yaml", "agent/speech/models/*.onnx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

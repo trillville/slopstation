@@ -7,7 +7,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from slopstation import config, text_client
+from slopstation import config
+from slopstation.agent.interfaces import text_client
 from slopstation.agent.llm.registry import AREAS
 
 MAX_BODY = 64 * 1024

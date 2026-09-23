@@ -1,12 +1,14 @@
-"""Test Ex-Link frames, checksums, and volume clamping."""
+"""Test Ex-Link frames, checksums, and volume clamping, and the raw command
+that sends one by name."""
 
+import json
 import sys
 import time
 import types
 
 import pytest
 
-from slopstation import tv
+from slopstation import paths, tv
 
 # name -> (c1, c2, c3, value), straight from the official worksheet rows.
 SPECS = {
@@ -97,3 +99,26 @@ def test_ack_validation_030cf1_or_the_command_did_not_land(fake_serial, port):
     port["answer"] = ""  # TV silent/off
     with pytest.raises(tv.ExlinkNak):
         tv.exlink_send_hex(FRAME, "COMX")
+
+
+def _events():
+    return [
+        json.loads(line)
+        for path in sorted(paths.logs().glob("*.jsonl"))
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def test_raw_sends_one_frame_by_name_off_the_launch_lane(fake_serial, port):
+    assert tv.main(["raw", "hdmi2"]) == 0
+    assert tv.main(["raw", "vol_set", "20"]) == 0
+    port["answer"] = "030cff"  # NAK
+    assert tv.main(["raw", "power_on"]) == 1
+    assert tv.main(["raw", "vol_set", "101"]) == 2  # refused before sending
+    assert [(e["lane"], e["event"], e["cmd"]) for e in _events()] == [
+        ("manual", "exlink_send", "hdmi2"),
+        ("manual", "exlink_send", "vol_set"),
+        ("manual", "exlink_nak", "power_on"),
+    ]
+    with pytest.raises(SystemExit):
+        tv.main(["vol", "14", "3"])  # only raw vol_set takes a level

@@ -27,7 +27,7 @@ from slopstation.agent.speech import earcons
 from slopstation.agent.steam import titles
 from slopstation.agent.telemetry import genai
 
-GRAMMAR = Path(__file__).resolve().parents[1] / "grammar.yaml"
+GRAMMAR = Path(__file__).resolve().parent / "grammar.yaml"
 
 GREETINGS = {"hey", "hi", "ok", "okay"}
 _PUNCT = ",.!?"

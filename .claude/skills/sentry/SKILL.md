@@ -115,7 +115,7 @@ them together with the heartbeat count:
     launch (the `state/cancel` marker), and `cancelled_by` carries the
     cancelling utterance's turn.
 - **manual**: `exlink_send` `exlink_nak` `tvremote_send` `tvremote_fail` — the
-  same events from a hand-run `python exlink.py <cmd>`, kept off the launch
+  same events from a hand-run `python -m slopstation.tv`, kept off the launch
   lane so operator probing does not skew launch metrics. Drop the lane to see
   every frame whoever sent it.
 - **voice**: `wake` `stt_final` `gate_match` `gate_miss` `turn_dropped` `mic_gated` `title_resolved` `title_miss` `dispatch` `session_open` `session_stop_requested` `session_close` `session_crashed` `pipeline_error` `heartbeat` `checkin` `checkin_failed`
@@ -198,10 +198,10 @@ them together with the heartbeat count:
   observation gap, not a failure; terminal delivery is `operation_announced`.
 - **steam**: `enrolled` `token_mint_failed` `token_transfer_failed`
   `install_queued` `install_failed` — the account session. The lane means
-  **hand-run**, like `manual` does for `exlink.py`: the agent passes its own
-  logger in, so a voice-driven session files these under `lane:voice` and only
-  `python -m slopstation.agent.steam.session …` at the console lands on
-  `lane:steam`.
+  **hand-run**, like `manual` does for the TV's command line: the agent passes
+  its own logger in, so a voice-driven session files these under `lane:voice`
+  and only `python -m slopstation.agent.steam.session …` at the console lands
+  on `lane:steam`.
   Select on `event` when you want both.
 - **gamepc**: `enter_start` `profile_applied` (carries `retried` on Enter —
   true means the first TV-GAMING apply missed and the retry rescued the
@@ -274,7 +274,7 @@ Spans carry transcripts and completions verbatim. Treat them as private.
 4. **A quiet result can be the answer.** No `heartbeat` means a dead shipper or
    a dead lane (the crons tell you which); no `launch_failed` means launches
    are fine. Say so rather than "nothing found".
-5. **`couch.log` and the JSONL on the K15 are the offline mirror.** If Sentry
+5. **`logs/couch.log` and the JSONL on the K15 are the offline mirror.** If Sentry
    has a gap, `logs/k15-*.jsonl` is the source of truth — but the
    collector persists its read offsets, so an outage backfills rather than
    skipping.

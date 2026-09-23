@@ -52,7 +52,7 @@ The TV is the one hard dependency on a brand. Power and input go over Ex-Link,
 Samsung's serial control protocol. Volume and mute use UPnP over HTTP, with
 readback to verify changes. Another make of TV means adapting `tv.py`.
 
-The custom wake model in `src/slopstation/agent/models` was trained by the
+The custom wake model in `src/slopstation/agent/speech/models` was trained by the
 author on recordings from this room with
 [slopstation-voice-lab](https://github.com/trillville/slopstation-voice-lab).
 It is the author's own work and is covered by this repository's MIT license.
@@ -89,7 +89,6 @@ Then read `src/slopstation/couch.py` for the launch,
 |---|---|
 | `src/slopstation/couch.py` | Start, watch, and end couch sessions |
 | `src/slopstation/chord_listener.py` | Listen for the controller chord |
-| `src/slopstation/text_client.py` | Send text commands from a terminal |
 | `src/slopstation/tv.py`, `haptics.py`, `gamepc.py` | Device interfaces for the TV, controller, and gaming PC |
 | `src/slopstation/agent/voice.py` | Run the voice service |
 | `src/slopstation/agent/speech/` | Wake word, audio, and fixed voice commands |
@@ -98,7 +97,7 @@ Then read `src/slopstation/couch.py` for the launch,
 | `src/slopstation/agent/steam/` | The game library, the Steam store, and the account session |
 | `src/slopstation/agent/media/` | Radarr, Sonarr, qBittorrent, Proton, and the media drive |
 | `src/slopstation/agent/operations/` | The ledger of tracked Steam and media work, and its monitors |
-| `src/slopstation/agent/interfaces/` | Text and MCP interfaces |
+| `src/slopstation/agent/interfaces/` | The text and MCP interfaces, and `slopstation-text`, the terminal client |
 | `gaming-pc/` | Gaming-PC scripts, the SSH command allowlist, and the installer |
 | `media/` | Optional media stack and its setup guide |
 | `docs/` | Setup, configuration, and operations |

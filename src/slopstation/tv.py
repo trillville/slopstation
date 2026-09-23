@@ -173,7 +173,8 @@ class Tv:
 
 
 def main(argv=None):
-    """The normal manual controls; exlink.py remains the serial diagnostic."""
+    """The manual controls. `raw` is the serial diagnostic: one Ex-Link frame
+    by name, and what the TV answered, with nothing verified."""
     import argparse
 
     from slopstation import config, events, logbook
@@ -181,10 +182,15 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Control the household TV")
     ap.add_argument(
         "command",
-        choices=("power_on", "power_off", "input", "vol", "up", "down", "mute"),
+        choices=("power_on", "power_off", "input", "vol", "up", "down", "mute", "raw"),
     )
     ap.add_argument("value", nargs="?")
+    ap.add_argument("level", nargs="?", type=int, help="raw vol_set only: 0-100")
     args = ap.parse_args(argv)
+    if args.level is not None and (args.command, args.value) != ("raw", "vol_set"):
+        ap.error("only raw vol_set takes a level")
+    if args.command == "raw":
+        return _raw(args.value, args.level)
     device = Tv(config.current(), logbook.logger("manual"))
     command = args.command
     n = None
@@ -240,6 +246,32 @@ def main(argv=None):
         )
         print(f"{command}: FAILED - {e}")
         return 1
+
+
+def _raw(name, level):
+    """Send one frame from EXLINK_FRAMES, or vol_set at a level, and print the
+    TV's answer. lane=manual keeps hand probing out of launch health, and
+    exlink_send still matches every frame either lane sent."""
+    from slopstation import config, events
+
+    if name == "vol_set" and level is not None and 0 <= level <= 100:
+        frame, fields = vol_set_frame(level), {"level_pct": level}
+    elif name in EXLINK_FRAMES and level is None:
+        frame, fields = EXLINK_FRAMES[name], {}
+    else:
+        print("raw takes " + "|".join(EXLINK_FRAMES) + " | vol_set <0-100>")
+        return 2
+    try:
+        ack = exlink_send_hex(frame, config.current()["tvComPort"])
+    except ExlinkNak as e:
+        events.emit(
+            "manual", "exlink_nak", events.ERROR, cmd=name, err=str(e), **fields
+        )
+        print(f"{name}: FAILED - {e}")
+        return 1
+    events.emit("manual", "exlink_send", cmd=name, ack=ack, **fields)
+    print(f"{name}: sent {frame}, ack {ack}")
+    return 0
 
 
 # Samsung Ex-Link frames: 08 22 c1 c2 c3 value + checksum, 9600 baud 8N1.

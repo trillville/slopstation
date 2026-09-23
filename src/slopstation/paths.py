@@ -30,4 +30,5 @@ def secrets_file() -> pathlib.Path:
 
 
 def couch_log() -> pathlib.Path:
-    return HOME / "couch.log"
+    """The human-readable log, beside the event files it mirrors."""
+    return logs() / "couch.log"
