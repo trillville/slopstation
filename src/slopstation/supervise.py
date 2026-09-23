@@ -162,6 +162,10 @@ _k32.GetCurrentProcess.restype = wintypes.HANDLE
 _k32.GetCurrentProcess.argtypes = []
 _k32.CloseHandle.restype = wintypes.BOOL
 _k32.CloseHandle.argtypes = [wintypes.HANDLE]
+# Untyped, the 64-bit tick count comes back as a signed 32-bit int and wraps
+# after 24.8 days of uptime, which moves the boot epoch below.
+_k32.GetTickCount64.restype = ctypes.c_uint64
+_k32.GetTickCount64.argtypes = []
 
 
 def _die_together() -> None:
@@ -226,7 +230,7 @@ def _install_if_pins_changed(log):
 
 
 def _uptime_s() -> float:
-    return ctypes.windll.kernel32.GetTickCount64() / 1000
+    return _k32.GetTickCount64() / 1000
 
 
 def _first_launch_this_boot() -> bool:

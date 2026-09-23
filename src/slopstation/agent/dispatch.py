@@ -263,7 +263,7 @@ class Dispatch:
             # No session: the page is the reason to start one. couch.py opens
             # it once READY. Lock check first: no ssh timeout against a
             # sleeping PC.
-            return self.start_session(nav=(kind, arg))
+            return self.start_session(nav=(kind, arg), turn=turn)
         cmd = gamepc.nav_cmd(kind, arg)
         if self.dry_run:
             return self._would(f"ssh {cmd}")

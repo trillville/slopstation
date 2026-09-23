@@ -236,12 +236,8 @@ def impls(ctx: ToolContext):
         if err:
             return err
         under = str(args.get("under") or "")
-        bounds, err = paging.window(args, cap=50)
-        if err:
-            return err
-        limit, offset = bounds
-        rows = storage.largest_items(root, under, offset + limit)
-        if not rows and under and storage._inside(root, under) is None:
+        rows = storage.largest_items(root, under)
+        if rows is None:
             return {"ok": False, "error": "that path is not under the media root"}
         return paging.page(rows, args, "items", cap=50, under=under or "/")
 
