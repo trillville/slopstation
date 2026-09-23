@@ -94,18 +94,16 @@ class Dispatch:
             self.log("start_refused", reason="lock_fresh", lock_age_s=round(age))  # type: ignore[arg-type] # active implies aged
             return _busy("a session is already active or starting")
         page = [str(x) for x in nav if x not in (None, "")] if nav else []
-        what = "couch.py start" + (f" {appid}" if appid else "")
+        argv = ["start"] + ([str(appid)] if appid else [])
         if page:
-            what += " --nav " + " ".join(page)
+            argv += ["--nav", *page]
+        what = "couch.py " + " ".join(argv)
         if self.dry_run:
             return self._would(what)
-        args = COUCH + ["start"] + ([str(appid)] if appid else [])
-        if page:
-            args += ["--nav", *page]
         turn = turn or self.utterance.turn or events.current().get("turn")
         if turn:
-            args += ["--turn", turn]
-        subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            argv += ["--turn", turn]
+        subprocess.Popen(COUCH + argv, creationflags=subprocess.CREATE_NEW_CONSOLE)
         self.log("session_dispatched", appid=appid, nav=page or None, turn=turn)
         if page:
             label = self._nav_label(page[0], page[1] if len(page) > 1 else None)
@@ -155,7 +153,7 @@ class Dispatch:
         if self.dry_run:
             return self._would("ssh playing")
         try:
-            out = gamepc.playing().strip()
+            out = gamepc.playing()
         except Exception as e:
             return _fail(f"couldn't reach the PC (ssh playing: {e})")
         return _ok(out if out.isdigit() else "0")
@@ -287,26 +285,22 @@ class Dispatch:
 
     def _nav_label(self, kind: str, arg: int | str | None) -> str:
         """Spoken-friendly name for a navigation target."""
-        if kind == "details" and arg:
-            return _name(arg)
-        if kind == "store" and arg:
-            return f"{_name(arg)} in the store"
-        if kind in ("dlc", "hub", "workshop", "news", "validate") and arg:
-            what = {
-                "dlc": "the DLC for {}",
-                "hub": "the community hub for {}",
-                "workshop": "the workshop for {}",
-                "news": "the news for {}",
-                "validate": "the file check for {}",
-            }[kind]
-            return what.format(_name(arg))
+        game = {
+            "details": "{}",
+            "store": "{} in the store",
+            "dlc": "the DLC for {}",
+            "hub": "the community hub for {}",
+            "workshop": "the workshop for {}",
+            "news": "the news for {}",
+            "validate": "the file check for {}",
+        }.get(kind)
+        if game and arg:
+            return game.format(_name(arg))
         return {
-            "downloads": "downloads",
             "library": "your library",
             "store": "the store",
             "collection": "that collection",
             "friends": "your friends",
-            "settings": "settings",
             "screenshots": "your screenshots",
             "wishlist": "your wishlist",
             "news": "the news",
@@ -315,15 +309,13 @@ class Dispatch:
 
     # -- display profile, outside a session ------------------------------------
 
-    DISPLAY_TARGETS = ("tv", "monitor")
-
     def display(self, target: str, turn=None) -> Result:
         """Move the PC's desktop to the TV or back to its monitor with no
         session: no Puck claim, no Big Picture, no session lock. For `tv` the
         TV is powered on and switched to the PC first. Refused while a session
         is live, since the session flow owns the displays."""
         target = str(target).strip().lower()
-        if target not in self.DISPLAY_TARGETS:
+        if target not in ("tv", "monitor"):
             return _fail(f"the display goes to the tv or the monitor, not '{target}'")
         if sessionlock.active():
             if target == "tv":

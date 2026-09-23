@@ -67,11 +67,11 @@ class SteamMonitor(Monitor):
 
     THREAD_NAME = "steam-operation-monitor"
 
-    def __init__(self, store, steam, log, poll_s=POLL_S):
+    def __init__(self, store, steam, log):
         self.store = store
         self.steam = steam
         self.log = log
-        self.poll_s = poll_s
+        self.poll_s = POLL_S
 
     def reconcile_once(self):
         operations = self.store.active(kind="steam_install")
@@ -197,11 +197,8 @@ class MediaMonitor(Monitor):
             return operation
         count = int(metadata.get("search_retry_count", 0) or 0)
         if count >= len(self.SEARCH_RETRY_DELAYS_S):
-            return (
-                self.store.update_metadata(
-                    operation["id"], {"search_retry_exhausted": True}
-                )
-                or operation
+            return self.store.update_metadata(
+                operation["id"], {"search_retry_exhausted": True}
             )
         try:
             available = self.media.search_available(operation)
@@ -209,15 +206,12 @@ class MediaMonitor(Monitor):
             available = False
         if available:
             return operation
-        return (
-            self.store.update_metadata(
-                operation["id"],
-                {
-                    "search_retry_pending": True,
-                    "search_retry_after": now + self.SEARCH_RETRY_DELAYS_S[count],
-                },
-            )
-            or operation
+        return self.store.update_metadata(
+            operation["id"],
+            {
+                "search_retry_pending": True,
+                "search_retry_after": now + self.SEARCH_RETRY_DELAYS_S[count],
+            },
         )
 
     def _dispatch_search_retry(self, operation, now):
@@ -251,32 +245,25 @@ class MediaMonitor(Monitor):
             self.store.update_metadata(operation["id"], updates, remove=remove)
             raise
 
-        operation = (
-            self.store.update_metadata(
-                operation["id"],
-                {
-                    "command_ids": command_ids,
-                    "search_retry_count": count,
-                },
-                remove=(
-                    "search_retry_pending",
-                    "search_retry_after",
-                    "search_retry_exhausted",
-                ),
-            )
-            or operation
+        operation = self.store.update_metadata(
+            operation["id"],
+            {
+                "command_ids": command_ids,
+                "search_retry_count": count,
+            },
+            remove=(
+                "search_retry_pending",
+                "search_retry_after",
+                "search_retry_exhausted",
+            ),
         )
-        operation = (
-            self.store.observe(
-                operation["id"],
-                RUNNING,
-                {"phase": "searching"},
-                f"{str(operation.get('authority', 'media')).title()} recovered; "
-                "retrying the search",
-            )
-            or operation
+        return self.store.observe(
+            operation["id"],
+            RUNNING,
+            {"phase": "searching"},
+            f"{str(operation.get('authority', 'media')).title()} recovered; "
+            "retrying the search",
         )
-        return operation
 
     def reconcile_once(self, now=None):
         now = int(time.time()) if now is None else int(now)
@@ -285,13 +272,8 @@ class MediaMonitor(Monitor):
             try:
                 dispatched = self.media.dispatch_pending_series_search(operation)
                 if dispatched:
-                    operation = (
-                        self.store.update_metadata(
-                            operation["id"],
-                            dispatched,
-                            remove=("search_pending",),
-                        )
-                        or operation
+                    operation = self.store.update_metadata(
+                        operation["id"], dispatched, remove=("search_pending",)
                     )
                 operation = self._dispatch_search_retry(operation, now)
                 observation = self.media.observe(operation)
@@ -465,7 +447,3 @@ def main(argv=None):
         )
     )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
