@@ -597,8 +597,6 @@ def check_voice_keys():
     )
 
 
-# WakeListener.MODELS_DIR, spelled out: importing audio.py would pull in
-# pipecat. test_doctor holds the two together.
 WAKE_MODELS = pathlib.Path(__file__).parent / "agent" / "speech" / "models"
 
 

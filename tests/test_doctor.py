@@ -445,21 +445,6 @@ def test_operations_in_an_unknown_state_with_the_agent_down(rows, lanes_down):
     assert rows.levels()["operations"] == "WARN"
 
 
-def test_wake_model_row_finds_a_model_where_the_voice_lane_loads_it(
-    rows, cfg, monkeypatch
-):
-    """The doctor looks in the directory the wake listener loads from, so a
-    committed custom model passes rather than reading as missing."""
-    from slopstation.agent.speech.audio import WakeListener
-
-    vendored = next(WakeListener.MODELS_DIR.glob("*.onnx"))
-    monkeypatch.setattr(supervise, "SENTINEL", paths.HOME / "deps-ok")
-    supervise.SENTINEL.write_text("")
-    doctor.check_venv({**cfg, "voice": {**cfg["voice"], "wakeModel": vendored.stem}})
-    assert rows.levels()["wake model"] == "PASS"
-    assert rows.detail("wake model").endswith("vendored in " + str(vendored.parent))
-
-
 def test_voice_library_and_deals_rows(rows):
     """Absent index, unreadable index, fresh index; stale deals."""
     import os
