@@ -310,19 +310,27 @@ If the service stops immediately, run a foreground check:
 ## Update the apps
 
 Radarr, Sonarr and Prowlarr say when a release is out, but the linuxserver
-images turn off their own updater. An update is a new image for that one
-container:
+images turn off their own updaters. An update is a new image for that one
+container: pull it and recreate the container. Config and library are on the
+bind mounts and are untouched.
+
+The voice lane does this on its own for minor versions, at 4 am, one app at a
+time. It waits a night if Radarr or Sonarr is importing. Every update is logged
+as `media_update_applied` with `before` and `after`; `before` is the image tag
+to pin if the new one misbehaves. A failed update is `media_update_failed`.
+`media.autoUpdate: false` turns it off.
+
+A new major version (Radarr 6 to 7) is not applied: it is logged once as
+`media_update_held`, because its database migration may not survive rolling
+the image back. Update it by hand:
 
 ```powershell
 .venv\Scripts\python -m slopstation.agent.tools.media updates
 .venv\Scripts\python -m slopstation.agent.tools.media update radarr --execute
 ```
 
-`update` pulls the image, recreates only that container and waits for the app
-to answer. It prints the version it replaced, which is also the image tag to
-pin if the new one misbehaves. "No newer image to pull" means linuxserver has
-not built the release yet (try again in a day or two), or the tag is pinned. A weekly scheduled Claude
-task on the K15 runs `updates` and asks on your phone before updating.
+"No newer image to pull" means linuxserver has not built the release yet (it
+usually does within a day or two), or the tag is pinned.
 
 ## Pin container images
 

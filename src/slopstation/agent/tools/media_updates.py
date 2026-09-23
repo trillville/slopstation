@@ -5,16 +5,25 @@ new image: pull it and recreate that one container. The app's config and
 library live on the bind mounts and are untouched.
 """
 
+import datetime
 import subprocess
 import time
 
 from slopstation.agent.tools.media_checks import compose_command
 from slopstation.agent.tools.media_clients import MediaError, _clean_text
+from slopstation.agent.tools.monitor import ChangeOnly, Monitor
 
 # A pull is a few hundred MB; the restart takes seconds.
 COMPOSE_TIMEOUT_S = 600
 READY_TIMEOUT_S = 120
 READY_POLL_S = 5
+# Minor updates apply in this local hour, when nobody is on the couch. The
+# hourly poll lands in it once a night.
+UPDATE_HOUR = 4
+UPDATE_POLL_S = 3600
+# The apps that import files; a restart mid-import is what waiting avoids.
+IMPORTERS = frozenset(("Radarr", "Sonarr"))
+IMPORTING = frozenset(("importing", "importpending"))
 
 
 def _status(client):
@@ -92,3 +101,74 @@ def update_app(
                 ) from None
             sleep(READY_POLL_S)
     return {"app": client.name, "before": before, "after": after}
+
+
+class MediaUpdateMonitor(Monitor):
+    """Apply minor app updates overnight and log each one. A new major version
+    is held for a person: its database migration may not survive rolling the
+    image back."""
+
+    THREAD_NAME = "media-update-monitor"
+
+    def __init__(
+        self,
+        clients,
+        log,
+        media_dir,
+        poll_s=UPDATE_POLL_S,
+        update=update_app,
+        clock=datetime.datetime.now,
+    ):
+        self.clients = tuple(clients)
+        self.log = log
+        self.media_dir = media_dir
+        self.poll_s = poll_s
+        self.update = update
+        self.clock = clock
+        self._held = ChangeOnly()
+
+    def reconcile_once(self):
+        if self.clock().hour != UPDATE_HOUR:
+            return
+        for client in self.clients:
+            try:
+                self._update(client)
+            except MediaError as e:
+                self.log.error(
+                    "media_update_failed", app=client.name, err=_clean_text(e)
+                )
+
+    def _update(self, client):
+        found = available_update(client)
+        if found is None:
+            return
+        if found["latest"].split(".")[0] != found["installed"].split(".")[0]:
+            if self._held.changed(client.name, found["latest"]):
+                self.log.warn(
+                    "media_update_held",
+                    app=client.name,
+                    installed=found["installed"],
+                    latest=found["latest"],
+                )
+            return
+        if client.name in IMPORTERS and self._importing(client):
+            return
+        result = self.update(client, self.media_dir)
+        # The same image twice: linuxserver has not built the release yet,
+        # and tomorrow night tries again.
+        if result["before"] != result["after"]:
+            self.log(
+                "media_update_applied",
+                app=client.name,
+                before=result["before"],
+                after=result["after"],
+            )
+
+    def _importing(self, client):
+        page = client.get("queue", {"pageSize": 50})
+        records = page.get("records") if isinstance(page, dict) else None
+        return any(
+            isinstance(row, dict)
+            and _clean_text(row.get("trackedDownloadState"), 30).lower() in IMPORTING
+            for row in records or ()
+        )

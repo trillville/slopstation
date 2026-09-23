@@ -5,10 +5,9 @@ import argparse
 import json
 
 from slopstation import config, logbook, paths
-from slopstation.agent.tools.media.config import _arr_clients
+from slopstation.agent.tools.media.config import servarr_clients
 from slopstation.agent.tools.media_checks import media_doctor
 from slopstation.agent.tools.media_clients import (
-    ArrClient,
     MediaConfigurationError,
     MediaError,
     _qbit_from_config,
@@ -24,17 +23,9 @@ def _servarr_clients(cfg, secrets):
     media_cfg = cfg.get("media")
     if not isinstance(media_cfg, dict):
         raise MediaConfigurationError("media configuration is missing")
-    clients = list(_arr_clients(media_cfg, secrets))
-    if config.real_key(secrets.get("prowlarrApiKey")):
-        clients.append(
-            ArrClient(
-                "Prowlarr",
-                media_cfg.get("prowlarrUrl", ""),
-                secrets["prowlarrApiKey"],
-                api_version="v1",
-            )
-        )
-    return {client.name.lower(): client for client in clients}
+    return {
+        client.name.lower(): client for client in servarr_clients(media_cfg, secrets)
+    }
 
 
 def main(argv=None):

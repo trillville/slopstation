@@ -1063,6 +1063,8 @@ class FakeServarr:
     def get(self, endpoint, params=None):
         if endpoint == "update":
             return list(self.releases)
+        if endpoint == "queue":
+            return self.queue
         assert endpoint == "system/status"
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         if status is None:
@@ -1136,3 +1138,55 @@ def test_update_fails_on_a_refused_pull_or_an_app_that_never_returns(tmp_path):
             now=lambda: next(clock),
             sleep=lambda s: None,
         )
+
+
+def _night_watch(apps, update, hour=4):
+    log = CapturingLog()
+    watch = media_updates.MediaUpdateMonitor(
+        apps,
+        log,
+        "media",
+        update=update,
+        clock=lambda: datetime.datetime(2026, 9, 27, hour, 5),
+    )
+    watch.reconcile_once()
+    return log
+
+
+def _offered(app, installed, latest, queue=()):
+    server = FakeServarr(
+        [{"version": installed}], [{"version": latest, "latest": True}]
+    )
+    server.name = app
+    server.queue = {"records": list(queue)}
+    return server
+
+
+def test_update_watch_applies_minors_overnight_and_holds_majors():
+    updated = []
+
+    def update(client, media_dir):
+        updated.append(client.name)
+        return {"app": client.name, "before": "6.3.0-ls314", "after": "6.4.4-ls320"}
+
+    radarr = _offered("Radarr", "6.3.0", "6.4.4")
+    sonarr = _offered("Sonarr", "4.0.19", "5.0.0")
+    assert _night_watch([radarr, sonarr], update, hour=15).records == []
+    log = _night_watch([radarr, sonarr], update)
+    assert updated == ["Radarr"]
+    assert log.find("media_update_applied")[0]["after"] == "6.4.4-ls320"
+    assert log.find("media_update_held")[0]["latest"] == "5.0.0"
+
+
+def test_update_watch_waits_out_an_import_and_logs_a_failed_update():
+    def update(client, media_dir):
+        raise media_clients.MediaError("pull access denied")
+
+    importing = _offered(
+        "Radarr", "6.3.0", "6.4.4", [{"trackedDownloadState": "importing"}]
+    )
+    prowlarr = _offered("Prowlarr", "2.5.2", "2.6.5")
+    log = _night_watch([importing, prowlarr], update)
+    assert [(r["event"], r["app"]) for r in log.records] == [
+        ("media_update_failed", "Prowlarr")
+    ]

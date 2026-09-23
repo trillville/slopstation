@@ -1,8 +1,7 @@
 name: slopstation-media
 
-# Radarr, Sonarr and Prowlarr are updated one at a time, after a yes, by
-# `python -m slopstation.agent.tools.media update <app>` (see README.md).
-# Pin a tag here to hold an image back.
+# Radarr, Sonarr and Prowlarr take minor updates on their own overnight (see
+# "Update the apps" in README.md). Pin a tag here to hold an image back.
 
 services:
   flaresolverr:
