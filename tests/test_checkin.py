@@ -14,21 +14,6 @@ URL = (
 )
 
 
-# -- parsing the DSN -----------------------------------------------------------
-
-
-def test_parse_dsn_splits_host_project_and_key():
-    host, project, key = checkin.parse_dsn(DSN)
-    assert host == "o4509876.ingest.us.sentry.io", host
-    assert project == "1234567", project
-    assert key == "abc123def456abc123def456abc12345", key
-    # An older org's DSN carries no region; the host is used verbatim either way.
-    assert (
-        checkin.parse_dsn("https://k0000000000000000000@o1.ingest.sentry.io/42")[0]
-        == "o1.ingest.sentry.io"
-    )
-
-
 # Absent, template junk, and things that are not DSNs all read as absent -
 # the same gate every other keyed lane uses.
 @pytest.mark.parametrize(
@@ -59,7 +44,10 @@ def test_checkin_url_is_built_out_of_the_dsn():
     # One monitor PER LANE: the slugs must differ, or one lane's check-in
     # silences the other's alert.
     assert checkin.checkin_url(DSN, "voice") != url
-    assert checkin.checkin_url(DSN, "") is None
+    # An older org's DSN carries no region; the host is used verbatim either way.
+    assert checkin.checkin_url(
+        "https://k0000000000000000000@o1.ingest.sentry.io/42", "listener"
+    ).startswith("https://o1.ingest.sentry.io/api/42/")
 
 
 # -- Error handling ------------------------------------------------------------
@@ -89,7 +77,7 @@ def test_start_refuses_without_a_dsn_and_under_a_test_run():
 def test_thread_checks_in_and_logs_the_first_result(monkeypatch):
     sent = []
 
-    def fake_send(url, status="ok"):
+    def fake_send(url):
         sent.append(url)
         return len(sent) > 1  # first call fails, then recovers
 

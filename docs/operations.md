@@ -84,7 +84,7 @@ mini-PC doctor also emits a haptic chirp when the controller listener is idle.
 Voice and media warnings do not make its exit code nonzero; `0 fail` verifies
 the controller launch chain, not every optional feature.
 
-- Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, imports, the
+- Mini PC: `.venv\Scripts\slopstation-doctor`. Config and secrets, the
   Ex-Link port, the controller, both lanes, SSH to the gaming PC and the
   dispatcher's answer, deploy skew between the two machines (`ssh <sshHost>
   version` against the checkout), VirtualHere and its firewall rule, session

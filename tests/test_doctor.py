@@ -280,7 +280,7 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
     monkeypatch.setattr(supervise, "query", lambda lane: {"Status": "Running"})
     # audio_device is the input answering; the output can still fail.
     _write_events(
-        events._path("20260913"),
+        events.log_file("20260913"),
         {"lane": "voice", "event": "audio_device_wait"},
         {"lane": "voice", "event": "audio_device", "kind": "input"},
     )
@@ -290,14 +290,16 @@ def test_wake_word_readiness_is_the_latest_voice_event(rows, monkeypatch):
     assert rows.detail("wake word") == "waiting for the microphone"
 
     rows.clear()
-    _write_events(events._path("20260914"), {"lane": "voice", "event": "audio_ready"})
+    _write_events(
+        events.log_file("20260914"), {"lane": "voice", "event": "audio_ready"}
+    )
     doctor.check_voice_agent()
     assert rows.levels()["wake word"] == "PASS"
 
     # A missing model is a WARN with its own hint, not a stale "armed".
     rows.clear()
     _write_events(
-        events._path("20260915"), {"lane": "voice", "event": "wake_model_missing"}
+        events.log_file("20260915"), {"lane": "voice", "event": "wake_model_missing"}
     )
     doctor.check_voice_agent()
     assert rows.detail("wake word") == "wake model missing"
@@ -365,26 +367,22 @@ def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkey
     assert rows.levels()["text interface"] == "PASS"
 
 
-def test_cron_checkin_reads_back_past_today(rows, monkeypatch):
+def test_cron_checkin_reads_back_past_today(rows):
     """A lane logs its first check-in and then only changes, so lanes that
     started days ago leave nothing in today's file and still count."""
     from slopstation import events
 
-    monkeypatch.setattr(
-        config, "load", lambda: {"sentryDsn": "https://key@o1.ingest.sentry.io/42"}
-    )
-
-    archived = paths.logs() / events.ARCHIVE_NAME / events._path("20260901").name
+    archived = paths.logs() / events.ARCHIVE_NAME / events.log_file("20260901").name
     _write_events(
         archived,
         {"lane": "listener", "event": "checkin"},
         {"lane": "voice", "event": "checkin_failed"},
     )
-    _write_events(events._path("20260913"), {"lane": "voice", "event": "checkin"})
+    _write_events(events.log_file("20260913"), {"lane": "voice", "event": "checkin"})
     _write_events(
-        events._path(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"}
+        events.log_file(time.strftime("%Y%m%d")), {"lane": "voice", "event": "wake"}
     )
-    doctor.check_sentry()
+    doctor.check_sentry({"sentryDsn": "https://key@o1.ingest.sentry.io/42"})
     assert rows.levels()["cron check-in"] == "PASS"
     assert rows.detail("cron check-in") == "accepted for listener, voice"
 
