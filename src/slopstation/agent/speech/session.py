@@ -226,8 +226,11 @@ class Session:
         from slopstation.agent.speech.preroll import PrerollFeeder
 
         secrets, voice = self.secrets, self.voice
-        catalog = library.Catalog.load()
-        game_terms = keyterms.load_titles(voice["keytermCount"], catalog.installed)
+        # One library snapshot for the session: its vocabulary and resolvers.
+        catalog = library.load()
+        game_terms = keyterms.load_titles(
+            voice["keytermCount"], catalog.get("installed", [])
+        )
         wake_phrase = _wake_phrase(voice["wakeModel"])
         terms = keyterms.stt_keyterms(voice, wake_phrase, catalog)
         log(
@@ -283,13 +286,13 @@ class Session:
             log,
             resolve_game=(
                 titles.build_resolver(
-                    voice["fuzzyTitleThreshold"], rows=catalog.installed
+                    voice["fuzzyTitleThreshold"], rows=catalog.get("installed", [])
                 )
                 if game_terms
                 else None
             ),
             resolve_collection=titles.build_collection_resolver(
-                voice["fuzzyTitleThreshold"], rows=catalog.collections
+                voice["fuzzyTitleThreshold"], rows=catalog.get("collections", [])
             ),  # None when no collections synced
             assistant_enabled=assistant_live,
             wake_word=wake_phrase.split()[-1],  # "jarvis" - the strip anchor
@@ -376,7 +379,7 @@ class Session:
         def tools_schema():
             assert self.toolkit is not None
             return ToolsSchema(
-                standard_tools=tool_schemas.pipecat_schemas(self.toolkit, log),
+                standard_tools=tool_schemas.pipecat_schemas(self.toolkit),
                 custom_tools={AdapterType.OPENAI: native} if native else None,
             )
 

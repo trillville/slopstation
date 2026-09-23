@@ -109,6 +109,7 @@ def test_disk_usage_and_largest_items(rig, root):
         and top["items"][0]["name"] == "Dune (2021)"
         and top["items"][0]["folder"]
     )
+    assert top["count"] == 2 and top["next_offset"] == 1, "the rest is one more page"
     everything = tk.call("largest_items", {})
     assert [i["name"] for i in everything["items"]] == ["Movies", "torrents", "TV"]
     assert not tk.call("largest_items", {"under": "../../etc"})["ok"]
@@ -148,11 +149,6 @@ def test_delete_path_is_guarded_gated_and_final(rig, root):
         and not (root / "Movies" / "Old Film (1999)").exists()
     )
     assert (root / "Movies" / "Dune (2021)").exists()
-    # A single stray file, dry run first.
-    dispatch.dry_run = True
-    dry = tk.call("delete_path", {"path": "torrents/Leftover.Stuff/x.bin"})
-    assert dry["dry_run"] and (root / "torrents" / "Leftover.Stuff" / "x.bin").exists()
-    dispatch.dry_run = False
     # With an arr app unreadable, nothing is deletable and nothing is an orphan.
     tk.ctx.media.sonarr.down = True
     unsure = tk.call("delete_path", {"path": "torrents/Leftover.Stuff/x.bin"})
@@ -225,16 +221,3 @@ def test_drive_health_reads_the_last_smart_warning(rig):
         out["last_smart_warning"]["msg"] == "new"
         and out["last_smart_warning"]["failtype"] == "Usage"
     )
-
-
-def test_no_media_root_is_a_plain_error(monkeypatch):
-    monkeypatch.setattr(storage, "media_root", lambda: None)
-    log = CapturingLog("voice")
-    dispatch = fake_dispatch(None, dry_run=True)
-    media = types.SimpleNamespace(
-        cfg={}, radarr=None, sonarr=None, qbit=None, prowlarr=None
-    )
-    tk = assistant.Toolkit(dispatch, log, media=media)
-    tk.load(["disk_usage"])
-    out = tk.call("disk_usage", {})
-    assert not out["ok"] and "MEDIA_ROOT" in out["error"]

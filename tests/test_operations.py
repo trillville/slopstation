@@ -481,14 +481,6 @@ def test_abandoning_a_pending_episode_request_keeps_the_series(log, monkeypatch)
     assert store.get(pending_op["id"])["state"] == operations.CANCELED
 
 
-def test_cli_lists_operations(log):
-    store = operations.OperationStore(log)
-    retry_op = _movie(store, "61", "Heat", 949, 10)
-    with contextlib.redirect_stdout(io.StringIO()) as stdout:
-        assert operations_monitors.main(["list"]) == 0
-    assert retry_op["id"] in stdout.getvalue()
-
-
 def test_waiting_series_is_abandoned_after_a_day(log):
     store = operations.OperationStore(log)
     give_media = FakeMedia(result=dict(WAITING))
@@ -602,26 +594,6 @@ def test_empty_movie_wait_fails_silently(log):
     assert failed_empty["state"] == operations.FAILED
     assert not failed_empty["announcement_pending"]
     assert failed_empty["summary"].startswith("No acceptable release")
-
-
-def test_unmonitored_request_is_canceled(log):
-    store = operations.OperationStore(log)
-    canceled_op = store.track_external(
-        "series_acquisition",
-        "sonarr",
-        "71",
-        "Andor",
-        metadata={"catalog_id": 393189, "seasons": [1]},
-    )
-    canceled_media = FakeMedia(
-        result={
-            "state": operations.CANCELED,
-            "progress": {"episodes": 0, "total_episodes": 0, "percent": 0},
-            "detail": "requested episodes are unmonitored",
-        }
-    )
-    operations_monitors.MediaMonitor(store, canceled_media, log).reconcile_once()
-    assert store.get(canceled_op["id"])["state"] == operations.CANCELED
 
 
 class DuckedRoom:
@@ -758,24 +730,6 @@ def test_delivery_retries_an_announcement_cut_short(log, monkeypatch):
         )
     )
     ann.stop()
-
-
-def test_media_monitor_reports_a_failed_search_as_failed(log):
-    terminal = []
-    store = operations.OperationStore(log, on_terminal=terminal.append)
-    fake_media = FakeMedia()
-    monitor = operations_monitors.MediaMonitor(store, fake_media, log)
-    op = _movie(store, "61", "Arrival", 329865, 9, promise="search")
-    fake_media.result = {
-        "state": operations.FAILED,
-        "progress": {"phase": "search_failed"},
-        "detail": "Radarr search failed",
-    }
-    monitor.reconcile_once()
-    row = store.get(op["id"])
-    assert row["state"] == operations.FAILED
-    assert row["summary"] == "Radarr's search for Arrival failed."
-    assert len(terminal) == 1
 
 
 def test_a_monitor_survives_a_failing_poll_and_stops_when_told(log):

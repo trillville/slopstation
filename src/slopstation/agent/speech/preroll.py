@@ -129,10 +129,10 @@ def _frames(pcm: bytes) -> list:
 
 class PrerollFeeder(FrameProcessor):
     """Replays wake-capture PCM ahead of live mic audio. The capture is handed
-    over LIVE and stopped here on StartFrame (see the module docstring); the
-    wake stream and the transport's mic stream overlap for the tail of the
-    build, so the last few chunks are captured twice - bounded by one
-    StartFrame hop, and silence in the normal cadence."""
+    over LIVE and stopped here on StartFrame; the wake stream and the
+    transport's mic stream overlap for the tail of the build, so the last few
+    chunks are captured twice - bounded by one StartFrame hop, and silence in
+    the normal cadence."""
 
     def __init__(self, log) -> None:
         super().__init__()

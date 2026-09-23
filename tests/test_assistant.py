@@ -209,13 +209,11 @@ class FakeMedia:
 
 
 class RaisingSteam:
-    """A revoked token: available() still says yes, then every call raises."""
-
-    def available(self):
-        return True
+    """A revoked token: install answers not ok, as the real one does when the
+    token no longer mints, and a read raises."""
 
     def install(self, a):
-        raise RuntimeError("token revoked")
+        return {"ok": False, "error": "couldn't reach Steam just now"}
 
     def download_status(self):
         raise RuntimeError("token revoked")
@@ -260,7 +258,6 @@ def fake_media():
 def fake_steam():
     """An enrolled account session whose install queues silently."""
     return types.SimpleNamespace(
-        available=lambda: True,
         install=lambda a: {"ok": True, "detail": "queued"},
         download_status=lambda: [],
     )
@@ -649,8 +646,6 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
 def test_list_games_and_search_store_refuse_a_bad_ask(impls):
     r = impls["list_games"]({"source": "nope"})
     assert not r["ok"] and "unknown source" in r["error"], r
-    r = impls["list_games"]({"source": "downloading"})  # moved to its own tool
-    assert not r["ok"] and "download_status" in r["error"], r
     r = impls["search_store"]({})  # neither term nor tags
     assert not r["ok"] and ("term" in r["error"] or "genre" in r["error"]), r
 
@@ -701,7 +696,7 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     seed_lock(None)
     dl = rimpls["download_status"]({})
     assert not dl["ok"] and "Steam" in dl["error"], dl
-    assert {"install_error", "download_status_error"} <= set(log.events())
+    assert {"install_fallback", "download_status_error"} <= set(log.events())
 
 
 def running(impls, log):
@@ -714,7 +709,7 @@ def running(impls, log):
 def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
     results = []
     tools = running({"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log)
-    schema = tool_schemas.pipecat_schemas(tools, log)[0]
+    schema = tool_schemas.pipecat_schemas(tools)[0]
 
     class Params:
         arguments = {}
@@ -741,7 +736,7 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
         },
         log,
     )
-    receipt_schema = tool_schemas.pipecat_schemas(tools, log)[0]
+    receipt_schema = tool_schemas.pipecat_schemas(tools)[0]
 
     class ReceiptWorker:
         async def queue_frame(self, frame):
@@ -784,7 +779,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
         },
         tlog,
     )
-    schemas = tool_schemas.pipecat_schemas(tools, tlog)
+    schemas = tool_schemas.pipecat_schemas(tools)
 
     answered = []
 
@@ -936,7 +931,7 @@ def test_game_details_resolves_a_missing_name_from_the_store(monkeypatch, impls)
     monkeypatch.setattr(
         steamstore,
         "store_items",
-        lambda a, cc=None: {a[0]: {"name": "Some Unowned Game"}},
+        lambda a: {a[0]: {"name": "Some Unowned Game"}},
     )
     monkeypatch.setattr(
         steamstore, "fetch_hltb", lambda name: hltb_calls.append(name) or {"main": 20}

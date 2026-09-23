@@ -7,6 +7,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from slopstation import events
+
 # Every local sidecar is on the LAN; a slow answer is a broken one.
 HTTP_TIMEOUT_S = 10
 # Except the interactive release search, which fans out to every indexer
@@ -146,16 +148,6 @@ def _qbit_http_transport(method, url, headers, body, timeout):
         raise MediaError("qBittorrent is unreachable") from e
 
 
-def _configured_password(value):
-    # events.real_key with the floor a Web UI password can meet.
-    return (
-        isinstance(value, str)
-        and "..." not in value
-        and not value.upper().startswith("PLACEHOLDER")
-        and len(value.strip()) >= 6
-    )
-
-
 class QbittorrentClient:
     """Authenticated boundary for diagnostics and explicit maintenance."""
 
@@ -163,7 +155,8 @@ class QbittorrentClient:
         parsed = _split_url("qBittorrent", base_url)
         if not isinstance(username, str) or not username:
             raise MediaConfigurationError("media.qbittorrentUsername is missing")
-        if not _configured_password(password):
+        # The floor a Web UI password can meet.
+        if not events.real_key(password, min_len=6):
             raise MediaConfigurationError("qbittorrentPassword is missing")
         self.base_url = parsed.geturl()
         self.origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -260,18 +253,8 @@ class QbittorrentClient:
             return "all"
         return "|".join(hashes)
 
-    def torrents(
-        self,
-        filter=None,
-        category=None,
-        sort=None,
-        reverse=False,
-        limit=None,
-        hashes=None,
-    ):
+    def torrents(self, filter=None, category=None, sort=None, reverse=False):
         params = {}
-        if hashes:
-            params["hashes"] = self._hashes(hashes)
         if filter:
             params["filter"] = filter
         if category is not None:
@@ -279,8 +262,6 @@ class QbittorrentClient:
         if sort:
             params["sort"] = sort
             params["reverse"] = "true" if reverse else "false"
-        if limit:
-            params["limit"] = int(limit)
         value = self._json("torrents/info", params or None)
         if not isinstance(value, list):
             raise MediaError("qBittorrent returned an invalid torrent list")
@@ -354,13 +335,13 @@ class QbittorrentClient:
         if upload is not None:
             self._call("POST", "transfer/setUploadLimit", {"limit": int(upload)})
 
-    def main_log(self, warnings_only=True, last_known_id=-1):
+    def main_log(self, warnings_only=True):
         params = {
             "normal": "false" if warnings_only else "true",
             "info": "false" if warnings_only else "true",
             "warning": "true",
             "critical": "true",
-            "last_known_id": int(last_known_id),
+            "last_known_id": -1,
         }
         value = self._json("log/main", params)
         return value if isinstance(value, list) else []

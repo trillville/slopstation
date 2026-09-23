@@ -24,14 +24,14 @@ def ssh(cmd: str, timeout: float = 15) -> str:
     return r.stdout.strip()
 
 
-def ssh_intent(cmd: str, turn: str | None = None, **kw) -> str:
+def ssh_intent(cmd: str, turn: str | None = None) -> str:
     """A MUTATING verb, tagged with this launch's turn id; read-only polls use
     plain ssh(). Pass `turn` explicitly from callers whose ambient context
     predates the utterance (the voice lane's - a ContextVar cannot reach it)."""
     turn = turn or events.current().get("turn")
     # Dispatch fails CLOSED on a malformed id (matches no verb, answers
     # DENIED), so re-validate here and send it uncorrelated instead.
-    return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd, **kw)
+    return ssh(f"{cmd} --turn {turn}" if events.valid_turn(turn) else cmd)
 
 
 def enter_running() -> bool | None:
@@ -51,7 +51,7 @@ def enter_running() -> bool | None:
 
 
 # --- the verbs ---------------------------------------------------------------
-# Read-only polls use ssh(); the five mutating verbs ride ssh_intent() with the
+# Read-only polls use ssh(); the seven mutating verbs ride ssh_intent() with the
 # turn. Each returns Dispatch's answer as printed.
 
 
@@ -93,7 +93,7 @@ def games() -> str:
 
 
 def collections() -> str:
-    return ssh("collections", timeout=15)
+    return ssh("collections")
 
 
 def launch(appid: int | str, turn: str | None = None) -> str:
@@ -110,7 +110,7 @@ def nav(kind: str, arg: object = None, turn: str | None = None) -> str:
 
 def disk() -> str:
     """Free space on each Steam library drive, as JSON rows."""
-    return ssh("disk", timeout=15)
+    return ssh("disk")
 
 
 def display(target: str, turn: str | None = None) -> str:
@@ -139,7 +139,7 @@ NAV_URL_PATTERN = (
 NAV_URL_RE = re.compile(NAV_URL_PATTERN)
 
 
-# The verb surface, one name per Dispatch.ps1 switch arm (test_turn compares).
+# The verb surface, one name per Dispatch.ps1 switch arm (test_turn_ids compares).
 VERBS = (
     "enter",
     "exit",

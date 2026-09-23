@@ -272,9 +272,6 @@ function Hide-DesktopSteam {
     }
 }
 
-# Return the foreground window title for the ready event.
-function Get-ForegroundTitle { [CG.Win]::ForegroundTitle() }
-
 # Steam's install path, from the registry. Shared with Launch-Game.
 function Get-SteamExe {
     $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath -replace '/', '\'

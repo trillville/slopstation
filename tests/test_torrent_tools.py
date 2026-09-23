@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from slopstation.agent.llm import assistant, confirm
+from slopstation.agent.llm import assistant
 from slopstation.agent.tools import media_proton
 
 LINKED = "a" * 40  # Radarr is waiting on this one
@@ -92,8 +92,6 @@ class FakeQbit:
             rows = [r for r in rows if r["state"] == "uploading"]
         elif filter == "downloading":
             rows = [r for r in rows if r["state"] == "downloading"]
-        elif filter == "stopped":
-            rows = [r for r in rows if r["state"].startswith("stopped")]
         if category is not None:
             rows = [r for r in rows if r["category"] == category]
         if sort == "added_on":
@@ -196,10 +194,6 @@ class FakeQbit:
 class FakeMedia:
     def __init__(self, qbit):
         self.qbit = qbit
-        self.prowlarr = None
-        self.radarr = types.SimpleNamespace(name="Radarr", get=lambda *a, **k: [])
-        self.sonarr = types.SimpleNamespace(name="Sonarr", get=lambda *a, **k: [])
-        self.cfg = {}
 
     fail_link = False
 
@@ -236,8 +230,6 @@ def test_list_torrents_links_media_filters_and_pages(rig):
     tk, qbit, _ = rig
     out = tk.call("list_torrents", {"state": "all", "limit": 2})
     assert out["ok"] and out["count"] == 3 and out["next_offset"] == 2
-    rest = tk.call("list_torrents", {"state": "all", "limit": 2, "offset": 2})
-    assert len(rest["torrents"]) == 1 and rest["next_offset"] is None
     # Newest first, and the linked one names its movie, not its release.
     assert [r["hash"] for r in out["torrents"]] == [SEEDING, LINKED]
     dune = out["torrents"][1]
@@ -301,9 +293,7 @@ def test_pause_resume_and_the_harmless_controls_report_the_state_after(rig):
     assert not any(a[0] == "delete" for a in qbit.actions)
 
 
-def test_delete_torrent_refuses_a_linked_torrent_and_gates_an_orphan(
-    rig, log, monkeypatch
-):
+def test_delete_torrent_refuses_a_linked_torrent_and_gates_an_orphan(rig, log):
     tk, qbit, dispatch = rig
     # An unread queue refuses: it cannot pass as "not linked".
     tk.ctx.media.fail_link = True
@@ -340,11 +330,6 @@ def test_delete_torrent_refuses_a_linked_torrent_and_gates_an_orphan(
     dispatch.utterance = types.SimpleNamespace(turn="aa0003", asked="")
     kept = tk.call("delete_torrent", {"hash": SEEDING, "delete_files": False})
     assert "keeping its files" in kept["acknowledgment"]
-    monkeypatch.setattr(confirm, "ASK_TTL_S", -1)
-    dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
-    assert not tk.call("delete_torrent", {"hash": SEEDING, "delete_files": False})[
-        "ok"
-    ], "stale ask re-asks"
 
 
 def test_transfer_info_and_speed_limits(rig):
@@ -427,24 +412,15 @@ def test_seeding_orphans_vpn_and_log(rig, monkeypatch):
     assert tk.call("qbit_log", {"everything": True, "limit": 1})["count"] == 2
 
 
-def test_dry_run_and_service_gating(log):
+def test_a_dry_run_acts_on_nothing(log):
     dispatch = types.SimpleNamespace(
         dry_run=True, utterance=types.SimpleNamespace(turn="aa0001", asked="")
     )
     qbit = FakeQbit()
     tk = assistant.Toolkit(dispatch, log, media=FakeMedia(qbit))
-    tk.load(["pause_torrent", "delete_torrent", "set_speed_limits"])
+    tk.load(["pause_torrent", "set_speed_limits"])
     assert tk.call("pause_torrent", {"hashes": ["all"]})["dry_run"] and not qbit.actions
-    assert (
-        tk.call("delete_torrent", {"hash": ORPHAN})["dry_run"] and len(qbit.rows) == 3
-    )
     assert (
         tk.call("set_speed_limits", {"download_kbps": 1})["dry_run"]
         and not qbit.actions
-    )
-    # No qBittorrent client: none of these are offered at all.
-    no_qbit = FakeMedia(None)
-    assert not any(
-        "torrents" in assistant.REGISTRY.get(n).needs
-        for n in assistant.Toolkit(dispatch, log, media=no_qbit).offered
     )

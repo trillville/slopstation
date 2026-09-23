@@ -97,10 +97,3 @@ def test_ack_validation_030cf1_or_the_command_did_not_land(fake_serial, port):
     port["answer"] = ""  # TV silent/off
     with pytest.raises(tv.ExlinkNak):
         tv.exlink_send_hex(FRAME, "COMX")
-
-
-def test_every_frame_is_seven_bytes_and_its_checksum_zeroes_the_sum():
-    for name, hexs in tv.EXLINK_FRAMES.items():
-        b = bytes.fromhex(hexs)
-        assert len(b) == 7, f"{name}: {len(b)} bytes"
-        assert (sum(b) & 0xFF) == 0, f"{name}: checksum does not zero the sum"

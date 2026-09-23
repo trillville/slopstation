@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog, fake_dispatch, sonarr_episode
+from helpers import SERVICE_CFG, CapturingLog, fake_dispatch, sonarr_episode
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import media, operations, operations_monitors
 from slopstation.agent.tools.media_clients import MediaError
@@ -366,22 +366,8 @@ def stack():
             }
         ],
     )
-    cfg = {
-        "movieRoot": "/data/Movies",
-        "seriesRoot": "/data/TV",
-        "moviePresets": {
-            "default": "Movie UHD",
-            "1080p": "Movie HD",
-            "2160p": "Movie UHD",
-        },
-        "seriesPresets": {
-            "default": "Series HD",
-            "1080p": "Series HD",
-            "2160p": "Series UHD",
-        },
-    }
     svc = media.MediaService(
-        cfg, CapturingLog("voice"), radarr, sonarr, prowlarr=prowlarr, qbit=None
+        SERVICE_CFG, CapturingLog("voice"), radarr, sonarr, prowlarr=prowlarr, qbit=None
     )
     return svc, radarr, sonarr, prowlarr
 
@@ -951,6 +937,14 @@ def test_delete_season_cancels_a_request_still_waiting_for_its_episode_ids(
     assert deleted["operations_canceled"] == [pending["id"]]
     assert store.get(pending["id"])["state"] == operations.CANCELED
     assert store.get(other_season["id"])["state"] == operations.RUNNING
+
+
+def test_delete_media_of_something_not_held_answers_without_asking(tracked):
+    """library() has no year for an id the app does not hold; the tool must
+    still reach its nothing-on-disk path instead of raising."""
+    tk, _, _ = tracked
+    out = tk.call("delete_media", {"kind": "movie", "catalog_id": 999})
+    assert out["ok"] and out["removed"] is False, out
 
 
 def test_episode_files_names_what_is_held_and_when_it_arrived(stack, rig, monkeypatch):

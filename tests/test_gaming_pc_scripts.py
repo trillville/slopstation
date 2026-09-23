@@ -49,7 +49,14 @@ def powershell(script, timeout=120):
         "-EncodedCommand",
         enc,
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    # Retry once: a cold-start stall does not repeat; a real hang trips twice.
+    for attempt in (1, 2):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise
     return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
 
 
@@ -69,28 +76,12 @@ def task_table(common):
 
 
 def parse_all():
-    script = PARSE_PS.format(pc=str(PC), media=str(MEDIA_START), root=str(ROOT))
-    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    cmd = [
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        enc,
-    ]
-    # Retry once: a cold-start stall does not repeat; a real hang trips twice.
-    for attempt in (1, 2):
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            break
-        except subprocess.TimeoutExpired:
-            if attempt == 2:
-                raise
-    lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    lines = powershell(
+        PARSE_PS.format(pc=str(PC), media=str(MEDIA_START), root=str(ROOT))
+    )
     errors = [ln for ln in lines if "|" in ln]
     parsed = [ln for ln in lines if ln.startswith("PARSED ")]
-    assert parsed, f"parser run produced no summary: {r.stderr[:400]}"
+    assert parsed, f"parser run produced no summary: {lines}"
     n = int(parsed[0].split()[1])
     assert n >= 11, f"only {n} scripts parsed - path bug, not a real pass"
     assert not errors, (
@@ -144,8 +135,6 @@ def owned(text, fn):
 
 
 def test_gaming_pc_scripts_parse():
-    if not shutil.which("powershell"):
-        pytest.skip("powershell not on PATH")
     dispatch, common, nav = read(DISPATCH), read(COMMON), read(NAV)
 
     # 1. Every script parses.

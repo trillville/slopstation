@@ -112,12 +112,6 @@ $stamp = if ($rev) { "$rev $(Get-Date -Format yyyy-MM-dd)" }
 Set-Content $buildId $stamp
 Write-Host "build-id: $stamp"
 
-# Runtime pieces that cannot come from the repo - warn, never touch.
-foreach ($f in 'vhui64.exe', 'OFFICE.lnk', 'TV-GAMING.lnk') {
-    if (-not (Test-Path (Join-Path $Dest $f))) {
-        Write-Host "WARNING: $Dest\$f is missing - install it on this machine (VirtualHere client / DisplayMagician shortcuts)"
-    }
-}
 Write-CgEvent 'deploy_done' @{ scripts = $scripts.Count; build_id = $stamp }
 Write-Host "deployed $($scripts.Count) files to $Dest"
 # The optional git call above may have left a non-zero $LASTEXITCODE.

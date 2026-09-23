@@ -355,11 +355,11 @@ def impls(ctx: ToolContext):
                     # One store call failed; do not let each facet retry it.
                     return out
                 if "dlc" in details:
-                    out["dlc"] = steamstore.fetch_dlc(appid, data)
+                    out["dlc"] = steamstore.fetch_dlc(data)
                 if "requirements" in details:
-                    out["requirements"] = steamstore.fetch_requirements(appid, data)
+                    out["requirements"] = steamstore.fetch_requirements(data)
                 if "release" in details:
-                    out["release"] = steamstore.fetch_release(appid, data)
+                    out["release"] = steamstore.fetch_release(data)
                 return out
 
             tasks["_details"] = from_details
@@ -425,11 +425,6 @@ def impls(ctx: ToolContext):
         the precomputed state/deals.json (~0 ms); trending, recently_played,
         wishlist are live calls; the owned sources read the catalog."""
         source = args.get("source")
-        if source == "downloading":
-            return {
-                "ok": False,
-                "error": "Steam's download status is the download_status tool",
-            }
         if source == "wishlist_on_sale":
             rows = steamstore.load_deals().get("wishlist_on_sale")
             if rows is None:
@@ -614,8 +609,6 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "appid must be an integer"}
         if appid <= 0:
             return {"ok": False, "error": "appid must be positive"}
-        if steam is None or not steam.available():
-            return {"ok": False, "error": "the Steam account session isn't enrolled"}
         if dry := ctx.preview(f"wishlist {action} {appid}"):
             return dry
         return steam.wishlist(appid, action == "add")

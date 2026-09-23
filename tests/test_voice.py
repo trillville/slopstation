@@ -1,6 +1,7 @@
 """Test voice-service startup, modes, event order, and error handling."""
 
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -9,7 +10,7 @@ import pytest
 
 import helpers
 from helpers import CapturingLog
-from slopstation import checkin, config, events, logbook
+from slopstation import checkin, config, events, gamepc, logbook
 from slopstation.agent import voice
 from slopstation.agent.speech import announce
 from slopstation.agent.telemetry import sentry
@@ -100,50 +101,14 @@ class FakeOperationStore:
         return []
 
 
-class FakeSteamMonitor:
-    made = []
-
-    def __init__(self, store, steam, log):
-        self.steam = steam
-        self.poll_s = 30
-        self.started = False
-        self.stopped = False
-        FakeSteamMonitor.made.append(self)
-
-    def start(self):
-        self.started = True
-        return threading.Thread(name="fake-monitor")  # never run
-
-    def stop(self):
-        self.stopped = True
-
-
-class FakeMediaMonitor:
-    KINDS = {"movie_acquisition", "series_acquisition"}
-    made = []
-
-    def __init__(self, store, service, log, poll_s=30):
-        self.poll_s = poll_s
-        self.started = False
-        self.stopped = False
-        FakeMediaMonitor.made.append(self)
-
-    def start(self):
-        self.started = True
-        return threading.Thread(name="fake-monitor")  # never run
-
-    def stop(self):
-        self.stopped = True
-
-
-class FakeProtonPortMonitor:
-    made = []
+class FakeMonitor:
+    made: list = []
 
     def __init__(self, poll_s=30):
         self.poll_s = poll_s
         self.started = False
         self.stopped = False
-        FakeProtonPortMonitor.made.append(self)
+        type(self).made.append(self)
 
     def start(self):
         self.started = True
@@ -151,6 +116,21 @@ class FakeProtonPortMonitor:
 
     def stop(self):
         self.stopped = True
+
+
+class FakeSteamMonitor(FakeMonitor):
+    def __init__(self, store, steam, log):
+        super().__init__()
+        self.steam = steam
+
+
+class FakeMediaMonitor(FakeMonitor):
+    def __init__(self, store, service, log, poll_s=30):
+        super().__init__(poll_s)
+
+
+class FakeProtonPortMonitor(FakeMonitor):
+    pass
 
 
 class FakeSteam:
@@ -213,6 +193,10 @@ def one_wake():
     return [(0.7, FakeCapture())]
 
 
+def unreachable_pc(cmd, timeout=15):
+    raise subprocess.CalledProcessError(255, ["ssh", cmd])
+
+
 @pytest.fixture
 def stubbed(monkeypatch):
     """Replace external calls and reset fake recorders."""
@@ -235,6 +219,8 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(voice, "WakeListener", FakeListener)
     monkeypatch.setattr(voice, "play_pcm", lambda pa, pcm, idx=None: None)
     monkeypatch.setattr(voice, "refresh_library_bg", lambda: None)
+    # The services' library ticker would otherwise ssh to the real gaming PC.
+    monkeypatch.setattr(gamepc, "ssh", unreachable_pc)
     monkeypatch.setattr(voice, "prewarm_imports_bg", lambda provider: None)
     monkeypatch.setattr(voice, "GrammarMatcher", lambda voice: "MATCHER")
     monkeypatch.setattr(voice, "TvDucker", FakeDucker)

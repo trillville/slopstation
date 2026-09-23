@@ -10,8 +10,6 @@ from slopstation.agent.tools.media_clients import (
     _kind,
 )
 
-PRESETS = ("default", "1080p", "2160p")
-
 
 @dataclasses.dataclass(frozen=True)
 class Observation:

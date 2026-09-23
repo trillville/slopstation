@@ -6,6 +6,7 @@ from pathlib import Path
 
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
+from slopstation.agent.llm.toolsets.media_browse import _gb
 from slopstation.agent.tools import storage
 
 DISK_USAGE = """\
@@ -216,12 +217,8 @@ def impls(ctx: ToolContext):
                         {
                             "app": client.name,
                             "path": row.get("path"),
-                            "free_gb": round(
-                                int(row.get("freeSpace", 0) or 0) / 1024**3, 1
-                            ),
-                            "total_gb": round(
-                                int(row.get("totalSpace", 0) or 0) / 1024**3, 1
-                            ),
+                            "free_gb": _gb(row.get("freeSpace"), 1),
+                            "total_gb": _gb(row.get("totalSpace"), 1),
                         }
                     )
             except Exception as e:
@@ -236,12 +233,8 @@ def impls(ctx: ToolContext):
         if err:
             return err
         under = str(args.get("under") or "")
-        bounds, err = paging.window(args, cap=50)
-        if err:
-            return err
-        limit, offset = bounds
-        rows = storage.largest_items(root, under, offset + limit)
-        if not rows and under and storage._inside(root, under) is None:
+        rows = storage.largest_items(root, under)
+        if rows is None:
             return {"ok": False, "error": "that path is not under the media root"}
         return paging.page(rows, args, "items", cap=50, under=under or "/")
 
@@ -312,8 +305,7 @@ def impls(ctx: ToolContext):
 
         return Plan(
             ("path", str(resolved)),
-            f"Delete {rel} - {files} file(s), {round(size / 1024**3, 2)} GB? "
-            "That cannot be undone.",
+            f"Delete {rel} - {files} file(s), {_gb(size)} GB? That cannot be undone.",
             act,
             f"delete {rel}",
         )

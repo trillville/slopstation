@@ -157,9 +157,11 @@ class TextHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authorized(self):
-        supplied = self.headers.get("Authorization", "")
-        expected = "Bearer " + self.server.token
-        return hmac.compare_digest(supplied, expected)
+        # Bytes, not str: compare_digest RAISES on a non-ASCII header.
+        return hmac.compare_digest(
+            self.headers.get("Authorization", "").encode("utf-8", "replace"),
+            ("Bearer " + self.server.token).encode("utf-8"),
+        )
 
     def do_GET(self):
         """GET /health: what the voice process has running. Needs the token."""

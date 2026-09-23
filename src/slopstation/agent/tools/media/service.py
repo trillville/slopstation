@@ -135,7 +135,7 @@ class MediaService(_Series, _Movies):
             "episode_ids": episode_ids,
         }
 
-    def _scope_queue(self, operation, episode_ids=None):
+    def _scope_queue(self, operation, episode_ids):
         """The queue rows for an operation's scope, filtered to the episodes
         it owns so a cancel leaves another request's download alone."""
         kind = self._operation_kind(operation)
@@ -143,9 +143,6 @@ class MediaService(_Series, _Movies):
         row_id = int(operation["external_ref"])
         if kind == "movie":
             return self._queue_records(client, "movieId", row_id)
-        if episode_ids is None:
-            missing, _ = self._missing_scope(operation)
-            episode_ids = self._episode_ids(missing)
         wanted = set(episode_ids)
         return [
             row
@@ -363,26 +360,22 @@ class MediaService(_Series, _Movies):
                 }
             )
         baselines = self._baselines(kind, row, episode_ids=scope.get("episode_ids"))
-        command = self._one(
-            client.post(
-                "command",
-                {
-                    "name": "ManualImport",
-                    "files": candidates["files"],
-                    "importMode": "auto",
-                },
-            ),
-            client.name,
-            "import command",
+        command_id = self._post_command(
+            client,
+            {
+                "name": "ManualImport",
+                "files": candidates["files"],
+                "importMode": "auto",
+            },
         )
         return self._submission(
             kind,
             row["id"],
             title,
             row.get(spec["id_key"]),
-            command_ids=[int(command["id"])],
+            command_ids=[command_id],
             phase="importing",
-            work_id=f"command:{command['id']}",
+            work_id=f"command:{command_id}",
             detail=f"{client.name} is importing {len(candidates['files'])} file(s)",
             **scope,
             **baselines,

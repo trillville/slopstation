@@ -344,7 +344,7 @@ def impls(ctx: ToolContext):
             }
         entry = media.library(kind, catalog_id)
         named = (
-            " ".join(str(part) for part in (entry["title"], entry["year"]) if part)
+            " ".join(str(part) for part in (entry["title"], entry.get("year")) if part)
             or f"{kind} {catalog_id}"
         )
         if all_seasons:

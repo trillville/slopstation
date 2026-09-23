@@ -9,14 +9,13 @@ import json
 import sys
 import time
 
-from slopstation import config, logbook, paths, statefile
+from slopstation import config, events, logbook, paths, statefile
 
 API = "https://api.steampowered.com"
 LOGIN = "https://login.steampowered.com"  # the transfer-login host
 COMMUNITY = "https://steamcommunity.com"
-STORE = "https://store.steampowered.com"
 # Steam inspects origin= on ClientComm GETs.
-ORIGIN = STORE
+ORIGIN = "https://store.steampowered.com"
 # Must not read as a bot library's default UA - that is the flagged
 # fingerprint. Bump occasionally.
 UA = (
@@ -61,7 +60,6 @@ class SteamSession:
     cached access token. The lane self-gates on available()."""
 
     def __init__(self, secrets, log=log, machine_name=None):
-        self.secrets = secrets
         self.log = log
         self.steamid = str(secrets.get("steamId64", ""))
         self._refresh = secrets.get("steamRefreshToken")
@@ -240,7 +238,7 @@ class SteamSession:
 
     def sessions(self):
         """Logged-in clients (GetAllClientLogonInfo), each {instanceid,
-        machine_name, os_name}. Empty when the PC's client is offline - not an
+        machine_name}. Empty when the PC's client is offline - not an
         error. Instanceids CHURN on every client login; never cache one."""
         body, _ = self._get(
             "IClientCommService/GetAllClientLogonInfo/v1",
@@ -254,7 +252,6 @@ class SteamSession:
                     {
                         "instanceid": str(iid),
                         "machine_name": s.get("machine_name", ""),
-                        "os_name": s.get("os_name", ""),
                     }
                 )
         return out
@@ -274,9 +271,8 @@ class SteamSession:
     def client_online(self):
         return self._target() is not None
 
-    def app_list(self, filters="changing"):
-        """Return installation and download status for changing apps (or, with
-        filters="installed", everything installed)."""
+    def app_list(self):
+        """Return installation and download status for changing apps."""
         tgt = self._target()
         if not tgt:
             return {}
@@ -288,7 +284,7 @@ class SteamSession:
                 "client_instanceid": tgt["instanceid"],
                 "fields": "games",
                 "include_client_info": "true",
-                "filters": filters,
+                "filters": "changing",
             },
         )
         out = {}
@@ -305,7 +301,6 @@ class SteamSession:
                 "changing": bool(a.get("changing")),
                 "paused": bool(a.get("download_paused")),
                 "uninstalling": bool(a.get("uninstalling")),
-                "running": bool(a.get("running")),
                 "downloaded": done,
                 "total": total,
                 # -1 is Steam's "not in the queue"; None speaks better.
@@ -392,11 +387,6 @@ class SteamSession:
         """Pause or resume one app's download; reports the paused flag Steam
         holds afterwards, which is the only proof the action meant what we
         think it does. Never raises."""
-        if action not in UPDATE_ACTIONS:
-            return {
-                "ok": False,
-                "error": f"action must be one of {list(UPDATE_ACTIONS)}",
-            }
         try:
             err = self._mutate(
                 "SetClientAppUpdateState",
@@ -586,9 +576,7 @@ class SteamSession:
         value is a credential - never log it."""
         path = paths.secrets_file()
         try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except OSError:  # no file yet - a fresh rig
-            data = {}
+            data = events.load_secrets(path)  # {} when there is no file yet
         except ValueError:
             # A present-but-unparseable secrets.json aborts: proceeding with {}
             # would os.replace the whole file with just this token.

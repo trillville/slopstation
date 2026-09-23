@@ -112,15 +112,8 @@ def impls(ctx: ToolContext):
     bind = Bindings(ctx, SPECS)
     dispatch, log, steam = ctx.dispatch, ctx.log, ctx.steam
 
-    def _ready():
-        if steam is None or not steam.available():
-            return {"ok": False, "error": "the Steam account session isn't enrolled"}
-        return None
-
     @bind
     def download_status(args):
-        if err := _ready():
-            return err
         try:
             rows = steam.download_status()
         except Exception as e:
@@ -132,8 +125,6 @@ def impls(ctx: ToolContext):
         return {"ok": True, "count": len(rows), "downloads": rows}
 
     def _switch(action, args):
-        if err := _ready():
-            return err
         appid = args.get("appid")
         try:
             appid = int(appid) if appid is not None else None
@@ -141,13 +132,9 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "appid must be an integer"}
         if dry := ctx.preview(f"{action} {appid or 'all downloads'}"):
             return dry
-        try:
-            if appid is None:
-                return steam.enable_downloads(action == "resume")
-            out = steam.set_update_state(appid, action)
-        except Exception as e:
-            log.error("download_switch_error", action=action, err=str(e))
-            return {"ok": False, "error": f"couldn't reach Steam to {action}"}
+        if appid is None:
+            return steam.enable_downloads(action == "resume")
+        out = steam.set_update_state(appid, action)
         if out.get("ok") and out.get("verified") is False:
             out["detail"] = (
                 "Steam accepted the request but its app list still shows the "
@@ -166,8 +153,6 @@ def impls(ctx: ToolContext):
 
     @bind.destructive
     def uninstall_game(args):
-        if err := _ready():
-            return err
         try:
             appid = int(args.get("appid", 0))
         except (TypeError, ValueError):
@@ -179,21 +164,10 @@ def impls(ctx: ToolContext):
         if playing.ok and str(playing.detail) == str(appid):
             return {"ok": False, "error": f"{name} is running - quit it first"}
 
-        def act():
-            try:
-                out = steam.uninstall(appid)
-            except Exception as e:
-                log.error("uninstall_error", appid=appid, err=str(e))
-                return {
-                    "ok": False,
-                    "error": "couldn't reach Steam, so nothing was uninstalled",
-                }
-            return {**out, "name": name}
-
         return Plan(
             ("uninstall", appid),
             f"Uninstall {name} from the PC?",
-            act,
+            lambda: {**steam.uninstall(appid), "name": name},
             f"uninstall {name}",
         )
 

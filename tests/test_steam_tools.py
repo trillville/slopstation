@@ -5,7 +5,6 @@ import types
 
 import pytest
 
-from helpers import fake_dispatch
 from slopstation import config, gamepc, sessionlock, statefile
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import library, steamstore
@@ -59,16 +58,8 @@ def catalog():
 
 
 class FakeSteam:
-    def __init__(self, enrolled=True):
-        self.enrolled = enrolled
+    def __init__(self):
         self.calls = []
-        self.apps = {INSTALLED: {"paused": True, "changing": True}}
-
-    def available(self):
-        return self.enrolled
-
-    def access_token(self):
-        return "tok"
 
     def client_online(self):
         return True
@@ -121,9 +112,6 @@ def rig(catalog, log, monkeypatch):
         tv=types.SimpleNamespace(
             power_state=lambda: "on", volume=lambda: 14, muted=lambda: False
         ),
-        display=lambda target, turn=None: types.SimpleNamespace(
-            ok=target in ("tv", "monitor"), detail=f"display {target}"
-        ),
     )
     steam = FakeSteam()
     tk = assistant.Toolkit(dispatch, log, steam=steam)
@@ -140,17 +128,15 @@ def test_game_details_gathers_the_new_facets(rig, monkeypatch):
     monkeypatch.setattr(
         steamstore,
         "fetch_dlc",
-        lambda a, d=None: [
-            {"appid": 1, "name": "Pack", "final": "$4.99", "discount": 0}
-        ],
+        lambda d: [{"appid": 1, "name": "Pack", "final": "$4.99", "discount": 0}],
     )
     monkeypatch.setattr(
-        steamstore, "fetch_requirements", lambda a, d=None: {"minimum": "8 GB RAM"}
+        steamstore, "fetch_requirements", lambda d: {"minimum": "8 GB RAM"}
     )
     monkeypatch.setattr(
         steamstore,
         "fetch_release",
-        lambda a, d=None: {
+        lambda d: {
             "date": "2 Feb, 2021",
             "coming_soon": False,
             "developers": ["Iron Gate"],
@@ -193,7 +179,7 @@ def test_game_details_gathers_the_new_facets(rig, monkeypatch):
     assert out["ok"] and "players_now" not in out
 
 
-def test_list_games_new_sources_and_the_moved_one(rig, monkeypatch):
+def test_list_games_reads_the_owned_sources_and_the_wishlist(rig, monkeypatch):
     tk, _, _, _ = rig
     unplayed = tk.call("list_games", {"source": "unplayed"})
     assert unplayed["ok"] and [g["name"] for g in unplayed["games"]] == [
@@ -219,9 +205,6 @@ def test_list_games_new_sources_and_the_moved_one(rig, monkeypatch):
     )
     wl = tk.call("list_games", {"source": "wishlist"})
     assert wl["ok"] and wl["games"][0]["name"] == "Wanted"
-    moved = tk.call("list_games", {"source": "downloading"})
-    assert not moved["ok"] and "download_status" in moved["error"]
-    assert not tk.call("list_games", {"source": "nope"})["ok"]
 
 
 def test_search_library_playtime_and_friends(rig, monkeypatch):
@@ -363,22 +346,6 @@ def test_steam_client_tools_report_what_steam_holds(rig, log):
     )
 
 
-def test_steam_client_tools_need_the_account_session(catalog, log):
-    dispatch = fake_dispatch(None)
-    tk = assistant.Toolkit(dispatch, log)
-    assert "download_status" not in tk.offered and "uninstall_game" not in tk.offered
-    unenrolled = assistant.Toolkit(dispatch, log, steam=FakeSteam(enrolled=False))
-    unenrolled.load(["download_status"])
-    assert "enrolled" in unenrolled.call("download_status", {})["error"]
-
-
-def test_display_tool_hands_the_target_to_dispatch(rig):
-    tk, _, _, _ = rig
-    assert tk.call("display", {"target": "tv"}) == {"ok": True, "detail": "display tv"}
-    assert tk.call("display", {"target": "monitor"})["ok"]
-    assert not tk.call("display", {"target": "projector"})["ok"]
-
-
 def test_tv_status_pc_status_wake_and_sleep(rig, monkeypatch):
     tk, dispatch, steam, _ = rig
     tv = tk.call("tv_status", {})
@@ -477,10 +444,7 @@ def test_tv_status_pc_status_wake_and_sleep(rig, monkeypatch):
 
 
 def test_store_helpers_parse_steams_shapes(monkeypatch):
-    calls = []
-
     def fake_get(url, params=None, timeout=20):
-        calls.append(url)
         if "appdetails" in url:
             return {
                 "1": {
@@ -566,20 +530,6 @@ def test_store_helpers_parse_steams_shapes(monkeypatch):
                     ]
                 }
             }
-        if "featuredcategories" in url:
-            return {
-                "top_sellers": {
-                    "items": [
-                        {
-                            "id": 9,
-                            "name": "Seller",
-                            "discount_percent": 10,
-                            "final_price": 899,
-                        },
-                        {"id": 228980, "name": "Redist"},
-                    ]
-                }
-            }
         if "GetWishlist" in url:
             return {
                 "response": {
@@ -591,11 +541,11 @@ def test_store_helpers_parse_steams_shapes(monkeypatch):
     monkeypatch.setattr(steamstore, "_get", fake_get)
     monkeypatch.setattr(library, "steam_creds", lambda: ("K", "7656119"))
     data = steamstore.fetch_appdetails(1)
-    assert steamstore.fetch_dlc(1, data) == [
+    assert steamstore.fetch_dlc(data) == [
         {"appid": 2, "name": "DLC Two", "final": "$4.99", "discount": 0, "price": 499}
     ]
-    assert steamstore.fetch_requirements(1, data) == {"minimum": "Memory: 8 GB"}
-    assert steamstore.fetch_release(1, data)["developers"] == ["Dev"]
+    assert steamstore.fetch_requirements(data) == {"minimum": "Memory: 8 GB"}
+    assert steamstore.fetch_release(data)["developers"] == ["Dev"]
     assert steamstore.fetch_players_now(1) == 777
     ach = steamstore.fetch_achievements(1)
     assert ach["total"] == 2 and ach["unlocked"] == 1 and ach["percent"] == 50
@@ -610,9 +560,6 @@ def test_store_helpers_parse_steams_shapes(monkeypatch):
         "playing"
     ] == "Hades"
     assert friends[1]["state"] == "offline" and friends[1]["last_seen"]
-    top = steamstore.fetch_featured("top_sellers")
-    assert top == [{"appid": 9, "name": "Seller", "discount": 10, "final": 8.99}]
-    assert steamstore.fetch_featured("bogus") == []
     wl = steamstore.fetch_wishlist("7656119")
     assert [w["appid"] for w in wl] == [3, 2] and wl[1]["name"] == "DLC Two"
     monkeypatch.setattr(library, "steam_creds", lambda: None)

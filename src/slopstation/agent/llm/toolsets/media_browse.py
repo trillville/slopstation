@@ -125,8 +125,8 @@ WANTED_SORT = {
 }
 
 
-def _gb(value):
-    return round(int(value or 0) / GB, 2)
+def _gb(value, places=2):
+    return round(int(value or 0) / GB, places)
 
 
 def _quality_name(row):
