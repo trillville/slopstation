@@ -317,7 +317,8 @@ bind mounts and are untouched.
 The voice lane does this on its own for minor versions, at 4 am, one app at a
 time. It waits a night if Radarr or Sonarr is importing. Every update is logged
 as `media_update_applied` with `before` and `after`; `before` is the image tag
-to pin if the new one misbehaves. A failed update is `media_update_failed`.
+to pin if the new one misbehaves. A failed update is `media_update_failed`;
+`media_update_skipped` means the app did not answer, so nothing was tried.
 `media.autoUpdate: false` turns it off.
 
 A new major version (Radarr 6 to 7) is not applied: it is logged once as

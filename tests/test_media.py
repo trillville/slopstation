@@ -1178,15 +1178,18 @@ def test_update_watch_applies_minors_overnight_and_holds_majors():
     assert log.find("media_update_held")[0]["latest"] == "5.0.0"
 
 
-def test_update_watch_waits_out_an_import_and_logs_a_failed_update():
+def test_update_watch_waits_out_an_import_and_tells_a_failed_update_from_a_skip():
     def update(client, media_dir):
         raise media_clients.MediaError("pull access denied")
 
     importing = _offered(
         "Radarr", "6.3.0", "6.4.4", [{"trackedDownloadState": "importing"}]
     )
+    down = FakeServarr([None], [{"version": "4.0.20", "latest": True}])
+    down.name = "Sonarr"
     prowlarr = _offered("Prowlarr", "2.5.2", "2.6.5")
-    log = _night_watch([importing, prowlarr], update)
+    log = _night_watch([importing, down, prowlarr], update)
     assert [(r["event"], r["app"]) for r in log.records] == [
-        ("media_update_failed", "Prowlarr")
+        ("media_update_skipped", "Sonarr"),
+        ("media_update_failed", "Prowlarr"),
     ]

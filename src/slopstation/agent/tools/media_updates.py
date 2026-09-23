@@ -134,8 +134,10 @@ class MediaUpdateMonitor(Monitor):
             try:
                 self._update(client)
             except MediaError as e:
-                self.log.error(
-                    "media_update_failed", app=client.name, err=_clean_text(e)
+                # A check before any update did not answer, so nothing was
+                # tried. An app that is down is the health watch's to report.
+                self.log.warn(
+                    "media_update_skipped", app=client.name, err=_clean_text(e)
                 )
 
     def _update(self, client):
@@ -153,7 +155,11 @@ class MediaUpdateMonitor(Monitor):
             return
         if client.name in IMPORTERS and self._importing(client):
             return
-        result = self.update(client, self.media_dir)
+        try:
+            result = self.update(client, self.media_dir)
+        except MediaError as e:
+            self.log.error("media_update_failed", app=client.name, err=_clean_text(e))
+            return
         # The same image twice: linuxserver has not built the release yet,
         # and tomorrow night tries again.
         if result["before"] != result["after"]:

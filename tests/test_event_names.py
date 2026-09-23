@@ -124,6 +124,7 @@ PYTHON = {
     "media_update_applied": {"after", "app", "before"},
     "media_update_failed": {"app", "err"},
     "media_update_held": {"app", "installed", "latest"},
+    "media_update_skipped": {"app", "err"},
     "media_watch_failed": {"app", "err"},
     "meta_failed": {"appid", "err"},
     "meta_fetched": {"appid", "n", "of"},
