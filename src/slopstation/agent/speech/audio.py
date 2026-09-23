@@ -251,7 +251,7 @@ class WakeListener:
     SILENT_CHUNKS = 375  # 30 s of literal zeros = dead stream
 
     # Custom wake models are stored in the repository.
-    MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
+    MODELS_DIR = Path(__file__).resolve().parent / "models"
 
     def __init__(self, pa, voice_cfg, input_device_index):
         import numpy as np

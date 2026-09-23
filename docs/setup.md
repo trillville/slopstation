@@ -61,7 +61,8 @@ mute use UPnP over HTTP. Another make means adapting `tv.py`.
 
    `vol` reads volume, `vol 14` sets it, and `input hdmi1` selects an input.
    `mute status` reads mute state; `mute on` and `mute off` set it explicitly.
-   The separate `slopstation.exlink` command is a raw serial diagnostic.
+   `raw hdmi1` sends one Ex-Link frame by name and prints the TV's answer:
+   a serial diagnostic that verifies nothing.
 
 9. Run the doctor until it ends with `0 fail`:
 

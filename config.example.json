@@ -81,7 +81,7 @@
     "wakeClipsKeep": 200,
     "wakeVadThreshold": 0,
     "wakePatience": 0,
-    "_wakeVerifier": "Optional speaker-specific verifier model from src/slopstation/agent/models. Enabling it replaces the base score, so retune wakeThreshold. wakeVerifierThreshold controls when verification runs.",
+    "_wakeVerifier": "Optional speaker-specific verifier model from src/slopstation/agent/speech/models. Enabling it replaces the base score, so retune wakeThreshold. wakeVerifierThreshold controls when verification runs.",
     "wakeVerifier": "",
     "wakeVerifierThreshold": 0.1,
     "_duckSteps":"Soundbar volume steps removed during a voice session and restored afterward. Requires tvIp. Set to 0 to disable.",

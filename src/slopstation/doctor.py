@@ -506,7 +506,7 @@ def check_session_state():
             WARN,
             "last_error",
             err.read_text().strip() or "(empty)",
-            "most recent launch failure - see couch.log",
+            "most recent launch failure - see logs\\couch.log",
         )
     except OSError:
         report(PASS, "last_error", "none")

@@ -13,8 +13,6 @@ config.ini
 # Runtime state and logs
 logs/
 state/
-couch.log
-couch.log.*
 
 # Per-machine config + API credentials - commit the *.example/*.template, never
 # these. Keeping them local lets a machine run straight from a git checkout and
@@ -37,17 +35,12 @@ __pycache__/
 # re-fetch from, so it is vendored and travels with the repo. Contents are
 # ignored rather than the directory itself - git cannot re-include a file whose
 # parent directory is excluded, so the directory itself would beat the negation.
-src/slopstation/agent/models/*
-!src/slopstation/agent/models/*.onnx
+src/slopstation/agent/speech/models/*
+!src/slopstation/agent/speech/models/*.onnx
 # The custom verifier travels for the same reason:
 # it is fitted against ONE .onnx from clips off this couch, so losing it means
 # re-labelling the clips, not re-downloading anything.
-!src/slopstation/agent/models/*.pkl
-
-# Voice: room recordings for wake-word training - tens of MB of the TV, and
-# the gaming PC is where they are consumed, not here
-room.wav
-room_*.wav
+!src/slopstation/agent/speech/models/*.pkl
 
 # OS / editor cruft
 Thumbs.db

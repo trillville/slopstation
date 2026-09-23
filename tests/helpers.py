@@ -6,12 +6,14 @@ import json
 import os
 import time
 import types
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from slopstation import events, logbook, sessionlock
+from slopstation.agent.media import clients
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "src" / "slopstation"
@@ -240,3 +242,56 @@ class FakeArr:
 
     def delete(self, endpoint, params=None):
         self.deletes.append((endpoint, params))
+
+
+@dataclasses.dataclass
+class FakeQbitWeb:
+    """qBittorrent's WebUI: one login cookie per session, preferences read
+    back and updated, and every call recorded."""
+
+    calls: list = dataclasses.field(default_factory=list)
+    preferences: dict = dataclasses.field(default_factory=lambda: {"listen_port": 6881})
+    interfaces: list = dataclasses.field(
+        default_factory=lambda: [{"name": "ProTUN", "value": "iftype53_2"}]
+    )
+    torrents: list = dataclasses.field(
+        default_factory=lambda: [{"hash": "a" * 40, "name": "x"}]
+    )
+    dht_nodes: int = 200
+    alive: bool = True
+
+    def transport(self, method, url, headers, body, timeout):
+        self.calls.append((method, url, headers, body, timeout))
+        path = urllib.parse.urlsplit(url).path
+        if not self.alive:
+            raise clients.MediaError("qBittorrent is unreachable")
+        if path.endswith("/auth/login"):
+            return {"Set-Cookie": "QBT_SID_8080=session-1; HttpOnly; path=/"}, b""
+        if headers.get("Cookie") == "QBT_SID_8080=expired":
+            raise clients.QbittorrentAuthError("expired session")
+        assert headers["Cookie"] == "QBT_SID_8080=session-1"
+        if path.endswith("/app/version"):
+            return {}, b"v5.2.3"
+        if path.endswith("/app/preferences"):
+            return {}, json.dumps(self.preferences).encode()
+        if path.endswith("/app/setPreferences"):
+            changes = json.loads(urllib.parse.parse_qs(body.decode())["json"][0])
+            self.preferences.update(changes)
+            return {}, b""
+        if path.endswith("/app/networkInterfaceList"):
+            return {}, json.dumps(self.interfaces).encode()
+        if path.endswith("/app/shutdown"):
+            self.alive = False
+            return {}, b""
+        if path.endswith("/torrents/info"):
+            return {}, json.dumps(self.torrents).encode()
+        if path.endswith("/torrents/stop"):
+            return {}, b""
+        if path.endswith("/transfer/info"):
+            return {}, json.dumps({"dht_nodes": self.dht_nodes}).encode()
+        if path.endswith("/transfer/speedLimitsMode"):
+            return {}, b"1"
+        raise AssertionError((method, path))
+
+    def count(self, suffix):
+        return len([row for row in self.calls if row[1].endswith(suffix)])

@@ -43,13 +43,15 @@ class Logger:
                 print(line, flush=True)
             except (OSError, ValueError, AttributeError, UnicodeError):
                 pass  # windowless task: stdout is None or a dead pipe
+            # Emit first: a process's first event creates logs\, where
+            # couch.log lives.
+            events.emit(self.lane, event, level, **fields)
             if events.ENV != "test":
                 try:
                     with paths.couch_log().open("a", encoding="utf-8") as f:
                         f.write(line + "\n")
                 except OSError:
                     pass
-            events.emit(self.lane, event, level, **fields)
         except Exception:
             pass
 

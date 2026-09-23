@@ -163,6 +163,28 @@ def test_store_serialises_on_the_file(log):
     assert len(writers[0].all()) == 100, len(writers[0].all())
 
 
+def test_track_survives_a_failing_store():
+    failed_submission = {
+        "ok": True,
+        "kind": "movie_acquisition",
+        "authority": "radarr",
+        "external_ref": "31",
+        "title": "Dune",
+        "catalog_id": 438631,
+        "preset": "default",
+        "profile": "Movie UHD",
+        "already_available": False,
+    }
+
+    class FailingStore:
+        log = helpers.CapturingLog("voice")
+
+        def track_external(self, *args, **kwargs):
+            raise OSError("disk unavailable")
+
+    assert operations.track(FailingStore(), failed_submission)["tracking"] == "failed"
+
+
 def test_steam_monitor_needs_install_proof(log, monkeypatch):
     terminal = []
     store = operations.OperationStore(log, on_terminal=terminal.append)

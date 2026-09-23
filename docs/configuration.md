@@ -49,7 +49,7 @@ agent does not start. Every other voice key has a default in code, so a
 | Keys | For |
 |---|---|
 | `inputDeviceName`, `outputDeviceName` | the audio devices, by name |
-| `wakeModel`, `wakeThreshold`, `wakeNearMissFactor`, `wakeClipsKeep`, `wakeVadThreshold`, `wakePatience`, `wakeVerifier`, `wakeVerifierThreshold` | the wake word: a stock openWakeWord name or a `.onnx` vendored in `src/slopstation/agent/models`, and its tuning |
+| `wakeModel`, `wakeThreshold`, `wakeNearMissFactor`, `wakeClipsKeep`, `wakeVadThreshold`, `wakePatience`, `wakeVerifier`, `wakeVerifierThreshold` | the wake word: a stock openWakeWord name or a `.onnx` vendored in `src/slopstation/agent/speech/models`, and its tuning |
 | `duckSteps`, `duckToPct` | volume ducking during a voice session and during an announcement; needs `tvIp` |
 | `holdWindowS`, `followupCarryS`, `eotThreshold`, `eotTimeoutMs`, `eagerEotThreshold`, `eagerEnabled` | turn taking; `holdWindowS` is how long the mic stays open after an answer, and a closing phrase ("thanks", "go away") ends it early |
 | `busyEnabled`, `busyAfterMs`, `busyPhrase` | the busy acknowledgment: a tool call still out after this many milliseconds gets one acknowledgment per turn, so a slow lookup is not a silence. Each tool says its own few words from its spec ("checking Steam", "starting Valheim"); a tool with none says `busyPhrase`, or plays the two-burst earcon when that is empty. `busyEnabled` false is the off switch |

@@ -84,8 +84,9 @@ builds the assistant's tools for the given services; `fake_dispatch(turn,
 asked, dry_run)` is the two attributes of Dispatch a tool reads;
 `sonarr_episode(...)` is one episode row with only the keys given;
 `FakeArr` is one Radarr or Sonarr app that answers reads from the rows it
-holds and records every write; `SERVICE_CFG` is the media service config
-the media tests share. Any other fake
+holds and records every write; `FakeQbitWeb` is qBittorrent's Web UI, which
+the client and Proton tests both drive; `SERVICE_CFG` is the media service
+config the media tests share. Any other fake
 of a service (a Radarr client, a Steam session, the media service) lives in
 the file that uses it, shaped for what that file tests; the same name in two
 files is two fakes on purpose. `test_couch.py`'s `wire` scripts the gaming
