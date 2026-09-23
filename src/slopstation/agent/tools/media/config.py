@@ -158,7 +158,7 @@ def from_config(cfg, secrets, log):
             ):
                 raise MediaConfigurationError(f"media.{key} is invalid")
         _positive(media_cfg, "pollS", 30)
-    except (KeyError, MediaConfigurationError) as e:
+    except MediaConfigurationError as e:
         log.warn("lane_disabled", what="media", reason=str(e))
         return None
     # Prowlarr and qBittorrent are extras: their absence disables their tools,

@@ -253,18 +253,8 @@ class QbittorrentClient:
             return "all"
         return "|".join(hashes)
 
-    def torrents(
-        self,
-        filter=None,
-        category=None,
-        sort=None,
-        reverse=False,
-        limit=None,
-        hashes=None,
-    ):
+    def torrents(self, filter=None, category=None, sort=None, reverse=False):
         params = {}
-        if hashes:
-            params["hashes"] = self._hashes(hashes)
         if filter:
             params["filter"] = filter
         if category is not None:
@@ -272,8 +262,6 @@ class QbittorrentClient:
         if sort:
             params["sort"] = sort
             params["reverse"] = "true" if reverse else "false"
-        if limit:
-            params["limit"] = int(limit)
         value = self._json("torrents/info", params or None)
         if not isinstance(value, list):
             raise MediaError("qBittorrent returned an invalid torrent list")
@@ -347,13 +335,13 @@ class QbittorrentClient:
         if upload is not None:
             self._call("POST", "transfer/setUploadLimit", {"limit": int(upload)})
 
-    def main_log(self, warnings_only=True, last_known_id=-1):
+    def main_log(self, warnings_only=True):
         params = {
             "normal": "false" if warnings_only else "true",
             "info": "false" if warnings_only else "true",
             "warning": "true",
             "critical": "true",
-            "last_known_id": int(last_known_id),
+            "last_known_id": -1,
         }
         value = self._json("log/main", params)
         return value if isinstance(value, list) else []

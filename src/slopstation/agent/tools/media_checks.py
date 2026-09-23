@@ -97,20 +97,6 @@ def _enabled_rows(rows):
     ]
 
 
-def _root_and_profile_gaps(root_paths, profile_names, wanted_root, wanted_profiles):
-    """Roots compare case-folded and without a trailing separator - Servarr
-    echoes the path back in either form."""
-    normalized = {str(path).rstrip("/\\").casefold() for path in root_paths}
-    root_exists = (
-        bool(wanted_root) and str(wanted_root).rstrip("/\\").casefold() in normalized
-    )
-    available = {str(name).casefold() for name in profile_names}
-    missing = [
-        name for name in wanted_profiles if str(name).casefold() not in available
-    ]
-    return root_exists, missing
-
-
 def _check_service_reachable(report, client):
     """Status then health - the preamble every Servarr app shares. False means
     the API never answered, so the caller's deeper checks would only restate
@@ -165,30 +151,36 @@ def _check_arr(report, kind, client, media_cfg):
             raise MediaError(f"{label} returned invalid roots or profiles")
         wanted_root = str(media_cfg.get(root_key, ""))
         wanted = sorted(set((media_cfg.get(presets_key) or {}).values()))
-        root_exists, missing = _root_and_profile_gaps(
-            [row.get("path", "") for row in roots if isinstance(row, dict)],
-            [row.get("name", "") for row in profiles if isinstance(row, dict)],
-            wanted_root,
-            wanted,
+        # Roots compare case-folded and without a trailing separator -
+        # Servarr echoes the path back in either form.
+        normalized = {
+            str(row.get("path", "")).rstrip("/\\").casefold()
+            for row in roots
+            if isinstance(row, dict)
+        }
+        root_exists = bool(wanted_root) and (
+            wanted_root.rstrip("/\\").casefold() in normalized
         )
-        if root_exists:
-            report.add("PASS", f"{label} root", wanted_root)
-        else:
-            report.add(
-                "FAIL",
-                f"{label} root",
-                f"configured root {wanted_root or '(missing)'} does not exist",
-            )
-        if missing:
-            report.add(
-                "FAIL", f"{label} quality profiles", "missing: " + ", ".join(missing)
-            )
-        else:
-            report.add(
-                "PASS",
-                f"{label} quality profiles",
-                f"all {len(wanted)} configured profile(s) exist",
-            )
+        available = {
+            str(row.get("name", "")).casefold()
+            for row in profiles
+            if isinstance(row, dict)
+        }
+        missing = [name for name in wanted if str(name).casefold() not in available]
+        report.add(
+            "PASS" if root_exists else "FAIL",
+            f"{label} root",
+            wanted_root
+            if root_exists
+            else f"configured root {wanted_root or '(missing)'} does not exist",
+        )
+        report.add(
+            "FAIL" if missing else "PASS",
+            f"{label} quality profiles",
+            "missing: " + ", ".join(missing)
+            if missing
+            else f"all {len(wanted)} configured profile(s) exist",
+        )
     except MediaError as e:
         report.add("FAIL", f"{label} library policy", str(e))
 
@@ -468,45 +460,26 @@ def _check_proton_port_sync(report, preferences, now=None):
         except (TypeError, ValueError):
             current = 0
         expected = source["port"]
-        report.add(
-            "PASS" if current == expected else "FAIL",
-            "Proton port synchronization",
-            (
-                f"active port {expected} matches qBittorrent"
-                if current == expected
-                else f"Proton active port {expected}; qBittorrent uses {current or 'invalid'}"
-            ),
+        level = "PASS" if current == expected else "FAIL"
+        detail = (
+            f"active port {expected} matches qBittorrent"
+            if current == expected
+            else f"Proton active port {expected}; qBittorrent uses {current or 'invalid'}"
         )
     elif state == "inactive":
-        report.add(
-            "PASS",
-            "Proton port synchronization",
-            f"idle; Proton status is {source['status']}",
-        )
+        level, detail = "PASS", f"idle; Proton status is {source['status']}"
     elif state == "transitional":
-        report.add(
-            "WARN",
-            "Proton port synchronization",
-            f"Proton status is {source['status']}; retry after connection settles",
-        )
+        level = "WARN"
+        detail = f"Proton status is {source['status']}; retry after connection settles"
     elif state == "stale":
-        report.add(
-            "FAIL",
-            "Proton port synchronization",
-            f"latest Proton state is {source['age_s']:.0f} seconds old",
-        )
+        level = "FAIL"
+        detail = f"latest Proton state is {source['age_s']:.0f} seconds old"
     elif state == "missing":
-        report.add(
-            "FAIL",
-            "Proton port synchronization",
-            f"client log is missing: {source['path']}",
-        )
+        level, detail = "FAIL", f"client log is missing: {source['path']}"
     else:
-        report.add(
-            "FAIL",
-            "Proton port synchronization",
-            "client log contains no recognized port-forwarding state",
-        )
+        level = "FAIL"
+        detail = "client log contains no recognized port-forwarding state"
+    report.add(level, "Proton port synchronization", detail)
 
 
 def media_doctor(cfg, secrets, now=None):

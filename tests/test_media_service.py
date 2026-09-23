@@ -4,7 +4,7 @@ import datetime
 
 import pytest
 
-from helpers import CapturingLog, FakeArr, sonarr_episode
+from helpers import SERVICE_CFG, CapturingLog, FakeArr, sonarr_episode
 from slopstation.agent.tools import (
     media,
     media_clients,
@@ -12,22 +12,6 @@ from slopstation.agent.tools import (
 )
 
 UTC = datetime.UTC
-
-
-SERVICE_CFG = {
-    "movieRoot": "/data/Movies",
-    "seriesRoot": "/data/TV",
-    "moviePresets": {
-        "default": "Movie UHD",
-        "1080p": "Movie HD",
-        "2160p": "Movie UHD",
-    },
-    "seriesPresets": {
-        "default": "Series HD",
-        "1080p": "Series HD",
-        "2160p": "Series UHD",
-    },
-}
 
 
 @pytest.fixture

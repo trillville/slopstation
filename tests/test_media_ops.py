@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from helpers import CapturingLog, fake_dispatch, sonarr_episode
+from helpers import SERVICE_CFG, CapturingLog, fake_dispatch, sonarr_episode
 from slopstation.agent.llm import assistant
 from slopstation.agent.tools import media, operations, operations_monitors
 from slopstation.agent.tools.media_clients import MediaError
@@ -366,22 +366,8 @@ def stack():
             }
         ],
     )
-    cfg = {
-        "movieRoot": "/data/Movies",
-        "seriesRoot": "/data/TV",
-        "moviePresets": {
-            "default": "Movie UHD",
-            "1080p": "Movie HD",
-            "2160p": "Movie UHD",
-        },
-        "seriesPresets": {
-            "default": "Series HD",
-            "1080p": "Series HD",
-            "2160p": "Series UHD",
-        },
-    }
     svc = media.MediaService(
-        cfg, CapturingLog("voice"), radarr, sonarr, prowlarr=prowlarr, qbit=None
+        SERVICE_CFG, CapturingLog("voice"), radarr, sonarr, prowlarr=prowlarr, qbit=None
     )
     return svc, radarr, sonarr, prowlarr
 

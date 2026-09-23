@@ -43,9 +43,7 @@ class _Queue(_Core):
                 if strict:
                     raise MediaError(f"{client.name}'s queue could not be read") from e
                 continue
-            for row in (
-                (queue or {}).get("records", []) if isinstance(queue, dict) else []
-            ):
+            for row in queue.get("records", []) if isinstance(queue, dict) else []:
                 download_id = str(row.get("downloadId") or "").lower()
                 if not download_id:
                     continue
@@ -158,6 +156,11 @@ class _Queue(_Core):
         "skipRedownload": True,
         "changeCategory": False,
     }
+
+    def _post_command(self, client, body):
+        """Start one command in the app; its id, to watch."""
+        command = self._one(client.post("command", body), client.name, "command")
+        return int(command["id"])
 
     @staticmethod
     def _cancel_commands(client, command_ids):

@@ -88,13 +88,12 @@ class _Series(_Queue):
     def _episode_label(episodes):
         return "episodes " + ", ".join(f"S{s:02d}E{e:02d}" for s, e in episodes)
 
-    def _set_series_seasons(self, series, selected, exclusive=False):
+    def _set_series_seasons(self, series, selected):
         """`selected` None monitors every normal season; an empty list leaves
         the seasons as they are, for a request scoped to episodes.
 
-        `exclusive` clears the seasons outside `selected`, and is only for
-        a series Slopstation just created. On one that was already in the
-        library the monitored seasons are somebody else's desired state -
+        Seasons outside `selected` are left as they are. On a series that was
+        already in the library they are somebody else's desired state -
         clearing them is what would stop a part-aired season from filling in
         as episodes air.
         """
@@ -107,38 +106,21 @@ class _Series(_Queue):
             number = int(row.get("seasonNumber", -1))
             if number > 0 and (selected is None or number in selected):
                 row["monitored"] = True
-            elif exclusive and number > 0:
-                row["monitored"] = False
             seasons.append(row)
         out.update(monitored=True, seasons=seasons)
         return out
 
     def _search_series(self, series_id, seasons):
         if seasons is None:
-            command = self._one(
-                self.sonarr.post(
-                    "command", {"name": "SeriesSearch", "seriesId": series_id}
-                ),
-                "Sonarr",
-                "search command",
+            body = {"name": "SeriesSearch", "seriesId": series_id}
+            return [self._post_command(self.sonarr, body)]
+        return [
+            self._post_command(
+                self.sonarr,
+                {"name": "SeasonSearch", "seriesId": series_id, "seasonNumber": season},
             )
-            return [int(command["id"])]
-        command_ids = []
-        for season in seasons:
-            command = self._one(
-                self.sonarr.post(
-                    "command",
-                    {
-                        "name": "SeasonSearch",
-                        "seriesId": series_id,
-                        "seasonNumber": season,
-                    },
-                ),
-                "Sonarr",
-                "search command",
-            )
-            command_ids.append(int(command["id"]))
-        return command_ids
+            for season in seasons
+        ]
 
     def _target_episodes(
         self, rows, seasons=None, now=None, monitored_only=True, episode_ids=None
@@ -218,24 +200,11 @@ class _Series(_Queue):
         """Start the app's search for one title: a movie, the given episodes,
         the given seasons, or the whole series. The command ids to watch."""
         if kind == "movie":
-            command = self._one(
-                self.radarr.post(
-                    "command", {"name": "MoviesSearch", "movieIds": [int(row_id)]}
-                ),
-                "Radarr",
-                "search command",
-            )
-            return [int(command["id"])]
+            body = {"name": "MoviesSearch", "movieIds": [int(row_id)]}
+            return [self._post_command(self.radarr, body)]
         if episode_ids:
-            command = self._one(
-                self.sonarr.post(
-                    "command",
-                    {"name": "EpisodeSearch", "episodeIds": sorted(episode_ids)},
-                ),
-                "Sonarr",
-                "search command",
-            )
-            return [int(command["id"])]
+            body = {"name": "EpisodeSearch", "episodeIds": sorted(episode_ids)}
+            return [self._post_command(self.sonarr, body)]
         return self._search_series(int(row_id), seasons)
 
     def _baselines(self, kind, row, seasons=None, episode_ids=None, rows=None):
@@ -270,24 +239,20 @@ class _Series(_Queue):
         rows = self.sonarr.get("episode", {"seriesId": int(series_id)})
         if not isinstance(rows, list):
             raise MediaError("Sonarr returned invalid episodes")
-        ids = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            if int(row.get("seasonNumber", -1) or 0) != int(season):
-                continue
-            if episode is not None and int(row.get("episodeNumber", -1) or 0) != int(
-                episode
-            ):
-                continue
-            try:
-                ids.append(int(row["id"]))
-            except (KeyError, TypeError, ValueError) as e:
-                raise MediaError("Sonarr episode has no id") from e
+        ids = self._episode_ids(
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and int(row.get("seasonNumber", -1) or 0) == int(season)
+            and (
+                episode is None
+                or int(row.get("episodeNumber", -1) or 0) == int(episode)
+            )
+        )
         if not ids:
             what = f"season {season}" + (f" episode {episode}" if episode else "")
             raise MediaError(f"Sonarr has no {what} for this series")
-        return sorted(ids), rows
+        return ids, rows
 
     def _scoped(self, kind, row, season=None, episode=None):
         """The scope one piece of work on a held title covers, and its
@@ -334,10 +299,9 @@ class _Series(_Queue):
         series = self._one(self.sonarr.get(f"series/{series_id}"), "Sonarr", "series")
         if series.get("addOptions"):
             return False
-        # Not `exclusive`: the add option left every season unmonitored, so
-        # turning the asked-for ones on is already the exclusive result, and
-        # on a series that was in the library the other seasons are somebody
-        # else's desired state.
+        # The add option left every season unmonitored, so turning the
+        # asked-for ones on leaves only those monitored; on a series that was
+        # in the library the other seasons are somebody else's desired state.
         self.sonarr.put(
             f"series/{series_id}", self._set_series_seasons(series, seasons)
         )
@@ -345,23 +309,15 @@ class _Series(_Queue):
 
     def _monitor_series_episodes(self, rows, seasons):
         wanted = set(seasons or [])
-        episode_ids = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            season = int(row.get("seasonNumber", 0) or 0)
-            if season <= 0 or (wanted and season not in wanted):
-                continue
-            if row.get("monitored"):
-                continue
-            try:
-                episode_id = int(row["id"])
-            except (KeyError, TypeError, ValueError) as e:
-                raise MediaError("Sonarr episode has no id") from e
-            if episode_id <= 0:
-                raise MediaError("Sonarr episode has no id")
-            episode_ids.append(episode_id)
-        self._monitor_episodes(episode_ids, True)
+        unmonitored = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and int(row.get("seasonNumber", 0) or 0) > 0
+            and (not wanted or int(row.get("seasonNumber", 0) or 0) in wanted)
+            and not row.get("monitored")
+        ]
+        self._monitor_episodes(self._episode_ids(unmonitored), True)
 
     def dispatch_pending_series_search(self, operation):
         """Start the search a request left pending because Sonarr was still
@@ -684,7 +640,7 @@ class _Series(_Queue):
                     "monitored": False,
                 },
             )
-            air = _parse_time(str(e.get("airDateUtc") or "").replace("Z", "+00:00"))
+            air = _parse_time(e.get("airDateUtc"))
             aired = air is not None and air <= now
             if e.get("hasFile"):
                 s["held"] += 1
