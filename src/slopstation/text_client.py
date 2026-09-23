@@ -32,11 +32,13 @@ def _local_settings():
     return url, token
 
 
-def ask(url, token, session, message):
-    body = json.dumps({"session": session, "message": message}).encode("utf-8")
+def ask(url, token, message, session=None, timeout=180):
+    payload = {"message": message}
+    if session:
+        payload["session"] = session
     request = urllib.request.Request(
         url.rstrip("/") + "/v1/chat",
-        data=body,
+        data=json.dumps(payload).encode("utf-8"),
         method="POST",
         headers={
             "Authorization": "Bearer " + token,
@@ -44,19 +46,19 @@ def ask(url, token, session, message):
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
             detail = json.loads(e.read().decode("utf-8")).get("error")
-        except (ValueError, UnicodeDecodeError):
+        except ValueError:
             detail = f"HTTP {e.code}"
-        raise RuntimeError(detail) from e
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise RuntimeError(str(detail)) from e
+    except (OSError, ValueError) as e:
         raise RuntimeError("could not reach the K15 text interface") from e
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error", "assistant request failed"))
-    return str(result.get("reply", ""))
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise RuntimeError("assistant request failed")
+    return result
 
 
 def main(argv=None):
@@ -75,7 +77,7 @@ def main(argv=None):
 
     def one(message):
         try:
-            print(ask(args.url, args.token, args.session, message))
+            print(ask(args.url, args.token, message, args.session)["reply"])
             return True
         except RuntimeError as e:
             print(f"error: {e}")

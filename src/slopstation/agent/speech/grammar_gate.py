@@ -24,7 +24,7 @@ from rapidfuzz import fuzz
 from slopstation import events
 from slopstation.agent.dispatch import Result
 from slopstation.agent.speech import earcons
-from slopstation.agent.telemetry import sentry
+from slopstation.agent.telemetry import genai
 from slopstation.agent.tools import titles
 
 GRAMMAR = Path(__file__).resolve().parents[1] / "grammar.yaml"
@@ -469,7 +469,7 @@ class GrammarGate(FrameProcessor):
                 events.context(turn=turn)
                 # Spans are exported off a batch thread that cannot see the
                 # context above, so the turn is pinned for them separately.
-                sentry.set_turn(turn)
+                genai.set_turn(turn)
                 # Backstop: a final transcript proves the turn ended even if
                 # no UserStoppedSpeakingFrame arrived (otherwise no feedback
                 # until the action completes, up to 15 s of ssh).

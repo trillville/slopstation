@@ -7,10 +7,10 @@ import types
 
 import pytest
 
-from helpers import CapturingLog, seed_lock, toolkit_impls
+from helpers import CapturingLog, fake_dispatch, seed_lock, toolkit_impls
 from slopstation import gamepc, sessionlock, statefile
 from slopstation.agent.dispatch import Dispatch
-from slopstation.agent.llm import assistant, backends, confirm
+from slopstation.agent.llm import assistant, backends, confirm, prompts
 from slopstation.agent.speech import tool_schemas
 from slopstation.agent.tools import library, steamstore
 
@@ -284,13 +284,11 @@ def live_media(live_dispatch, log, fake_operations, fake_media):
 def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     si = assistant.system_instruction(CFG_MIN)
     assert "CATALOG" in si and str(INSTALLED) in si
-    # The behavioural rule stays in the prompt; the tool rule travels with
-    # the tool, so it is absent when the media service is.
-    assert "Never guess an id" in si and "find_media" not in si
-    assert "Never guess an id" in assistant.REGISTRY.get("find_media").description
+    # The prompt never names a tool the process may not offer: the tool rule
+    # travels with the tool, so it is absent when the media service is.
+    assert "find_media" not in si
     # Dynamic tail: the date and the clock.
     assert time.strftime("%Y-%m-%d") in si
-    assert re.search(r"It is \d\d:\d\d on", flat(si)), "the clock, not only the date"
     # The clock is the LAST line, so every token before it is a stable prefix.
     assert re.search(r"It is \d\d:\d\d on [\d-]+ local time" + r"\.$", si.strip())
     assert si.index("CATALOG (") < si.rindex("It is ")
@@ -299,7 +297,6 @@ def test_system_instruction_carries_the_catalog_and_the_voice_rules(catalog):
     assert "none configured" in assistant.system_instruction(nulled)
     # A date with no zone drifts toward UTC and dates briefs tomorrow; an empty
     # location is a real deployment shape and must still say the day is local.
-    assert "local time" in flat(si)
     zoned = {
         **CFG_MIN["voice"],
         "location": {**CFG_MIN["voice"]["location"], "timezone": "America/Los_Angeles"},
@@ -647,7 +644,6 @@ def test_delete_media_needs_a_confirmation_from_a_later_turn(
 
 
 def test_list_games_and_search_store_refuse_a_bad_ask(impls):
-    assert "list_games" in impls and "search_store" in impls
     r = impls["list_games"]({"source": "nope"})
     assert not r["ok"] and "unknown source" in r["error"], r
     r = impls["search_store"]({})  # neither term nor tags
@@ -703,11 +699,16 @@ def test_a_dead_token_falls_through_to_the_tv_path(
     assert {"install_fallback", "download_status_error"} <= set(log.events())
 
 
+def running(impls, log):
+    """A Toolkit running these impls, all loaded, in registry order."""
+    tk = assistant.Toolkit(fake_dispatch(), log)
+    tk.impls, tk.loaded = impls, [n for n in assistant.REGISTRY.names() if n in impls]
+    return tk
+
+
 def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
     results = []
-    tools = assistant.as_tools(
-        {"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log
-    )
+    tools = running({"stop_listening": lambda _: {"ok": True, "end_turn": True}}, log)
     schema = tool_schemas.pipecat_schemas(tools)[0]
 
     class Params:
@@ -726,7 +727,7 @@ def test_stop_listening_ends_the_turn_with_no_second_llm_turn(log):
 def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
     spoken = []
     receipt_result = []
-    tools = assistant.as_tools(
+    tools = running(
         {
             "request_series": lambda _: {
                 "ok": True,
@@ -762,7 +763,7 @@ def test_an_acknowledgment_is_spoken_without_a_second_llm_turn(log):
 
 
 def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
-    # A tool-calling llm span traces as output:null; Tools.call is where the
+    # A tool-calling llm span traces as output:null; Toolkit.call is where the
     # tool and its args are recorded.
     tlog = CapturingLog("voice")
     calls = {"n": 0}
@@ -771,7 +772,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
         calls["n"] += 1
 
     monkeypatch.setattr(assistant.sentry, "tool_span", spy)
-    tools = assistant.as_tools(
+    tools = running(
         {
             "get_now_playing": lambda a: {"ok": True, "game": "Hades"},
             "launch_game": boom,
@@ -956,7 +957,7 @@ def test_server_side_search_follows_the_knob(catalog):
     voice_off = CFG_MIN["voice"]
     assert assistant.server_tools(voice_off, "anthropic") == []
     assert assistant.server_tools(voice_off, "openai") == []
-    assert "search the web" not in flat(assistant.system_instruction(CFG_MIN))
+    assert prompts.WEB_SEARCH_RULE not in assistant.system_instruction(CFG_MIN)
     (aw,) = assistant.server_tools(VOICE_ON, "anthropic")
     (ow,) = assistant.server_tools(VOICE_ON, "openai")
     assert aw["type"] == "web_search_20250305" and aw["max_uses"] == 2
@@ -973,11 +974,10 @@ def test_server_side_search_follows_the_knob(catalog):
     assert "user_location" not in assistant.server_tools(bare, "openai")[0]
     si_on = assistant.system_instruction({**CFG_MIN, "voice": VOICE_ON})
     # Voice replies omit citations and search narration.
-    assert "search the web" in flat(si_on) and "NO citations" in flat(si_on)
-    assert "Never announce or offer to search" in flat(si_on)
+    assert prompts.WEB_SEARCH_RULE in si_on and prompts.WEB_SEARCH_VOICE_RULE in si_on
 
 
-def test_anthropic_backend_resumes_a_paused_turn(monkeypatch):
+def test_anthropic_backend_resumes_a_paused_turn(monkeypatch, log):
     # Resuming a turn keeps the partial assistant response.
     b = backends.AnthropicBackend(
         {"anthropicApiKey": "x" * 24}, "claude-haiku-4-5", voice=VOICE_ON
@@ -1007,7 +1007,7 @@ def test_anthropic_backend_resumes_a_paused_turn(monkeypatch):
             )
         ),
     )
-    out = b.turn("sys", "when did the dlc ship", {})
+    out = b.turn("sys", "when did the dlc ship", running({}, log))
     assert out == "Checking. June 2026.", out
     assert len(calls) == 2 and not script
     assert calls[0]["tools"][-1]["type"] == "web_search_20250305"
@@ -1042,7 +1042,6 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog):
     assert llm_o._settings.reasoning.model_dump(exclude_none=True) == {
         "effort": "low"
     }, llm_o._settings.reasoning
-    # Native tools ride ToolsSchema.custom_tools through the OpenAI Responses
 
 
 def test_the_sdk_clients_carry_deadlines():

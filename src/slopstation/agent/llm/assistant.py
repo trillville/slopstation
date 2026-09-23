@@ -2,7 +2,6 @@
 
 import json
 import time
-from typing import Any
 
 from slopstation.agent.llm import prompts, toolsets
 from slopstation.agent.llm.confirm import ConfirmGate
@@ -90,56 +89,7 @@ def system_instruction(cfg, interface="voice", offered=None):
     )
 
 
-class Tools:
-    """How a conversation runs a tool, on every lane: look the name up,
-    refuse what is not loaded, catch what raises, record the call. The
-    Toolkit is the live shape; StaticTools wears it over a bare dict."""
-
-    registry = REGISTRY
-    log: Any = None
-    dispatch: Any = None  # utterance pinned per call; None reads dispatch live
-    impls: dict
-    loaded: list
-
-    def render(self, provider):
-        if provider == "openai":
-            return REGISTRY.openai_tools(self.loaded)
-        return REGISTRY.anthropic_tools(self.loaded)
-
-    def call(self, name, args):
-        """Run one loaded tool. An unloaded tool is refused even when offered:
-        the prompt promises it is found first. A raising tool becomes an error
-        dict, because an Anthropic history with a tool_use and no tool_result
-        fails every later request. Every call is recorded here."""
-        fn = self.impls.get(name)
-        if fn is None:
-            return {"ok": False, "error": f"there is no tool called {name}"}
-        if name not in self.loaded:
-            return {
-                "ok": False,
-                "error": f"{name} is not loaded - call find_tools for it first",
-            }
-        try:
-            with utterance_snapshot(self.dispatch):
-                out = fn(args)
-        except MediaError as e:
-            # The media services' errors are written for the user: "that
-            # series is not in the library", "Radarr returned HTTP 503".
-            if self.log is not None:
-                self.log.error("tool_error", tool=name, err=str(e))
-            out = {"ok": False, "error": str(e)}
-        except Exception as e:
-            if self.log is not None:
-                self.log.error("tool_error", tool=name, err=repr(e))
-            out = {
-                "ok": False,
-                "error": "that didn't go through - something upstream failed",
-            }
-        record_tool_call(name, args, out, self.log)
-        return out
-
-
-class Toolkit(Tools):
+class Toolkit:
     """One conversation's tools: what is offered, what is loaded, how to call.
 
     Offered is every registry tool whose services are present. Loaded starts
@@ -149,6 +99,8 @@ class Toolkit(Tools):
     lets the voice lane push the new list into its Pipecat context. `gate`
     is the confirmation state; a voice follow-up hands the previous
     session's in, so a yes survives the wake between them."""
+
+    registry = REGISTRY
 
     def __init__(
         self,
@@ -188,6 +140,47 @@ class Toolkit(Tools):
         self.defaults = [n for n in self.offered if REGISTRY.get(n).default]
         self.loaded = list(self.defaults)
 
+    def render(self, provider):
+        if provider == "openai":
+            return REGISTRY.openai_tools(self.loaded)
+        return REGISTRY.anthropic_tools(self.loaded)
+
+    def call(self, name, args):
+        """Run one loaded tool. An unloaded tool is refused even when offered:
+        the prompt promises it is found first. A raising tool becomes an error
+        dict, because an Anthropic history with a tool_use and no tool_result
+        fails every later request. Every call is recorded here, in Sentry and
+        the local log."""
+        fn = self.impls.get(name)
+        if fn is None:
+            return {"ok": False, "error": f"there is no tool called {name}"}
+        if name not in self.loaded:
+            return {
+                "ok": False,
+                "error": f"{name} is not loaded - call find_tools for it first",
+            }
+        try:
+            with utterance_snapshot(self.dispatch):
+                out = fn(args)
+        except MediaError as e:
+            # The media services' errors are written for the user: "that
+            # series is not in the library", "Radarr returned HTTP 503".
+            self.log.error("tool_error", tool=name, err=str(e))
+            out = {"ok": False, "error": str(e)}
+        except Exception as e:
+            self.log.error("tool_error", tool=name, err=repr(e))
+            out = {
+                "ok": False,
+                "error": "that didn't go through - something upstream failed",
+            }
+        try:
+            sentry.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
+        except Exception:
+            pass
+        ok = out.get("ok") if isinstance(out, dict) else None
+        self.log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
+        return out
+
     def busy_phrase(self, name, args):
         """What to say when `name` has kept the user waiting: the spec's busy
         phrase with {game} filled from the appid argument, or None when the
@@ -216,21 +209,6 @@ class Toolkit(Tools):
         return new
 
 
-class StaticTools(Tools):
-    """A plain name->fn dict wearing the Tools interface, for the REPL and
-    tests. Every name it holds is loaded, in registry order."""
-
-    def __init__(self, impls, log=None):
-        self.impls = dict(impls)
-        self.log = log
-        self.loaded = [n for n in REGISTRY.names() if n in self.impls]
-
-
-def as_tools(tools, log=None):
-    """Accept a Tools-shaped object or a bare impls dict."""
-    return StaticTools(tools, log) if isinstance(tools, dict) else tools
-
-
 def game_title(appid):
     """The title behind an appid for a spoken phrase: installed name, owned
     name, or "that game" when the catalog has neither. Never an id aloud."""
@@ -242,17 +220,6 @@ def game_title(appid):
     if name is None:
         name = library.load().get("owned", {}).get(str(appid), {}).get("name")
     return name or "that game"
-
-
-def record_tool_call(name, args, out, log=None):
-    """Record a tool call in Sentry and the local log."""
-    try:
-        sentry.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
-    except Exception:
-        pass
-    if log:
-        ok = out.get("ok") if isinstance(out, dict) else None
-        log("tool_call", tool=name, ok=ok, args=json.dumps(args)[:300])
 
 
 def _user_location(voice):

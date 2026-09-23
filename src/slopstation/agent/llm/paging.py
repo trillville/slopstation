@@ -10,12 +10,12 @@ fetched for this window; a tool over a local list passes the whole list.
 DEFAULT, CAP = 10, 40
 
 
-def properties(default=DEFAULT, cap=CAP, what="rows"):
+def properties(cap=CAP, what="rows"):
     """The two schema properties every paged tool carries."""
     return {
         "limit": {
             "type": "integer",
-            "description": f"{what} per page, default {default}, at most {cap}",
+            "description": f"{what} per page, default {DEFAULT}, at most {cap}",
         },
         "offset": {
             "type": "integer",
@@ -25,10 +25,10 @@ def properties(default=DEFAULT, cap=CAP, what="rows"):
     }
 
 
-def window(args, default=DEFAULT, cap=CAP):
+def window(args, cap=CAP):
     """(limit, offset) from the args, clamped; (None, error) when malformed."""
     try:
-        limit = int(args.get("limit") or default)
+        limit = int(args.get("limit") or DEFAULT)
         offset = int(args.get("offset") or 0)
     except (TypeError, ValueError):
         return None, {"ok": False, "error": "limit and offset must be integers"}
@@ -39,11 +39,11 @@ def window(args, default=DEFAULT, cap=CAP):
     return (max(1, min(limit, cap)), offset), None
 
 
-def page(rows, args, key, default=DEFAULT, cap=CAP, total=None, **extra):
+def page(rows, args, key, cap=CAP, total=None, **extra):
     """The result dict for one page of `rows` under `key`. `rows` is the
     whole list unless `total` says it is a server-fetched window that
     already starts at the offset."""
-    bounds, err = window(args, default, cap)
+    bounds, err = window(args, cap)
     if err:
         return err
     limit, offset = bounds

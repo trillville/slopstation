@@ -1,5 +1,5 @@
 """Pipecat function schemas for a conversation's loaded tools: the voice lane's
-adapter over Tools.call. The text lane calls Tools directly."""
+adapter over Toolkit.call. The text lane calls the Toolkit directly."""
 
 
 def pipecat_schemas(tools):

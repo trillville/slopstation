@@ -1,4 +1,7 @@
-"""Run assistant turns through Anthropic or OpenAI, including tool calls."""
+"""Run assistant turns through Anthropic or OpenAI, including tool calls.
+
+A backend's turn() takes a Toolkit and renders its tool list on EVERY request
+in the loop, so a tool that find_tools loads mid-turn is offered on the next."""
 
 import json
 import time
@@ -13,29 +16,11 @@ LLM_TIMEOUT_S = 90
 LLM_MAX_RETRIES = 1
 # These backends serve the text interface and the REPL, where an answer can
 # be a list or a table. The voice lane sets its own, shorter cap in
-# speech/session.py. Matches the OpenAI backend's max_output_tokens.
+# speech/session.py.
 TEXT_MAX_TOKENS = 1500
 
 
-# --- Provider backends --------------------------------------------------------
-
-
-class Backend:
-    """Provider-independent assistant backend."""
-
-    model: str
-    messages: list
-    server_tools: list
-    cache_note: str
-
-    def turn(self, system_text, user_text, tools) -> str:
-        """One user turn to a final reply. `tools` is a Toolkit (or a bare
-        impls dict): its tool list is rendered on EVERY request in the loop,
-        so a tool that find_tools loads mid-turn is offered on the next."""
-        raise NotImplementedError
-
-
-class AnthropicBackend(Backend):
+class AnthropicBackend:
     key = assistant.PROVIDER_KEY["anthropic"]
 
     def __init__(self, secrets, model, effort=None, voice=None):
@@ -52,8 +37,7 @@ class AnthropicBackend(Backend):
         self.server_tools = assistant.server_tools(voice, "anthropic") if voice else []
 
     @sentry.agent("assistant")
-    def turn(self, system_text, user_text, tools):
-        toolkit = assistant.as_tools(tools)
+    def turn(self, system_text, user_text, toolkit):
         # Cache the stable tools and system prompt together.
         system = [
             {
@@ -119,7 +103,7 @@ class AnthropicBackend(Backend):
             self.messages.append({"role": "user", "content": results})
 
 
-class OpenAIBackend(Backend):
+class OpenAIBackend:
     """Run a stateful conversation through the OpenAI Responses API."""
 
     key = assistant.PROVIDER_KEY["openai"]
@@ -140,8 +124,7 @@ class OpenAIBackend(Backend):
         self.server_tools = assistant.server_tools(voice, "openai") if voice else []
 
     @sentry.agent("assistant")
-    def turn(self, system_text, user_text, tools):
-        toolkit = assistant.as_tools(tools)
+    def turn(self, system_text, user_text, toolkit):
         self.messages.append({"role": "user", "content": user_text})
         pending = [{"role": "user", "content": user_text}]
         while True:
@@ -155,7 +138,7 @@ class OpenAIBackend(Backend):
                     input=pending,
                     tools=tools,
                     reasoning={"effort": self.effort},
-                    max_output_tokens=1500,
+                    max_output_tokens=TEXT_MAX_TOKENS,
                     previous_response_id=self.prev,
                 )
                 u, det = resp.usage, getattr(resp.usage, "input_tokens_details", None)
@@ -208,7 +191,7 @@ class OpenAIBackend(Backend):
                 )
 
 
-BACKENDS: dict[str, Callable[..., Backend]] = {
+BACKENDS: dict[str, Callable[..., AnthropicBackend | OpenAIBackend]] = {
     "anthropic": AnthropicBackend,
     "openai": OpenAIBackend,
 }

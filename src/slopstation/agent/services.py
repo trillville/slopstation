@@ -39,9 +39,10 @@ class Services:
         from slopstation.agent.tools import operations as operations_mod
 
         # Refreshes the catalog on its own clock; never blocks wake detection.
-        self._ticker(
-            events.Ticker("library-sync", library.SYNC_S, library.periodic_sync())
-        )
+        ticker = events.Ticker("library-sync", library.SYNC_S, library.periodic_sync())
+        ticker.start()
+        self.tickers.append(ticker)
+        self.threads.append((ticker.name, ticker))
 
         # If operations.json cannot be read, nothing below that writes to it
         # starts. The file is not touched; the doctor reports it.
@@ -213,8 +214,3 @@ class Services:
         self.threads.append((what, monitor.start()))
         self.monitors.append(monitor)
         self.log("lane_up", what=what, poll_s=monitor.poll_s)
-
-    def _ticker(self, ticker):
-        ticker.start()
-        self.tickers.append(ticker)
-        self.threads.append((ticker.name, ticker))

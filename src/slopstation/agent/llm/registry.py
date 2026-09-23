@@ -123,11 +123,7 @@ _UTTERANCE: contextvars.ContextVar[tuple[str | None, str] | None] = (
 
 @contextlib.contextmanager
 def utterance_snapshot(dispatch):
-    """Pin dispatch.utterance for the tool about to run. With no dispatch (a
-    bare tools dict) nothing is pinned."""
-    if dispatch is None:
-        yield
-        return
+    """Pin dispatch.utterance for the tool about to run."""
     live = getattr(dispatch, "utterance", None)
     token = _UTTERANCE.set(
         (getattr(live, "turn", None), getattr(live, "asked", None) or "")
@@ -298,9 +294,6 @@ class Registry:
     def __iter__(self) -> Iterator[ToolSpec]:
         return iter(self._specs)
 
-    def __len__(self) -> int:
-        return len(self._specs)
-
     def get(self, name: str) -> ToolSpec:
         for spec in self._specs:
             if spec.name == name:
@@ -314,29 +307,23 @@ class Registry:
         """The specs whose needs the present services satisfy."""
         return [s for s in self._specs if set(s.needs) <= services]
 
-    def by_area(self, names: Iterable[str] | None = None) -> dict[str, list[ToolSpec]]:
-        """Specs grouped by area, in AREAS order; `names` narrows the set."""
-        keep = None if names is None else set(names)
+    def by_area(self, names: Iterable[str]) -> dict[str, list[ToolSpec]]:
+        """The named specs grouped by area, in AREAS order."""
+        keep = set(names)
         out: dict[str, list[ToolSpec]] = {area: [] for area in AREAS}
         for s in self._specs:
-            if keep is None or s.name in keep:
+            if s.name in keep:
                 out[s.area].append(s)
         return {a: specs for a, specs in out.items() if specs}
 
-    def select(self, names: Iterable[str] | None = None) -> list[ToolSpec]:
-        """The specs to render. A list or tuple renders in ITS order (a
-        toolkit's loaded set: defaults first, then what was found, in the
-        order it was found, so the rendered prefix stays cache-stable); a
-        set or None renders in registry order."""
-        if names is None:
-            return list(self._specs)
-        if isinstance(names, (list, tuple)):
-            return [self.get(n) for n in names]
-        keep = set(names)
-        return [s for s in self._specs if s.name in keep]
+    def select(self, names: Iterable[str]) -> list[ToolSpec]:
+        """The specs to render, in the order given: a toolkit's loaded set is
+        defaults first, then what was found, in the order it was found, so the
+        rendered prefix stays cache-stable."""
+        return [self.get(n) for n in names]
 
-    def anthropic_tools(self, names: Iterable[str] | None = None) -> list[dict]:
+    def anthropic_tools(self, names: Iterable[str]) -> list[dict]:
         return [s.anthropic() for s in self.select(names)]
 
-    def openai_tools(self, names: Iterable[str] | None = None) -> list[dict]:
+    def openai_tools(self, names: Iterable[str]) -> list[dict]:
         return [s.openai() for s in self.select(names)]
