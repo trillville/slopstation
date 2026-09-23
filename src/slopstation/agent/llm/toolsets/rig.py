@@ -5,6 +5,7 @@ import subprocess
 import urllib.parse
 
 from slopstation import gamepc, sessionlock
+from slopstation.agent.llm.formatting import gigabytes
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.steam import library, titles
 
@@ -709,8 +710,8 @@ def impls(ctx: ToolContext):
                         str(r["drive"]).lower(),
                         {
                             "drive": r.get("drive"),
-                            "free_gb": round(int(r.get("free", 0) or 0) / 1024**3, 1),
-                            "total_gb": round(int(r.get("total", 0) or 0) / 1024**3, 1),
+                            "free_gb": gigabytes(r.get("free"), 1),
+                            "total_gb": gigabytes(r.get("total"), 1),
                         },
                     )
             out["steam_drives"] = list(drives.values())

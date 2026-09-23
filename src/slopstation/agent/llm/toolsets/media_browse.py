@@ -7,11 +7,12 @@ import datetime
 from typing import Any
 
 from slopstation.agent.llm import paging
+from slopstation.agent.llm.formatting import gigabytes
 from slopstation.agent.llm.registry import Bindings, ToolContext
-from slopstation.agent.llm.toolsets.media_ops import (
+from slopstation.agent.llm.toolsets.media_schema import (
     CATALOG_ID,
     KIND,
-    _spec,
+    media_spec,
 )
 from slopstation.agent.media.clients import (
     KINDS,
@@ -19,9 +20,6 @@ from slopstation.agent.media.clients import (
     MediaError,
     _parse_time,
 )
-
-GB = 1024**3
-
 
 KIND_OR_BOTH = {"type": "string", "enum": ["movie", "series", "both"]}
 
@@ -125,10 +123,6 @@ WANTED_SORT = {
 }
 
 
-def _gb(value, places=2):
-    return round(int(value or 0) / GB, places)
-
-
 def _quality_name(row):
     return ((row.get("quality") or {}).get("quality") or {}).get("name")
 
@@ -168,7 +162,7 @@ def _movie_row(row):
         "year": row.get("year"),
         "tmdb_id": row.get("tmdbId"),
         "has_file": bool(row.get("hasFile")),
-        "size_gb": _gb(row.get("sizeOnDisk")),
+        "size_gb": gigabytes(row.get("sizeOnDisk")),
         "monitored": bool(row.get("monitored")),
         "added": str(row.get("added") or "")[:10],
         "genres": (row.get("genres") or [])[:3],
@@ -183,7 +177,7 @@ def _series_row(row):
         "tvdb_id": row.get("tvdbId"),
         "episodes_held": stats.get("episodeFileCount"),
         "episodes_total": stats.get("totalEpisodeCount"),
-        "size_gb": _gb(stats.get("sizeOnDisk")),
+        "size_gb": gigabytes(stats.get("sizeOnDisk")),
         "monitored": bool(row.get("monitored")),
         "status": row.get("status"),
         "added": str(row.get("added") or "")[:10],
@@ -192,7 +186,7 @@ def _series_row(row):
 
 
 SPECS = [
-    _spec(
+    media_spec(
         "browse_media",
         BROWSE_MEDIA,
         {
@@ -203,8 +197,8 @@ SPECS = [
             **paging.properties(),
         },
         ("kind",),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "browse movies",
             "browse shows",
             "recently added",
@@ -215,13 +209,13 @@ SPECS = [
         paged=True,
         busy="checking the library",
     ),
-    _spec(
+    media_spec(
         "media_details",
         MEDIA_DETAILS,
         {"kind": KIND, "catalog_id": CATALOG_ID},
         ("kind", "catalog_id"),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "movie details",
             "series details",
             "what quality is it",
@@ -230,7 +224,7 @@ SPECS = [
         ),
         busy="checking the library",
     ),
-    _spec(
+    media_spec(
         "episode_files",
         EPISODE_FILES,
         {
@@ -242,8 +236,8 @@ SPECS = [
             **paging.properties(what="episodes"),
         },
         ("catalog_id",),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "which episodes do i have",
             "episode files",
             "when was it downloaded",
@@ -251,13 +245,13 @@ SPECS = [
         ),
         paged=True,
     ),
-    _spec(
+    media_spec(
         "missing_media",
         MISSING_MEDIA,
         {"kind": KIND, **paging.properties()},
         ("kind",),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "missing episodes",
             "missing movies",
             "wanted",
@@ -267,13 +261,13 @@ SPECS = [
         paged=True,
         busy="checking what's missing",
     ),
-    _spec(
+    media_spec(
         "calendar",
         CALENDAR,
         {"kind": KIND_OR_BOTH, "days": {"type": "integer"}, **paging.properties()},
         (),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "what airs this week",
             "calendar",
             "upcoming episodes",
@@ -283,7 +277,7 @@ SPECS = [
         paged=True,
         busy="checking the calendar",
     ),
-    _spec(
+    media_spec(
         "search_releases",
         SEARCH_RELEASES,
         {
@@ -293,8 +287,8 @@ SPECS = [
             "episode": {"type": "integer"},
         },
         ("kind", "catalog_id"),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "search releases",
             "which releases are available",
             "manual search",
@@ -303,13 +297,13 @@ SPECS = [
         ),
         busy="searching the indexers",
     ),
-    _spec(
+    media_spec(
         "import_queue",
         IMPORT_QUEUE,
         {"kind": KIND_OR_BOTH, **paging.properties()},
         (),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "import queue",
             "stuck import",
             "waiting to import",
@@ -319,7 +313,7 @@ SPECS = [
         paged=True,
         busy="checking the queue",
     ),
-    _spec(
+    media_spec(
         "media_history",
         MEDIA_HISTORY,
         {
@@ -331,8 +325,8 @@ SPECS = [
             **paging.properties(),
         },
         (),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "media history",
             "what was grabbed",
             "recent imports",
@@ -342,13 +336,13 @@ SPECS = [
         paged=True,
         busy="checking the history",
     ),
-    _spec(
+    media_spec(
         "media_health",
         MEDIA_HEALTH,
         {},
         (),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "media health",
             "is radarr ok",
             "is sonarr ok",
@@ -358,13 +352,13 @@ SPECS = [
         ),
         busy="checking the media stack",
     ),
-    _spec(
+    media_spec(
         "movie_collections",
         MOVIE_COLLECTIONS,
         {"name": {"type": "string"}},
         (),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "collections",
             "do i have all the",
             "the whole trilogy",
@@ -373,7 +367,7 @@ SPECS = [
         ),
         busy="checking the collections",
     ),
-    _spec(
+    media_spec(
         "search_indexers",
         SEARCH_INDEXERS,
         {
@@ -382,8 +376,8 @@ SPECS = [
             **paging.properties(),
         },
         ("query",),
-        "read",
-        (
+        risk="read",
+        keywords=(
             "search indexers",
             "search torrents",
             "is there a release for",
@@ -459,7 +453,7 @@ def impls(ctx: ToolContext):
             out["files"] = [
                 {
                     "path": f.get("relativePath"),
-                    "size_gb": _gb(f.get("size")),
+                    "size_gb": gigabytes(f.get("size")),
                     "quality": _quality_name(f),
                 }
                 for f in files
@@ -491,7 +485,7 @@ def impls(ctx: ToolContext):
                     "episode": int(e.get("episodeNumber", 0) or 0),
                     "title": e.get("title"),
                     "quality": _quality_name(f),
-                    "size_gb": _gb(f.get("size")),
+                    "size_gb": gigabytes(f.get("size")),
                     "added": str(f.get("dateAdded") or "")[:19],
                 }
             )
@@ -645,7 +639,7 @@ def impls(ctx: ToolContext):
                     "indexer_id": r.get("indexerId"),
                     "indexer": r.get("indexer"),
                     "name": r.get("title"),
-                    "size_gb": _gb(r.get("size")),
+                    "size_gb": gigabytes(r.get("size")),
                     "seeders": r.get("seeders"),
                     "quality": _quality_name(r),
                     "age_hours": round(float(r.get("ageHours", 0) or 0)),
@@ -856,7 +850,7 @@ def impls(ctx: ToolContext):
             {
                 "name": r.get("title"),
                 "indexer": r.get("indexer"),
-                "size_gb": _gb(r.get("size")),
+                "size_gb": gigabytes(r.get("size")),
                 "seeders": r.get("seeders"),
                 "age_days": r.get("age"),
                 "guid": r.get("guid"),
