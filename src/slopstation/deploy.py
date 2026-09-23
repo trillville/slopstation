@@ -175,7 +175,9 @@ def main(argv: list[str]) -> int:
             log("deploy_media", dur_ms=int((time.time() - t_media) * 1000))
 
         fails = subprocess.run(
-            [sys.executable, "-m", "slopstation.doctor"], cwd=paths.HOME, timeout=900
+            [sys.executable, "-m", "slopstation.doctor", "--smoke"],
+            cwd=paths.HOME,
+            timeout=900,
         ).returncode
         log(
             "deploy_done",

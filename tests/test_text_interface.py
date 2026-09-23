@@ -163,6 +163,9 @@ def test_a_session_carries_turns_tools_and_one_trace_file(base, log, saved):
         "Requested Andor, season 1, in 2160p. Sonarr is searching in the background."
     )
     assert first["turn"] != second["turn"]
+    # The reply names the tools its turn called, and only those.
+    assert first["tools"] == ["list_operations"] and second["tools"] == []
+    assert acquired["tools"] == ["request_series"]
     assert len(log.find("text_request")) == 3
     calls = log.find("tool_call")
     assert len(calls) == 2
