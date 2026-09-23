@@ -88,21 +88,23 @@ def _check_config(report, media_cfg):
         report(PASS, "media config", "topology, roots, and presets present")
 
 
-def _compose_services(media_dir):
+def compose_command(media_dir, *args):
     env_file = media_dir / ".env"
     if not env_file.is_file():
         raise MediaError(f"Compose environment file is missing: {env_file}")
-    command = [
+    return [
         "docker",
         "compose",
         "--project-directory",
         str(media_dir),
         "--env-file",
         str(env_file),
-        "ps",
-        "--format",
-        "json",
+        *args,
     ]
+
+
+def _compose_services(media_dir):
+    command = compose_command(media_dir, "ps", "--format", "json")
     try:
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=20, check=False
