@@ -307,6 +307,23 @@ If the service stops immediately, run a foreground check:
     -c "$env:ProgramFiles\smartmontools\bin\smartd.conf" -q onecheck -d
 ```
 
+## Update the apps
+
+Radarr, Sonarr and Prowlarr say when a release is out, but the linuxserver
+images turn off their own updater. An update is a new image for that one
+container:
+
+```powershell
+.venv\Scripts\python -m slopstation.agent.tools.media updates
+.venv\Scripts\python -m slopstation.agent.tools.media update radarr --execute
+```
+
+`update` pulls the image, recreates only that container and waits for the app
+to answer. It prints the version it replaced, which is also the image tag to
+pin if the new one misbehaves. "No newer image to pull" means linuxserver has
+not built the release yet (try again in a day or two), or the tag is pinned. A weekly scheduled Claude
+task on the K15 runs `updates` and asks on your phone before updating.
+
 ## Pin container images
 
 The Compose file uses `:latest`. To replace those tags with the exact running

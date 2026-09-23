@@ -1,6 +1,8 @@
 name: slopstation-media
 
-# Replace ``latest`` tags with the versions verified on the K15 before pulling.
+# Radarr, Sonarr and Prowlarr are updated one at a time, after a yes, by
+# `python -m slopstation.agent.tools.media update <app>` (see README.md).
+# Pin a tag here to hold an image back.
 
 services:
   flaresolverr:

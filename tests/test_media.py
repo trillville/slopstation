@@ -4,6 +4,7 @@ import collections
 import dataclasses
 import datetime
 import json
+import subprocess
 import urllib.parse
 
 import pytest
@@ -17,6 +18,7 @@ from slopstation.agent.tools import (
     media_clients,
     media_health,
     media_proton,
+    media_updates,
     operations,
 )
 
@@ -1043,3 +1045,94 @@ def test_media_doctor_fails_a_misconfigured_qbittorrent(monkeypatch, tmp_path):
         row["name"] == "qBittorrent excluded file names" and row["level"] == "FAIL"
         for row in broken["checks"]
     )
+
+
+# --- app updates --------------------------------------------------------------
+
+
+class FakeServarr:
+    """One app's status and release list. Each status read takes the next
+    entry of `statuses`; None is the app not answering, as mid-restart."""
+
+    name = "Radarr"
+
+    def __init__(self, statuses, releases=()):
+        self.statuses = list(statuses)
+        self.releases = list(releases)
+
+    def get(self, endpoint, params=None):
+        if endpoint == "update":
+            return list(self.releases)
+        assert endpoint == "system/status"
+        status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        if status is None:
+            raise media_clients.MediaError("media service is unreachable")
+        return status
+
+
+RADARR_6_3 = {"version": "6.3.0.10514", "packageVersion": "6.3.0.10514-ls314"}
+RADARR_6_4 = {"version": "6.4.4.10685", "packageVersion": "6.4.4.10685-ls320"}
+
+
+def test_available_update_names_a_newer_release_only():
+    releases = [
+        {
+            "version": "6.4.4.10685",
+            "latest": True,
+            "installed": False,
+            "releaseDate": "2026-09-16T18:13:40Z",
+        },
+        {"version": "6.3.0.10514", "latest": False, "installed": True},
+    ]
+    assert media_updates.available_update(FakeServarr([RADARR_6_3], releases)) == {
+        "installed": "6.3.0.10514",
+        "latest": "6.4.4.10685",
+        "released": "2026-09-16",
+    }
+    current = [dict(releases[0], installed=True)]
+    assert media_updates.available_update(FakeServarr([RADARR_6_4], current)) is None
+
+
+class FakeDocker:
+    def __init__(self, returncode=0):
+        self.returncode = returncode
+        self.commands = []
+
+    def __call__(self, command, **kwargs):
+        self.commands.append(command[command.index("--env-file") + 2 :])
+        return subprocess.CompletedProcess(command, self.returncode, "", "denied")
+
+
+def _media_dir(tmp_path):
+    (tmp_path / ".env").write_text("MEDIA_ROOT=media", encoding="utf-8")
+    return tmp_path
+
+
+def test_update_recreates_one_container_and_waits_for_the_app(tmp_path):
+    docker = FakeDocker()
+    app = FakeServarr([RADARR_6_3, None, None, RADARR_6_4])
+    result = media_updates.update_app(
+        app, _media_dir(tmp_path), run=docker, now=lambda: 0, sleep=lambda s: None
+    )
+    assert docker.commands == [["pull", "radarr"], ["up", "-d", "radarr"]]
+    assert result == {
+        "app": "Radarr",
+        "before": "6.3.0.10514-ls314",
+        "after": "6.4.4.10685-ls320",
+    }
+
+
+def test_update_fails_on_a_refused_pull_or_an_app_that_never_returns(tmp_path):
+    with pytest.raises(media_clients.MediaError, match="denied"):
+        media_updates.update_app(
+            FakeServarr([RADARR_6_3]), _media_dir(tmp_path), run=FakeDocker(1)
+        )
+    clock = iter(range(0, 1000, 60))
+    with pytest.raises(media_clients.MediaError, match="did not answer"):
+        media_updates.update_app(
+            FakeServarr([RADARR_6_3, None]),
+            _media_dir(tmp_path),
+            run=FakeDocker(),
+            now=lambda: next(clock),
+            sleep=lambda s: None,
+        )
