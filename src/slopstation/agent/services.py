@@ -107,6 +107,12 @@ class Services:
                 cfg, secrets, log, operations=self.operations
             ),
         )
+        # Pulls images and restarts the app containers; a dry run must not.
+        self._monitor(
+            "media_auto_update",
+            lambda: media.media_update_monitor_from_config(cfg, secrets, log),
+            live_only=True,
+        )
         self._monitor(
             "disk_watch",
             lambda: media.disk_health_monitor_from_config(cfg, log),

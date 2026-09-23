@@ -1,6 +1,7 @@
 name: slopstation-media
 
-# Replace ``latest`` tags with the versions verified on the K15 before pulling.
+# Radarr, Sonarr and Prowlarr take minor updates on their own overnight (see
+# "Update the apps" in README.md). Pin a tag here to hold an image back.
 
 services:
   flaresolverr:
