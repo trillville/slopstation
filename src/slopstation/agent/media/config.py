@@ -18,6 +18,7 @@ from slopstation.agent.media.proton import (
     ProtonPortMonitor,
 )
 from slopstation.agent.media.service import MediaService
+from slopstation.agent.media.updates import MediaUpdateMonitor
 
 
 def _media_cfg(cfg, flag=None, default=True):
@@ -52,6 +53,20 @@ def _arr_clients(media_cfg, secrets):
         ArrClient(name, media_cfg[f"{name.lower()}Url"], secrets[key])
         for name, key in (("Radarr", "radarrApiKey"), ("Sonarr", "sonarrApiKey"))
     )
+
+
+def servarr_clients(media_cfg, secrets):
+    """Radarr and Sonarr, plus Prowlarr when it has a key."""
+    clients = _arr_clients(media_cfg, secrets)
+    if not config.real_key(secrets.get("prowlarrApiKey")):
+        return clients
+    prowlarr = ArrClient(
+        "Prowlarr",
+        media_cfg.get("prowlarrUrl", ""),
+        secrets["prowlarrApiKey"],
+        api_version="v1",
+    )
+    return (*clients, prowlarr)
 
 
 def _optional_monitor(cfg, log, flag, what, build, default=True):
@@ -101,6 +116,18 @@ def media_health_monitor_from_config(cfg, secrets, log, operations=None):
         )
 
     return _optional_monitor(cfg, log, "healthSync", "media_health_sync", build)
+
+
+def media_update_monitor_from_config(cfg, secrets, log):
+    return _optional_monitor(
+        cfg,
+        log,
+        "autoUpdate",
+        "media_auto_update",
+        lambda media_cfg: MediaUpdateMonitor(
+            servarr_clients(media_cfg, secrets), log, paths.HOME / "media"
+        ),
+    )
 
 
 def _media_root(env_path):

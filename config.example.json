@@ -38,6 +38,8 @@
     "healthSync": true,
     "_healthSync": "Poll Radarr and Sonarr for health issues, failed imports, and stalled downloads.",
     "healthPollS": 300,
+    "autoUpdate": true,
+    "_autoUpdate": "Apply Radarr, Sonarr and Prowlarr minor updates at 4 am and log each one. A new major version is logged and left for you.",
     "stalledGraceMinutes": 30,
     "_stalledGraceMinutes": "A grab that has received nothing for this long is marked failed so the app takes its next candidate. 0 turns that off.",
     "diskWatch": true,

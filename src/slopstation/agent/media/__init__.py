@@ -2,12 +2,13 @@
 media drive.
 
 `MediaService` is the one object callers hold. `from_config` builds it, and
-the three watch factories build the pollers that run beside it."""
+the monitor factories build the pollers that run beside it."""
 
 from slopstation.agent.media.config import (
     disk_health_monitor_from_config,
     from_config,
     media_health_monitor_from_config,
+    media_update_monitor_from_config,
     proton_port_monitor_from_config,
 )
 from slopstation.agent.media.core import Observation
@@ -19,5 +20,6 @@ __all__ = [
     "disk_health_monitor_from_config",
     "from_config",
     "media_health_monitor_from_config",
+    "media_update_monitor_from_config",
     "proton_port_monitor_from_config",
 ]
