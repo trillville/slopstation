@@ -75,7 +75,8 @@ deploy goes red with a diagnosis, and someone does the step by hand.
   checkout means re-running `Setup-K15-Tasks.ps1`. The gaming PC's tasks are
   re-registered by `gaming-pc\Install.ps1`, run elevated from a checkout.
 - **Runtime pieces on the PC.** `vhui64.exe` and the two DisplayMagician
-  shortcuts. `Deploy.ps1` warns when they are missing and never touches them.
+  shortcuts. `Doctor.ps1` fails when they are missing; `Deploy.ps1` never
+  touches them.
 
 ## Doctors
 

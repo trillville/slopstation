@@ -76,7 +76,7 @@ try {
     if ($running) { Log "note: game $running was already running at Enter" }
 
     # 6. Write READY only after setup completes.
-    $fg = Get-ForegroundTitle
+    $fg = [CG.Win]::ForegroundTitle()
     if ($fg -eq $CG.SteamWindow) {
         $focused = $false
         Log "WARNING: desktop Steam is in the foreground - the controller will not reach the TV"

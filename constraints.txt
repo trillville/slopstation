@@ -90,7 +90,6 @@ typing-inspection==0.4.3
 typing_extensions==4.16.0
 unicode-rbnf==2.4.0
 urllib3==2.7.0
-websocket-client==1.9.0
 websockets==17.0.1
 win32_setctime==1.2.0
 wrapt==2.3.0

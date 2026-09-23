@@ -56,8 +56,7 @@ try {
     # the desktop Steam window in front.
     Hide-DesktopSteam
     $wsh = New-Object -ComObject WScript.Shell
-    if (Wait-For { $wsh.AppActivate($CG.BpmWindow) } 8 'Big Picture re-focused') { }
-    else { Log 'WARNING: Big Picture never took focus after the stop' }
+    if (-not (Wait-For { $wsh.AppActivate($CG.BpmWindow) } 8 'Big Picture re-focused')) { Log 'WARNING: Big Picture never took focus after the stop' }
 
     $cleared = (Get-RunningAppId) -eq 0
     Write-CgEvent 'game_stopped' @{ appid = $idn; method = $method; cleared = $cleared } `

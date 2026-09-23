@@ -126,14 +126,14 @@ def load_secrets(path: str | pathlib.Path) -> dict:
         return {}
 
 
-def real_key(value: object) -> TypeGuard[str]:
+def real_key(value: object, min_len: int = 15) -> TypeGuard[str]:
     """Template junk ('dg_...', 'PLACEHOLDER...') reads as absent. Redacting
     "..." would black out prose."""
     return (
         isinstance(value, str)
         and "..." not in value
         and not value.upper().startswith("PLACEHOLDER")
-        and len(value.strip()) >= 15
+        and len(value.strip()) >= min_len
     )
 
 

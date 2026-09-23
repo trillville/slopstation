@@ -48,7 +48,7 @@ given is an attribute beside it.
 | Attribute | Values |
 |---|---|
 | `service` | `k15` (orchestrator), `gamepc` (the gaming PC) |
-| `lane` | k15: `voice` `launch` `listener` `library` `steam` `traces` `supervisor` `manual` `deploy` — gamepc: `enter` `exit` `launchgame` `nav` `stopgame` `wake-safety` `office-safety` `dispatch` `pc-transcript` |
+| `lane` | k15: `voice` `launch` `listener` `library` `steam` `traces` `supervisor` `manual` `deploy` — gamepc: `enter` `exit` `launchgame` `nav` `stopgame` `wake-safety` `office-safety` `display` `dispatch` `deploy` `pc-transcript` |
 | `severity` | `info` `warn` `error` — the whole set; there is no `debug` |
 | `env` | `prod`, `test` — **always filter `env:prod`** unless investigating the test suite |
 | `event` | the closed vocabulary below |
@@ -213,7 +213,7 @@ them together with the heartbeat count:
   WHICH escalation rung actually quit it, plus `cleared`) `game_stop_failed`
 - **dispatch** (gaming PC, its own file because Dispatch runs elevated and the
   task scripts do not): `verb` — every mutating verb (`enter` `exit` `launch`
-  `nav` `stop`) with `verb`, `answer` and the `turn` it carried; a `DENIED`
+  `nav` `stop` `display` `sleep`) with `verb`, `answer` and the `turn` it carried; a `DENIED`
   command lands at `severity:warn` with `answer=DENIED` and the first 60 chars
   as `cmd`. The read-only polls stay silent.
 - **launch, also**: `config_invalid` (a config doctor would FAIL — refused
@@ -283,5 +283,5 @@ Spans carry transcripts and completions verbatim. Treat them as private.
 
 Check, in order: is `env:prod` filtering out what you want; is the time range
 too narrow; is the attribute name right; is the collector running on the
-machine in question (`python doctor.py` on the K15 has a row for it). A gap on
+machine in question (`slopstation-doctor` on the K15 has a row for it). A gap on
 one machine only is that machine's collector — the two ship independently.

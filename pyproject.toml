@@ -12,7 +12,7 @@ requires-python = ">=3.13"
 
 dependencies = [
   # Recheck service compatibility before changing Pipecat.
-  "pipecat-ai[local,silero,deepgram,anthropic,openai,tracing]==1.8.1",
+  "pipecat-ai[local,deepgram,anthropic,openai,tracing]==1.8.1",
   # Sentry uses the HTTP OTLP exporter.
   "opentelemetry-exporter-otlp-proto-http==1.44.0",
   # Avoid the aggregate OTLP extra, which adds separately resolved packages.
