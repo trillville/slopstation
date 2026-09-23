@@ -64,14 +64,8 @@ class _Movies(_Queue):
             movie_id = int(movie["id"])
             title = _clean_text(movie.get("title")) or f"TMDB {tmdb_id}"
             baseline_file_id = None
-        command = self._one(
-            self.radarr.post(
-                "command", {"name": "MoviesSearch", "movieIds": [movie_id]}
-            ),
-            "Radarr",
-            "search command",
-        )
-        command_ids = [int(command["id"])]
+        body = {"name": "MoviesSearch", "movieIds": [movie_id]}
+        command_ids = [self._post_command(self.radarr, body)]
         return self._submission(
             "movie",
             movie_id,

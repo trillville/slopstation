@@ -14,6 +14,7 @@ from typing import Any
 
 from slopstation.agent.llm import paging
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
+from slopstation.agent.llm.toolsets.media_browse import _gb
 from slopstation.agent.tools import media_proton
 
 HASH_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
@@ -35,20 +36,14 @@ ORDER = {
     "down": "decreasePrio",
 }
 
-_OWNERSHIP = (
-    " Radarr and Sonarr own their downloads: use the movie and TV tools for "
-    "anything that changes what a linked torrent is or whether it exists."
-)
-
-LIST_TORRENTS = (
-    """\
+LIST_TORRENTS = """\
 List torrents in qBittorrent: by state (downloading, seeding, completed,
 paused, stalled, errored, active, inactive, all), category, or a name
 fragment. Each row carries the movie or series it belongs to when Radarr or
 Sonarr is waiting on it, so say the title, not the release name. Returns the
-count first and one page of rows, most recently added first."""
-    + _OWNERSHIP
-)
+count first and one page of rows, most recently added first. Radarr and
+Sonarr own their downloads: use the movie and TV tools for anything that
+changes what a linked torrent is or whether it exists."""
 
 TORRENT_DETAILS = """\
 One torrent in full: state, sizes, ratio, seeding time, save path, trackers'
@@ -407,7 +402,7 @@ def _row(t, link):
         "owner": linked["authority"] if linked else None,
         "state": t.get("state"),
         "percent": round(100 * float(t.get("progress", 0) or 0)),
-        "size_gb": round(int(t.get("size", 0) or 0) / 1024**3, 2),
+        "size_gb": _gb(t.get("size")),
         "down_kbps": _kbps(t.get("dlspeed")),
         "up_kbps": _kbps(t.get("upspeed")),
         "eta_min": None
@@ -447,15 +442,9 @@ def impls(ctx: ToolContext):
         return out, None
 
     def _one(args):
-        h = _hash(args.get("hash"))
-        return (
-            (h, None)
-            if h
-            else (
-                None,
-                {"ok": False, "error": "pass the torrent hash from list_torrents"},
-            )
-        )
+        if h := _hash(args.get("hash")):
+            return h, None
+        return None, {"ok": False, "error": "pass the torrent hash from list_torrents"}
 
     def _link():
         """For reads: an unreadable queue means rows show no owner."""
@@ -535,11 +524,9 @@ def impls(ctx: ToolContext):
             "media": link["title"] if link else None,
             "owner": link["authority"] if link else None,
             "save_path": props.get("save_path"),
-            "size_gb": round(int(props.get("total_size", 0) or 0) / 1024**3, 2),
-            "downloaded_gb": round(
-                int(props.get("total_downloaded", 0) or 0) / 1024**3, 2
-            ),
-            "uploaded_gb": round(int(props.get("total_uploaded", 0) or 0) / 1024**3, 2),
+            "size_gb": _gb(props.get("total_size")),
+            "downloaded_gb": _gb(props.get("total_downloaded")),
+            "uploaded_gb": _gb(props.get("total_uploaded")),
             "ratio": round(float(props.get("share_ratio", 0) or 0), 2),
             "seeding_hours": round(int(props.get("seeding_time", 0) or 0) / 3600, 1),
             "seeds": props.get("seeds_total"),
@@ -560,7 +547,7 @@ def impls(ctx: ToolContext):
             "files": [
                 {
                     "name": f.get("name"),
-                    "gb": round(int(f.get("size", 0) or 0) / 1024**3, 2),
+                    "gb": _gb(f.get("size")),
                     "percent": round(100 * float(f.get("progress", 0) or 0)),
                     "priority": f.get("priority"),
                 }
@@ -647,7 +634,7 @@ def impls(ctx: ToolContext):
         if not rows:
             return {"ok": False, "error": "no torrent with that hash"}
         name = rows[0].get("name")
-        size_gb = round(int(rows[0].get("size", 0) or 0) / 1024**3, 2)
+        size_gb = _gb(rows[0].get("size"))
 
         def act():
             try:
@@ -687,18 +674,14 @@ def impls(ctx: ToolContext):
             "ok": True,
             "down_kbps": _kbps(info.get("dl_info_speed")),
             "up_kbps": _kbps(info.get("up_info_speed")),
-            "session_down_gb": round(
-                int(info.get("dl_info_data", 0) or 0) / 1024**3, 2
-            ),
-            "session_up_gb": round(int(info.get("up_info_data", 0) or 0) / 1024**3, 2),
+            "session_down_gb": _gb(info.get("dl_info_data")),
+            "session_up_gb": _gb(info.get("up_info_data")),
             "down_limit_kbps": _kbps(info.get("dl_rate_limit")),
             "up_limit_kbps": _kbps(info.get("up_rate_limit")),
             "alternative_limits": alt,
             "connection": info.get("connection_status"),
             "dht_nodes": info.get("dht_nodes"),
-            "free_space_gb": round(
-                int(state.get("free_space_on_disk", 0) or 0) / 1024**3, 1
-            )
+            "free_space_gb": _gb(state.get("free_space_on_disk"), 1)
             if state.get("free_space_on_disk") is not None
             else None,
             "queued_disk_jobs": state.get("queued_io_jobs"),
@@ -765,27 +748,22 @@ def impls(ctx: ToolContext):
         rows.sort(key=lambda t: -float(t.get("ratio", 0) or 0))
         link = _link()
 
-        def share(t):
+        # qBittorrent's share limits: -2 follows the global policy, -1 is none.
+        words = {-2: "global", -1: "none"}
+
+        def shape(t):
+            row = _row(t, link)
             ratio = t.get("ratio_limit", -2)
             time_limit = t.get("seeding_time_limit", -2)
             return {
-                "ratio_limit": "global"
-                if ratio == -2
-                else ("none" if ratio == -1 else ratio),
-                "time_limit_min": "global"
-                if time_limit == -2
-                else ("none" if time_limit == -1 else time_limit),
-            }
-
-        def shape(t):
-            return {
                 **{
-                    k: _row(t, link)[k]
+                    k: row[k]
                     for k in ("hash", "name", "media", "ratio", "up_kbps", "size_gb")
                 },
-                "uploaded_gb": round(int(t.get("uploaded", 0) or 0) / 1024**3, 2),
+                "uploaded_gb": _gb(t.get("uploaded")),
                 "seeding_hours": round(int(t.get("seeding_time", 0) or 0) / 3600, 1),
-                **share(t),
+                "ratio_limit": words.get(ratio, ratio),
+                "time_limit_min": words.get(time_limit, time_limit),
             }
 
         out = paging.page(
@@ -800,9 +778,7 @@ def impls(ctx: ToolContext):
                 if prefs.get("max_seeding_time_enabled")
                 else None,
             },
-            total_uploaded_gb=round(
-                sum(int(t.get("uploaded", 0) or 0) for t in rows) / 1024**3, 2
-            ),
+            total_uploaded_gb=_gb(sum(int(t.get("uploaded", 0) or 0) for t in rows)),
         )
         if out["ok"]:
             out["torrents"] = [shape(t) for t in out["torrents"]]
@@ -829,7 +805,7 @@ def impls(ctx: ToolContext):
                 {
                     "hash": t.get("hash"),
                     "name": t.get("name"),
-                    "size_gb": round(int(t.get("size", 0) or 0) / 1024**3, 2),
+                    "size_gb": _gb(t.get("size")),
                     "category": t.get("category"),
                     "completed": t.get("completion_on"),
                 }
@@ -851,8 +827,6 @@ def impls(ctx: ToolContext):
         except Exception as e:
             proton = {"state": "unreadable", "detail": str(e)}
         listen = int(prefs.get("listen_port", 0) or 0)
-        forwarded = proton.get("port") if isinstance(proton, dict) else None
-        active = isinstance(proton, dict) and proton.get("state") == "active"
         return {
             "ok": True,
             "interface": prefs.get("current_interface_name")
@@ -860,9 +834,8 @@ def impls(ctx: ToolContext):
             "bound_address": prefs.get("current_interface_address"),
             "listen_port": listen,
             "proton": proton,
-            "ports_agree": active
-            and forwarded is not None
-            and int(forwarded) == listen,
+            # "active" means Proton holds a forwarded port.
+            "ports_agree": proton["state"] == "active" and proton["port"] == listen,
         }
 
     @bind

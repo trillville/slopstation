@@ -264,9 +264,8 @@ def last_smart_warning() -> dict | None:
 
 
 def drive_health(root: Path) -> dict:
-    mounts = sorted({root.anchor or str(root), paths.HOME.anchor or str(paths.HOME)})
     return {
-        "volumes": [_usage(m) for m in mounts],
+        **disk_usage(root, folders=False),
         "warn_below_gb": FREE_WARN_BYTES // GB,
         "last_smart_warning": last_smart_warning(),
     }

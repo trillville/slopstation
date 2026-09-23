@@ -107,6 +107,23 @@ def fake_dispatch(turn="aa0001", asked="", dry_run=False):
     return types.SimpleNamespace(dry_run=dry_run, utterance=utterance)
 
 
+# The MediaService config test_media_ops and test_media_service share.
+SERVICE_CFG = {
+    "movieRoot": "/data/Movies",
+    "seriesRoot": "/data/TV",
+    "moviePresets": {
+        "default": "Movie UHD",
+        "1080p": "Movie HD",
+        "2160p": "Movie UHD",
+    },
+    "seriesPresets": {
+        "default": "Series HD",
+        "1080p": "Series HD",
+        "2160p": "Series UHD",
+    },
+}
+
+
 def sonarr_episode(
     id, season, *, number=None, has_file=None, monitored=None, aired=None, file_id=None
 ):

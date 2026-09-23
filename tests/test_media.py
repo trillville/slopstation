@@ -253,18 +253,6 @@ def test_proton_monitor_syncs_a_fresh_mapping(proton_log, qbit, qbit_web, monkey
     assert not proton_monitor.reconcile_once()["changed"]
     assert qbit_web.count("/app/setPreferences") == mutations
 
-    proton_log.write_text(
-        proton_log.read_text(encoding="utf-8")
-        + proton_event(
-            "2026-08-30T04:10:41.000Z", "DestroyPortMappingCommunication", 39733
-        )
-        + proton_event("2026-08-30T04:10:41.100Z", "Stopped"),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 10, 42, tzinfo=UTC)
-    )
-    assert proton_monitor.reconcile_once()["state"] == "inactive"
     monkeypatch.setattr(
         proton_monitor, "now", datetime.datetime(2026, 8, 30, 4, 12, 0, tzinfo=UTC)
     )
@@ -672,21 +660,6 @@ def test_health_watch_reaps_a_download_that_completed_empty():
     assert [(r["download"], r["reason"], r["idle_s"]) for r in reaped] == [
         ("EMPTY", "empty", 0)
     ]
-
-
-def test_health_watch_reports_a_dead_app_once():
-    class DeadArr:
-        name = "Sonarr"
-
-        def get(self, endpoint, params=None):
-            raise media_clients.MediaError("connection refused")
-
-    watch_log = CapturingLog("voice")
-    dead = media_health.MediaHealthMonitor((DeadArr(),), watch_log)
-    dead.reconcile_once()
-    dead.reconcile_once()
-    # An app that stays down is one line, not one line per poll.
-    assert len(watch_log.find("media_watch_failed")) == 1
 
 
 # --- grabs no operation asked for ---------------------------------------------

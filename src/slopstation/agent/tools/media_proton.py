@@ -133,8 +133,6 @@ def read_proton_port_state(path=None, now=None):
         return _no_state("unknown", source)
 
     current = now or datetime.datetime.now(datetime.UTC)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=datetime.UTC)
     age_s = (current - latest["observed"]).total_seconds()
     status = latest["status"]
     port = latest["port"]
@@ -224,9 +222,6 @@ class ProtonPortMonitor(Monitor):
         self._acted_at = None
         self._step = 0
 
-    def _now(self):
-        return self.now or datetime.datetime.now(datetime.UTC)
-
     def _watch_peers(self):
         """Zero DHT nodes with downloads waiting is the dead-socket symptom
         whatever caused it. Each PEERS_DEAD_S it persists: rebind, then
@@ -248,7 +243,7 @@ class ProtonPortMonitor(Monitor):
                 f"Windows reserved {reserved}, which holds qBittorrent's port "
                 f"{port}; see 'Proton forwarded port' in media/README.md"
             )
-        now = self._now()
+        now = self.now or datetime.datetime.now(datetime.UTC)
         if self._dead_since is None:
             self._dead_since = now
         waited_s = (now - (self._acted_at or self._dead_since)).total_seconds()
