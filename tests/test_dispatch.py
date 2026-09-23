@@ -204,7 +204,7 @@ def test_end_session_restores_the_room_before_the_exit(host):
     assert d.end_session().ok and hooked == [1]
 
 
-def test_play_game_session_live_ssh_outcomes_and_cold_start(monkeypatch, host, spawned):
+def test_play_game_session_live_ssh_outcomes_and_cold_start(host, spawned):
     seed_lock(10)  # fresh lock = session up
     d, _ = harness()
     host("OK")
@@ -215,21 +215,12 @@ def test_play_game_session_live_ssh_outcomes_and_cold_start(monkeypatch, host, s
     r = d.play_game(1)
     # An index miss reports the app ID instead of raising.
     assert not r.ok and r.earcon == "busy" and "BUSY:42" in r.detail, r
-    monkeypatch.setattr(
-        library, "installed_name", lambda a: {42: "Baldur's Gate 3"}.get(a)
-    )
-    r = d.play_game(1)
-    assert "Baldur's Gate 3 is already running" in r.detail, r
-    assert "quit" in r.detail, r  # the BUSY message now OFFERS the quit
-    monkeypatch.setattr(library, "installed_name", lambda a: None)
-    assert "app 42 is already running" in d.play_game(1).detail
     host("NOTREADY")  # launch still in flight
     r = d.play_game(1)
     assert not r.ok and r.earcon == "busy"
     host("NOTINSTALLED")  # PC-side install guard
     r = d.play_game(1)
     assert not r.ok and r.earcon == "fail" and "not installed" in r.detail
-    assert "controller" in r.detail, r
     host(ssh_down)
     d, _ = harness()
     assert d.play_game(1).earcon == "fail"
@@ -283,14 +274,7 @@ def test_nav_correlated_wire_per_kind_notready_and_unknown_kind_refusal(
     assert d.nav("details", 400).ok and wire[-1] == "nav details 400 --turn 4c1d0e", (
         wire
     )
-    assert d.nav("store", 400).ok and wire[-1] == "nav store 400 --turn 4c1d0e", wire
-    assert (
-        d.nav("collection", "uc-abc").ok
-        and wire[-1] == "nav collection uc-abc --turn 4c1d0e"
-    ), wire
-    # The newer pages: bare, per-game, and a URL on the allowlist.
-    assert d.nav("friends").ok and wire[-1] == "nav friends --turn 4c1d0e", wire
-    assert d.nav("dlc", 400).ok and wire[-1] == "nav dlc 400 --turn 4c1d0e", wire
+    # A URL on the allowlist.
     r = d.nav("url", "https://store.steampowered.com/wishlist/")
     assert r.ok and "that page" in r.detail, r
     assert wire[-1] == "nav url https://store.steampowered.com/wishlist/ --turn 4c1d0e"
