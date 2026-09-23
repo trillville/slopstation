@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from slopstation.agent.llm import paging
-from slopstation.agent.llm.formatting import gigabytes
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.media import storage
+from slopstation.agent.media.units import gigabytes
 
 DISK_USAGE = """\
 Free and used space: the media volume and the checkout volume, and how much

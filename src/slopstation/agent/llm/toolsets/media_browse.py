@@ -7,7 +7,6 @@ import datetime
 from typing import Any
 
 from slopstation.agent.llm import paging
-from slopstation.agent.llm.formatting import gigabytes
 from slopstation.agent.llm.registry import Bindings, ToolContext
 from slopstation.agent.llm.toolsets.media_schema import (
     CATALOG_ID,
@@ -20,6 +19,7 @@ from slopstation.agent.media.clients import (
     MediaError,
     _parse_time,
 )
+from slopstation.agent.media.units import gigabytes
 
 KIND_OR_BOTH = {"type": "string", "enum": ["movie", "series", "both"]}
 

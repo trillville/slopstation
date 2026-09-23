@@ -13,9 +13,9 @@ import re
 from typing import Any
 
 from slopstation.agent.llm import paging
-from slopstation.agent.llm.formatting import gigabytes
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
 from slopstation.agent.media import proton
+from slopstation.agent.media.units import gigabytes
 
 HASH_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
 STATES = {

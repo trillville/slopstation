@@ -14,12 +14,12 @@ from typing import Any
 
 from slopstation import paths
 from slopstation.agent.media.disk import FREE_WARN_BYTES
+from slopstation.agent.media.units import GB, gigabytes
 
 # The three folders Compose mounts under /data. Deleting one of them, or the
 # root, is never a tidy-up.
 TOP_FOLDERS = ("Movies", "TV", "torrents")
 CONTAINER_PREFIX = "/data/"
-GB = 1024**3
 
 
 def media_root() -> Path | None:
@@ -43,8 +43,8 @@ def _usage(mount) -> dict:
     u = shutil.disk_usage(mount)
     return {
         "mount": str(mount),
-        "total_gb": round(u.total / GB, 1),
-        "free_gb": round(u.free / GB, 1),
+        "total_gb": gigabytes(u.total, 1),
+        "free_gb": gigabytes(u.free, 1),
         "pct_free": round(100.0 * u.free / u.total, 1) if u.total else 0.0,
         "low": u.free < FREE_WARN_BYTES,
     }
@@ -93,7 +93,7 @@ def disk_usage(root: Path, folders: bool = True) -> dict:
             p = root / name
             if p.is_dir():
                 size, files = tree_size(p)
-                rows.append({"folder": name, "gb": round(size / GB, 1), "files": files})
+                rows.append({"folder": name, "gb": gigabytes(size, 1), "files": files})
         out["folders"] = rows
     return out
 
@@ -124,7 +124,7 @@ def largest_items(root: Path, under: str = "") -> list[dict] | None:
             {
                 "name": entry.name,
                 "path": str(Path(entry.path).relative_to(root)).replace("\\", "/"),
-                "gb": round(size / GB, 2),
+                "gb": gigabytes(size),
                 "bytes": size,
                 "files": files,
                 "folder": entry.is_dir(follow_symlinks=False),
@@ -174,7 +174,7 @@ def orphan_files(root: Path, known: set[Path], torrent_paths: set[Path]) -> dict
                     unknown_media.append(
                         {
                             "path": str(p.relative_to(root)).replace("\\", "/"),
-                            "gb": round(size / GB, 2),
+                            "gb": gigabytes(size),
                         }
                     )
     stray: list[dict[str, Any]] = []
@@ -200,7 +200,7 @@ def orphan_files(root: Path, known: set[Path], torrent_paths: set[Path]) -> dict
             stray.append(
                 {
                     "path": str(Path(entry.path).relative_to(root)).replace("\\", "/"),
-                    "gb": round(size / GB, 2),
+                    "gb": gigabytes(size),
                 }
             )
     unknown_media.sort(key=lambda r: -r["gb"])
@@ -237,7 +237,7 @@ def delete(target: Path) -> dict:
     else:
         size, files = target.stat().st_size, 1
         target.unlink()
-    return {"deleted": str(target), "gb": round(size / GB, 2), "files": files}
+    return {"deleted": str(target), "gb": gigabytes(size), "files": files}
 
 
 def last_smart_warning() -> dict | None:
