@@ -64,7 +64,7 @@ _HUMAN_MAX = 80
 # Record attributes alerts select on, so they stay low-cardinality and are
 # read once. The test suite sets SLOPSTATION_ENV before anything imports this,
 # so a test can never write a record indistinguishable from an outage.
-SERVICE = os.environ.get("SLOPSTATION_SERVICE", "k15")
+SERVICE = "k15"
 ENV = os.environ.get("SLOPSTATION_ENV", "prod")
 HOST = platform.node()
 
@@ -178,21 +178,16 @@ def scrub(key: str, value: Any) -> Any:
 _last_day = None
 
 
-def _path(day: str) -> pathlib.Path:
+def log_file(day: str) -> pathlib.Path:
+    """This service's event file for a YYYYMMDD day."""
     stem = "test" if ENV == "test" else SERVICE
     return paths.logs() / f"{stem}-{day}.jsonl"
-
-
-def log_file(day: str) -> pathlib.Path:
-    """This service's event file for a YYYYMMDD day, for readers such as the
-    doctor."""
-    return _path(day)
 
 
 def log_files() -> list[pathlib.Path]:
     """Every retained event file of this service, newest first: the live
     folder, then the archive."""
-    pattern = _path("*").name
+    pattern = log_file("*").name
     return sorted(
         [*paths.logs().glob(pattern), *(paths.logs() / ARCHIVE_NAME).glob(pattern)],
         key=lambda f: f.name,
@@ -309,7 +304,7 @@ def emit(lane: str, event: str, level: str = INFO, /, **fields: Any) -> dict | N
             paths.logs().mkdir(parents=True, exist_ok=True)
             _prune()
             _last_day = day
-        _append(_path(day), json.dumps(rec, default=str, ensure_ascii=False))
+        _append(log_file(day), json.dumps(rec, default=str, ensure_ascii=False))
     except (OSError, ValueError, TypeError):
         pass  # the event is lost; the caller is not
     return rec

@@ -59,16 +59,16 @@ def parse_dsn(dsn: object) -> tuple[str, str, str] | None:
 
 def checkin_url(dsn: object, lane: str) -> str | None:
     parsed = parse_dsn(dsn)
-    if parsed is None or not lane:
+    if parsed is None:
         return None
     host, project, key = parsed
     return f"https://{host}/api/{project}/cron/{SLUG_PREFIX}{lane}/{key}/"
 
 
-def send(url: str, status: str = "ok") -> bool:
+def send(url: str) -> bool:
     """One check-in. POST rather than GET so monitor_config rides along and
     the monitor upserts itself. Never raises."""
-    body = json.dumps({"monitor_config": MONITOR_CONFIG, "status": status}).encode(
+    body = json.dumps({"monitor_config": MONITOR_CONFIG, "status": "ok"}).encode(
         "utf-8"
     )
     req = urllib.request.Request(

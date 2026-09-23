@@ -45,7 +45,7 @@ def active(age_s: float | None = None) -> bool:
     return age_s is not None and age_s < LOCK_STALE_S
 
 
-def acquire(content: str = "") -> bool:
+def acquire(content: str) -> bool:
     """Acquire an absent or stale session under the shared Windows byte lock."""
     with statefile.guard(lock_file()):
         if active():
@@ -55,12 +55,12 @@ def acquire(content: str = "") -> bool:
 
 
 def _owned() -> bool:
-    """Called under guard; notes without a PID predate ownership tracking."""
+    """Called under guard; the lock reads `<turn> <pid>`."""
     try:
         parts = lock_file().read_text(encoding="utf-8").split()
     except OSError:
         return False
-    return len(parts) < 2 or parts[1] == str(os.getpid())
+    return parts[1:] == [str(os.getpid())]
 
 
 def touch() -> bool:

@@ -25,48 +25,34 @@ def tone_report(side, freq_hz, duration_ms, gain=0, lfo_freq=0, lfo_depth=0):
     )
 
 
-def pulse_report(side, on_us, off_us, repeat):
-    return struct.pack("<BBHHH", HAPTIC_PULSE, side, on_us, off_us, repeat)
-
-
 def stop_report(side):
     """Zero-filled 0x81 = stop any playing tone on that side."""
-    return pulse_report(side, 0, 0, 0)
+    return struct.pack("<BBHHH", HAPTIC_PULSE, side, 0, 0, 0)
 
 
 # --- finding the interface ----------------------------------------------------
 
 
-def streams_input_reports(reads) -> bool:
-    """open_streaming_interface predicate: keep the RID_INPUT streamer."""
-    return reads[-1][0] == RID_INPUT
-
-
-def open_streaming_interface(accept=None, timeout_s: float = 2.0):
-    """Latch a Puck HID interface. The Puck exposes ~13 and some error on read;
-    those are skipped. `accept(reads)` runs after every read and decides which
-    interface to keep - default keeps the first that reads at all. Returns
-    (device, path), or (None, None) if nothing was accepted in timeout_s.
+def open_streaming_interface(timeout_s: float = 2.0):
+    """Latch the Puck HID interface that streams RID_INPUT reports. The Puck
+    exposes ~13 and some error on read; those are skipped. Returns the device,
+    or None if no interface streamed input within timeout_s.
 
     hid is imported here, not at module scope, so importing this module costs
     nothing on a box without the controller's HID stack."""
     import hid
 
-    accept = accept or (lambda reads: True)
     for info in hid.enumerate(VID, PID):
         dev = None
         try:
             dev = hid.device()
             dev.open_path(info["path"])
             dev.set_nonblocking(True)
-            reads = []
             t0 = time.time()
             while time.time() - t0 < timeout_s:
                 r = dev.read(64)
-                if r:
-                    reads.append(r)
-                    if accept(reads):
-                        return dev, info["path"]
+                if r and r[0] == RID_INPUT:
+                    return dev
                 time.sleep(0.002)
         except (OSError, ValueError):
             pass  # unreadable interface - skip it
@@ -75,11 +61,11 @@ def open_streaming_interface(accept=None, timeout_s: float = 2.0):
                 dev.close()
             except Exception:
                 pass
-    return None, None
+    return None
 
 
 def play_pattern(dev, steps: Sequence[tuple[int, ...]], gain: int = 0) -> None:
-    """Play a haptic pattern; production and bench audition share this engine.
+    """Play a haptic pattern.
     steps = ((freq_hz, dur_ms, gap_after_ms, lfo_freq, lfo_depth), ...); each
     tone plays out before the next. The trailing stops are harmless if tones
     self-terminated and required if they sustained."""
@@ -91,15 +77,10 @@ def play_pattern(dev, steps: Sequence[tuple[int, ...]], gain: int = 0) -> None:
         dev.write(stop_report(side))
 
 
-def chirp(dev, gain: int = 0) -> None:
+def chirp(dev) -> None:
     """Two short self-terminating tones + stops: the 'is the haptic path alive'
     stimulus doctor.py sends."""
-    for freq, dur in ((440, 60), (660, 90)):
-        for side in (0, 1):
-            dev.write(tone_report(side, freq, dur, gain))
-        time.sleep(0.07)
-    for side in (0, 1):
-        dev.write(stop_report(side))
+    play_pattern(dev, ((440, 60, 10, 0, 0), (660, 90, 0, 0, 0)))
 
 
 # --- Haptic vocabulary: one base note, count is the message -------------------
