@@ -94,6 +94,10 @@ the controller launch chain, not every optional feature.
   enabled, the whole stack: the containers, Radarr, Sonarr and Prowlarr
   through their APIs, qBittorrent's settings, Proton's forwarded port,
   Windows' port reservations, and monitored episodes nothing is chasing.
+  With `--smoke`, which the deploy passes, it also asks the assistant one
+  question through the text interface ("is the gaming PC awake?"). The row
+  passes when a reply comes back and the model called a tool to get it. The
+  question costs one model call.
 - Gaming PC: `C:\CouchGaming\Doctor.ps1`. The loaded config, the deployed
   files, each scheduled task against its definition, sshd and the mini-PC-only
   firewall rule, the key file's ACL, the NIC's wake settings, VirtualHere and

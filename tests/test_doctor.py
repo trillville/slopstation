@@ -346,6 +346,55 @@ def test_text_interface_row_reads_health_from_the_running_lane(rows, cfg, monkey
     assert rows.levels()["text interface"] == "PASS"
 
 
+class _SmokeBackend:
+    """The model: calls find_tools when `uses_tools`, then answers."""
+
+    uses_tools = True
+
+    def __init__(self, secrets, model, effort=None, voice=None):
+        self.messages: list[dict] = []
+
+    def turn(self, system_text, user_text, tools):
+        if self.uses_tools:
+            assert tools.call("find_tools", {"query": "is the pc awake"})["ok"]
+        return "The PC is asleep."
+
+
+def test_smoke_turn_passes_only_when_the_model_calls_a_tool(rows, cfg, monkeypatch):
+    """A real text server with a fake model: a turn that called a tool
+    passes, one that answered without one warns, and no server is not tried."""
+    from slopstation.agent.interfaces import text
+    from slopstation.agent.llm import backends
+    from slopstation.agent.services import Services
+
+    token = "t" * 64
+    monkeypatch.setattr(config, "secrets", lambda: {"textInterfaceToken": token})
+    monkeypatch.setitem(
+        backends.BACKENDS, cfg["voice"]["assistantProvider"], _SmokeBackend
+    )
+    live = {**cfg, "textInterface": {"enabled": True, "host": "127.0.0.1", "port": 0}}
+    secrets = {"textInterfaceToken": token, "anthropicApiKey": "a" * 64}
+    server = text.start(Services(live, secrets, helpers.CapturingLog("voice")))
+    assert server is not None
+    try:
+        live["textInterface"]["port"] = server.server_address[1]
+        doctor.check_assistant(live, text_answered=True)
+        assert rows.levels()["assistant"] == "PASS"
+        assert rows.detail("assistant").endswith("via find_tools")
+        rows.clear()
+        monkeypatch.setattr(_SmokeBackend, "uses_tools", False)
+        doctor.check_assistant(live, text_answered=True)
+        assert rows.levels()["assistant"] == "WARN"
+        assert "without calling a tool" in rows.detail("assistant")
+    finally:
+        server.shutdown()
+        server.server_close()
+    rows.clear()
+    doctor.check_assistant(live, text_answered=False)
+    assert rows.levels()["assistant"] == "WARN"
+    assert rows.detail("assistant").startswith("not tried")
+
+
 def test_cron_checkin_reads_back_past_today(rows):
     """A lane logs its first check-in and then only changes, so lanes that
     started days ago leave nothing in today's file and still count."""

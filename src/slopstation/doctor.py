@@ -1,10 +1,14 @@
-"""K15 chain diagnosis: python -m slopstation.doctor
+"""K15 chain diagnosis: python -m slopstation.doctor [--smoke]
 
 Read-only except one haptic chirp, skipped when the chord listener is running
 (one process owns the Puck). Voice, media and telemetry rows are WARN-only;
 only the chord chain can FAIL. Exit code = number of FAILs.
+
+--smoke also asks the running assistant one question, which costs a model
+call; the deploy passes it.
 """
 
+import argparse
 import json
 import os
 import pathlib
@@ -548,7 +552,7 @@ def _steam_mint_probe(days):
     )
 
 
-def check_voice(cfg):
+def check_voice(cfg, smoke=False):
     """Voice overlay health - WARN-only, never FAIL."""
     if not (cfg and isinstance(cfg.get("voice"), dict)):
         report(
@@ -564,7 +568,9 @@ def check_voice(cfg):
     check_voice_config(cfg)
     check_steam_session()
     check_media(cfg)
-    check_text(cfg)
+    answered = check_text(cfg)
+    if smoke:
+        check_assistant(cfg, answered)
     check_remote(cfg)
     check_operations()
     check_voice_agent()
@@ -734,26 +740,32 @@ def check_media(cfg):
     media_doctor.check(cfg, config.secrets(), report)
 
 
+def _text_url(cfg, path):
+    """The text interface's URL for `path`, on the host the lane bound. A
+    wildcard bind answers on loopback; any other host answers only on itself."""
+    text = cfg["textInterface"]
+    host = str(text.get("host", "127.0.0.1"))
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    return f"http://{host}:{int(text.get('port', 8765))}{path}"
+
+
 def check_text(cfg):
-    """The text interface's /health: what the voice process has up. WARN-only."""
+    """The text interface's /health: what the voice process has up. WARN-only.
+    True when it answered."""
     text = cfg.get("textInterface")
     if not isinstance(text, dict) or not text.get("enabled"):
         report(PASS, "text interface", "disabled")
-        return
+        return False
     token = config.secrets().get("textInterfaceToken")
     if not config.real_key(token):
         report(
             WARN, "text interface", "textInterfaceToken missing or a placeholder", ""
         )
-        return
-    # The host the lane bound. A wildcard bind answers on loopback; any other
-    # host answers only on itself.
-    host = str(text.get("host", "127.0.0.1"))
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
+        return False
     port = int(text.get("port", 8765))
     request = urllib.request.Request(
-        f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {token}"}
+        _text_url(cfg, "/health"), headers={"Authorization": f"Bearer {token}"}
     )
     try:
         with urllib.request.urlopen(request, timeout=2) as r:
@@ -765,7 +777,7 @@ def check_text(cfg):
             f"no answer on {port} ({e})",
             "the voice agent hosts it; check the voice lane above",
         )
-        return
+        return False
     up = [k for k in ("operations", "steam", "media") if health.get(k)]
     # Every thread the voice process started. Missing: never started. False:
     # died.
@@ -776,6 +788,68 @@ def check_text(cfg):
         report(WARN, "text interface", f"{detail}; stopped: {', '.join(dead)}", "")
     else:
         report(PASS, "text interface", detail)
+    return True
+
+
+# A question the assistant can only answer by calling a tool, and one whose
+# tools are all reads.
+SMOKE_QUESTION = (
+    "Is the gaming PC awake right now? Only check; do not wake it, start "
+    "anything or change anything."
+)
+SMOKE_TIMEOUT_S = 120
+
+
+def check_assistant(cfg, text_answered):
+    """One real turn through the text interface: the model is reachable, takes
+    the tool schemas, calls a tool, and answers. WARN-only."""
+    if not text_answered:
+        report(WARN, "assistant", "not tried - the text interface did not answer")
+        return
+    token = config.secrets().get("textInterfaceToken")
+    # Its own session, so a conversation in progress is not touched and the
+    # trace is easy to tell apart.
+    session = f"doctor-{int(time.time())}"
+    request = urllib.request.Request(
+        _text_url(cfg, "/v1/chat"),
+        data=json.dumps({"session": session, "message": SMOKE_QUESTION}).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=SMOKE_TIMEOUT_S) as r:
+            result = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        report(
+            WARN,
+            "assistant",
+            f"no answer to a question ({e})",
+            "see text_request_failed in the voice event log",
+        )
+        return
+    secs = time.monotonic() - started
+    tools = result.get("tools") or []
+    reply = str(result.get("reply") or "").strip()
+    turn = result.get("turn")
+    if not reply:
+        report(WARN, "assistant", f"turn {turn} came back empty")
+    elif not tools:
+        report(
+            WARN,
+            "assistant",
+            f"turn {turn} answered without calling a tool: {reply[:80]!r}",
+            "the model is not using its tools",
+        )
+    else:
+        report(
+            PASS,
+            "assistant",
+            f"turn {turn} answered in {secs:.0f} s via {', '.join(tools)}",
+        )
 
 
 def check_remote(cfg):
@@ -1049,8 +1123,13 @@ def check_telemetry(cfg):
     )
 
 
-def main():
+def main(argv=None):
     """Every row, in chain order. Exit code = number of FAILs."""
+    ap = argparse.ArgumentParser(prog="slopstation-doctor")
+    ap.add_argument(
+        "--smoke", action="store_true", help="also ask the assistant one question"
+    )
+    args = ap.parse_args(argv)
     cfg = check_config()
     check_com(cfg)
     puck_ok = check_puck()
@@ -1062,7 +1141,7 @@ def main():
     check_virtualhere()
     check_session_state()
     check_telemetry(cfg)
-    check_voice(cfg)
+    check_voice(cfg, smoke=args.smoke)
     print(f"\n{_counts[PASS]} pass, {_counts[WARN]} warn, {_counts[FAIL]} fail")
     return _counts[FAIL]
 

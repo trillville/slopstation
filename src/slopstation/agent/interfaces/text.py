@@ -28,16 +28,19 @@ class SessionBusy(RuntimeError):
 class Acknowledged:
     """A Toolkit whose acknowledgments are kept, so the LAN client gets the
     receipt a voice user would have heard. Calls are recorded by the Toolkit
-    itself, the same way on every lane."""
+    itself, the same way on every lane; this keeps only their names, for the
+    reply."""
 
     def __init__(self, toolkit, acknowledgments):
         self.toolkit = toolkit
         self.acknowledgments = acknowledgments
+        self.called: list[str] = []
 
     def render(self, provider):
         return self.toolkit.render(provider)
 
     def call(self, name, args):
+        self.called.append(name)
         out = self.toolkit.call(name, args)
         if isinstance(out, dict):
             shown = out.get("confirm") or out.get("acknowledgment")
@@ -133,7 +136,15 @@ class TextApplication:
             meta={"session": session_id, "turn": turn},
             stem=session["stem"],
         )
-        return {"ok": True, "session": session_id, "turn": turn, "reply": reply}
+        # The tools the turn called, in order: doctor.py's smoke turn checks
+        # the model reached one.
+        return {
+            "ok": True,
+            "session": session_id,
+            "turn": turn,
+            "reply": reply,
+            "tools": tools.called,
+        }
 
 
 class TextServer(ThreadingHTTPServer):
