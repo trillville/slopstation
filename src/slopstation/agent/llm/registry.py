@@ -72,30 +72,23 @@ class ToolSpec:
     # that reach a network or the PC need one; a local read never fires it.
     busy: str | None = None
 
-    def anthropic(self) -> dict[str, Any]:
+    def _render(self, schema_key: str) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
-            "input_schema": {
+            schema_key: {
                 "type": "object",
                 "properties": self.properties,
                 "required": list(self.required),
             },
         }
 
+    def anthropic(self) -> dict[str, Any]:
+        return self._render("input_schema")
+
     def openai(self) -> dict[str, Any]:
-        # Responses API tool shape is FLAT (name/parameters at top level) - the
-        # nested {"function": {...}} form is chat-completions only.
-        return {
-            "type": "function",
-            "name": self.name,
-            "description": self.description,
-            "parameters": {
-                "type": "object",
-                "properties": self.properties,
-                "required": list(self.required),
-            },
-        }
+        # Responses uses a flat tool shape, unlike Chat Completions.
+        return {"type": "function", **self._render("parameters")}
 
 
 @dataclass(frozen=True)

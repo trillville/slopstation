@@ -2,6 +2,7 @@
 
 from slopstation.agent import operations as operations_mod
 from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
+from slopstation.agent.llm.toolsets.media_schema import KIND
 
 _FIND_MEDIA = """\
 Resolve a movie or series title before requesting it. Returns at most five
@@ -61,7 +62,7 @@ SPECS = [
         "find_media",
         _FIND_MEDIA,
         {
-            "kind": {"type": "string", "enum": ["movie", "series"]},
+            "kind": KIND,
             "query": {
                 "type": "string",
                 "description": "spoken title and optional year",
@@ -78,7 +79,7 @@ SPECS = [
         "media_library",
         _MEDIA_LIBRARY,
         {
-            "kind": {"type": "string", "enum": ["movie", "series"]},
+            "kind": KIND,
             "catalog_id": {
                 "type": "integer",
                 "description": "TMDB movie id or TVDB series id returned by find_media",
@@ -153,7 +154,7 @@ SPECS = [
         "delete_media",
         _DELETE_MEDIA,
         {
-            "kind": {"type": "string", "enum": ["movie", "series"]},
+            "kind": KIND,
             "catalog_id": {
                 "type": "integer",
                 "description": "TMDB movie id or TVDB series id returned by find_media",

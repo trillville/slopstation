@@ -9,15 +9,9 @@ from __future__ import annotations
 import json
 
 from slopstation.agent import operations as operations_mod
-from slopstation.agent.llm.registry import Bindings, Plan, ToolContext, ToolSpec
+from slopstation.agent.llm.registry import Bindings, Plan, ToolContext
+from slopstation.agent.llm.toolsets.media_schema import CATALOG_ID, KIND, media_spec
 from slopstation.agent.media.clients import KINDS
-
-KIND = {"type": "string", "enum": ["movie", "series"]}
-CATALOG_ID = {
-    "type": "integer",
-    "description": "TMDB movie id or TVDB series id from find_media",
-}
-
 
 GRAB_RELEASE = """\
 Take one specific release from search_releases: pass its guid and indexer_id,
@@ -70,34 +64,8 @@ imported. This cannot tell the app what an unmatched file is; that needs the
 app's own interface. The import is tracked: list_operations follows it."""
 
 
-def _spec(
-    name,
-    description,
-    props,
-    required,
-    risk,
-    keywords,
-    needs=("media",),
-    paged=False,
-    busy=None,
-):
-    return ToolSpec(
-        name,
-        description,
-        props,
-        required,
-        risk=risk,
-        area="media",
-        keywords=keywords,
-        default=False,
-        needs=needs,
-        paged=paged,
-        busy=busy,
-    )
-
-
 SPECS = [
-    _spec(
+    media_spec(
         "grab_release",
         GRAB_RELEASE,
         {
@@ -112,11 +80,16 @@ SPECS = [
             "episode": {"type": "integer", "description": "the episode searched"},
         },
         ("kind", "catalog_id", "guid", "indexer_id"),
-        "act",
-        ("grab release", "download that one", "take this release", "manual grab"),
+        risk="act",
+        keywords=(
+            "grab release",
+            "download that one",
+            "take this release",
+            "manual grab",
+        ),
         busy="grabbing it",
     ),
-    _spec(
+    media_spec(
         "retry_search",
         RETRY_SEARCH,
         {
@@ -126,8 +99,8 @@ SPECS = [
             "episode": {"type": "integer"},
         },
         ("kind", "catalog_id"),
-        "act",
-        (
+        risk="act",
+        keywords=(
             "search again",
             "retry search",
             "kick the search",
@@ -136,7 +109,7 @@ SPECS = [
         ),
         busy="starting the search",
     ),
-    _spec(
+    media_spec(
         "cancel_request",
         CANCEL_REQUEST,
         {
@@ -146,8 +119,8 @@ SPECS = [
             }
         },
         ("operation_id",),
-        "destructive",
-        (
+        risk="destructive",
+        keywords=(
             "cancel the request",
             "stop the download",
             "stop searching for",
@@ -158,7 +131,7 @@ SPECS = [
         needs=("media", "operations"),
         busy="stopping it",
     ),
-    _spec(
+    media_spec(
         "set_monitored",
         SET_MONITORED,
         {
@@ -168,10 +141,16 @@ SPECS = [
             "seasons": {"type": "array", "items": {"type": "integer"}},
         },
         ("kind", "catalog_id", "monitored"),
-        "act",
-        ("monitor", "unmonitor", "stop tracking", "start tracking", "stop looking for"),
+        risk="act",
+        keywords=(
+            "monitor",
+            "unmonitor",
+            "stop tracking",
+            "start tracking",
+            "stop looking for",
+        ),
     ),
-    _spec(
+    media_spec(
         "set_quality_profile",
         SET_QUALITY_PROFILE,
         {
@@ -180,8 +159,8 @@ SPECS = [
             "preset": {"type": "string", "enum": ["default", "1080p", "2160p"]},
         },
         ("kind", "catalog_id", "preset"),
-        "act",
-        (
+        risk="act",
+        keywords=(
             "quality profile",
             "upgrade to 4k",
             "change quality",
@@ -189,7 +168,7 @@ SPECS = [
             "downgrade quality",
         ),
     ),
-    _spec(
+    media_spec(
         "resolve_queue_item",
         RESOLVE_QUEUE_ITEM,
         {
@@ -199,8 +178,8 @@ SPECS = [
             "blocklist": {"type": "boolean", "description": "default false"},
         },
         ("kind", "queue_id"),
-        "destructive",
-        (
+        risk="destructive",
+        keywords=(
             "remove from queue",
             "cancel that download",
             "blocklist release",
@@ -208,13 +187,18 @@ SPECS = [
             "bad release",
         ),
     ),
-    _spec(
+    media_spec(
         "manual_import",
         MANUAL_IMPORT,
         {"kind": KIND, "download_id": {"type": "string"}},
         ("kind", "download_id"),
-        "act",
-        ("manual import", "import it anyway", "force import", "import the download"),
+        risk="act",
+        keywords=(
+            "manual import",
+            "import it anyway",
+            "force import",
+            "import the download",
+        ),
         busy="importing",
     ),
 ]
