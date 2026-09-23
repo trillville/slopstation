@@ -192,24 +192,48 @@ SPECS = [
 ]
 
 
-def _episode_pairs(value):
-    """Sorted (season, episode) pairs, or (None, error)."""
-    if not isinstance(value, list) or not all(
-        isinstance(item, dict)
-        and all(
-            not isinstance(item.get(key), bool)
-            and isinstance(item.get(key), int)
-            and item[key] > 0
-            for key in ("season", "episode")
-        )
-        for item in value
-    ):
+def _scope(args):
+    """((seasons, episodes, all_seasons), None) for the one scope a series
+    request or deletion names, sorted, or (None, error). An empty list is no
+    scope, not a conflicting one; naming none is the caller's to refuse."""
+    seasons = args.get("seasons") or None
+    episodes = args.get("episodes") or None
+    all_seasons = args.get("all_seasons", False)
+    if not isinstance(all_seasons, bool):
+        return None, {"ok": False, "error": "all_seasons must be boolean"}
+    if (seasons is not None) + (episodes is not None) + all_seasons > 1:
         return None, {
             "ok": False,
-            "error": "episodes must be objects with positive season and "
-            "episode numbers",
+            "error": "give explicit seasons, explicit episodes or all_seasons, "
+            "not more than one",
         }
-    return sorted({(item["season"], item["episode"]) for item in value}), None
+    if episodes is not None:
+        if not isinstance(episodes, list) or not all(
+            isinstance(item, dict)
+            and all(
+                not isinstance(item.get(key), bool)
+                and isinstance(item.get(key), int)
+                and item[key] > 0
+                for key in ("season", "episode")
+            )
+            for item in episodes
+        ):
+            return None, {
+                "ok": False,
+                "error": "episodes must be objects with positive season and "
+                "episode numbers",
+            }
+        episodes = sorted({(item["season"], item["episode"]) for item in episodes})
+    if seasons is not None:
+        if not isinstance(seasons, list) or any(
+            isinstance(n, bool) or not isinstance(n, int) or n <= 0 for n in seasons
+        ):
+            return None, {
+                "ok": False,
+                "error": "season numbers must be positive integers",
+            }
+        seasons = sorted(set(seasons))
+    return (seasons, episodes, all_seasons), None
 
 
 def _season_scope(seasons):
@@ -232,179 +256,95 @@ def _episode_scope(episodes):
 def impls(ctx: ToolContext):
     """name -> fn(args: dict) -> dict for the five media tools."""
     bind = Bindings(ctx, SPECS)
-    log, operations, media = ctx.log, ctx.operations, ctx.media
+    operations, media = ctx.operations, ctx.media
 
     @bind
     def find_media(args):
         kind = str(args.get("kind", ""))
-        try:
-            candidates = media.find(kind, args.get("query", ""))
-            return {"ok": True, "kind": kind, "candidates": candidates}
-        except Exception as e:
-            log.error("tool_error", tool="find_media", err=str(e))
-            return {"ok": False, "error": str(e)}
+        candidates = media.find(kind, args.get("query", ""))
+        return {"ok": True, "kind": kind, "candidates": candidates}
 
     @bind
     def media_library(args):
         kind = str(args.get("kind", ""))
-        try:
-            return {"ok": True, **media.library(kind, args.get("catalog_id"))}
-        except Exception as e:
-            log.error("tool_error", tool="media_library", err=str(e))
-            return {"ok": False, "error": str(e)}
+        return {"ok": True, **media.library(kind, args.get("catalog_id"))}
 
     def _track_media(submission):
         return operations_mod.track(operations, submission, ctx.turn())
 
     @bind
     def request_movie(args):
-        try:
-            tmdb_id = int(args.get("tmdb_id", 0))
-            preset = args.get("preset", "default")
-            if tmdb_id <= 0:
-                return {"ok": False, "error": "tmdb_id must be positive"}
-            if dry := ctx.preview(f"request TMDB {tmdb_id} with preset {preset}"):
-                return dry
-            return _track_media(media.request_movie(tmdb_id, preset))
-        except Exception as e:
-            log.error("tool_error", tool="request_movie", err=str(e))
-            return {"ok": False, "error": str(e)}
+        tmdb_id = int(args.get("tmdb_id", 0))
+        preset = args.get("preset", "default")
+        if dry := ctx.preview(f"request TMDB {tmdb_id} with preset {preset}"):
+            return dry
+        return _track_media(media.request_movie(tmdb_id, preset))
 
     @bind
     def request_series(args):
-        try:
-            tvdb_id = int(args.get("tvdb_id", 0))
-            preset = args.get("preset", "default")
-            if tvdb_id <= 0:
-                return {"ok": False, "error": "tvdb_id must be positive"}
-            seasons = args.get("seasons") or None
-            episodes = args.get("episodes") or None
-            all_seasons = args.get("all_seasons", False)
-            if not isinstance(all_seasons, bool):
-                return {"ok": False, "error": "all_seasons must be boolean"}
-            if (seasons is not None) + (episodes is not None) + all_seasons > 1:
-                return {
-                    "ok": False,
-                    "error": "choose explicit seasons, explicit episodes or "
-                    "all_seasons, not more than one",
-                }
-            if seasons is None and episodes is None and not all_seasons:
-                return {
-                    "ok": False,
-                    "error": "series request needs explicit scope",
-                    "clarification": "Which season would you like, or "
-                    "should I download all seasons?",
-                }
-            if episodes is not None:
-                episodes, invalid = _episode_pairs(episodes)
-                if invalid:
-                    return invalid
-            if seasons is not None:
-                if not isinstance(seasons, list) or not seasons:
-                    return {"ok": False, "error": "seasons must be a non-empty list"}
-                if any(
-                    isinstance(n, bool) or not isinstance(n, int) or n <= 0
-                    for n in seasons
-                ):
-                    return {
-                        "ok": False,
-                        "error": "season numbers must be positive integers",
-                    }
-                seasons = sorted(set(seasons))
-            scope = (
-                "all normal seasons"
-                if all_seasons
-                else _episode_scope(episodes)
-                if episodes is not None
-                else _season_scope(seasons)
+        tvdb_id = int(args.get("tvdb_id", 0))
+        preset = args.get("preset", "default")
+        scoped, invalid = _scope(args)
+        if invalid:
+            return invalid
+        seasons, episodes, all_seasons = scoped
+        if seasons is None and episodes is None and not all_seasons:
+            return {
+                "ok": False,
+                "error": "series request needs explicit scope",
+                "clarification": "Which season would you like, or "
+                "should I download all seasons?",
+            }
+        scope = (
+            "all normal seasons"
+            if all_seasons
+            else _episode_scope(episodes)
+            if episodes is not None
+            else _season_scope(seasons)
+        )
+        if dry := ctx.preview(f"request TVDB {tvdb_id}, {scope}, with preset {preset}"):
+            return dry
+        submission = media.request_series(tvdb_id, preset, seasons, episodes=episodes)
+        submission["all_seasons"] = all_seasons
+        result = _track_media(submission)
+        quality = (
+            "using the default quality profile"
+            if result.get("preset") == "default"
+            else f"in {result.get('preset')}"
+        )
+        if result.get("already_available"):
+            acknowledgment = (
+                f"{result['title']}, {scope}, {quality} is already available."
             )
-            if dry := ctx.preview(
-                f"request TVDB {tvdb_id}, {scope}, with preset {preset}"
-            ):
-                return dry
-            submission = media.request_series(
-                tvdb_id, preset, seasons, episodes=episodes
+        else:
+            acknowledgment = (
+                f"Requested {result['title']}, {scope}, "
+                f"{quality}. Sonarr is searching in the "
+                "background."
             )
-            submission["all_seasons"] = all_seasons
-            result = _track_media(submission)
-            quality = (
-                "using the default quality profile"
-                if result.get("preset") == "default"
-                else f"in {result.get('preset')}"
-            )
-            if result.get("already_available"):
-                acknowledgment = (
-                    f"{result['title']}, {scope}, {quality} is already available."
-                )
-            else:
-                acknowledgment = (
-                    f"Requested {result['title']}, {scope}, "
-                    f"{quality}. Sonarr is searching in the "
-                    "background."
-                )
-            return {**result, "acknowledgment": acknowledgment}
-        except Exception as e:
-            log.error("tool_error", tool="request_series", err=str(e))
-            return {"ok": False, "error": str(e)}
+        return {**result, "acknowledgment": acknowledgment}
 
     @bind.destructive
     def delete_media(args):
+        kind = str(args.get("kind", ""))
         try:
-            kind = str(args.get("kind", ""))
             catalog_id = int(args.get("catalog_id", 0) or 0)
-            # An empty list is no scope, not a conflicting one.
-            seasons = args.get("seasons") or None
-            episodes = args.get("episodes") or None
-            all_seasons = bool(args.get("all_seasons", False))
         except (TypeError, ValueError, OverflowError):
             return {"ok": False, "error": "catalog_id must be an integer"}
-        if kind not in ("movie", "series"):
-            return {"ok": False, "error": f"unknown media kind {kind}"}
-        if catalog_id <= 0:
-            return {"ok": False, "error": "catalog_id must be positive"}
-        if episodes is not None and kind != "series":
+        if args.get("episodes") and kind != "series":
             return {"ok": False, "error": "only a series has episodes"}
-        if (seasons is not None) + (episodes is not None) + all_seasons > 1:
-            return {
-                "ok": False,
-                "error": "delete explicit seasons, explicit episodes or "
-                "all_seasons, not more than one",
-            }
-        if (
-            kind == "series"
-            and seasons is None
-            and episodes is None
-            and not all_seasons
-        ):
+        scoped, invalid = _scope(args)
+        if invalid:
+            return invalid
+        seasons, episodes, all_seasons = scoped
+        if kind == "series" and not (seasons or episodes or all_seasons):
             return {
                 "ok": False,
                 "error": "name seasons or episodes, or explicitly request all seasons",
             }
-        if episodes is not None:
-            episodes, invalid = _episode_pairs(episodes)
-            if invalid:
-                return invalid
-        if seasons is not None:
-            if (
-                not isinstance(seasons, list)
-                or not seasons
-                or any(
-                    isinstance(n, bool) or not isinstance(n, int) or n <= 0
-                    for n in seasons
-                )
-            ):
-                return {
-                    "ok": False,
-                    "error": "season numbers must be positive integers",
-                }
-            seasons = sorted(set(seasons))
-        try:
-            entry = media.library(kind, catalog_id)
-        except Exception as e:
-            log.error("tool_error", tool="delete_media", err=str(e))
-            return {"ok": False, "error": str(e)}
+        entry = media.library(kind, catalog_id)
         named = (
-            " ".join(str(part) for part in (entry["title"], entry["year"]) if part)
+            " ".join(str(part) for part in (entry["title"], entry.get("year")) if part)
             or f"{kind} {catalog_id}"
         )
         if all_seasons:
@@ -415,38 +355,34 @@ def impls(ctx: ToolContext):
             named += ", " + _season_scope(seasons)
 
         def act():
-            try:
-                if kind != "series" or all_seasons:
-                    episode_ids = []
-                elif episodes:
-                    episode_ids = media.episodes_in_scope(catalog_id, episodes)
-                else:
-                    episode_ids = media.episodes_in_seasons(catalog_id, seasons)
-                covered, command_ids = operations_mod.covered_by_delete(
-                    operations,
-                    kind,
+            if kind != "series" or all_seasons:
+                episode_ids = []
+            elif episodes:
+                episode_ids = media.episodes_in_scope(catalog_id, episodes)
+            else:
+                episode_ids = media.episodes_in_seasons(catalog_id, seasons)
+            covered, command_ids = operations_mod.covered_by_delete(
+                operations,
+                kind,
+                catalog_id,
+                seasons,
+                all_seasons,
+                episode_ids,
+                episodes=episodes,
+            )
+            if kind == "movie":
+                result = media.delete_movie(catalog_id, command_ids)
+            else:
+                result = media.delete_series(
                     catalog_id,
-                    seasons,
-                    all_seasons,
-                    episode_ids,
-                    episodes=episodes,
+                    seasons=seasons,
+                    all_seasons=all_seasons,
+                    command_ids=command_ids,
+                    episode_ids=episode_ids if episodes else None,
                 )
-                if kind == "movie":
-                    result = media.delete_movie(catalog_id, command_ids)
-                else:
-                    result = media.delete_series(
-                        catalog_id,
-                        seasons=seasons,
-                        all_seasons=all_seasons,
-                        command_ids=command_ids,
-                        episode_ids=episode_ids if episodes else None,
-                    )
-                return operations_mod.record_deleted(
-                    operations, covered, result, episodes=episodes
-                )
-            except Exception as e:
-                log.error("tool_error", tool="delete_media", err=str(e))
-                return {"ok": False, "error": str(e)}
+            return operations_mod.record_deleted(
+                operations, covered, result, episodes=episodes
+            )
 
         if not entry["in_library"]:
             # Nothing on disk to lose: the app never held it, or let go.

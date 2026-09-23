@@ -11,8 +11,6 @@ from slopstation.agent.llm.registry import Bindings, ToolContext
 from slopstation.agent.llm.toolsets.media_ops import (
     CATALOG_ID,
     KIND,
-    _kind,
-    _library_row,
     _spec,
 )
 from slopstation.agent.tools.media_clients import (
@@ -161,11 +159,7 @@ def _profile_qualities(profile):
 
 def _kinds(args):
     kind = str(args.get("kind") or "both")
-    if kind == "both":
-        return ["movie", "series"], None
-    if kind not in KINDS:
-        return None, {"ok": False, "error": "kind must be movie, series or both"}
-    return [kind], None
+    return ["movie", "series"] if kind == "both" else [kind]
 
 
 def _movie_row(row):
@@ -406,22 +400,14 @@ SPECS = [
 def impls(ctx: ToolContext):
     media = ctx.media
 
-    def _client(kind):
-        return media._client(kind)
-
-    def _row(kind, catalog_id):
-        return _library_row(media, kind, catalog_id)
-
     bind = Bindings(ctx, SPECS)
 
     @bind
     def browse_media(args):
-        kind, err = _kind(args)
-        if err:
-            return err
+        kind = str(args.get("kind"))
         rows = [
             r
-            for r in _client(kind).get(KINDS[kind]["resource"]) or []
+            for r in media._client(kind).get(KINDS[kind]["resource"]) or []
             if isinstance(r, dict)
         ]
         genre = str(args.get("genre") or "").lower()
@@ -449,13 +435,9 @@ def impls(ctx: ToolContext):
 
     @bind
     def media_details(args):
-        kind, err = _kind(args)
-        if err:
-            return err
-        row, err = _row(kind, args.get("catalog_id"))
-        if err:
-            return err
-        client = _client(kind)
+        kind = str(args.get("kind"))
+        row = media._held(kind, int(args["catalog_id"]))
+        client = media._client(kind)
         profiles = {
             int(p["id"]): p
             for p in (client.get("qualityprofile") or [])
@@ -489,9 +471,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def episode_files(args):
-        row, err = _row("series", args.get("catalog_id"))
-        if err:
-            return err
+        row = media._held("series", int(args["catalog_id"]))
         try:
             season = None if args.get("season") is None else int(args["season"])
         except (TypeError, ValueError):
@@ -499,7 +479,7 @@ def impls(ctx: ToolContext):
         params = {"seriesId": row["id"], "includeEpisodeFile": "true"}
         if season is not None:
             params["seasonNumber"] = season
-        episodes = _client("series").get("episode", params) or []
+        episodes = media._client("series").get("episode", params) or []
         held = []
         for e in episodes:
             if not isinstance(e, dict) or not e.get("hasFile"):
@@ -522,10 +502,8 @@ def impls(ctx: ToolContext):
 
     @bind
     def missing_media(args):
-        kind, err = _kind(args)
-        if err:
-            return err
-        client = _client(kind)
+        kind = str(args.get("kind"))
+        client = media._client(kind)
         bounds, err = paging.window(args)
         if err:
             return err
@@ -579,9 +557,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def calendar(args):
-        kinds, err = _kinds(args)
-        if err:
-            return err
+        kinds = _kinds(args)
         try:
             days = int(args.get("days") or 7)
         except (TypeError, ValueError):
@@ -596,7 +572,7 @@ def impls(ctx: ToolContext):
         }
         rows: list[dict[str, Any]] = []
         for kind in kinds:
-            for r in _client(kind).get("calendar", params) or []:
+            for r in media._client(kind).get("calendar", params) or []:
                 if not isinstance(r, dict):
                     continue
                 if kind == "movie":
@@ -643,13 +619,9 @@ def impls(ctx: ToolContext):
 
     @bind
     def search_releases(args):
-        kind, err = _kind(args)
-        if err:
-            return err
-        row, err = _row(kind, args.get("catalog_id"))
-        if err:
-            return err
-        client = _client(kind)
+        kind = str(args.get("kind"))
+        row = media._held(kind, int(args["catalog_id"]))
+        client = media._client(kind)
         if kind == "movie":
             params: dict[str, Any] = {"movieId": row["id"]}
         else:
@@ -692,12 +664,10 @@ def impls(ctx: ToolContext):
 
     @bind
     def import_queue(args):
-        kinds, err = _kinds(args)
-        if err:
-            return err
+        kinds = _kinds(args)
         rows = []
         for kind in kinds:
-            client = _client(kind)
+            client = media._client(kind)
             include = "includeMovie" if kind == "movie" else "includeSeries"
             queue = (
                 client.get("queue", {"page": 1, "pageSize": 1000, include: "true"})
@@ -731,9 +701,7 @@ def impls(ctx: ToolContext):
 
     @bind
     def media_history(args):
-        kinds, err = _kinds(args)
-        if err:
-            return err
+        kinds = _kinds(args)
         event = str(args.get("event") or "any")
         if event != "any" and event not in HISTORY_EVENTS["movie"]:
             return {
@@ -747,7 +715,7 @@ def impls(ctx: ToolContext):
         rows = []
         total = 0
         for kind in kinds:
-            client = _client(kind)
+            client = media._client(kind)
             include = "includeMovie" if kind == "movie" else "includeSeries"
             # Each app serves its own newest window; the merge below is
             # sliced to the page, so the offset is honoured across both.
