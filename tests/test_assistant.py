@@ -1026,13 +1026,13 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog):
         **CFG_MIN["voice"],
         "assistantProvider": "anthropic",
         "assistantModelAnthropic": "claude-haiku-4-5",
-        "assistantModelOpenai": "gpt-5.6-luna",
+        "assistantModelOpenai": "gpt-6-luna",
     }
     session._make_llm(voice_a, dummy, si)
     voice_o = {
         **voice_a,
         "assistantProvider": "openai",
-        "assistantModelOpenai": "gpt-5.6-luna",
+        "assistantModelOpenai": "gpt-6-luna",
         "assistantReasoningEffort": "low",
     }
     llm_o = session._make_llm(voice_o, dummy, si)

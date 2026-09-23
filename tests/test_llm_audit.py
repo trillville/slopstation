@@ -193,7 +193,7 @@ def test_installs_on_the_real_pipecat_class():
     real = llm.OpenAIResponsesHttpLLMService(
         api_key="sk-not-used-no-call-is-made",
         settings=llm.OpenAIResponsesHttpLLMService.Settings(
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             system_instruction="x",
             max_completion_tokens=10,
             reasoning=llm.OpenAIResponsesReasoningConfig(effort="none"),
