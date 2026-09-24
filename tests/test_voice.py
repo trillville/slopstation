@@ -14,6 +14,7 @@ from slopstation import checkin, config, events, gamepc, logbook
 from slopstation.agent import media, operations, voice
 from slopstation.agent.operations import monitors
 from slopstation.agent.speech import announce
+from slopstation.agent.steam import library
 from slopstation.agent.steam import session as steam_session
 from slopstation.agent.telemetry import sentry
 
@@ -217,6 +218,9 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(voice, "refresh_library_bg", lambda: None)
     # The services' library ticker would otherwise ssh to the real gaming PC.
     monkeypatch.setattr(gamepc, "ssh", unreachable_pc)
+    # Its first tick also outlives the test, and writing library.json then
+    # creates the next test's state directory under its fixture.
+    monkeypatch.setattr(library, "periodic_sync", lambda: lambda: None)
     monkeypatch.setattr(voice, "prewarm_imports_bg", lambda provider: None)
     monkeypatch.setattr(voice, "GrammarMatcher", lambda voice: "MATCHER")
     monkeypatch.setattr(voice, "TvDucker", FakeDucker)
