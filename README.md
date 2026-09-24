@@ -10,9 +10,6 @@ controller chord on the couch and the TV comes on, the PC wakes, and Steam Big
 Picture is on screen with the controller working. Say "hey Alfred, play Hades"
 and it launches.
 
-It is one household's system, run every day and deployed from this
-repository. It is not a framework.
-
 ## How a session starts
 
 ```mermaid
