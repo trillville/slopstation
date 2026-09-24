@@ -216,10 +216,7 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(voice, "WakeListener", FakeListener)
     monkeypatch.setattr(voice, "play_pcm", lambda pa, pcm, idx=None: None)
     monkeypatch.setattr(voice, "refresh_library_bg", lambda: None)
-    # The services' library ticker would otherwise ssh to the real gaming PC.
     monkeypatch.setattr(gamepc, "ssh", unreachable_pc)
-    # Its first tick also outlives the test, and writing library.json then
-    # creates the next test's state directory under its fixture.
     monkeypatch.setattr(library, "periodic_sync", lambda: lambda: None)
     monkeypatch.setattr(voice, "prewarm_imports_bg", lambda provider: None)
     monkeypatch.setattr(voice, "GrammarMatcher", lambda voice: "MATCHER")
