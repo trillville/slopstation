@@ -91,6 +91,12 @@ ARR_BLOCKED_READ = (
 )
 # Commands that restart or rewrite the app rather than act on media.
 ARR_BLOCKED_COMMANDS = ("applicationupdate", "backup", "restart", "reset")
+# Writes a curated tool already does, with the house's defaults and no
+# confirmation round trip: (service, method, path) -> the tool to use.
+CURATED = {
+    ("sonarr", "POST", "series"): "request_series",
+    ("radarr", "POST", "movie"): "request_movie",
+}
 QBIT_BLOCKED = (
     "app/shutdown",
     "app/setPreferences",
@@ -154,11 +160,11 @@ document: use web search for it."""
 
 RADARR_API = (
     "Any Radarr v3 call: method, path under /api/v3, query params, JSON body. "
-    + _RESEARCH
+    "Adding a movie is request_movie, never POST /movie here. " + _RESEARCH
 )
 SONARR_API = (
     "Any Sonarr v3 call: method, path under /api/v3, query params, JSON body. "
-    + _RESEARCH
+    "Adding a series is request_series, never POST /series here. " + _RESEARCH
 )
 PROWLARR_API = (
     "Any Prowlarr v1 call: method, path under /api/v1, query params, JSON body. "
@@ -368,6 +374,14 @@ def impls(ctx: ToolContext):
                 "error": f"{method} /{path} is an operator setting and is not "
                 "reachable from here",
             }
+        curated = CURATED.get((service, method, path.lower()))
+        if curated:
+            log.warn("tool_refused", tool=f"{service}_api", reason="curated", path=path)
+            return {
+                "ok": False,
+                "error": f"{method} /{path} is what {curated} does: call "
+                f"{curated} instead, with the id from find_media",
+            }
         literal = (
             f"{method} /{path}"
             + (f" ({tag})" if tag else "")
@@ -431,9 +445,19 @@ def impls(ctx: ToolContext):
 
         if method == "GET":
             return run()
+        # A yes only runs the request it was asked about, byte for byte. When
+        # the model rebuilds the body for the same endpoint, say so, or the
+        # user's yes is spent on a fresh question nobody can see.
+        note = ""
+        if any(s[:4] == scope[:4] and s != scope for s in ctx.gate.pending()):
+            note = (
+                f"a different {method} /{path} is already waiting for a yes. If "
+                "the user's yes was for that one, call again with that request "
+                "exactly as first sent; this one is a new question"
+            )
         # The text lane shows the literal, body included; the voice lane has
         # the model read it back in words.
-        return Plan(scope, "", run, f"run {literal}", confirm=literal)
+        return Plan(scope, "", run, f"run {literal}", confirm=literal, note=note)
 
     def _record(service, method, path, literal, out):
         """Record a passthrough write in the ledger as finished, so `operations

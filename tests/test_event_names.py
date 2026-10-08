@@ -228,7 +228,7 @@ PYTHON = {
     "update_state_error": {"action", "appid", "err"},
     "update_state_set": {"action", "appid", "paused"},
     "wishlist_edit_error": {"appid", "err"},
-    "tool_refused": {"appid", "catalog_id", "path", "reason", "tool"},
+    "tool_refused": {"appid", "catalog_id", "path", "reason", "tool", "turn"},
     "trace_save_failed": {"err"},
     "trace_saved": {"file", "messages", "pruned"},
     "tracing_setup_failed": {"err"},

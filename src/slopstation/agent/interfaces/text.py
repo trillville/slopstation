@@ -31,10 +31,12 @@ class Acknowledged:
     itself, the same way on every lane; this keeps only their names, for the
     reply."""
 
-    def __init__(self, toolkit, acknowledgments):
+    def __init__(self, toolkit):
         self.toolkit = toolkit
-        self.acknowledgments = acknowledgments
         self.called: list[str] = []
+        # The last receipt a tool handed back, and whether it is a request
+        # still waiting for the user's yes.
+        self.shown: tuple[str, bool] | None = None
 
     def render(self, provider):
         return self.toolkit.render(provider)
@@ -43,10 +45,27 @@ class Acknowledged:
         self.called.append(name)
         out = self.toolkit.call(name, args)
         if isinstance(out, dict):
-            shown = out.get("confirm") or out.get("acknowledgment")
-            if shown:
-                self.acknowledgments.append(str(shown))
+            if out.get("confirm"):
+                self.shown = (str(out["confirm"]), True)
+            elif out.get("acknowledgment"):
+                self.shown = (str(out["acknowledgment"]), False)
         return out
+
+    def reply(self, model_reply):
+        """What the client is sent. A receipt replaces the model's words. A
+        request waiting for a yes keeps them, and says plainly that nothing
+        ran: the bare request alone reads like a result."""
+        if self.shown is None:
+            return model_reply
+        shown, pending = self.shown
+        if not pending:
+            return shown
+        return (
+            "NOT RUN YET - this needs the user's yes first.\n\n"
+            f"{model_reply}\n\n"
+            f"The exact request: {shown}\n\n"
+            "Reply yes to run it unchanged."
+        )
 
 
 class TextApplication:
@@ -113,11 +132,10 @@ class TextApplication:
             )
         try:
             session["dispatch"].begin_utterance(turn, message)
-            acknowledgments: list[str] = []
-            tools = Acknowledged(session["toolkit"], acknowledgments)
-            reply = session["backend"].turn(self.system_text, message, tools)
-            if acknowledgments:
-                reply = acknowledgments[-1]
+            tools = Acknowledged(session["toolkit"])
+            reply = tools.reply(
+                session["backend"].turn(self.system_text, message, tools)
+            )
             # Copied under the lock: a concurrent turn on this session appends
             # to the same list. The MCP adapter forwards to here, so its turns
             # trace too - remote_request carries the same turn id.

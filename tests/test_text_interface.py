@@ -179,6 +179,22 @@ def test_a_session_carries_turns_tools_and_one_trace_file(base, log, saved):
     assert len({stem for _, _, _, stem in saved}) == 1
 
 
+def test_a_request_waiting_for_a_yes_says_nothing_ran():
+    """2026-10-07: the reply was the bare POST body, which the MCP client read
+    as a result, so it never answered the question."""
+
+    class Toolkit:
+        def call(self, name, args):
+            return {"ok": False, "confirm": "POST /command {}", "error": "not run"}
+
+    tools = text.Acknowledged(Toolkit())
+    assert tools.reply("Hello.") == "Hello."  # no tool, the model's own words
+    tools.call("radarr_api", {})
+    reply = tools.reply("Shall I start an RSS sync?")
+    assert reply.startswith("NOT RUN YET")
+    assert "Shall I start an RSS sync?" in reply and "POST /command {}" in reply
+
+
 def test_a_stalled_turn_wedges_only_its_own_session(base, log, gate):
     # A turn stuck inside the backend must not wedge its session: the
     # next request on it 503s as busy, while other sessions keep working.

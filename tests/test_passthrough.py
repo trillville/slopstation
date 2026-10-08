@@ -83,7 +83,8 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
     assert media.radarr.calls == []
     # Same turn again: still refused - the model cannot answer itself.
     assert not tk.call("radarr_api", dict(ask))["ok"]
-    assert log.find("tool_refused")[-1]["reason"] == "unconfirmed"
+    refused = log.find("tool_refused")[-1]
+    assert (refused["reason"], refused["turn"]) == ("unconfirmed", "aa0001")
     # A later turn with the identical request commits.
     dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
     done = tk.call("radarr_api", dict(ask))
@@ -96,6 +97,36 @@ def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypa
     monkeypatch.setattr(confirm, "ASK_TTL_S", -1)
     dispatch.utterance = types.SimpleNamespace(turn="aa0004", asked="yes")
     assert not tk.call("radarr_api", other)["ok"]
+
+
+def test_a_yes_for_a_rebuilt_body_says_which_request_is_waiting(live):
+    """2026-10-07: the model rebuilt a POST body after the user's yes, so the
+    yes armed a fresh question instead of running the one asked about."""
+    tk, dispatch, media = live
+    first = {"method": "POST", "path": "command", "body": {"name": "RssSync"}}
+    assert "detail" not in tk.call("radarr_api", dict(first))
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="yes")
+    rebuilt = dict(first, body={"name": "RssSync", "trigger": "manual"})
+    out = tk.call("radarr_api", rebuilt)
+    assert not out["ok"] and media.radarr.calls == []
+    assert "a different POST /command is already waiting" in out["detail"]
+    # The original request, resent unchanged, still runs on that yes.
+    assert tk.call("radarr_api", dict(first))["ok"]
+
+
+def test_adding_a_series_or_movie_points_to_the_request_tool(live, log):
+    tk, _, media = live
+    for tool, path, curated in (
+        ("sonarr_api", "/series", "request_series"),
+        ("radarr_api", "movie", "request_movie"),
+    ):
+        out = tk.call(tool, {"method": "POST", "path": path, "body": {"title": "x"}})
+        assert not out["ok"] and f"call {curated} instead" in out["error"]
+        assert log.find("tool_refused")[-1]["reason"] == "curated"
+    assert media.sonarr.calls == [] and media.radarr.calls == []
+    # Editing an existing series is still the passthrough's to ask about.
+    edit = tk.call("sonarr_api", {"method": "PUT", "path": "series/18", "body": {}})
+    assert not edit["ok"] and edit["confirm"].startswith("PUT /series/18")
 
 
 def test_a_confirmed_write_lands_in_the_ledger_already_finished(live, log):
