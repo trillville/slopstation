@@ -46,6 +46,11 @@ class ConfirmGate:
             return False
         return True
 
+    def pending(self) -> list[tuple]:
+        """The scopes still waiting for a yes."""
+        self._prune()
+        return list(self._pending)
+
     def done(self, scope: tuple) -> None:
         """The action succeeded: the ask is spent."""
         self._pending.pop(scope, None)

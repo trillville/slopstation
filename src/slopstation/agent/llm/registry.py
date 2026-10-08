@@ -103,6 +103,7 @@ class Plan:
     act: Callable[[], dict]
     preview: str
     confirm: str = ""  # the literal a text lane shows instead of `ask`
+    note: str = ""  # added to the refusal as `detail`, for the model only
 
 
 # The utterance a running tool was called under. The grammar gate replaces
@@ -172,7 +173,9 @@ class ToolContext:
         literal a text lane reads back). Anything not `ok` from `act` keeps
         the ask armed, so a retry does not ask twice."""
         if not self.gate.confirmed(scope, self.turn()):
-            self.log.warn("tool_refused", tool=tool, reason="unconfirmed")
+            self.log.warn(
+                "tool_refused", tool=tool, reason="unconfirmed", turn=self.turn()
+            )
             return {"ok": False, **ask}
         out = act()
         if isinstance(out, dict) and out.get("ok"):
@@ -253,6 +256,8 @@ class Bindings:
                     "error": "not run yet: read this request back to the user in "
                     "plain words, and call again unchanged once they say yes",
                 }
+            if plan.note:
+                ask["detail"] = plan.note
             return ctx.confirm(name, plan.scope, ask, plan.act)
 
         run.__name__ = name
