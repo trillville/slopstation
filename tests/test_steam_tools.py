@@ -260,6 +260,26 @@ def test_search_library_playtime_and_friends(rig, monkeypatch):
     assert "steamApiKey" in tk.call("friends", {})["error"]
 
 
+def test_achievements_list_every_one_with_its_unlock_date(rig, monkeypatch):
+    tk, _, _, _ = rig
+    rows = [
+        {"name": f"Feat {i}", "desc": "", "global_pct": 50.0, "unlocked": None}
+        for i in range(12)
+    ]
+    rows[0]["unlocked"], rows[11]["unlocked"] = "2024-03-22", "2024-04-02"
+    monkeypatch.setattr(store, "fetch_achievement_list", lambda a: rows)
+    page = tk.call("my_achievements", {"appid": INSTALLED, "list": "all"})
+    # Paged like every list: the count, a first page, and where the rest starts.
+    assert page["ok"] and page["count"] == 12 and page["next_offset"] == 10
+    assert page["unlocked"] == 2 and page["game_total"] == 12
+    assert page["achievements"][0] == rows[0], "in the game's own order"
+    got = tk.call("my_achievements", {"appid": INSTALLED, "list": "unlocked"})
+    assert [r["unlocked"] for r in got["achievements"]] == ["2024-03-22", "2024-04-02"]
+    locked = tk.call("my_achievements", {"appid": INSTALLED, "list": "locked"})
+    assert locked["count"] == 10
+    assert not tk.call("my_achievements", {"appid": INSTALLED, "list": "rarest"})["ok"]
+
+
 def test_achievements_new_releases_and_wishlist_edit(rig, monkeypatch):
     tk, dispatch, steam, _ = rig
     monkeypatch.setattr(

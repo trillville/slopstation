@@ -53,7 +53,11 @@ game the catalog in the prompt is faster."""
 MY_ACHIEVEMENTS = """\
 The user's achievement progress in one game: unlocked out of total, the most
 recent unlocks, the commonly earned ones still missing (closest to done), and
-the rarest ones held, each with its global unlock rate. Owned games only."""
+the rarest ones held, each with its global unlock rate. Owned games only.
+With `list`, every achievement instead, in the game's own order, each with
+its description and unlock date: all, or only the unlocked or locked ones.
+That returns the count and one page of rows."""
+ACHIEVEMENT_LISTS = ("all", "unlocked", "locked")
 
 PLAYTIME = """\
 Hours played across the library: lifetime or the last two weeks, most played
@@ -211,7 +215,11 @@ SPECS = [
     ToolSpec(
         "my_achievements",
         MY_ACHIEVEMENTS,
-        {"appid": {"type": "integer", "description": "appid from the catalog"}},
+        {
+            "appid": {"type": "integer", "description": "appid from the catalog"},
+            "list": {"type": "string", "enum": list(ACHIEVEMENT_LISTS)},
+            **paging.properties(),
+        },
         ("appid",),
         risk="read",
         area="steam",
@@ -221,9 +229,13 @@ SPECS = [
             "achievement progress",
             "rarest achievement",
             "trophies",
+            "all achievements",
+            "which achievements",
+            "unlock dates",
         ),
         default=False,
         needs=("steam_data",),
+        paged=True,
         busy="checking Steam",
     ),
     ToolSpec(
@@ -536,6 +548,31 @@ def impls(ctx: ToolContext):
         appid = int(args.get("appid", 0))
         if str(appid) not in library.load().get("owned", {}):
             return {"ok": False, "error": "achievements are read for owned games only"}
+        which = args.get("list")
+        if which is not None:
+            if which not in ACHIEVEMENT_LISTS:
+                return {"ok": False, "error": "list must be all, unlocked or locked"}
+            rows = store.fetch_achievement_list(appid)
+            if rows is None:
+                return {
+                    "ok": False,
+                    "error": "no achievement data - the game has none, or the steamApiKey is missing",
+                }
+            got = [r for r in rows if r["unlocked"]]
+            keep = {
+                "all": rows,
+                "unlocked": got,
+                "locked": [r for r in rows if not r["unlocked"]],
+            }[which]
+            return paging.page(
+                keep,
+                args,
+                "achievements",
+                appid=appid,
+                list=which,
+                unlocked=len(got),
+                game_total=len(rows),
+            )
         out = store.fetch_achievements(appid)
         if out is None:
             return {

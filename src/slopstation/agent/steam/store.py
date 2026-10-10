@@ -359,9 +359,10 @@ def fetch_players_now(appid: int) -> int | None:
     return int(count) if isinstance(count, int) else None
 
 
-def fetch_achievements(appid: int) -> dict | None:
-    """The account's progress in one game against the global unlock rates.
-    Needs the API key; None without it or when the game has none."""
+def _achievement_data(appid: int) -> tuple[list, list, dict] | None:
+    """The game's achievements in its own order, the account's progress on
+    them, and the global unlock rates. Needs the API key; None without it,
+    when the game has none, or when the profile hides its progress."""
     creds = library.steam_creds()
     if not creds:
         return None
@@ -375,7 +376,6 @@ def fetch_achievements(appid: int) -> dict | None:
     ).get("achievements", []) or []
     if not defined:
         return None
-    names = {a.get("name"): a for a in defined if a.get("name")}
     mine = _get(
         f"{API}/ISteamUserStats/GetPlayerAchievements/v1/",
         {"key": key, "steamid": steamid, "appid": int(appid)},
@@ -396,21 +396,46 @@ def fetch_achievements(appid: int) -> dict | None:
         )
         or []
     }
+    return defined, got, pct
+
+
+def _achievement_row(meta: dict, mine: dict, pct: dict) -> dict:
+    """One achievement: its schema entry, the account's entry, the rates."""
+    apiname = meta.get("name") or mine.get("apiname", "")
+    return {
+        "name": library.ascii_only(meta.get("displayName") or apiname),
+        "desc": library.ascii_only(meta.get("description") or "")[:120],
+        "global_pct": round(pct.get(apiname, 0.0), 1),
+        "unlocked": time.strftime("%Y-%m-%d", time.localtime(mine.get("unlocktime", 0)))
+        if mine.get("unlocktime")
+        else None,
+    }
+
+
+def fetch_achievement_list(appid: int) -> list[dict] | None:
+    """Every achievement in the game's own order, each with the date the
+    account unlocked it (None while locked). None as for _achievement_data."""
+    data = _achievement_data(appid)
+    if data is None:
+        return None
+    defined, got, pct = data
+    mine = {a.get("apiname"): a for a in got}
+    return [_achievement_row(m, mine.get(m.get("name"), {}), pct) for m in defined]
+
+
+def fetch_achievements(appid: int) -> dict | None:
+    """The account's progress in one game against the global unlock rates.
+    Needs the API key; None without it or when the game has none."""
+    data = _achievement_data(appid)
+    if data is None:
+        return None
+    defined, got, pct = data
+    names = {a.get("name"): a for a in defined if a.get("name")}
     unlocked = [a for a in got if a.get("achieved")]
     missing = [a for a in got if not a.get("achieved")]
 
     def row(a):
-        meta = names.get(a.get("apiname"), {})
-        return {
-            "name": library.ascii_only(meta.get("displayName") or a.get("apiname", "")),
-            "desc": library.ascii_only(meta.get("description") or "")[:120],
-            "global_pct": round(pct.get(a.get("apiname"), 0.0), 1),
-            "unlocked": time.strftime(
-                "%Y-%m-%d", time.localtime(a.get("unlocktime", 0))
-            )
-            if a.get("unlocktime")
-            else None,
-        }
+        return _achievement_row(names.get(a.get("apiname"), {}), a, pct)
 
     unlocked.sort(key=lambda a: -int(a.get("unlocktime", 0) or 0))
     missing.sort(key=lambda a: -pct.get(a.get("apiname"), 0.0))

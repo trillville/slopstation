@@ -159,6 +159,7 @@ class Toolkit:
                 "ok": False,
                 "error": f"{name} is not loaded - call find_tools for it first",
             }
+        started = time.time_ns()
         try:
             with utterance_snapshot(self.dispatch):
                 out = fn(args)
@@ -174,7 +175,9 @@ class Toolkit:
                 "error": "that didn't go through - something upstream failed",
             }
         try:
-            sentry.tool_span(name, json.dumps(args)[:2000], json.dumps(out)[:2000])
+            sentry.tool_span(
+                name, json.dumps(args)[:2000], json.dumps(out)[:2000], started
+            )
         except Exception:
             pass
         ok = out.get("ok") if isinstance(out, dict) else None
