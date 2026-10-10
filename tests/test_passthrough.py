@@ -70,6 +70,61 @@ def test_reads_run_at_once_scrubbed_capped_and_logged(live, log):
     assert big["ok"] and big["truncated"] and len(big["result"]) < 9000
 
 
+# Steam's achievement schema for a 60-achievement game: too big to read whole
+# (the icon URLs), and the endpoint cannot page.
+SCHEMA = {
+    "game": {
+        "gameName": "Dragon's Dogma 2",
+        "availableGameStats": {
+            "achievements": [
+                {
+                    "name": str(i),
+                    "displayName": f"Feat {i}",
+                    "icon": "https://cdn.example/" + "x" * 200,
+                }
+                for i in range(60)
+            ]
+        },
+    }
+}
+
+
+def test_fields_narrow_a_response_too_big_to_read(live):
+    tk, _, media = live
+    media.sonarr.answer = SCHEMA
+    ask = {"method": "GET", "path": "schema"}
+    big = tk.call("sonarr_api", dict(ask))
+    # The cut says how to get less, and lists the keys to name.
+    assert big["truncated"] and "`fields`" in big["detail"]
+    assert {"name", "displayName", "icon"} <= set(big["keys"])
+    narrow = tk.call("sonarr_api", {**ask, "fields": ["name", "displayName"]})
+    assert narrow["ok"] and "truncated" not in narrow
+    rows = narrow["result"]["game"]["availableGameStats"]["achievements"]
+    assert len(rows) == 60 and rows[59] == {"name": "59", "displayName": "Feat 59"}
+    assert "gameName" not in narrow["result"]["game"]
+    # A key the response does not have answers with the ones it does.
+    miss = tk.call("sonarr_api", {**ask, "fields": ["title"]})
+    assert miss["ok"] and miss["result"] == {} and "displayName" in miss["keys"]
+    assert not tk.call("sonarr_api", {**ask, "fields": "name"})["ok"]
+
+
+def test_a_read_repeated_in_one_turn_is_refused(live, log):
+    tk, dispatch, media = live
+    media.sonarr.answer = SCHEMA
+    ask = {"method": "GET", "path": "schema"}
+    assert tk.call("sonarr_api", dict(ask))["truncated"]
+    again = tk.call("sonarr_api", dict(ask))
+    assert not again["ok"] and "already ran" in again["error"]
+    assert "`fields`" in again["detail"], "a cut answer says how to get less"
+    assert len(media.sonarr.calls) == 1, "the service was not asked twice"
+    assert log.find("tool_refused")[-1]["reason"] == "repeat"
+    # Narrowed is a different read; so is the same read on a later turn.
+    assert tk.call("sonarr_api", {**ask, "fields": ["name"]})["ok"]
+    dispatch.utterance = types.SimpleNamespace(turn="aa0002", asked="")
+    assert tk.call("sonarr_api", dict(ask))["ok"]
+    assert len(media.sonarr.calls) == 3
+
+
 def test_mutations_wait_for_a_confirmation_from_a_later_turn(live, log, monkeypatch):
     tk, dispatch, media = live
     ask = {
@@ -443,6 +498,8 @@ def test_a_refused_request_fails_and_keeps_the_ask_armed(live, log, monkeypatch)
     tk.ctx.media.radarr.call = lambda *a, **k: (_ for _ in ()).throw(
         RuntimeError("media service returned HTTP 404 for nope")
     )
+    # A later turn: within one, the same read is refused as a repeat.
+    dispatch.utterance = types.SimpleNamespace(turn="aa0005", asked="")
     out = tk.call("radarr_api", {"method": "GET", "path": "nope"})
     assert not out["ok"] and "detail" not in out
     assert log.find("tool_gap")[-1]["status"] == 404

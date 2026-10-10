@@ -358,6 +358,10 @@ def test_store_helpers_parse_steams_shapes(monkeypatch):
     assert (
         ach["next_up"][0]["name"] == "Second" and ach["next_up"][0]["unlocked"] is None
     )
+    # The whole list keeps the game's order, unlocked or not.
+    every = store.fetch_achievement_list(1)
+    assert [a["name"] for a in every] == ["First", "Second"]
+    assert every[0]["unlocked"] and every[1]["unlocked"] is None
     friends = store.fetch_friends()
     assert [f["name"] for f in friends] == ["Amy", "Zed"] and friends[0][
         "playing"

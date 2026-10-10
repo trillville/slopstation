@@ -3,16 +3,18 @@
 import functools
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
 import helpers
+from slopstation import events
 from slopstation.agent.interfaces import text
 from slopstation.agent.llm import backends
 from slopstation.agent.services import Services
-from slopstation.agent.telemetry import traces
+from slopstation.agent.telemetry import sentry, traces
 
 TOKEN = "t" * 64
 SECRETS = {"textInterfaceToken": TOKEN, "anthropicApiKey": "a" * 64}
@@ -177,6 +179,70 @@ def test_a_session_carries_turns_tools_and_one_trace_file(base, log, saved):
     assert [n for _, n, _, _ in saved] == [1, 2, 3]
     assert {s for _, _, s, _ in saved} == {"couch"}
     assert len({stem for _, _, _, stem in saved}) == 1
+
+
+class TracedBackend(FakeBackend):
+    """Spans the way the real backends make them: a turn, then a chat."""
+
+    @sentry.agent("assistant")
+    def turn(self, system_text, user_text, tools):
+        with sentry.chat_span("anthropic", "claude-haiku-4-5"):
+            pass
+        return super().turn(system_text, user_text, tools)
+
+
+class SlowOperations(FakeOperations):
+    """Takes a measurable while, and notes the ambient ids it ran under."""
+
+    def for_assistant(self, *args, **kwargs):
+        self.seen = events.current()
+        time.sleep(0.05)
+        return super().for_assistant(*args, **kwargs)
+
+
+@pytest.fixture
+def spans(monkeypatch):
+    """Tracing on, through a real OpenTelemetry provider into memory."""
+    from opentelemetry import trace
+
+    sdk_trace = pytest.importorskip("opentelemetry.sdk.trace")
+    export = pytest.importorskip("opentelemetry.sdk.trace.export")
+    in_memory = pytest.importorskip(
+        "opentelemetry.sdk.trace.export.in_memory_span_exporter"
+    )
+    mem = in_memory.InMemorySpanExporter()
+    provider = sdk_trace.TracerProvider()
+    provider.add_span_processor(export.SimpleSpanProcessor(mem))
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: provider)
+    monkeypatch.setattr(sentry, "_on", True)
+    yield mem
+    provider.shutdown()
+
+
+def test_a_turn_traces_as_its_sessions_conversation(
+    cfg, log, monkeypatch, saved, spans
+):
+    monkeypatch.setitem(backends.BACKENDS, "anthropic", TracedBackend)
+    services = Services(cfg, SECRETS, log)
+    services.operations, services.media = SlowOperations(), FakeMedia()
+    out = text.TextApplication(services).turn("couch", "what is running?")
+    # Sentry builds a Conversation from this id, so every span of the turn
+    # needs it (2026-10-10: none had it, and no text turn could be found).
+    ids = {"gen_ai.conversation.id": "couch", "couch.turn": out["turn"]}
+    got = {s.name: s for s in spans.get_finished_spans()}
+    assert set(got) == {
+        "invoke_agent assistant",
+        "chat claude-haiku-4-5",
+        "execute_tool list_operations",
+    }
+    for name, span in got.items():
+        assert {k: span.attributes.get(k) for k in ids} == ids, name
+    tool = got["execute_tool list_operations"]
+    assert tool.end_time - tool.start_time >= 50_000_000, "spans the tool's run"
+    # The events a tool logs carry the same ids, and they end with the turn.
+    seen = services.operations.seen
+    assert (seen["turn"], seen["session"]) == (out["turn"], "couch")
+    assert "turn" not in events.current()
 
 
 def test_a_request_waiting_for_a_yes_says_nothing_ran():

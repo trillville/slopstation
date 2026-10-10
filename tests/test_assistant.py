@@ -768,7 +768,7 @@ def test_every_tool_call_is_recorded_including_the_raisers(monkeypatch):
     tlog = CapturingLog("voice")
     calls = {"n": 0}
 
-    def spy(kind, query, status=None):
+    def spy(kind, query, status=None, started_ns=None):
         calls["n"] += 1
 
     monkeypatch.setattr(assistant.sentry, "tool_span", spy)

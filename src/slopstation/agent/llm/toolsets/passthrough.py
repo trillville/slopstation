@@ -40,6 +40,10 @@ class HttpFailure(Exception):
 # not read differently from `config/host`.
 PATH_RE = re.compile(r"^[A-Za-z0-9_.\-{}]+(/[A-Za-z0-9_.\-{}]+)*$")
 MAX_RESULT_CHARS = 8000
+MAX_FIELDS = 30
+# How many of a cut response's key names to list, so the model can pick
+# `fields` from what is there instead of guessing.
+MAX_KEYS_SHOWN = 40
 
 SECRET_KEY_RE = re.compile(
     r"(api[_-]?key|token|password|passwd|secret|passkey|authorization|cookie|magnet)",
@@ -205,6 +209,13 @@ def _params_schema(extra=None):
                 {"type": "array", "items": {}},
             ],
         },
+        "fields": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "keep only these keys of the response, at any depth, "
+            "and the objects and lists that hold them, e.g. ['name', "
+            "'displayName']. For a response too big to read whole.",
+        },
     }
     props.update(extra or {})
     return props
@@ -317,6 +328,39 @@ def _cap(result):
     return text[:MAX_RESULT_CHARS] + " ...", True
 
 
+_DROP = object()
+
+
+def _select(value, keys):
+    """Only the named keys, wherever they sit, and the containers on the way
+    to them. _DROP when nothing under `value` matches."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in keys:
+                out[k] = v
+            elif (kept := _select(v, keys)) is not _DROP:
+                out[k] = kept
+        return out or _DROP
+    if isinstance(value, list):
+        kept = [x for x in (_select(v, keys) for v in value) if x is not _DROP]
+        return kept or _DROP
+    return _DROP
+
+
+def _key_names(value, seen=None):
+    """Every distinct key in a response, in the order first met."""
+    seen = {} if seen is None else seen
+    if isinstance(value, dict):
+        for k, v in value.items():
+            seen.setdefault(k, None)
+            _key_names(v, seen)
+    elif isinstance(value, list):
+        for v in value:
+            _key_names(v, seen)
+    return list(seen)
+
+
 def _under(path, prefixes):
     """Whole-segment prefix match: `tag` covers `tag` and `tag/3`, not `tags`."""
     p = path.lower()
@@ -344,6 +388,11 @@ def _qbit_mutates(method, path):
 def impls(ctx: ToolContext):
     bind = Bindings(ctx, SPECS)
     log, media, steam, operations = ctx.log, ctx.media, ctx.steam, ctx.operations
+    # The reads this turn has already had answered, and whether each answer
+    # was cut. Asking again cannot change the answer, and a model that keeps
+    # asking spends the user's wait on it (2026-10-10: one Steam call 59
+    # times in one turn).
+    answered: dict[str, Any] = {"turn": None, "reads": {}}
 
     def _run(service, args, send, tag=""):
         """`tag` names anything beyond method, path and body that the user is
@@ -362,6 +411,17 @@ def impls(ctx: ToolContext):
             return {"ok": False, "error": "body must be a JSON object or array"}
         if service == "qbittorrent" and isinstance(body, list):
             return {"ok": False, "error": "qBittorrent takes form fields, not an array"}
+        fields = args.get("fields")
+        if fields is not None and not (
+            isinstance(fields, list)
+            and 0 < len(fields) <= MAX_FIELDS
+            and all(isinstance(f, str) and f for f in fields)
+        ):
+            return {
+                "ok": False,
+                "error": f"fields must be a list of 1-{MAX_FIELDS} key names",
+            }
+        keys = frozenset(fields or ())
         if service == "qbittorrent" and _qbit_mutates(method, path):
             # An action is an action whatever verb the model wrote.
             method = "POST"
@@ -397,6 +457,25 @@ def impls(ctx: ToolContext):
             json.dumps(body, sort_keys=True),
         )
         asked = ctx.asked()
+        turn = ctx.turn()
+        # `fields` shapes only what comes back, so it is not part of what a
+        # user confirms, but it does make a different read.
+        read = scope + (json.dumps(sorted(keys)),)
+        if answered["turn"] != turn:
+            answered.update(turn=turn, reads={})
+        if method == "GET" and turn is not None and read in answered["reads"]:
+            log.warn("tool_refused", tool=f"{service}_api", reason="repeat", path=path)
+            repeat = {
+                "ok": False,
+                "error": "this exact request already ran this turn and its "
+                "answer is above; asking again returns the same answer",
+            }
+            if answered["reads"][read]:
+                repeat["detail"] = (
+                    "that answer was cut: call again with `fields` set to only "
+                    "the keys you need"
+                )
+            return {"service": service, "request": literal, **repeat}
 
         def run():
             """Send, and answer with one receipt: ok is whether the service
@@ -424,11 +503,34 @@ def impls(ctx: ToolContext):
                     )
             else:
                 status = 200
-                result, truncated = _cap(scrub(result))
-                out = {"ok": True, "result": result}
+                result = scrub(result)
+                missed = None
+                if keys:
+                    picked = _select(result, keys)
+                    if picked is _DROP:
+                        missed, picked = _key_names(result), {}
+                    result = picked
+                size = len(json.dumps(result, default=str))
+                capped, truncated = _cap(result)
+                out = {"ok": True, "result": capped}
+                if missed is not None:
+                    out["detail"] = (
+                        "none of `fields` is in the response; the keys it has "
+                        "are listed in `keys`"
+                    )
+                    out["keys"] = missed[:MAX_KEYS_SHOWN]
                 if truncated:
+                    # Most of these APIs cannot page, so the way to less is
+                    # naming the keys, listed here so they need no guessing.
                     out["truncated"] = True
-                    out["detail"] = "the response was cut; ask for less or page it"
+                    out["detail"] = (
+                        f"cut at {MAX_RESULT_CHARS} of {size} characters: call "
+                        "again with `fields` set to only the keys you need"
+                        + (" - fewer than this time" if keys else "")
+                    )
+                    out["keys"] = _key_names(result)[:MAX_KEYS_SHOWN]
+                if method == "GET" and turn is not None:
+                    answered["reads"][read] = truncated
             # `api`, not `service`: that name belongs to the log record itself.
             log(
                 "tool_gap",

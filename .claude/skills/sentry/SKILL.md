@@ -167,7 +167,8 @@ them together with the heartbeat count:
     the outage.
 - **voice, assistant lane**: `tool_call` — one per tool the assistant ran, with
   `tool`, `ok` and truncated `args`. Nothing before 2026-08-14 has it. Also
-  `tool_refused` (the boundary rejecting a call, e.g. `reason=unknown_appid`),
+  `tool_refused` (the boundary rejecting a call, e.g. `reason=unknown_appid`,
+  or `reason=repeat` for a raw API read already answered that turn),
   and `web_search` (provider-executed search). Every one of these also exists
   as a span under agent monitoring, where the arguments are untruncated.
 - **voice, couch verbs**: `nav_dispatched` `quit_dispatched` — both carry the
@@ -260,7 +261,12 @@ One voice session is one trace and one Conversation, both keyed on the
   beside them. Read it when the assistant did something odd — the log's
   `tool_call` args are truncated, these are not.
 - Both lanes appear: the voice pipeline, and the text/MCP interface, which
-  drives the SDKs directly and shows up as `invoke_agent assistant`.
+  drives the SDKs directly and shows up as `invoke_agent assistant`. A text
+  or MCP conversation's `session` is its Conversation id, and its `turn` is
+  on every span and log line of the turn. Text turns from before 2026-10-10
+  have neither: find those by time window, or in `state/traces/`.
+- `execute_tool` spans last as long as the tool ran (before 2026-10-10 they
+  were instant markers, so older ones say nothing about tool time).
 
 Spans carry transcripts and completions verbatim. Treat them as private.
 
