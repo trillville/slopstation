@@ -272,8 +272,11 @@ def main():
             what="assistant",
             provider=provider,
             model=default_model(voice, provider),
-            # anthropic has no effort knob
-            effort=voice["assistantReasoningEffort"] if provider == "openai" else None,
+            effort=(
+                voice["assistantReasoningEffort"]
+                if provider == "openai"
+                else voice.get("assistantEffortAnthropic") or None
+            ),
             websearch=voice["assistantWebSearch"] or None,
         )
 

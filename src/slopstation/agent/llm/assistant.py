@@ -258,3 +258,11 @@ PROVIDER_KEY = {"anthropic": "anthropicApiKey", "openai": "openaiApiKey"}
 
 def default_model(voice, provider):
     return voice[MODEL_KEY[provider]]
+
+
+def anthropic_effort(voice):
+    """The request fields that set the Anthropic model's effort, or {} when
+    assistantEffortAnthropic is absent or empty: Haiku 4.5 and older reject
+    `effort`, and an unset key keeps the model's own default."""
+    effort = voice.get("assistantEffortAnthropic")
+    return {"output_config": {"effort": effort}} if effort else {}

@@ -56,7 +56,7 @@ agent does not start. Every other voice key has a default in code, so a
 | `chatterFloorDb` | the mic gate: once the talker goes quiet, sound this far under the talker's level is muted before speech recognition hears it. Absent or 0 is off (measure only); 15 is the value to try. `mic_gated` in the logs says what it silenced; `level_db` on each turn says where the room sits |
 | `keytermCount`, `fuzzyTitleThreshold` | what the speech recogniser is told to expect, and how loosely a spoken title matches the library |
 | `ttsVoice` | the Deepgram voice |
-| `assistantProvider`, `assistantModelAnthropic`, `assistantModelOpenai`, `assistantReasoningEffort`, `assistantWebSearch`, `assistantSearchMaxUses` | the assistant model and its tools |
+| `assistantProvider`, `assistantModelAnthropic`, `assistantEffortAnthropic`, `assistantModelOpenai`, `assistantReasoningEffort`, `assistantWebSearch`, `assistantSearchMaxUses` | the assistant model and its tools. `assistantEffortAnthropic` is the Anthropic model's effort (empty sends none, which Haiku 4.5 needs); `assistantReasoningEffort` is OpenAI's. Voice web search works on the OpenAI provider only |
 | `inputs`, `navTargets` | spoken names for TV inputs, and for Big Picture pages: each phrase maps to one of downloads, library, store, friends, settings, wishlist, screenshots. Write phrases the way speech recognition spells them ("wish list" as well as "wishlist"). A page asked for with no session live starts one and opens once Big Picture is up |
 | `volumeStep`, `volumeMax`, `earconGain`, `location`, `followUpAfterAnnounce`, `steamDataTools` | volume verbs, earcon level, the assistant's time zone and locale, and whether an announcement opens a follow-up window |
 
