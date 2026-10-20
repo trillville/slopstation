@@ -67,13 +67,20 @@ def _make_llm(voice, secrets, system_text):
         )
     from pipecat.services.anthropic.llm import AnthropicLLMService
 
+    from slopstation.agent.llm.assistant import anthropic_effort
+
     return AnthropicLLMService(
         api_key=secrets["anthropicApiKey"],
         settings=AnthropicLLMService.Settings(
             model=default_model(voice, "anthropic"),
             system_instruction=system_text,
             enable_prompt_caching=True,
-            max_tokens=400,
+            # Thinking counts against this: Haiku 5.5 at effort medium used up
+            # to ~670 tokens on a spoken answer (2026-10-17 replay), so the old
+            # 400 would cut replies off. The prompt keeps answers short.
+            max_tokens=1500,
+            # Pipecat merges `extra` into the request as-is.
+            extra=anthropic_effort(voice),
         ),
     )
 

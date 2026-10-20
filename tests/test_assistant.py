@@ -1012,6 +1012,33 @@ def test_anthropic_backend_resumes_a_paused_turn(monkeypatch, log):
     assert calls[1]["messages"][-1]["role"] == "assistant"  # partial re-sent
 
 
+def test_anthropic_effort_is_sent_only_when_configured(monkeypatch, log):
+    # Haiku 4.5 rejects `effort`, so an unset key must send no field at all.
+    reply = types.SimpleNamespace(
+        content=[types.SimpleNamespace(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=None,
+    )
+    sent = {}
+
+    def recorder(name):
+        def create(**kw):
+            sent[name] = kw
+            return reply
+
+        return types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+
+    for name, voice in (
+        ("set", {**VOICE_ON, "assistantEffortAnthropic": "medium"}),
+        ("unset", VOICE_ON),
+    ):
+        b = backends.AnthropicBackend({"anthropicApiKey": "x" * 24}, "m", voice=voice)
+        monkeypatch.setattr(b, "client", recorder(name))
+        b.turn("sys", "hi", running({}, log))
+    assert sent["set"]["output_config"] == {"effort": "medium"}, sent["set"]
+    assert "output_config" not in sent["unset"], sent["unset"]
+
+
 # -- pipecat constructions with dummy keys -------------------------------------
 
 
@@ -1025,10 +1052,13 @@ def test_make_llm_builds_both_providers_from_dummy_keys(catalog):
     voice_a = {
         **CFG_MIN["voice"],
         "assistantProvider": "anthropic",
-        "assistantModelAnthropic": "claude-haiku-4-5",
+        "assistantModelAnthropic": "claude-haiku-5-5",
+        "assistantEffortAnthropic": "medium",
         "assistantModelOpenai": "gpt-6-luna",
     }
-    session._make_llm(voice_a, dummy, si)
+    llm_a = session._make_llm(voice_a, dummy, si)
+    # Pipecat merges `extra` into the request, so this is what the API sees.
+    assert llm_a._settings.extra == {"output_config": {"effort": "medium"}}
     voice_o = {
         **voice_a,
         "assistantProvider": "openai",

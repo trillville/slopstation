@@ -41,8 +41,9 @@ busy state. launching true means a launch is still in progress (it can take
 a minute and may be retrying): say so, offer to wait or to cancel, and never
 call it an active session. session_active true with launching false means
 Big Picture is up (appid 0) or a game is running. Either way the rig is
-busy: never report it as idle or offer to start a session. false means truly
-idle."""
+busy: never report it as idle or offer to start a session. false means no
+session. It says nothing about whether the PC is awake, asleep or reachable:
+for that, find pc_status."""
 
 QUIT_GAME = """\
 Quit the game that is currently running. This ENDS the game and can lose

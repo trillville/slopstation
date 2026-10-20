@@ -15,9 +15,11 @@ from slopstation.agent.telemetry import sentry, traces
 LLM_TIMEOUT_S = 90
 LLM_MAX_RETRIES = 1
 # These backends serve the text interface and the REPL, where an answer can
-# be a list or a table. The voice lane sets its own, shorter cap in
-# speech/session.py.
-TEXT_MAX_TOKENS = 1500
+# be a list or a table. The cap covers thinking as well as the answer: Haiku
+# 5.5 at effort medium used up to ~6900 tokens on one call (2026-10-17
+# replay), and at 1500 a long list came back as an empty reply. The voice lane
+# sets its own cap in speech/session.py.
+TEXT_MAX_TOKENS = 8000
 
 
 class AnthropicBackend:
@@ -32,6 +34,8 @@ class AnthropicBackend:
             max_retries=LLM_MAX_RETRIES,
         )
         self.model = model
+        # `effort` is the OpenAI knob; this lane reads its own from config.
+        self.effort_fields = assistant.anthropic_effort(voice) if voice else {}
         self.messages = []
         self.cache_note = ""
         self.server_tools = assistant.server_tools(voice, "anthropic") if voice else []
@@ -63,6 +67,7 @@ class AnthropicBackend:
                     system=system,  # type: ignore[arg-type]
                     messages=self.messages,
                     tools=tools,
+                    **self.effort_fields,
                 )
                 u = resp.usage
                 text = " ".join(b.text for b in resp.content if b.type == "text")
