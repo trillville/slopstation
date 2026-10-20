@@ -413,14 +413,21 @@ def _achievement_row(meta: dict, mine: dict, pct: dict) -> dict:
 
 
 def fetch_achievement_list(appid: int) -> list[dict] | None:
-    """Every achievement in the game's own order, each with the date the
-    account unlocked it (None while locked). None as for _achievement_data."""
+    """Every achievement in the game's own order: whether the account has it
+    (Steam's flag - an unlock can carry no time) and the date it was unlocked,
+    when Steam has one. None as for _achievement_data."""
     data = _achievement_data(appid)
     if data is None:
         return None
     defined, got, pct = data
     mine = {a.get("apiname"): a for a in got}
-    return [_achievement_row(m, mine.get(m.get("name"), {}), pct) for m in defined]
+    rows = []
+    for m in defined:
+        entry = mine.get(m.get("name"), {})
+        rows.append(
+            {**_achievement_row(m, entry, pct), "achieved": bool(entry.get("achieved"))}
+        )
+    return rows
 
 
 def fetch_achievements(appid: int) -> dict | None:

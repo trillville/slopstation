@@ -558,11 +558,11 @@ def impls(ctx: ToolContext):
                     "ok": False,
                     "error": "no achievement data - the game has none, or the steamApiKey is missing",
                 }
-            got = [r for r in rows if r["unlocked"]]
+            got = [r for r in rows if r["achieved"]]
             keep = {
                 "all": rows,
                 "unlocked": got,
-                "locked": [r for r in rows if not r["unlocked"]],
+                "locked": [r for r in rows if not r["achieved"]],
             }[which]
             return paging.page(
                 keep,
