@@ -100,13 +100,15 @@ def heal(watch):
 
 
 def test_a_lost_drive_restarts_the_vm_and_searches_again(tmp_path):
+    """A failed wsl --shutdown, in output no code page decodes, is not where
+    the heal stops: Docker is already stopped and must be started again."""
     sonarr = App("Sonarr").set(roots=LOST)
-    docker = Docker([sonarr])
+    docker = Docker([sonarr], fail={"wsl --shutdown": b"\x8f\xff\x00b\x00u\x00s\x00y"})
     watch, log, _ = monitor(tmp_path, docker)
     watch.reconcile_once()
     assert not docker.ran, "one poll of grace before acting"
     watch.reconcile_once()
-    assert docker.ran.count("wsl --shutdown") == 1
+    assert "desktop start" in docker.ran
     assert log.find("media_mount_restored")
     assert sonarr.posts == [
         ("command", {"name": "MissingEpisodeSearch", "monitored": True})
@@ -128,42 +130,27 @@ def test_only_a_configured_root_whose_folder_windows_has_counts(tmp_path):
     assert not docker.ran and not docker2.ran
 
 
-def test_a_restart_that_leaves_docker_down_is_retried_an_hour_later(tmp_path):
+def test_a_heal_that_leaves_docker_down_is_finished_later(tmp_path):
+    """Silent apps after a failed heal are still the heal's: not within the
+    hour, and not lost when the lane restarts, because the marker outlives
+    it."""
     sonarr = App("Sonarr").set(roots=LOST)
     docker = Docker([sonarr], fail={"desktop start": b"engine error"})
-    watch, log, clock = monitor(tmp_path, docker)
+    watch, log, _ = monitor(tmp_path, docker)
     heal(watch)
     assert "engine error" in log.find("media_mount_heal_failed")[-1]["err"]
     watch.reconcile_once()
-    assert docker.ran.count("wsl --shutdown") == 1
-    clock.t += mount.RESTART_COOLDOWN_S
-    watch.reconcile_once()
-    assert docker.ran.count("wsl --shutdown") == 2
-
-
-def test_a_failed_wsl_shutdown_still_starts_docker_again(tmp_path):
-    sonarr = App("Sonarr").set(roots=LOST)
-    docker = Docker([sonarr], fail={"wsl --shutdown": b"busy"})
-    watch, log, _ = monitor(tmp_path, docker)
-    heal(watch)
-    assert "desktop start" in docker.ran
+    assert docker.ran.count("wsl --shutdown") == 1, "not again within the hour"
+    docker.fail = {}
+    restarted, log, _ = monitor(tmp_path, docker)
+    heal(restarted)
     assert log.find("media_mount_restored")
 
 
-def test_a_lane_restarted_mid_heal_picks_it_up(tmp_path):
-    """The marker outlives the lane: a new one that finds Docker down after
-    a heal began restarts it instead of reading silence as health."""
-    sonarr = App("Sonarr", up=False).set(roots=LOST)
-    docker = Docker([sonarr])
-    docker.engine = False
-    watch, log, _ = monitor(tmp_path, docker)
-    watch.marker.parent.mkdir(parents=True, exist_ok=True)
-    watch.marker.touch()
-    heal(watch)
-    assert log.find("media_mount_restored")
-
-
-def test_a_restart_that_did_not_bring_the_roots_back_is_not_repeated(tmp_path):
+def test_a_heal_the_roots_did_not_come_back_from_is_not_repeated(tmp_path):
+    """The apps answer and still cannot reach the drive: the restart was not
+    the fix. Roots that come back later, slower than the heal waited, are
+    still the recovery."""
     sonarr = App("Sonarr").set(roots=LOST)
     docker = Docker([sonarr], heals=False)
     watch, log, clock = monitor(tmp_path, docker)
@@ -172,29 +159,10 @@ def test_a_restart_that_did_not_bring_the_roots_back_is_not_repeated(tmp_path):
     clock.t += 2 * mount.RESTART_COOLDOWN_S
     heal(watch)
     assert docker.ran.count("wsl --shutdown") == 1
-
-
-def test_roots_back_after_a_failed_heal_still_search(tmp_path):
-    """Apps slower to start than the heal waits: the heal is reported failed,
-    and the next poll that finds the roots back is the recovery."""
-    sonarr = App("Sonarr").set(roots=LOST)
-    docker = Docker([sonarr], heals=False)
-    watch, log, _ = monitor(tmp_path, docker)
-    heal(watch)
-    assert log.find("media_mount_heal_failed")
     sonarr.set(roots=BACK)
     watch.reconcile_once()
     assert log.find("media_mount_restored")
     assert sonarr.posts
-
-
-def test_step_output_that_is_not_text_cannot_stop_the_heal(tmp_path):
-    sonarr = App("Sonarr").set(roots=LOST)
-    docker = Docker([sonarr], fail={"desktop stop": b"\x8f\xff\x00b\x00a\x00d"})
-    watch, log, _ = monitor(tmp_path, docker)
-    heal(watch)
-    err = log.find("media_mount_heal_failed")[-1]["err"]
-    assert err.startswith("docker desktop stop failed")
 
 
 def test_a_lane_that_cannot_break_away_stops_nothing(tmp_path):

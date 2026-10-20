@@ -295,20 +295,9 @@ disk checks with `media.diskWatch`,
 
 ### Media drive lost
 
-Docker Desktop's VM maps Windows drives only when it starts. If the media
-drive arrives after that (a reboot that starts Docker first, or a replug),
-Radarr and Sonarr see a 128 MB stand-in for `/data`, report their root
-folders missing, and reject every release for disk space. Restarting the
-containers does not help; restarting the VM does.
-
-The voice lane restarts the VM itself (`media.mountHeal`, on by default)
-when a configured root has been unreachable for two polls while its folder
-exists on Windows. It tries at most once an hour, retries only while a
-failed attempt has left Docker down, and then asks the apps to search for
-everything missing. The doctor's root rows warn while a root is
-unreachable.
-
-By hand, from a normal PowerShell window:
+When the media drive arrives after Docker Desktop's VM has started, Radarr
+and Sonarr see an empty 128 MB `/data` and reject every release; the voice
+lane restarts the VM itself (`media.mountHeal`), and by hand it is:
 
 ```powershell
 docker desktop stop
@@ -316,9 +305,6 @@ wsl --shutdown
 docker desktop start
 .\media\Start-Media.ps1
 ```
-
-`docker run --rm -v M:/Media:/x alpine df -h /x` shows the real drive size
-when the VM can see it, and 128M when it cannot.
 
 ### SMART monitoring
 
