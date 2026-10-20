@@ -265,6 +265,19 @@ def _tracer():
     return _otel.get_tracer("slopstation.llm")
 
 
+def _correlation():
+    """The ambient session and turn as span attributes. Sentry builds a
+    Conversation from the spans sharing gen_ai.conversation.id, so a span
+    without it cannot be found from the session in the JSONL."""
+    ctx = events.current()
+    attrs = {}
+    if ctx.get("session"):
+        attrs["gen_ai.conversation.id"] = str(ctx["session"])
+    if ctx.get("turn"):
+        attrs["couch.turn"] = str(ctx["turn"])
+    return attrs
+
+
 def agent(name):
     """Decorator: wrap a call in the gen_ai.invoke_agent span Sentry's Agents
     dashboard hangs chat and tool spans under. A decorator rather than a with
@@ -282,6 +295,7 @@ def agent(name):
                         "sentry.op": "gen_ai.invoke_agent",
                         "gen_ai.operation.name": "invoke_agent",
                         "gen_ai.agent.name": name,
+                        **_correlation(),
                     },
                 )
             except Exception:
@@ -310,6 +324,7 @@ def chat_span(provider, model, messages=None, tools=None, system=None):
                 "gen_ai.operation.name": "chat",
                 "gen_ai.provider.name": provider,
                 "gen_ai.request.model": model,
+                **_correlation(),
             }
             if system:
                 attrs["gen_ai.system_instructions"] = str(system)
@@ -330,8 +345,11 @@ def chat_span(provider, model, messages=None, tools=None, system=None):
                 pass
 
 
-def tool_span(kind, query, result=None):
-    """Record a provider-executed tool call under the active span."""
+def tool_span(kind, query, result=None, started_ns=None):
+    """Record a finished tool call under the active span. `started_ns`
+    (time.time_ns() when the call began) gives the span the call's real
+    length; without it the span is only a marker, which is all a
+    provider-executed search can have."""
     if not _on:
         return
     try:
@@ -343,7 +361,9 @@ def tool_span(kind, query, result=None):
                 "gen_ai.tool.name": str(kind),
                 "gen_ai.tool.type": "function",
                 "gen_ai.tool.call.arguments": str(query)[:2000],
+                **_correlation(),
             },
+            start_time=started_ns,
         ) as s:
             if result:
                 s.set_attribute("gen_ai.tool.call.result", str(result))

@@ -9,7 +9,7 @@ import uuid
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from slopstation import config
+from slopstation import config, events
 from slopstation.agent.llm import assistant, backends
 from slopstation.agent.telemetry import traces
 
@@ -130,6 +130,9 @@ class TextApplication:
                 "this session is still answering its previous message; "
                 "retry shortly or start a new session"
             )
+        # Ambient for the turn: every event its tools log carries the turn and
+        # session, and every span carries them as the Sentry conversation.
+        ambient = events.context(turn=turn, session=session_id)
         try:
             session["dispatch"].begin_utterance(turn, message)
             tools = Acknowledged(session["toolkit"])
@@ -141,6 +144,7 @@ class TextApplication:
             # trace too - remote_request carries the same turn id.
             messages = list(session["backend"].messages)
         finally:
+            events.reset(ambient)
             session["lock"].release()
         self.log(
             "text_request",
