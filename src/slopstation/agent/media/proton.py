@@ -15,6 +15,7 @@ from slopstation.agent.media.clients import (
     clean_text,
     parse_time,
 )
+from slopstation.agent.media.processes import OUTSIDE_LANE
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
@@ -26,7 +27,7 @@ PROTON_STATUS_RE = re.compile(
     r"(?P<detail>.*?)(?=^\d{4}-\d{2}-\d{2}T|\Z)"
 )
 PROTON_PORT_RE = re.compile(r"Port pair\s+\d+->(?P<port>\d+)")
-# Zero DHT nodes this long, with downloads waiting, before each heal step.
+# Zero DHT nodes this long before each heal step.
 PEERS_DEAD_S = 300
 QBIT_RESTART_WAIT_S = 60
 # The lowest forwarded port Proton hands out. Observed, not documented:
@@ -39,9 +40,17 @@ def _launch_detached(exe):
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
         subprocess, "CREATE_NEW_PROCESS_GROUP", 0
     )
-    return subprocess.Popen(
-        [str(exe)], cwd=str(Path(exe).parent), creationflags=flags, close_fds=True
-    )
+    cwd = str(Path(exe).parent)
+    try:
+        return subprocess.Popen(
+            [str(exe)], cwd=cwd, creationflags=flags | OUTSIDE_LANE, close_fds=True
+        )
+    except PermissionError:
+        # A lane started before its job allowed breakaway. qBittorrent is
+        # already shut down by now, so inside the job beats not at all.
+        return subprocess.Popen(
+            [str(exe)], cwd=cwd, creationflags=flags, close_fds=True
+        )
 
 
 def _netsh(*args):
@@ -159,7 +168,8 @@ class ProtonPortMonitor(Monitor):
     sockets to an adapter that exists. A reconnect that keeps the port
     changes no preference, so nothing reopens the sockets and DHT stays
     empty; rebind on the reconnect, and when DHT stays empty anyway,
-    rebind, then restart."""
+    rebind, then restart. `on_recovered(after)` runs once a heal step
+    brings the peers back."""
 
     THREAD_NAME = "proton-port-monitor"
 
@@ -174,6 +184,7 @@ class ProtonPortMonitor(Monitor):
         exe=None,
         launch=_launch_detached,
         sleep=time.sleep,
+        on_recovered=None,
     ):
         self.client = client
         self.log = log
@@ -184,6 +195,7 @@ class ProtonPortMonitor(Monitor):
         self.exe = exe
         self.launch = launch
         self.sleep = sleep
+        self.on_recovered = on_recovered
         self._failures = ChangeOnly()
         self._last_state = None
         self._reset_watch()
@@ -223,15 +235,13 @@ class ProtonPortMonitor(Monitor):
         self._step = 0
 
     def _watch_peers(self):
-        """Zero DHT nodes with downloads waiting is the dead-socket symptom
-        whatever caused it. Each PEERS_DEAD_S it persists: rebind, then
-        restart, then say so once and wait."""
+        """Zero DHT nodes is the dead-socket symptom whatever caused it. Each
+        PEERS_DEAD_S it persists: rebind, then restart, then say so once and
+        wait. Idle counts: a qBittorrent that started before the VPN adapter
+        existed binds to nothing, and no download comes along to show it."""
         nodes = int(self.client.transfer_info().get("dht_nodes", 0) or 0)
         preferences = {} if nodes else self.client.preferences()
         if nodes or not preferences.get("dht", True):
-            self._recovered(nodes)
-            return nodes
-        if not self.client.torrents(filter="downloading"):
             self._recovered(nodes)
             return nodes
         port = int(preferences.get("listen_port", 0) or 0)
@@ -266,10 +276,13 @@ class ProtonPortMonitor(Monitor):
         return nodes
 
     def _recovered(self, nodes):
-        if self._step:
-            after = "rebind" if self._step == 1 else "restart"
-            self.log("qbit_peers_recovered", after=after, nodes=nodes)
+        step = self._step
         self._reset_watch()
+        if step:
+            after = "rebind" if step == 1 else "restart"
+            self.log("qbit_peers_recovered", after=after, nodes=nodes)
+            if self.on_recovered is not None:
+                self.on_recovered("qbit_" + after)
 
     def _rebind(self, reason):
         if not self.interface:

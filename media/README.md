@@ -227,10 +227,14 @@ The same sync keeps qBittorrent's peer sockets alive. A Proton reconnect
 recreates the adapter under the same name, and a socket bound before it
 keeps a name that still matches while pointing at nothing: every check
 passes and DHT sits at zero nodes. The sync rebinds on each reconnect, and
-whenever DHT stays empty with downloads waiting it rebinds, then restarts
-qBittorrent through its API (`media.qbittorrentExe` names the executable),
-then reports once and waits. Restarting by hand still works. For manual
-recovery of the port:
+whenever DHT stays empty it rebinds, then restarts qBittorrent through its
+API (`media.qbittorrentExe` names the executable), then reports once and
+waits. It does this with nothing queued too, which catches a qBittorrent
+that started before the Proton adapter existed ("The configured network
+interface is invalid" in its log). Once a step brings the peers back, it
+asks Radarr and Sonarr to search for everything missing. Restarting by
+hand still works. For manual recovery of the
+port:
 
 ```powershell
 .venv\Scripts\python -m slopstation.agent.media set-qbit-port <active-port> --execute
@@ -271,9 +275,12 @@ docker compose --project-directory media --env-file media\.env ps
 | `media_import_failed` | An import failed |
 | `media_queue_stalled` | A queued download reported a warning or error |
 | `media_queue_reaped` / `media_queue_reap_failed` | A grab that received nothing for `media.stalledGraceMinutes` was marked failed so the app takes its next candidate; or could not be, or the target has used up its replacements |
-| `qbit_peers_lost` / `qbit_peers_recovered` | DHT emptied with downloads waiting, and came back (`after` names the step that worked) |
+| `qbit_peers_lost` / `qbit_peers_recovered` | DHT emptied, and came back (`after` names the step that worked) |
 | `qbit_rebound` / `qbit_restarted` | A heal step ran; `reason` is `proton_reconnect` or `peers_lost` |
 | `qbit_heal_failed` | A heal step could not run, or DHT stayed empty after the restart |
+| `media_mount_lost` / `media_mount_restored` | The apps lost the media drive while Windows still had it, and the Docker VM restart brought it back |
+| `media_mount_heal_failed` | The VM restart could not run or did not bring the drive back |
+| `media_missing_searched` / `media_missing_search_failed` | After a heal, an app was asked to search for everything missing (`after` names the heal), or could not be |
 | `media_watch_failed` | A service could not be reached |
 | `disk_space_low` / `disk_space_cleared` | A watched volume crossed the configured limit |
 | `disk_watch_failed` | A watched volume could not be read |
@@ -285,6 +292,19 @@ with nothing received before it is marked failed (0 turns that off). The app
 treats a dead torrent as a warning and keeps it forever otherwise. Configure
 disk checks with `media.diskWatch`,
 `media.diskPollS`, and `media.diskFreeWarnGb`.
+
+### Media drive lost
+
+When the media drive arrives after Docker Desktop's VM has started, Radarr
+and Sonarr see an empty 128 MB `/data` and reject every release; the voice
+lane restarts the VM itself (`media.mountHeal`), and by hand it is:
+
+```powershell
+docker desktop stop
+wsl --shutdown
+docker desktop start
+.\media\Start-Media.ps1
+```
 
 ### SMART monitoring
 

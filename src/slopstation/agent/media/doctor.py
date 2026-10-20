@@ -273,13 +273,13 @@ def _check_arr(report, kind, client, media_cfg):
         wanted = sorted(set((media_cfg.get(presets_key) or {}).values()))
         # Roots compare case-folded and without a trailing separator -
         # Servarr echoes the path back in either form.
-        normalized = {
-            str(entry.get("path", "")).rstrip("/\\").casefold()
+        by_path = {
+            str(entry.get("path", "")).rstrip("/\\").casefold(): entry
             for entry in roots
             if isinstance(entry, dict)
         }
-        root_exists = bool(wanted_root) and (
-            wanted_root.rstrip("/\\").casefold() in normalized
+        root = (
+            by_path.get(wanted_root.rstrip("/\\").casefold()) if wanted_root else None
         )
         available = {
             str(entry.get("name", "")).casefold()
@@ -287,13 +287,22 @@ def _check_arr(report, kind, client, media_cfg):
             if isinstance(entry, dict)
         }
         missing = [name for name in wanted if str(name).casefold() not in available]
-        report(
-            PASS if root_exists else WARN,
-            f"{label} root",
-            wanted_root
-            if root_exists
-            else f"configured root {wanted_root or '(missing)'} does not exist",
-        )
+        if root is None:
+            report(
+                WARN,
+                f"{label} root",
+                f"configured root {wanted_root or '(missing)'} does not exist",
+            )
+        elif root.get("accessible") is False:
+            report(
+                WARN,
+                f"{label} root",
+                f"{wanted_root} is configured but {label} cannot reach it",
+                "Docker's VM lost the media drive: see 'Media drive lost' "
+                "in media\\README.md",
+            )
+        else:
+            report(PASS, f"{label} root", wanted_root)
         report(
             WARN if missing else PASS,
             f"{label} quality profiles",

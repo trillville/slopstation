@@ -161,6 +161,7 @@ class FakeArr:
     queue: dict = dataclasses.field(default_factory=lambda: {"records": []})
     history: dict = dataclasses.field(default_factory=lambda: {"records": []})
     health: list = dataclasses.field(default_factory=list)
+    roots: list = dataclasses.field(default_factory=list)
     indexers: list = dataclasses.field(
         default_factory=lambda: [
             {"id": 1, "enable": True, "enableAutomaticSearch": True}
@@ -208,6 +209,8 @@ class FakeArr:
             )
         if endpoint == "health":
             return [dict(row) for row in self.health]
+        if endpoint == "rootfolder":
+            return [dict(row) for row in self.roots]
         if endpoint == "indexer":
             return [dict(row) for row in self.indexers]
         raise AssertionError((self.name, "GET", endpoint, params))

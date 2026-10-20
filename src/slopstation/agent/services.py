@@ -117,6 +117,12 @@ class Services:
             "disk_watch",
             lambda: media.disk_health_monitor_from_config(cfg, log),
         )
+        # Stops Docker Desktop and its VM; a dry run must not.
+        self._monitor(
+            "docker_mount_heal",
+            lambda: media.docker_mount_monitor_from_config(cfg, secrets, log),
+            live_only=True,
+        )
 
         text.start(self)
         # Forwards to the text interface over localhost, so it takes no tools

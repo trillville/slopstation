@@ -14,12 +14,18 @@ from slopstation.agent.media.disk import (
     DiskHealthMonitor,
 )
 from slopstation.agent.media.health import HEALTH_POLL_S, MediaHealthMonitor
+from slopstation.agent.media.mount import MOUNT_POLL_S, DockerMountMonitor
 from slopstation.agent.media.proton import (
     ProtonPortMonitor,
 )
+from slopstation.agent.media.recovery import search_missing
 from slopstation.agent.media.service import MediaService
 from slopstation.agent.media.units import GB
 from slopstation.agent.media.updates import MediaUpdateMonitor
+
+
+def _media_dir():
+    return paths.HOME / "media"
 
 
 def _media_cfg(cfg, flag=None, default=True):
@@ -83,6 +89,16 @@ def _optional_monitor(cfg, log, flag, what, build, default=True):
         return None
 
 
+def _search_after_heal(media_cfg, secrets, log):
+    """What a heal runs once it worked: a search for everything still
+    missing. None without the apps' keys, and the heal still runs."""
+    try:
+        clients = _arr_clients(media_cfg, secrets)
+    except MediaConfigurationError:
+        return None
+    return lambda after: search_missing(clients, log, after)
+
+
 def proton_port_monitor_from_config(cfg, secrets, log):
     return _optional_monitor(
         cfg,
@@ -95,6 +111,7 @@ def proton_port_monitor_from_config(cfg, secrets, log):
             poll_s=_positive(media_cfg, "pollS", 30),
             interface=str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN")),
             exe=media_cfg.get("qbittorrentExe") or None,
+            on_recovered=_search_after_heal(media_cfg, secrets, log),
         ),
         default=False,
     )
@@ -126,7 +143,7 @@ def media_update_monitor_from_config(cfg, secrets, log):
         "autoUpdate",
         "media_auto_update",
         lambda media_cfg: MediaUpdateMonitor(
-            servarr_clients(media_cfg, secrets), log, paths.HOME / "media"
+            servarr_clients(media_cfg, secrets), log, _media_dir()
         ),
     )
 
@@ -145,16 +162,21 @@ def _media_root(env_path):
     return None
 
 
+def _required_media_root():
+    env_path = _media_dir() / ".env"
+    root = _media_root(env_path)
+    if not root:
+        raise MediaConfigurationError(
+            f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
+        )
+    return root
+
+
 def disk_health_monitor_from_config(cfg, log):
     def build(media_cfg):
         poll_s = _positive(media_cfg, "diskPollS", DISK_POLL_S)
         warn_gb = _positive(media_cfg, "diskFreeWarnGb", FREE_WARN_BYTES // GB)
-        env_path = paths.HOME / "media" / ".env"
-        root = _media_root(env_path)
-        if not root:
-            raise MediaConfigurationError(
-                f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
-            )
+        root = _required_media_root()
         # The library volume fills from downloads; the checkout volume holds
         # the databases and the event log. Anchors, so one volume named twice
         # is watched once.
@@ -166,6 +188,25 @@ def disk_health_monitor_from_config(cfg, log):
         )
 
     return _optional_monitor(cfg, log, "diskWatch", "disk_watch", build)
+
+
+def docker_mount_monitor_from_config(cfg, secrets, log):
+    def build(media_cfg):
+        radarr, sonarr = _arr_clients(media_cfg, secrets)
+        roots = {
+            radarr.name: media_cfg.get("movieRoot", ""),
+            sonarr.name: media_cfg.get("seriesRoot", ""),
+        }
+        return DockerMountMonitor(
+            (radarr, sonarr),
+            log,
+            roots,
+            _required_media_root(),
+            _media_dir(),
+            poll_s=_positive(media_cfg, "mountPollS", MOUNT_POLL_S),
+        )
+
+    return _optional_monitor(cfg, log, "mountHeal", "docker_mount_heal", build)
 
 
 def from_config(cfg, secrets, log):

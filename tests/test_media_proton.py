@@ -135,9 +135,9 @@ def test_proton_reconnect_rebinds_even_when_the_port_is_unchanged(
 def test_dead_peers_rebind_then_restart_then_report(
     proton_log, qbit, qbit_web, monkeypatch
 ):
-    """The self-healing loop: zero DHT nodes with downloads waiting gets a
-    rebind after PEERS_DEAD_S, a restart after another, one error after a
-    third, then silence until the nodes come back."""
+    """The self-healing loop: zero DHT nodes gets a rebind after
+    PEERS_DEAD_S, a restart after another, one error after a third, then
+    silence until the nodes come back, when the apps search again."""
     monkeypatch.setattr(proton, "PROTON_LOG_MAX_AGE_S", 10**6)
     monkeypatch.setattr(proton, "reserved_port_range", lambda port: None)
     log = CapturingLog("voice")
@@ -155,6 +155,7 @@ def test_dead_peers_rebind_then_restart_then_report(
         return Process()
 
     qbit_web.dht_nodes = 0
+    searched = []
     proton_monitor = proton.ProtonPortMonitor(
         qbit,
         log,
@@ -164,6 +165,7 @@ def test_dead_peers_rebind_then_restart_then_report(
         exe="C:/qb/qbittorrent.exe",
         launch=launch,
         sleep=lambda s: None,
+        on_recovered=searched.append,
     )
 
     def at(seconds):
@@ -192,23 +194,36 @@ def test_dead_peers_rebind_then_restart_then_report(
     assert at(1800)["dht_nodes"] == 50
     recovered = log.find("qbit_peers_recovered")[-1]
     assert (recovered["after"], recovered["nodes"]) == ("restart", 50)
+    assert searched == ["qbit_restart"]
+    at(2100)
+    assert searched == ["qbit_restart"], "healthy polls search nothing"
     # Recovery resets the loop: a later loss starts from the first step.
     qbit_web.dht_nodes = 0
-    at(2100)
     at(2400)
+    at(2700)
     assert len(log.find("qbit_peers_lost")) == 2
-    # Nothing waiting on peers is nothing to heal.
-    log2 = CapturingLog("voice")
+
+
+def test_an_idle_qbittorrent_with_no_peers_is_healed_too(
+    proton_log, qbit, qbit_web, monkeypatch
+):
+    """Nothing queued is no reason to wait: a qBittorrent that started
+    before the VPN adapter existed stays unbound until something rebinds
+    it, and the downloads that would have noticed never arrive."""
+    monkeypatch.setattr(proton, "PROTON_LOG_MAX_AGE_S", 10**6)
+    monkeypatch.setattr(proton, "reserved_port_range", lambda port: None)
+    log = CapturingLog("voice")
+    qbit_web.dht_nodes = 0
     qbit_web.torrents = []
     idle = proton.ProtonPortMonitor(
-        qbit, log2, path=proton_log, now=PROTON_NOW, interface="ProTUN"
+        qbit, log, path=proton_log, now=PROTON_NOW, interface="ProTUN"
     )
-    for seconds in (0, 300, 600, 900):
+    for seconds in (0, 300):
         monkeypatch.setattr(
             idle, "now", PROTON_NOW + datetime.timedelta(seconds=seconds)
         )
         idle.reconcile_once()
-    assert not log2.find("qbit_peers_lost")
+    assert log.find("qbit_rebound")[-1]["reason"] == "peers_lost"
 
 
 EXCLUDED_UDP = """
