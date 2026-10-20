@@ -281,19 +281,37 @@ def _check_arr(report, kind, client, media_cfg):
         root_exists = bool(wanted_root) and (
             wanted_root.rstrip("/\\").casefold() in normalized
         )
+        # Present but unreachable is the Docker VM that lost the media drive:
+        # the app writes to a 128 MB stand-in and rejects every release.
+        unreachable = root_exists and any(
+            isinstance(entry, dict)
+            and entry.get("accessible") is False
+            and str(entry.get("path", "")).rstrip("/\\").casefold()
+            == wanted_root.rstrip("/\\").casefold()
+            for entry in roots
+        )
         available = {
             str(entry.get("name", "")).casefold()
             for entry in profiles
             if isinstance(entry, dict)
         }
         missing = [name for name in wanted if str(name).casefold() not in available]
-        report(
-            PASS if root_exists else WARN,
-            f"{label} root",
-            wanted_root
-            if root_exists
-            else f"configured root {wanted_root or '(missing)'} does not exist",
-        )
+        if unreachable:
+            report(
+                WARN,
+                f"{label} root",
+                f"{wanted_root} is configured but {label} cannot reach it",
+                "Docker's VM lost the media drive: see 'Media drive lost' "
+                "in media\\README.md",
+            )
+        else:
+            report(
+                PASS if root_exists else WARN,
+                f"{label} root",
+                wanted_root
+                if root_exists
+                else f"configured root {wanted_root or '(missing)'} does not exist",
+            )
         report(
             WARN if missing else PASS,
             f"{label} quality profiles",

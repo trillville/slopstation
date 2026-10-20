@@ -102,6 +102,10 @@ def run(lane: str) -> None:
 
 # --- the job object: end the wrapper, end everything it started ------------------
 _JOB_KILL_ON_CLOSE = 0x2000
+# Lets a child created with CREATE_BREAKAWAY_FROM_JOB leave the job. Only the
+# media heals ask for it, when they relaunch qBittorrent or Docker Desktop:
+# those must outlive the lane. Every other child stays in the job.
+_JOB_BREAKAWAY_OK = 0x800
 _JOB_EXTENDED_LIMITS = 9
 
 
@@ -179,7 +183,7 @@ def _die_together() -> None:
     if not job:
         raise ctypes.WinError(ctypes.get_last_error())
     limits = _ExtendedLimits()
-    limits.BasicLimitInformation.LimitFlags = _JOB_KILL_ON_CLOSE
+    limits.BasicLimitInformation.LimitFlags = _JOB_KILL_ON_CLOSE | _JOB_BREAKAWAY_OK
     ok = _k32.SetInformationJobObject(
         job, _JOB_EXTENDED_LIMITS, ctypes.byref(limits), ctypes.sizeof(limits)
     )

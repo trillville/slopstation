@@ -63,6 +63,7 @@ class Stack:
         self.qbit = dict(HEALTHY_QBIT)
         self.dht_nodes = 120
         self.wanted: list = []
+        self.roots_accessible = True
         self.dynamic = (21000, 11000)  # netsh's first port and count
         log = tmp_path / "client-logs.txt"
         log.write_text(PROTON_LOG, encoding="utf-8")
@@ -107,7 +108,12 @@ class Stack:
                 for name in ("Radarr", "Sonarr")
             ]
         if path.endswith("/rootfolder"):
-            return [{"path": media["movieRoot" if movies else "seriesRoot"]}]
+            return [
+                {
+                    "path": media["movieRoot" if movies else "seriesRoot"],
+                    "accessible": self.roots_accessible,
+                }
+            ]
         if path.endswith("/qualityprofile"):
             presets = media["moviePresets" if movies else "seriesPresets"]
             return [{"name": name} for name in set(presets.values())]
@@ -179,6 +185,15 @@ def test_a_healthy_stack_passes_every_row(stack):
         "port reservations",
         "media monitoring",
     } <= set(rows.levels())
+
+
+def test_an_unreachable_root_warns_and_points_at_the_vm(stack):
+    """The Docker VM that lost the media drive: the root is configured and
+    present, and the app cannot reach it."""
+    stack.roots_accessible = False
+    rows = stack.run()
+    assert rows.levels()["Sonarr root"] == "WARN"
+    assert "cannot reach" in rows.detail("Sonarr root")
 
 
 def test_a_misconfigured_qbittorrent_warns_on_each_setting(stack):

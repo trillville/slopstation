@@ -14,9 +14,11 @@ from slopstation.agent.media.disk import (
     DiskHealthMonitor,
 )
 from slopstation.agent.media.health import HEALTH_POLL_S, MediaHealthMonitor
+from slopstation.agent.media.mount import MOUNT_POLL_S, DockerMountMonitor
 from slopstation.agent.media.proton import (
     ProtonPortMonitor,
 )
+from slopstation.agent.media.recovery import search_missing
 from slopstation.agent.media.service import MediaService
 from slopstation.agent.media.units import GB
 from slopstation.agent.media.updates import MediaUpdateMonitor
@@ -83,6 +85,16 @@ def _optional_monitor(cfg, log, flag, what, build, default=True):
         return None
 
 
+def _search_after_heal(media_cfg, secrets, log):
+    """What a heal runs once it worked: a search for everything still
+    missing. None without the apps' keys, and the heal still runs."""
+    try:
+        clients = _arr_clients(media_cfg, secrets)
+    except MediaConfigurationError:
+        return None
+    return lambda after: search_missing(clients, log, after)
+
+
 def proton_port_monitor_from_config(cfg, secrets, log):
     return _optional_monitor(
         cfg,
@@ -95,9 +107,30 @@ def proton_port_monitor_from_config(cfg, secrets, log):
             poll_s=_positive(media_cfg, "pollS", 30),
             interface=str(media_cfg.get("qbittorrentNetworkInterface", "ProtonVPN")),
             exe=media_cfg.get("qbittorrentExe") or None,
+            on_recovered=_search_after_heal(media_cfg, secrets, log),
         ),
         default=False,
     )
+
+
+def docker_mount_monitor_from_config(cfg, secrets, log):
+    def build(media_cfg):
+        env_path = paths.HOME / "media" / ".env"
+        root = _media_root(env_path)
+        if not root:
+            raise MediaConfigurationError(
+                f"no MEDIA_ROOT in {env_path} - run Start-Media.ps1"
+            )
+        return DockerMountMonitor(
+            _arr_clients(media_cfg, secrets),
+            log,
+            root,
+            paths.HOME / "media",
+            poll_s=_positive(media_cfg, "mountPollS", MOUNT_POLL_S),
+            on_recovered=_search_after_heal(media_cfg, secrets, log),
+        )
+
+    return _optional_monitor(cfg, log, "mountHeal", "docker_mount_heal", build)
 
 
 def media_health_monitor_from_config(cfg, secrets, log, operations=None):

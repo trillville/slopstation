@@ -6,6 +6,7 @@ the monitor factories build the pollers that run beside it."""
 
 from slopstation.agent.media.config import (
     disk_health_monitor_from_config,
+    docker_mount_monitor_from_config,
     from_config,
     media_health_monitor_from_config,
     media_update_monitor_from_config,
@@ -18,6 +19,7 @@ __all__ = [
     "MediaService",
     "Observation",
     "disk_health_monitor_from_config",
+    "docker_mount_monitor_from_config",
     "from_config",
     "media_health_monitor_from_config",
     "media_update_monitor_from_config",

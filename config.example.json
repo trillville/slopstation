@@ -46,6 +46,9 @@
     "_diskWatch": "Monitor free space for the media root and checkout. SMART monitoring is configured separately.",
     "diskPollS": 300,
     "diskFreeWarnGb": 250,
+    "mountHeal": true,
+    "_mountHeal": "Restart Docker Desktop's VM when Radarr or Sonarr loses the media drive that Windows still has, at most once an hour. See 'Media drive lost' in media/README.md.",
+    "mountPollS": 300,
     "moviePresets": {
       "default": "Slopstation Blu-ray HDR TrueHD",
       "1080p": "Slopstation 1080p",
