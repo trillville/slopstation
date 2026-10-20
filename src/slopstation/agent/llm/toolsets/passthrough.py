@@ -468,7 +468,7 @@ def impls(ctx: ToolContext):
             repeat = {
                 "ok": False,
                 "error": "this exact request already ran this turn and its "
-                "answer is above; asking again returns the same answer",
+                "answer is above; for fresher state, ask in a later turn",
             }
             if answered["reads"][read]:
                 repeat["detail"] = (
@@ -520,13 +520,15 @@ def impls(ctx: ToolContext):
                     )
                     out["keys"] = missed[:MAX_KEYS_SHOWN]
                 if truncated:
-                    # Most of these APIs cannot page, so the way to less is
-                    # naming the keys, listed here so they need no guessing.
+                    # Steam cannot page, so the way to less there is naming
+                    # the keys, listed here so they need no guessing. The Arr
+                    # lists (history, queue, wanted) do page.
                     out["truncated"] = True
                     out["detail"] = (
                         f"cut at {MAX_RESULT_CHARS} of {size} characters: call "
                         "again with `fields` set to only the keys you need"
                         + (" - fewer than this time" if keys else "")
+                        + ", or ask for a smaller page if the API pages"
                     )
                     out["keys"] = _key_names(result)[:MAX_KEYS_SHOWN]
                 if method == "GET" and turn is not None:

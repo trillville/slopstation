@@ -263,10 +263,10 @@ One voice session is one trace and one Conversation, both keyed on the
 - Both lanes appear: the voice pipeline, and the text/MCP interface, which
   drives the SDKs directly and shows up as `invoke_agent assistant`. A text
   or MCP conversation's `session` is its Conversation id, and its `turn` is
-  on every span and log line of the turn. Text turns from before 2026-10-10
-  have neither: find those by time window, or in `state/traces/`.
-- `execute_tool` spans last as long as the tool ran (before 2026-10-10 they
-  were instant markers, so older ones say nothing about tool time).
+  on every span and log line of the turn. Text turns from before #176
+  deployed have neither: find those by time window, or in `state/traces/`.
+- `execute_tool` spans last as long as the tool ran (before #176 deployed
+  they were instant markers, so older ones say nothing about tool time).
 
 Spans carry transcripts and completions verbatim. Treat them as private.
 
