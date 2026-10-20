@@ -34,17 +34,23 @@ class Docker:
         self.arrs = arrs
         self.start_fails = start_fails
         self.refuse_breakaway = refuse_breakaway
+        self.engine = True
         self.calls = []
 
     def run(self, argv, creationflags=0, **kwargs):
         if self.refuse_breakaway and creationflags & mount.OUTSIDE_LANE:
             raise PermissionError(5, "Access is denied")
         self.calls.append(" ".join(argv[:3]))
+        if argv[1:2] in (["version"], ["info"]) and not self.engine:
+            return subprocess.CompletedProcess(argv, 1, "", "cannot connect")
         if argv[1:3] == ["desktop", "stop"]:
+            self.engine = False
             for arr in self.arrs:
                 arr.up = False
-        if argv[1:3] == ["desktop", "start"] and self.start_fails:
-            return subprocess.CompletedProcess(argv, 1, "", "")
+        if argv[1:3] == ["desktop", "start"]:
+            if self.start_fails:
+                return subprocess.CompletedProcess(argv, 1, "", "")
+            self.engine = True
         if argv[:2] == ["docker", "compose"] and "up" in argv:
             for arr in self.arrs:
                 arr.set(up=True, roots=BACK)
@@ -92,7 +98,7 @@ def test_a_lost_drive_restarts_the_vm_and_searches_again(tmp_path):
     assert not docker.calls, "one poll of grace before acting"
     watch.reconcile_once()
     assert docker.calls == [
-        "docker version",
+        "docker --version",
         "docker desktop stop",
         "wsl --shutdown",
         "docker desktop start",

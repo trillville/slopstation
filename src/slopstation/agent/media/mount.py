@@ -118,7 +118,8 @@ class DockerMountMonitor(Monitor):
         """Docker Desktop is started outside the lane's job, so the next lane
         restart does not end it. The probe comes first: a lane whose job
         refuses that must fail before it stops anything."""
-        self._call("breakaway probe", ["docker", "version"], OUTSIDE_LANE)
+        # The client alone: after a restart that failed, the engine is down.
+        self._call("breakaway probe", ["docker", "--version"], OUTSIDE_LANE)
         self._call("docker desktop stop", ["docker", "desktop", "stop"])
         self._call("wsl --shutdown", ["wsl", "--shutdown"])
         # Detached, and no pipes: Docker Desktop could inherit them and hold
