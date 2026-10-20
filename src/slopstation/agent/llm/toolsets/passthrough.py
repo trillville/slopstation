@@ -187,7 +187,9 @@ Any Steam web call: GET or POST to api.steampowered.com (pass the interface
 path, e.g. ISteamUserStats/GetPlayerAchievements/v1), store.steampowered.com
 or steamcommunity.com (pass the path). auth 'key' adds the Web API key,
 'account' adds the signed-in account's token (needed for IClientCommService
-and other account-scoped calls), 'none' sends neither. Research the call
+and other account-scoped calls), 'none' sends neither. 'key' and 'account'
+also add the user's own steamid when the call names none: leave steamid out
+for the user's own data, and never make one up. Research the call
 first with web search; never guess. POST returns the literal request for the
 user to confirm before it runs."""
 
@@ -620,6 +622,11 @@ def impls(ctx: ToolContext):
             if steam is None or not steam.available():
                 raise RuntimeError("the Steam account session is not enrolled")
             params["access_token"] = steam.access_token()
+            # As with the key: the token alone does not name the account, and
+            # without a steamid Steam answers 400 "Missing required routing
+            # parameter" (2026-10-10, GetOwnedGames).
+            if host == "api.steampowered.com":
+                params.setdefault("steamid", steam.steamid)
         elif auth == "key" and host == "api.steampowered.com":
             creds = library.steam_creds()
             if not creds:

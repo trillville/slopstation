@@ -505,6 +505,34 @@ def test_a_refused_request_fails_and_keeps_the_ask_armed(live, log, monkeypatch)
     assert log.find("tool_gap")[-1]["status"] == 404
 
 
+def test_an_account_call_names_the_users_own_steamid(log, monkeypatch):
+    sent = []
+
+    class R:
+        status_code = 200
+        headers = {"X-eresult": "1"}
+        text = ""
+
+        def json(self):
+            return {"response": {"game_count": 1}}
+
+    fake_requests = types.SimpleNamespace(
+        request=lambda m, url, **kw: sent.append(kw["params"]) or R()
+    )
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    steam = types.SimpleNamespace(
+        available=lambda: True, access_token=lambda: "TOK", steamid="7656119"
+    )
+    tk = assistant.Toolkit(fake_dispatch("aa0001"), log, steam=steam)
+    tk.load(["steam_api"])
+    ask = {"method": "GET", "path": "IPlayerService/GetOwnedGames/v1"}
+    assert tk.call("steam_api", {**ask, "auth": "account"})["ok"]
+    assert sent[-1] == {"access_token": "TOK", "steamid": "7656119"}
+    # One the call names (a friend's) is kept.
+    friend = {**ask, "auth": "account", "params": {"steamid": "7656120"}}
+    assert tk.call("steam_api", friend)["ok"] and sent[-1]["steamid"] == "7656120"
+
+
 def test_a_steam_post_is_confirmed_with_its_credential_in_scope(live, log):
     tk, dispatch, _ = live
     ask = {"method": "POST", "path": "IPlayerService/X/v1", "body": {"a": 1}}
