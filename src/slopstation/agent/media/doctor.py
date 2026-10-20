@@ -273,22 +273,13 @@ def _check_arr(report, kind, client, media_cfg):
         wanted = sorted(set((media_cfg.get(presets_key) or {}).values()))
         # Roots compare case-folded and without a trailing separator -
         # Servarr echoes the path back in either form.
-        normalized = {
-            str(entry.get("path", "")).rstrip("/\\").casefold()
+        by_path = {
+            str(entry.get("path", "")).rstrip("/\\").casefold(): entry
             for entry in roots
             if isinstance(entry, dict)
         }
-        root_exists = bool(wanted_root) and (
-            wanted_root.rstrip("/\\").casefold() in normalized
-        )
-        # Present but unreachable is the Docker VM that lost the media drive:
-        # the app writes to a 128 MB stand-in and rejects every release.
-        unreachable = root_exists and any(
-            isinstance(entry, dict)
-            and entry.get("accessible") is False
-            and str(entry.get("path", "")).rstrip("/\\").casefold()
-            == wanted_root.rstrip("/\\").casefold()
-            for entry in roots
+        root = (
+            by_path.get(wanted_root.rstrip("/\\").casefold()) if wanted_root else None
         )
         available = {
             str(entry.get("name", "")).casefold()
@@ -296,7 +287,13 @@ def _check_arr(report, kind, client, media_cfg):
             if isinstance(entry, dict)
         }
         missing = [name for name in wanted if str(name).casefold() not in available]
-        if unreachable:
+        if root is None:
+            report(
+                WARN,
+                f"{label} root",
+                f"configured root {wanted_root or '(missing)'} does not exist",
+            )
+        elif root.get("accessible") is False:
             report(
                 WARN,
                 f"{label} root",
@@ -305,13 +302,7 @@ def _check_arr(report, kind, client, media_cfg):
                 "in media\\README.md",
             )
         else:
-            report(
-                PASS if root_exists else WARN,
-                f"{label} root",
-                wanted_root
-                if root_exists
-                else f"configured root {wanted_root or '(missing)'} does not exist",
-            )
+            report(PASS, f"{label} root", wanted_root)
         report(
             WARN if missing else PASS,
             f"{label} quality profiles",

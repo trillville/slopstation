@@ -22,11 +22,8 @@ def search_missing(clients, log, after):
     """Queue a search for every monitored item without a file. `after` names
     the heal that made it worth trying again."""
     for client in clients:
-        body = MISSING_SEARCH.get(client.name)
-        if body is None:
-            continue
         try:
-            client.post("command", dict(body))
+            client.post("command", MISSING_SEARCH[client.name])
         except MediaError as e:
             log.error(
                 "media_missing_search_failed",

@@ -15,6 +15,7 @@ from slopstation.agent.media.clients import (
     clean_text,
     parse_time,
 )
+from slopstation.agent.media.processes import OUTSIDE_LANE
 from slopstation.agent.monitor import ChangeOnly, Monitor
 
 PROTON_ACTIVE_STATUSES = {"PortMappingCommunication", "SleepingUntilRefresh"}
@@ -35,30 +36,21 @@ PROTON_PORT_FLOOR = 40000
 EXCLUDED_RANGE_RE = re.compile(r"(?m)^[ \t]*(\d+)[ \t]+(\d+)[ \t]*(\*?)")
 
 
-# Out of the lane's kill-on-close job (supervise._die_together), so a service
-# a heal relaunches is not ended by the next lane restart or deploy.
-OUTSIDE_LANE = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
-
-
 def _launch_detached(exe):
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
         subprocess, "CREATE_NEW_PROCESS_GROUP", 0
     )
-
-    def launch(extra):
-        return subprocess.Popen(
-            [str(exe)],
-            cwd=str(Path(exe).parent),
-            creationflags=flags | extra,
-            close_fds=True,
-        )
-
+    cwd = str(Path(exe).parent)
     try:
-        return launch(OUTSIDE_LANE)
+        return subprocess.Popen(
+            [str(exe)], cwd=cwd, creationflags=flags | OUTSIDE_LANE, close_fds=True
+        )
     except PermissionError:
         # A lane started before its job allowed breakaway. qBittorrent is
         # already shut down by now, so inside the job beats not at all.
-        return launch(0)
+        return subprocess.Popen(
+            [str(exe)], cwd=cwd, creationflags=flags, close_fds=True
+        )
 
 
 def _netsh(*args):
@@ -177,8 +169,7 @@ class ProtonPortMonitor(Monitor):
     changes no preference, so nothing reopens the sockets and DHT stays
     empty; rebind on the reconnect, and when DHT stays empty anyway,
     rebind, then restart. `on_recovered(after)` runs once a heal step
-    brings the peers back, so the apps search again for what they could
-    not fetch meanwhile."""
+    brings the peers back."""
 
     THREAD_NAME = "proton-port-monitor"
 
@@ -247,8 +238,7 @@ class ProtonPortMonitor(Monitor):
         """Zero DHT nodes is the dead-socket symptom whatever caused it. Each
         PEERS_DEAD_S it persists: rebind, then restart, then say so once and
         wait. Idle counts: a qBittorrent that started before the VPN adapter
-        existed binds to nothing, and waiting for a download to notice left
-        it that way for five days."""
+        existed binds to nothing, and no download comes along to show it."""
         nodes = int(self.client.transfer_info().get("dht_nodes", 0) or 0)
         preferences = {} if nodes else self.client.preferences()
         if nodes or not preferences.get("dht", True):

@@ -229,11 +229,11 @@ keeps a name that still matches while pointing at nothing: every check
 passes and DHT sits at zero nodes. The sync rebinds on each reconnect, and
 whenever DHT stays empty it rebinds, then restarts qBittorrent through its
 API (`media.qbittorrentExe` names the executable), then reports once and
-waits. It does this with nothing queued too: a qBittorrent that started
-before the Proton adapter existed binds to nothing and logs "The configured
-network interface is invalid", and nothing else would notice. Once a step
-brings the peers back, it asks Radarr and Sonarr to search for everything
-still missing. Restarting by hand still works. For manual recovery of the
+waits. It does this with nothing queued too, which catches a qBittorrent
+that started before the Proton adapter existed ("The configured network
+interface is invalid" in its log). Once a step brings the peers back, it
+asks Radarr and Sonarr to search for everything missing. Restarting by
+hand still works. For manual recovery of the
 port:
 
 ```powershell
@@ -279,7 +279,7 @@ docker compose --project-directory media --env-file media\.env ps
 | `qbit_rebound` / `qbit_restarted` | A heal step ran; `reason` is `proton_reconnect` or `peers_lost` |
 | `qbit_heal_failed` | A heal step could not run, or DHT stayed empty after the restart |
 | `media_mount_lost` / `media_mount_restored` | The apps lost the media drive while Windows still had it, and the Docker VM restart brought it back |
-| `media_mount_heal_failed` | The VM restart could not run or did not bring the drive back; the next try is an hour later |
+| `media_mount_heal_failed` | The VM restart could not run or did not bring the drive back |
 | `media_missing_searched` / `media_missing_search_failed` | After a heal, an app was asked to search for everything missing (`after` names the heal), or could not be |
 | `media_watch_failed` | A service could not be reached |
 | `disk_space_low` / `disk_space_cleared` | A watched volume crossed the configured limit |
@@ -297,18 +297,16 @@ disk checks with `media.diskWatch`,
 
 Docker Desktop's VM maps Windows drives only when it starts. If the media
 drive arrives after that (a reboot that starts Docker first, or a replug),
-every bind to it resolves to a 128 MB stand-in on the VM's own disk. Radarr
-and Sonarr report their root folders missing and reject every release with
-"Importing after download will exceed available disk space". Restarting the
+Radarr and Sonarr see a 128 MB stand-in for `/data`, report their root
+folders missing, and reject every release for disk space. Restarting the
 containers does not help; restarting the VM does.
 
-The voice lane does that itself (`media.mountHeal`, on by default, polled
-every `media.mountPollS` seconds). When an app's root folder has been
-unreachable for two polls while `MEDIA_ROOT` exists on Windows, it stops
-Docker Desktop, runs `wsl --shutdown`, starts Docker Desktop again, runs
-`docker compose up -d`, and waits for the roots to come back. It tries at
-most once an hour, and then asks the apps to search for everything missing.
-The doctor's Radarr and Sonarr root rows warn while a root is unreachable.
+The voice lane restarts the VM itself (`media.mountHeal`, on by default)
+when a configured root has been unreachable for two polls while its folder
+exists on Windows. It tries at most once an hour, retries only while a
+failed attempt has left Docker down, and then asks the apps to search for
+everything missing. The doctor's root rows warn while a root is
+unreachable.
 
 By hand, from a normal PowerShell window:
 

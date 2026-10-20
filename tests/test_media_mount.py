@@ -1,5 +1,5 @@
-"""The heals that bring the media stack back after the Docker VM loses the
-media drive, and the search for what went missing meanwhile."""
+"""The heal that restarts Docker's VM when the apps lose the media drive,
+and the search for what went missing meanwhile."""
 
 import dataclasses
 import subprocess
@@ -9,6 +9,7 @@ from slopstation.agent.media import mount
 from slopstation.agent.media.clients import MediaError
 from slopstation.agent.media.recovery import search_missing
 
+ROOTS = {"Sonarr": "/data/TV", "Radarr": "/data/Movies"}
 LOST = [{"path": "/data/TV", "accessible": False}]
 BACK = [{"path": "/data/TV", "accessible": True}]
 
@@ -26,35 +27,38 @@ class App(FakeArr):
 
 
 class Docker:
-    """The docker and wsl command lines: every call recorded. Stopping
-    Docker takes the apps down; `compose up` brings them back with the drive
-    in view, unless Docker Desktop failed to start."""
+    """The docker and wsl command lines. Stopping Docker takes the engine and
+    the apps down; `compose up` brings the apps back, with the drive in view
+    unless `heals` is off. `fail` maps a step to the output it fails with."""
 
-    def __init__(self, arrs, start_fails=False, refuse_breakaway=False):
-        self.arrs = arrs
-        self.start_fails = start_fails
+    def __init__(self, apps, fail=None, refuse_breakaway=False, heals=True):
+        self.apps = apps
+        self.fail = fail or {}
         self.refuse_breakaway = refuse_breakaway
+        self.heals = heals
         self.engine = True
-        self.calls = []
+        self.ran = []
 
-    def run(self, argv, creationflags=0, **kwargs):
+    def run(self, argv, stdout=None, creationflags=0, **kwargs):
         if self.refuse_breakaway and creationflags & mount.OUTSIDE_LANE:
             raise PermissionError(5, "Access is denied")
-        self.calls.append(" ".join(argv[:3]))
-        if argv[1:2] in (["version"], ["info"]) and not self.engine:
-            return subprocess.CompletedProcess(argv, 1, "", "cannot connect")
-        if argv[1:3] == ["desktop", "stop"]:
+        step = " ".join(argv[1:3]) if argv[0] == "docker" else " ".join(argv)
+        self.ran.append(step)
+        if step in self.fail:
+            stdout.write(self.fail[step])
+            return subprocess.CompletedProcess(argv, 1)
+        if argv[1] in ("version", "info") and not self.engine:
+            return subprocess.CompletedProcess(argv, 1)
+        if step == "desktop stop":
             self.engine = False
-            for arr in self.arrs:
-                arr.up = False
-        if argv[1:3] == ["desktop", "start"]:
-            if self.start_fails:
-                return subprocess.CompletedProcess(argv, 1, "", "")
+            for app in self.apps:
+                app.up = False
+        elif step == "desktop start":
             self.engine = True
-        if argv[:2] == ["docker", "compose"] and "up" in argv:
-            for arr in self.arrs:
-                arr.set(up=True, roots=BACK)
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        elif argv[1] == "compose":
+            for app in self.apps:
+                app.set(up=True, roots=BACK if self.heals else LOST)
+        return subprocess.CompletedProcess(argv, 0)
 
 
 class Clock:
@@ -68,75 +72,129 @@ class Clock:
         self.t += seconds
 
 
-def monitor(tmp_path, docker, arrs, searched=None):
+def monitor(tmp_path, docker, root=None):
+    media_root = tmp_path / "M"
+    (media_root / "TV").mkdir(parents=True, exist_ok=True)
     media_dir = tmp_path / "media"
-    media_dir.mkdir()
-    (media_dir / ".env").write_text("MEDIA_ROOT=x\n", encoding="utf-8")
+    media_dir.mkdir(exist_ok=True)
+    (media_dir / ".env").write_text("", encoding="utf-8")
     clock = Clock()
     log = CapturingLog("voice")
     watch = mount.DockerMountMonitor(
-        arrs,
+        docker.apps,
         log,
-        tmp_path,
+        ROOTS,
+        root or media_root,
         media_dir,
         run=docker.run,
         now=clock,
         sleep=clock.sleep,
-        on_recovered=None if searched is None else searched.append,
     )
     return watch, log, clock
 
 
+def heal(watch):
+    """The grace poll, then the poll that acts."""
+    watch.reconcile_once()
+    watch.reconcile_once()
+
+
 def test_a_lost_drive_restarts_the_vm_and_searches_again(tmp_path):
     sonarr = App("Sonarr").set(roots=LOST)
-    radarr = App("Radarr").set(roots=BACK)
-    docker = Docker([sonarr, radarr])
-    searched = []
-    watch, log, _ = monitor(tmp_path, docker, [sonarr, radarr], searched)
-
-    watch.reconcile_once()
-    assert not docker.calls, "one poll of grace before acting"
-    watch.reconcile_once()
-    assert docker.calls == [
-        "docker --version",
-        "docker desktop stop",
-        "wsl --shutdown",
-        "docker desktop start",
-        "docker info --format",
-        "docker compose --project-directory",
-    ]
-    assert log.find("media_mount_lost")[-1]["roots"] == "Sonarr /data/TV"
-    assert log.find("media_mount_restored")
-    assert searched == ["docker_mount"]
-
-
-def test_a_drive_windows_cannot_see_either_is_left_alone(tmp_path):
-    sonarr = App("Sonarr").set(roots=LOST)
     docker = Docker([sonarr])
-    watch, log, _ = monitor(tmp_path, docker, [sonarr])
-    watch.media_root = tmp_path / "unplugged"
-    for _ in range(3):
-        watch.reconcile_once()
-    assert not docker.calls
-    assert not log.find("media_mount_lost")
+    watch, log, _ = monitor(tmp_path, docker)
+    watch.reconcile_once()
+    assert not docker.ran, "one poll of grace before acting"
+    watch.reconcile_once()
+    assert docker.ran.count("wsl --shutdown") == 1
+    assert log.find("media_mount_restored")
+    assert sonarr.posts == [
+        ("command", {"name": "MissingEpisodeSearch", "monitored": True})
+    ]
+    assert not watch.marker.exists()
 
 
-def test_a_failed_restart_is_reported_and_retried_an_hour_later(tmp_path):
-    """A restart that stops Docker and then fails leaves the apps silent,
-    which is not the drive coming back: the heal still owns the retry."""
+def test_only_a_configured_root_whose_folder_windows_has_counts(tmp_path):
+    """An extra root, or a folder gone on Windows too, is not the VM's
+    doing, and restarting it would only take the stack down."""
+    extra = App("Sonarr").set(roots=[{"path": "/data/Old", "accessible": False}])
+    docker = Docker([extra])
+    watch = monitor(tmp_path, docker)[0]
+    (tmp_path / "M" / "Old").mkdir()
+    heal(watch)
     sonarr = App("Sonarr").set(roots=LOST)
-    docker = Docker([sonarr], start_fails=True)
-    watch, log, clock = monitor(tmp_path, docker, [sonarr])
+    docker2 = Docker([sonarr])
+    heal(monitor(tmp_path, docker2, root=tmp_path / "unplugged")[0])
+    assert not docker.ran and not docker2.ran
+
+
+def test_a_restart_that_leaves_docker_down_is_retried_an_hour_later(tmp_path):
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], fail={"desktop start": b"engine error"})
+    watch, log, clock = monitor(tmp_path, docker)
+    heal(watch)
+    assert "engine error" in log.find("media_mount_heal_failed")[-1]["err"]
     watch.reconcile_once()
-    watch.reconcile_once()
-    assert "docker desktop start" in log.find("media_mount_heal_failed")[-1]["err"]
-    assert not sonarr.up
-    attempts = docker.calls.count("wsl --shutdown")
-    watch.reconcile_once()
-    assert docker.calls.count("wsl --shutdown") == attempts
+    assert docker.ran.count("wsl --shutdown") == 1
     clock.t += mount.RESTART_COOLDOWN_S
     watch.reconcile_once()
-    assert docker.calls.count("wsl --shutdown") == attempts + 1
+    assert docker.ran.count("wsl --shutdown") == 2
+
+
+def test_a_failed_wsl_shutdown_still_starts_docker_again(tmp_path):
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], fail={"wsl --shutdown": b"busy"})
+    watch, log, _ = monitor(tmp_path, docker)
+    heal(watch)
+    assert "desktop start" in docker.ran
+    assert log.find("media_mount_restored")
+
+
+def test_a_lane_restarted_mid_heal_picks_it_up(tmp_path):
+    """The marker outlives the lane: a new one that finds Docker down after
+    a heal began restarts it instead of reading silence as health."""
+    sonarr = App("Sonarr", up=False).set(roots=LOST)
+    docker = Docker([sonarr])
+    docker.engine = False
+    watch, log, _ = monitor(tmp_path, docker)
+    watch.marker.parent.mkdir(parents=True, exist_ok=True)
+    watch.marker.touch()
+    heal(watch)
+    assert log.find("media_mount_restored")
+
+
+def test_a_restart_that_did_not_bring_the_roots_back_is_not_repeated(tmp_path):
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], heals=False)
+    watch, log, clock = monitor(tmp_path, docker)
+    heal(watch)
+    assert log.find("media_mount_heal_failed")
+    clock.t += 2 * mount.RESTART_COOLDOWN_S
+    heal(watch)
+    assert docker.ran.count("wsl --shutdown") == 1
+
+
+def test_roots_back_after_a_failed_heal_still_search(tmp_path):
+    """Apps slower to start than the heal waits: the heal is reported failed,
+    and the next poll that finds the roots back is the recovery."""
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], heals=False)
+    watch, log, _ = monitor(tmp_path, docker)
+    heal(watch)
+    assert log.find("media_mount_heal_failed")
+    sonarr.set(roots=BACK)
+    watch.reconcile_once()
+    assert log.find("media_mount_restored")
+    assert sonarr.posts
+
+
+def test_step_output_that_is_not_text_cannot_stop_the_heal(tmp_path):
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], fail={"desktop stop": b"\x8f\xff\x00b\x00a\x00d"})
+    watch, log, _ = monitor(tmp_path, docker)
+    heal(watch)
+    err = log.find("media_mount_heal_failed")[-1]["err"]
+    assert err.startswith("docker desktop stop failed")
 
 
 def test_a_lane_that_cannot_break_away_stops_nothing(tmp_path):
@@ -144,14 +202,11 @@ def test_a_lane_that_cannot_break_away_stops_nothing(tmp_path):
     would leave the stack down: the probe has to fail first."""
     sonarr = App("Sonarr").set(roots=LOST)
     docker = Docker([sonarr], refuse_breakaway=True)
-    watch, log, _ = monitor(tmp_path, docker, [sonarr])
-    watch.reconcile_once()
-    watch.reconcile_once()
-    assert not docker.calls
-    assert (
-        "restart the Slopstation tasks"
-        in log.find("media_mount_heal_failed")[-1]["err"]
-    )
+    watch, log, _ = monitor(tmp_path, docker)
+    heal(watch)
+    assert not docker.ran
+    err = log.find("media_mount_heal_failed")[-1]["err"]
+    assert "restart the Slopstation tasks" in err
 
 
 def test_search_missing_asks_each_app_and_reports_one_that_refuses():
