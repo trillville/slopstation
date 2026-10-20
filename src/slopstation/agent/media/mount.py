@@ -68,11 +68,18 @@ class DockerMountMonitor(Monitor):
         self.on_recovered = on_recovered
         self._lost_since = None
         self._restarted_at = None
+        self._failed = False
 
     def reconcile_once(self):
-        lost, _ = root_state(self.clients)
+        lost, silent = root_state(self.clients)
+        if self._failed:
+            # A restart that failed partway can leave Docker stopped, and
+            # then the apps do not answer at all. That is still this heal's
+            # to retry, not a recovery.
+            lost += [f"{name} not answering" for name in silent]
         if not lost:
             self._lost_since = None
+            self._failed = False
             return
         # The drive itself is gone: disk_watch reports that, and no VM
         # restart brings it back.
@@ -98,8 +105,10 @@ class DockerMountMonitor(Monitor):
         try:
             self._restart_vm()
         except MediaError as e:
+            self._failed = True
             self.log.error("media_mount_heal_failed", err=clean_text(e))
             return
+        self._failed = False
         self._lost_since = None
         self.log("media_mount_restored", waited_s=round(self.now() - now))
         if self.on_recovered is not None:

@@ -1,6 +1,7 @@
 """The heals that bring the media stack back after the Docker VM loses the
 media drive, and the search for what went missing meanwhile."""
 
+import dataclasses
 import subprocess
 
 from helpers import CapturingLog, FakeArr
@@ -12,13 +13,26 @@ LOST = [{"path": "/data/TV", "accessible": False}]
 BACK = [{"path": "/data/TV", "accessible": True}]
 
 
-class Docker:
-    """The docker and wsl command lines: every call recorded, and `compose
-    up` puts the drive back in the apps' view unless told not to."""
+@dataclasses.dataclass
+class App(FakeArr):
+    """An app in a container: it stops answering while Docker is down."""
 
-    def __init__(self, arrs, heals=True, refuse_breakaway=False):
+    up: bool = True
+
+    def get(self, endpoint, params=None):
+        if not self.up:
+            raise MediaError(f"{self.name} is unreachable")
+        return super().get(endpoint, params)
+
+
+class Docker:
+    """The docker and wsl command lines: every call recorded. Stopping
+    Docker takes the apps down; `compose up` brings them back with the drive
+    in view, unless Docker Desktop failed to start."""
+
+    def __init__(self, arrs, start_fails=False, refuse_breakaway=False):
         self.arrs = arrs
-        self.heals = heals
+        self.start_fails = start_fails
         self.refuse_breakaway = refuse_breakaway
         self.calls = []
 
@@ -26,9 +40,14 @@ class Docker:
         if self.refuse_breakaway and creationflags & mount.OUTSIDE_LANE:
             raise PermissionError(5, "Access is denied")
         self.calls.append(" ".join(argv[:3]))
-        if argv[:2] == ["docker", "compose"] and "up" in argv and self.heals:
+        if argv[1:3] == ["desktop", "stop"]:
             for arr in self.arrs:
-                arr.set(roots=BACK)
+                arr.up = False
+        if argv[1:3] == ["desktop", "start"] and self.start_fails:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        if argv[:2] == ["docker", "compose"] and "up" in argv:
+            for arr in self.arrs:
+                arr.set(up=True, roots=BACK)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
 
@@ -63,8 +82,8 @@ def monitor(tmp_path, docker, arrs, searched=None):
 
 
 def test_a_lost_drive_restarts_the_vm_and_searches_again(tmp_path):
-    sonarr = FakeArr("Sonarr").set(roots=LOST)
-    radarr = FakeArr("Radarr").set(roots=BACK)
+    sonarr = App("Sonarr").set(roots=LOST)
+    radarr = App("Radarr").set(roots=BACK)
     docker = Docker([sonarr, radarr])
     searched = []
     watch, log, _ = monitor(tmp_path, docker, [sonarr, radarr], searched)
@@ -86,7 +105,7 @@ def test_a_lost_drive_restarts_the_vm_and_searches_again(tmp_path):
 
 
 def test_a_drive_windows_cannot_see_either_is_left_alone(tmp_path):
-    sonarr = FakeArr("Sonarr").set(roots=LOST)
+    sonarr = App("Sonarr").set(roots=LOST)
     docker = Docker([sonarr])
     watch, log, _ = monitor(tmp_path, docker, [sonarr])
     watch.media_root = tmp_path / "unplugged"
@@ -97,12 +116,15 @@ def test_a_drive_windows_cannot_see_either_is_left_alone(tmp_path):
 
 
 def test_a_failed_restart_is_reported_and_retried_an_hour_later(tmp_path):
-    sonarr = FakeArr("Sonarr").set(roots=LOST)
-    docker = Docker([sonarr], heals=False)
+    """A restart that stops Docker and then fails leaves the apps silent,
+    which is not the drive coming back: the heal still owns the retry."""
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], start_fails=True)
     watch, log, clock = monitor(tmp_path, docker, [sonarr])
     watch.reconcile_once()
     watch.reconcile_once()
-    assert "within" in log.find("media_mount_heal_failed")[-1]["err"]
+    assert "docker desktop start" in log.find("media_mount_heal_failed")[-1]["err"]
+    assert not sonarr.up
     attempts = docker.calls.count("wsl --shutdown")
     watch.reconcile_once()
     assert docker.calls.count("wsl --shutdown") == attempts
@@ -114,7 +136,7 @@ def test_a_failed_restart_is_reported_and_retried_an_hour_later(tmp_path):
 def test_a_lane_that_cannot_break_away_stops_nothing(tmp_path):
     """Stopping Docker and then failing to start it outside the lane's job
     would leave the stack down: the probe has to fail first."""
-    sonarr = FakeArr("Sonarr").set(roots=LOST)
+    sonarr = App("Sonarr").set(roots=LOST)
     docker = Docker([sonarr], refuse_breakaway=True)
     watch, log, _ = monitor(tmp_path, docker, [sonarr])
     watch.reconcile_once()
