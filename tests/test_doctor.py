@@ -395,6 +395,42 @@ def test_smoke_turn_passes_only_when_the_model_calls_a_tool(rows, cfg, monkeypat
     assert rows.detail("assistant").startswith("not tried")
 
 
+def test_smart_restart_warns_until_windows_restarts_smartd(rows, cfg, monkeypatch):
+    sc = {
+        "query": "STATE : 4 RUNNING",
+        "qfailure": "RESET_PERIOD (in seconds)    : 0",
+        "qfailureflag": "FAILURE_ACTIONS_ON_NONCRASH_FAILURES:  FALSE",
+    }
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kw: types.SimpleNamespace(
+            stdout=sc.get(argv[1], "") if argv[0] == "sc" else "",
+            stderr="",
+            returncode=0,
+        ),
+    )
+    # As the K15 was on 2026-10-14: running, but nothing brings it back.
+    doctor.check_telemetry(cfg)
+    assert rows.levels()["smart restart"] == doctor.WARN
+    # The actions alone are not enough: smartd leaves by a clean exit with an
+    # error code, which only the flag counts as a failure.
+    sc["qfailure"] = "FAILURE_ACTIONS : RESTART -- Delay = 60000 milliseconds."
+    rows.clear()
+    doctor.check_telemetry(cfg)
+    assert rows.levels()["smart restart"] == doctor.WARN
+    sc["qfailureflag"] = "FAILURE_ACTIONS_ON_NONCRASH_FAILURES:  TRUE"
+    rows.clear()
+    doctor.check_telemetry(cfg)
+    assert rows.levels()["smart restart"] == doctor.PASS
+    # Not installed: smart watch says so, and there is nothing to restart.
+    sc["query"] = "[SC] EnumQueryServicesStatus:OpenService FAILED 1060"
+    rows.clear()
+    doctor.check_telemetry(cfg)
+    assert rows.levels()["smart watch"] == doctor.WARN
+    assert "smart restart" not in rows.names()
+
+
 def test_cron_checkin_reads_back_past_today(rows):
     """A lane logs its first check-in and then only changes, so lanes that
     started days ago leave nothing in today's file and still count."""

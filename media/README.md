@@ -314,8 +314,16 @@ Install smartmontools, edit the device and command paths in
 ```powershell
 Copy-Item smartd.conf.example "$env:ProgramFiles\smartmontools\bin\smartd.conf"
 & "$env:ProgramFiles\smartmontools\bin\smartd.exe" install
+sc.exe failure smartd reset= 3600 actions= restart/60000/restart/300000/restart/900000
+sc.exe failureflag smartd 1
 Start-Service smartd
 ```
+
+The two `sc.exe` lines matter. smartd exits if the media drive is not there
+when it starts, and after a reboot the drive can arrive minutes late. On
+2026-10-14 that left SMART unwatched for six days. With these lines, Windows
+starts smartd again after 1 minute, then 5, then every 15 until the drive is
+there. The doctor's `smart restart` row checks for them.
 
 Confirm the physical device with `smartctl --scan`. USB enclosures may require
 SAT translation (`-d sat`). Add `-M test`, restart the service, and confirm one

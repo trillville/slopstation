@@ -78,6 +78,9 @@ deploy goes red with a diagnosis, and someone does the step by hand.
 - **Runtime pieces on the PC.** `vhui64.exe` and the two DisplayMagician
   shortcuts. `Doctor.ps1` fails when they are missing; `Deploy.ps1` never
   touches them.
+- **smartd on the mini PC.** The service, its config and its restart setting
+  are installed by hand, elevated (`media/README.md`, "SMART monitoring"). The
+  doctor's `smart watch` and `smart restart` rows warn when either is missing.
 
 ## Doctors
 

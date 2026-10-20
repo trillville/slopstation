@@ -116,20 +116,58 @@ def check_puck():
 
 
 def _service_row(name, service, stopped_hint, absent_hint):
-    """One row for a Windows service the K15 relies on."""
+    """One row for a Windows service the K15 relies on. True when the service
+    is installed, running or not."""
     try:
         out = subprocess.run(
             ["sc", "query", service], capture_output=True, text=True, timeout=10
         ).stdout
     except Exception as e:
         report(WARN, name, f"could not query ({e})", "")
-        return
+        return False
     if "RUNNING" in out:
         report(PASS, name, f"{service} service running")
     elif "STOPPED" in out:
         report(WARN, name, f"{service} installed but STOPPED", stopped_hint)
     else:
         report(WARN, name, f"{service} not installed", absent_hint)
+        return False
+    return True
+
+
+# smartd exits when a configured drive is not there at start, and the media
+# drive can arrive minutes after boot (2026-10-14: down six days). These have
+# the service manager start it again: after 1 and 5 minutes, then every 15.
+SMARTD_RESTART = (
+    "sc.exe failure smartd reset= 3600 "
+    "actions= restart/60000/restart/300000/restart/900000; "
+    "sc.exe failureflag smartd 1"
+)
+
+
+def _smartd_restart_row():
+    """Whether the service manager restarts smartd when it exits with an
+    error. Both halves are needed: the actions, and the flag that applies them
+    to a clean exit with an error code, which is how smartd leaves."""
+    try:
+        actions, flag = (
+            subprocess.run(
+                ["sc", verb, "smartd"], capture_output=True, text=True, timeout=10
+            ).stdout
+            for verb in ("qfailure", "qfailureflag")
+        )
+    except Exception as e:
+        report(WARN, "smart restart", f"could not query ({e})", "")
+        return
+    if "RESTART" in actions.upper() and "TRUE" in flag.upper():
+        report(PASS, "smart restart", "smartd is started again if it exits")
+    else:
+        report(
+            WARN,
+            "smart restart",
+            "smartd stays down if it starts before the media drive",
+            f"elevated: {SMARTD_RESTART}",
+        )
 
 
 def _process_row(name, lane, up, down, down_hint):
@@ -1118,12 +1156,13 @@ def check_telemetry(cfg):
     check_sentry(cfg)
     # SMART needs Administrator for raw device access, so it is a service and
     # not part of any lane; a rebuilt K15 lacks it until someone registers it.
-    _service_row(
+    if _service_row(
         "smart watch",
         "smartd",
-        "Start-Service smartd - a failing disk says nothing meanwhile",
+        "Start-Service smartd (elevated) - a failing disk says nothing meanwhile",
         "disk attributes unwatched; see smartd.conf.example",
-    )
+    ):
+        _smartd_restart_row()
 
 
 def main(argv=None):
