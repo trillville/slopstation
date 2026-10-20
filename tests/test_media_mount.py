@@ -165,6 +165,18 @@ def test_a_heal_the_roots_did_not_come_back_from_is_not_repeated(tmp_path):
     assert sonarr.posts
 
 
+def test_a_stop_that_failed_with_docker_still_up_is_retried(tmp_path):
+    sonarr = App("Sonarr").set(roots=LOST)
+    docker = Docker([sonarr], fail={"desktop stop": b"timed out"})
+    watch, log, clock = monitor(tmp_path, docker)
+    heal(watch)
+    assert "timed out" in log.find("media_mount_heal_failed")[-1]["err"]
+    docker.fail = {}
+    clock.t += mount.RESTART_COOLDOWN_S
+    watch.reconcile_once()
+    assert log.find("media_mount_restored")
+
+
 def test_a_lane_that_cannot_break_away_stops_nothing(tmp_path):
     """Stopping Docker and then failing to start it outside the lane's job
     would leave the stack down: the probe has to fail first."""

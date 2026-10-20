@@ -138,7 +138,14 @@ class DockerMountMonitor(Monitor):
         self._call("breakaway probe", ["docker", "--version"], OUTSIDE_LANE)
         self.marker.parent.mkdir(parents=True, exist_ok=True)
         self.marker.touch()
-        self._call("docker desktop stop", ["docker", "desktop", "stop"])
+        try:
+            self._call("docker desktop stop", ["docker", "desktop", "stop"])
+        except MediaError:
+            # Apps still answering means nothing was stopped: a failed try
+            # for the cooldown to retry, not a heal that left Docker down.
+            if len(self._state()[1]) < len(self.clients):
+                self.marker.unlink(missing_ok=True)
+            raise
         shutdown_err = ""
         try:
             self._call("wsl --shutdown", ["wsl", "--shutdown"])
